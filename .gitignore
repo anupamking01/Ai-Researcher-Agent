@@ -1,0 +1,17 @@
+#Ignore env containing secrets
+.env
+#Ignore Virtual Env
+env/
+#Ignore generated outputs
+outputs/
+#Ignore pycache
+**/__pycache__/
+*.yml
+Dockerfile
+*.md
+*.dockerignore
+py-ai-agent/
+*.github
+__pycache__/
+*.pdf
+
