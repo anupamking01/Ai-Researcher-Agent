@@ -5,8 +5,8 @@ from pydantic import BaseModel
 import json
 import os
 
-from agent.llm_utils import choose_agent
-from agent.run import WebSocketManager
+from logic.llm_utils import choose_agent
+from logic.run import WebSocketManager
 
 
 class ResearchRequest(BaseModel):
@@ -17,8 +17,8 @@ class ResearchRequest(BaseModel):
 
 
 app = FastAPI()
-app.mount("/site", StaticFiles(directory="client"), name="site")
-app.mount("/static", StaticFiles(directory="client/static"), name="static")
+app.mount("/site", StaticFiles(directory="frontend"), name="site")
+app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
 # Dynamic directory for outputs once first research is run
 @app.on_event("startup")
 def startup_event():
@@ -26,7 +26,7 @@ def startup_event():
         os.makedirs("outputs")
     app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
 
-templates = Jinja2Templates(directory="client")
+templates = Jinja2Templates(directory="frontend")
 
 manager = WebSocketManager()
 

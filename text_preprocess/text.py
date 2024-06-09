@@ -5,7 +5,7 @@ import string
 
 from selenium.webdriver.remote.webdriver import WebDriver
 
-from config import Config
+from settings import Config
 from agent.llm_utils import create_chat_completion
 import os
 from md2pdf.core import md2pdf

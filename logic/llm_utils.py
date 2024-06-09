@@ -10,8 +10,8 @@ from langchain.adapters import openai as lc_openai
 from colorama import Fore, Style
 from openai.error import APIError, RateLimitError
 
-from agent.prompts import auto_agent_instructions
-from config import Config
+from logic.prompts import auto_agent_instructions
+from settings import Config
 
 CFG = Config()
 

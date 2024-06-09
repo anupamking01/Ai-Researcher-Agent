@@ -5,16 +5,16 @@ import asyncio
 import json
 import uuid
 
-from actions.web_search import web_search
-from actions.web_scrape import async_browse
-from processing.text import \
+from scrape.web_search import web_search
+from scrape.web_scrape import async_browse
+from text_preprocess.text import \
     write_to_file, \
     create_message, \
     create_chat_completion, \
     read_txt_files, \
     write_md_to_pdf
-from config import Config
-from agent import prompts
+from settings import Config
+from logic import prompts
 import os
 import string
 

@@ -19,10 +19,10 @@ from selenium.webdriver.safari.options import Options as SafariOptions
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
 from fastapi import WebSocket
-import processing.text as summary
+import text_preprocess.text as summary
 
-from config import Config
-from processing.html import extract_hyperlinks, format_hyperlinks
+from settings import Config
+from text_preprocess.html import extract_hyperlinks, format_hyperlinks
 
 from concurrent.futures import ThreadPoolExecutor
 
