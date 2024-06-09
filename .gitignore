@@ -14,4 +14,7 @@ py-ai-agent/
 *.github
 __pycache__/
 *.pdf
+actions/
+*.DS_Store
+*.crdownload
 
