@@ -6,10 +6,12 @@ on:
       smart_model:
         description: Exact OpenAI model ID for planning/report/verifier calls
         required: true
+        default: "gpt-5.6-terra"
         type: string
       fast_model:
         description: Exact OpenAI model ID for per-source summarization calls
         required: true
+        default: "gpt-5.6-luna"
         type: string
       temperature:
         description: Sampling temperature; use 0 for the frozen pilot
