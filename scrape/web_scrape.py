@@ -8,13 +8,12 @@ from pathlib import Path
 from sys import platform
 
 from bs4 import BeautifulSoup
-from chromedriver_py import binary_path
 from fastapi import WebSocket
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options as ChromeOptions
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
+from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.safari.options import Options as SafariOptions
 from selenium.webdriver.support import expected_conditions as EC
@@ -128,7 +127,7 @@ def scrape_text_with_selenium(url: str) -> tuple[WebDriver, str]:
     options.add_argument("--headless")
 
     if CFG.selenium_web_browser == "firefox":
-        service = Service(executable_path=GeckoDriverManager().install())
+        service = FirefoxService(executable_path=GeckoDriverManager().install())
         driver = webdriver.Firefox(service=service, options=options)
     elif CFG.selenium_web_browser == "safari":
         driver = webdriver.Safari(options=options)
@@ -138,9 +137,9 @@ def scrape_text_with_selenium(url: str) -> tuple[WebDriver, str]:
             options.add_argument("--remote-debugging-port=9222")
         options.add_argument("--no-sandbox")
         options.add_experimental_option("prefs", {"download_restrictions": 3})
-        driver = webdriver.Chrome(
-            service=Service(executable_path=binary_path), options=options
-        )
+        # Selenium Manager resolves a driver compatible with the installed
+        # Chrome instead of relying on the repository's old ChromeDriver 119.
+        driver = webdriver.Chrome(options=options)
 
     driver.get(url)
     WebDriverWait(driver, 10).until(
