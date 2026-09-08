@@ -1,10 +1,17 @@
 import asyncio
 import datetime
+import time
 
-from typing import List, Dict
+from typing import Dict, List
 from fastapi import WebSocket
-from settings import check_openai_api_key
+
+from logic.evaluation import RunTrace
+from logic.experiment import ExperimentConfig, save_run_trace
 from logic.research_agent import ResearchAgent
+from settings import Config, check_openai_api_key
+
+
+CFG = Config()
 
 
 class WebSocketManager:
@@ -34,27 +41,126 @@ class WebSocketManager:
         del self.sender_tasks[websocket]
         del self.message_queues[websocket]
 
-    async def start_streaming(self, task, report_type, agent, agent_role_prompt, websocket):
-        report, path = await run_agent(task, report_type, agent, agent_role_prompt, websocket)
+    async def start_streaming(
+        self,
+        task,
+        report_type,
+        agent,
+        agent_role_prompt,
+        websocket,
+        experiment_config=None,
+    ):
+        report, path = await run_agent(
+            task,
+            report_type,
+            agent,
+            agent_role_prompt,
+            websocket,
+            experiment_config=experiment_config,
+        )
         return report, path
 
 
-async def run_agent(task, report_type, agent, agent_role_prompt, websocket):
+async def run_agent(
+    task,
+    report_type,
+    agent,
+    agent_role_prompt,
+    websocket,
+    experiment_config=None,
+):
+    """Run one instrumented research-agent experiment.
+
+    The public return value remains ``(report, path)`` for compatibility with
+    the existing web application. A machine-readable trace is persisted for
+    every attempted run, including failed runs.
+    """
     check_openai_api_key()
+    config = experiment_config or ExperimentConfig()
+    start_time = datetime.datetime.now(datetime.timezone.utc)
+    start_clock = time.perf_counter()
 
-    start_time = datetime.datetime.now()
+    assistant = ResearchAgent(
+        task,
+        agent,
+        agent_role_prompt,
+        websocket,
+        experiment_config=config,
+    )
 
-    # await websocket.send_json({"type": "logs", "output": f"Start time: {str(start_time)}\n\n"})
+    report = ""
+    path = None
+    run_error = None
 
-    assistant = ResearchAgent(task, agent, agent_role_prompt, websocket)
-    await assistant.conduct_research()
+    try:
+        await assistant.conduct_research()
+        report, path = await assistant.write_report(report_type, websocket)
+    except Exception as exc:  # Trace the failure, then preserve existing behavior.
+        run_error = exc
+    finally:
+        latency_seconds = time.perf_counter() - start_clock
+        verification = assistant.verification_result or {}
 
-    report, path = await assistant.write_report(report_type, websocket)
+        trace = RunTrace(
+            run_id=str(assistant.directory_name),
+            completed=bool(report) and run_error is None,
+            source_count=assistant.browse_attempt_count,
+            failed_source_count=assistant.browse_failure_count,
+            citation_count=int(verification.get("claims_checked", 0) or 0),
+            unsupported_claim_count=int(verification.get("unsupported", 0) or 0),
+            latency_seconds=latency_seconds,
+            prompt_tokens=0,
+            completion_tokens=0,
+            estimated_cost_usd=0.0,
+            variant_id=config.variant_id,
+            question=task,
+            planning_mode=config.planning_mode,
+            verification_mode=config.verification_mode,
+            source_budget=config.source_budget,
+            query_count=len(assistant.search_queries),
+            supported_claim_count=int(verification.get("supported", 0) or 0),
+            partially_supported_claim_count=int(
+                verification.get("partially_supported", 0) or 0
+            ),
+            contradicted_claim_count=int(
+                verification.get("contradicted", 0) or 0
+            ),
+            smart_model=CFG.smart_llm_model,
+            fast_model=CFG.fast_llm_model,
+            temperature=CFG.temperature,
+            usage_accounting_status="not_exposed_by_legacy_streaming_adapter",
+        )
+        trace_payload = trace.to_dict()
+        trace_payload["started_at_utc"] = start_time.isoformat()
+        trace_payload["verification_status"] = verification.get(
+            "status", "not_requested"
+        )
+        if run_error is not None:
+            trace_payload["error_type"] = type(run_error).__name__
+            trace_payload["error_message"] = str(run_error)[:1000]
 
-    await websocket.send_json({"type": "path", "output": path})
+        trace_path = save_run_trace(
+            trace=trace_payload,
+            config=config,
+            run_id=str(assistant.directory_name),
+        )
 
-    end_time = datetime.datetime.now()
-    await websocket.send_json({"type": "logs", "output": f"\nEnd time: {end_time}\n"})
-    await websocket.send_json({"type": "logs", "output": f"\nTotal run time: {end_time - start_time}\n"})
+        if websocket is not None and hasattr(websocket, "send_json"):
+            await websocket.send_json(
+                {
+                    "type": "logs",
+                    "output": (
+                        f"\nExperiment variant: {config.variant_id}\n"
+                        f"Trace: {trace_path}\n"
+                        f"Total run time: {latency_seconds:.2f}s\n"
+                    ),
+                }
+            )
+
+    if run_error is not None:
+        raise run_error
+
+    if websocket is not None and hasattr(websocket, "send_json"):
+        await websocket.send_json({"type": "path", "output": path})
 
     return report, path
