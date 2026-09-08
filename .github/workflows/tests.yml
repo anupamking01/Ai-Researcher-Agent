@@ -20,5 +20,8 @@ jobs:
       - name: Install test dependencies
         run: pip install -r requirements-dev.txt
 
+      - name: Compile research code
+        run: python -m compileall -q agent logic scripts tests
+
       - name: Run offline unit tests
         run: python -m pytest -q
