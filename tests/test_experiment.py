@@ -9,6 +9,7 @@ from logic.experiment import (
     normalize_verifier_output,
     save_run_trace,
 )
+from scripts.summarize_pilot import _estimate_reported_token_cost
 
 
 def test_initial_pilot_variants_are_explicit():
@@ -109,6 +110,31 @@ def test_usage_tracker_aggregates_provider_usage_by_model():
     assert usage["total_tokens"] == 185
     assert usage["by_model"]["model-a"]["model_calls"] == 2
     assert usage["by_model"]["model-b"]["unavailable_calls"] == 1
+
+
+def test_frozen_cost_estimator_uses_exact_model_rates():
+    pricing = {
+        "models": {
+            "smart": {"input": 2.0, "output": 12.0},
+            "fast": {"input": 0.2, "output": 1.2},
+        }
+    }
+    usage = {
+        "smart": {"prompt_tokens": 1_000_000, "completion_tokens": 100_000},
+        "fast": {"prompt_tokens": 500_000, "completion_tokens": 50_000},
+    }
+    cost, status = _estimate_reported_token_cost(usage, pricing)
+    assert cost == pytest.approx(3.36)
+    assert status == "estimated_from_frozen_uncached_rates"
+
+
+def test_frozen_cost_estimator_rejects_unknown_model():
+    cost, status = _estimate_reported_token_cost(
+        {"unknown": {"prompt_tokens": 1, "completion_tokens": 1}},
+        {"models": {}},
+    )
+    assert cost is None
+    assert status == "unknown_model_price:unknown"
 
 
 def test_trace_is_persisted_under_variant_directory(tmp_path):
