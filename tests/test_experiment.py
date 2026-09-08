@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from agent.llm_utils import UsageTracker
 from logic.experiment import (
     ExperimentConfig,
     allocate_source_budgets,
@@ -18,14 +19,17 @@ def test_initial_pilot_variants_are_explicit():
     assert direct.planning_mode == "direct"
     assert direct.source_budget == 6
     assert direct.verification_mode == "none"
+    assert direct.stream_report is False
 
     assert planner.planning_mode == "planner"
     assert planner.source_budget == 6
     assert planner.verification_mode == "none"
+    assert planner.stream_report is False
 
     assert verifier.planning_mode == "planner"
     assert verifier.source_budget == 6
     assert verifier.verification_mode == "verify"
+    assert verifier.stream_report is False
 
 
 def test_unknown_variant_is_rejected():
@@ -73,6 +77,40 @@ def test_verifier_accepts_json_code_fence():
     assert parsed["claims_checked"] == 1
 
 
+def test_usage_tracker_aggregates_provider_usage_by_model():
+    tracker = UsageTracker()
+    tracker.record_response(
+        "model-a",
+        {
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 25,
+                "total_tokens": 125,
+            }
+        },
+    )
+    tracker.record_response(
+        "model-a",
+        {
+            "usage": {
+                "prompt_tokens": 50,
+                "completion_tokens": 10,
+                "total_tokens": 60,
+            }
+        },
+    )
+    tracker.record_unavailable("model-b")
+
+    usage = tracker.snapshot()
+    assert usage["model_calls"] == 3
+    assert usage["unavailable_calls"] == 1
+    assert usage["prompt_tokens"] == 150
+    assert usage["completion_tokens"] == 35
+    assert usage["total_tokens"] == 185
+    assert usage["by_model"]["model-a"]["model_calls"] == 2
+    assert usage["by_model"]["model-b"]["unavailable_calls"] == 1
+
+
 def test_trace_is_persisted_under_variant_directory(tmp_path):
     config = ExperimentConfig(
         variant_id="D6",
@@ -80,6 +118,9 @@ def test_trace_is_persisted_under_variant_directory(tmp_path):
         source_budget=6,
         verification_mode="none",
         trace_root=str(tmp_path),
+        task_set_id="pilot-v1",
+        task_id="pilot-01",
+        stream_report=False,
     )
     output_path = save_run_trace(
         trace={"completed": True, "source_count": 6},
@@ -88,6 +129,7 @@ def test_trace_is_persisted_under_variant_directory(tmp_path):
     )
 
     payload = json.loads(open(output_path, encoding="utf-8").read())
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["experiment"]["variant_id"] == "D6"
+    assert payload["experiment"]["task_id"] == "pilot-01"
     assert payload["trace"]["source_count"] == 6
