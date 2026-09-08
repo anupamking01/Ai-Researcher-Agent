@@ -11,7 +11,7 @@ Brotli==1.1.0
 certifi==2024.6.2
 cffi==1.16.0
 charset-normalizer==3.3.2
-click==8.1.7
+click==8.1.8
 colorama==0.4.6
 cssselect2==0.7.0
 dataclasses-json==0.5.14
