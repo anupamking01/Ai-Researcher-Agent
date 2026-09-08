@@ -23,6 +23,11 @@ on:
         required: true
         default: "D6 P6 P6V"
         type: string
+  push:
+    branches:
+      - research-paper-eval-2027
+    paths:
+      - experiments/run_live_pilot.trigger
 
 jobs:
   pilot:
@@ -32,9 +37,10 @@ jobs:
       contents: read
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      SMART_LLM_MODEL: ${{ inputs.smart_model }}
-      FAST_LLM_MODEL: ${{ inputs.fast_model }}
-      TEMPERATURE: ${{ inputs.temperature }}
+      SMART_LLM_MODEL: ${{ github.event.inputs.smart_model || 'gpt-5.6-terra' }}
+      FAST_LLM_MODEL: ${{ github.event.inputs.fast_model || 'gpt-5.6-luna' }}
+      TEMPERATURE: ${{ github.event.inputs.temperature || '0' }}
+      PILOT_VARIANTS: ${{ github.event.inputs.variants || 'D6 P6 P6V' }}
       USE_WEB_BROWSER: chrome
       PYTHONUNBUFFERED: "1"
 
@@ -56,6 +62,13 @@ jobs:
             exit 1
           fi
 
+      - name: Show frozen pilot configuration
+        run: |
+          echo "SMART_LLM_MODEL=$SMART_LLM_MODEL"
+          echo "FAST_LLM_MODEL=$FAST_LLM_MODEL"
+          echo "TEMPERATURE=$TEMPERATURE"
+          echo "PILOT_VARIANTS=$PILOT_VARIANTS"
+
       - name: Show browser version
         run: google-chrome --version || google-chrome-stable --version
 
@@ -72,7 +85,7 @@ jobs:
 
       - name: Run frozen live pilot
         shell: bash
-        run: python scripts/run_pilot.py --variants ${{ inputs.variants }}
+        run: python scripts/run_pilot.py --variants $PILOT_VARIANTS
 
       - name: Summarize pilot
         if: always()
