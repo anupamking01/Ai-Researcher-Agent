@@ -19,9 +19,9 @@ class ExperimentConfig:
     """Controls one experimental agent variant.
 
     ``source_budget`` is the maximum number of unique URLs scheduled for
-    browsing during one run. This is intentionally an attempted-browse budget
-    rather than a successful-source target so variants receive the same
-    maximum number of external browsing calls even when some pages fail.
+    browsing during one run. This is an attempted-browse budget rather than a
+    successful-source target so variants receive the same maximum number of
+    external browsing calls even when some pages fail.
     """
 
     variant_id: str = "P6"
@@ -29,6 +29,10 @@ class ExperimentConfig:
     source_budget: int = 6
     verification_mode: str = "none"
     trace_root: str = "outputs/experiment_traces"
+    task_set_id: str = ""
+    task_id: str = ""
+    stream_report: bool = True
+    search_candidate_multiplier: int = 3
 
     def __post_init__(self) -> None:
         if self.planning_mode not in _VALID_PLANNING_MODES:
@@ -44,28 +48,33 @@ class ExperimentConfig:
             raise ValueError("source_budget must be a positive integer")
         if not self.variant_id.strip():
             raise ValueError("variant_id must be non-empty")
+        if self.search_candidate_multiplier <= 0:
+            raise ValueError("search_candidate_multiplier must be positive")
 
     @classmethod
     def from_variant(cls, variant_id: str) -> "ExperimentConfig":
-        """Return one of the initial pilot variants used by the paper."""
+        """Return one of the frozen initial pilot variants used by the paper."""
         variants = {
             "D6": cls(
                 variant_id="D6",
                 planning_mode="direct",
                 source_budget=6,
                 verification_mode="none",
+                stream_report=False,
             ),
             "P6": cls(
                 variant_id="P6",
                 planning_mode="planner",
                 source_budget=6,
                 verification_mode="none",
+                stream_report=False,
             ),
             "P6V": cls(
                 variant_id="P6V",
                 planning_mode="planner",
                 source_budget=6,
                 verification_mode="verify",
+                stream_report=False,
             ),
         }
         try:
@@ -93,11 +102,7 @@ def allocate_source_budgets(total_budget: int, n_queries: int) -> list[int]:
 
 
 def normalize_verifier_output(raw_result: str) -> dict[str, Any]:
-    """Parse and normalize the bounded verifier's JSON response.
-
-    Count totals are recomputed from the four labels rather than trusting the
-    model-provided total. This keeps trace metrics internally consistent.
-    """
+    """Parse and normalize the bounded verifier's JSON response."""
     text = (raw_result or "").strip()
     if text.startswith("```"):
         lines = text.splitlines()
@@ -140,7 +145,7 @@ def save_run_trace(
     output_path = root / f"{run_id}.json"
 
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
         "experiment": config.to_dict(),
         "trace": trace,
