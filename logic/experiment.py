@@ -19,9 +19,9 @@ class ExperimentConfig:
     """Controls one experimental agent variant.
 
     ``source_budget`` is the maximum number of unique URLs scheduled for
-    browsing during one run.  This is intentionally an attempted-browse
-    budget rather than a successful-source target so variants receive the
-    same maximum number of external browsing calls even when some pages fail.
+    browsing during one run. This is intentionally an attempted-browse budget
+    rather than a successful-source target so variants receive the same
+    maximum number of external browsing calls even when some pages fail.
     """
 
     variant_id: str = "P6"
@@ -77,6 +77,55 @@ class ExperimentConfig:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def allocate_source_budgets(total_budget: int, n_queries: int) -> list[int]:
+    """Spread a fixed external browsing-call budget across planned queries."""
+    if total_budget < 0:
+        raise ValueError("total_budget cannot be negative")
+    if n_queries < 0:
+        raise ValueError("n_queries cannot be negative")
+    if n_queries == 0:
+        return []
+
+    base, remainder = divmod(total_budget, n_queries)
+    return [base + (1 if index < remainder else 0) for index in range(n_queries)]
+
+
+def normalize_verifier_output(raw_result: str) -> dict[str, Any]:
+    """Parse and normalize the bounded verifier's JSON response.
+
+    Count totals are recomputed from the four labels rather than trusting the
+    model-provided total. This keeps trace metrics internally consistent.
+    """
+    text = (raw_result or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].strip().lower() in {"```", "```json"}:
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        raise ValueError("Verifier output must be a JSON object")
+
+    labels = (
+        "supported",
+        "partially_supported",
+        "unsupported",
+        "contradicted",
+    )
+    normalized: dict[str, Any] = {}
+    for label in labels:
+        value = int(data.get(label, 0))
+        normalized[label] = max(value, 0)
+
+    normalized["claims_checked"] = sum(normalized[label] for label in labels)
+    examples = data.get("examples", [])
+    normalized["examples"] = examples[:8] if isinstance(examples, list) else []
+    return normalized
 
 
 def save_run_trace(
