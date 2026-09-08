@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this repository in academic work, please cite the software repository and the relevant related work listed in the README."
+title: "AI Research Agent: Planner-Execution Web Research System"
+type: software
+authors:
+  - family-names: Poddar
+    given-names: Anupam
+repository-code: "https://github.com/anupamking01/Ai-Researcher-Agent"
+license: MIT
+date-released: 2024-01-01
+keywords:
+  - agentic-ai
+  - large-language-models
+  - autonomous-agents
+  - web-research
+  - retrieval
+  - llm-evaluation
