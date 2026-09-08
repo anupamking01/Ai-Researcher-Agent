@@ -4,7 +4,7 @@
 
 This document records the operational choices used by the first executable pilot and takes precedence over any earlier planning-language in `RESEARCH_PROTOCOL.md` where the two differ. The protocol should be revised to match these choices before the main experiment is frozen.
 
-The pilot infrastructure is implemented and offline-validated. The remaining step is the live 15-run execution (5 tasks × D6/P6/P6V) with explicit current model IDs and an authenticated OpenAI API key.
+The pilot infrastructure is implemented and offline-validated. The remaining experimental step is the live 15-run execution (5 tasks × D6/P6/P6V) with explicit current model IDs and an authenticated OpenAI API key.
 
 ## Source-budget operationalization
 
@@ -28,7 +28,7 @@ The verifier examines up to 20 important atomic factual claims using only eviden
 
 ## Usage accounting
 
-The project still pins `openai==0.27.10`, but pilot report generation is deliberately non-streaming so the Chat Completions response exposes provider-reported usage. A thread-safe usage ledger now aggregates:
+The project still pins `openai==0.27.10`, but pilot report generation is deliberately non-streaming so the Chat Completions response exposes provider-reported usage. A thread-safe usage ledger aggregates:
 
 - model-call count;
 - prompt tokens;
@@ -39,7 +39,24 @@ The project still pins `openai==0.27.10`, but pilot report generation is deliber
 
 Per-source summarization calls, planner calls, report-generation calls, and verifier calls share the same run-level usage ledger. If any call lacks provider usage, the trace marks usage as partial/unavailable rather than estimating missing tokens.
 
-USD cost is still intentionally not computed. Before cost claims are made, the experiment must freeze a dated pricing table for the exact model IDs used. Token accounting and cost accounting are therefore separate fields in the trace.
+## Frozen cost accounting
+
+`experiments/openai_pricing_2026-09-08.json` freezes a dated text-token pricing snapshot for the model IDs intended for this pilot. The default live workflow uses:
+
+- smart/planning/report/verifier model: `gpt-5.6-terra`;
+- fast/source-summarization model: `gpt-5.6-luna`;
+- temperature: `0`.
+
+`scripts/summarize_pilot.py` uses the trace's **per-model provider-reported prompt and completion token totals** and the frozen pricing file to calculate an estimated USD cost for each run, variant averages, and paired cost deltas.
+
+The cost estimator deliberately:
+
+- applies the frozen uncached input rate because cached-input tokens are not separately captured by the current ledger;
+- refuses to cost an unknown model ID rather than substituting another model's price;
+- labels the estimate and pricing effective date in the summary output;
+- leaves long-context pricing multipliers for explicit review if any live request crosses the provider threshold.
+
+The pricing file is a frozen research artifact and should not be silently edited after live pilot execution.
 
 ## Retrieval audit trail
 
@@ -70,13 +87,13 @@ Every run trace records:
 - `FAST_LLM_MODEL`
 - `TEMPERATURE`
 
-Explicit process environment variables now take precedence over `.env`, preventing stale local settings from replacing pinned experiment values.
+Explicit process environment variables take precedence over `.env`, preventing stale local settings from replacing pinned experiment values.
 
 The runner writes `outputs/pilot_manifest.json` with the task set, selected variants, model IDs, temperature, and Git commit before execution. `scripts/summarize_pilot.py` subsequently produces `pilot_summary.json` and `pilot_runs.csv` from persisted traces.
 
 ## GitHub Actions execution
 
-`.github/workflows/live-pilot.yml` provides a manual `workflow_dispatch` path. It requires an `OPENAI_API_KEY` repository secret and explicit model/temperature inputs, runs offline tests first, executes the frozen pilot, summarizes traces, and uploads reports/traces/CSV/JSON as a workflow artifact.
+`.github/workflows/live-pilot.yml` provides a manual `workflow_dispatch` path. It requires an `OPENAI_API_KEY` repository secret, defaults to Terra/Luna at temperature 0, runs offline tests first, executes the frozen pilot, summarizes traces, and uploads reports/traces/CSV/JSON as a workflow artifact.
 
 No API key is committed to the repository.
 
@@ -89,8 +106,9 @@ The five frozen tasks in `experiments/pilot_tasks.json` are diagnostic only. Do 
 3. that browsing budgets are actually respected;
 4. that failed scraping is correctly distinguished from successful evidence;
 5. that provider usage accounting is complete for the live configuration;
-6. that verifier output is parseable often enough to be useful;
-7. that D6/P6/P6V show enough operational and support-metric variation to justify a larger study;
-8. that reports are suitable for a later blinded human-quality evaluation.
+6. that frozen-price cost accounting covers every used model;
+7. that verifier output is parseable often enough to be useful;
+8. that D6/P6/P6V show enough operational and support-metric variation to justify a larger study;
+9. that reports are suitable for a later blinded human-quality evaluation.
 
-Only after this pilot should the main task set, model IDs, temperature, human-rubric protocol, dated pricing table, and expanded variant matrix be frozen.
+Only after this pilot should the main task set, human-rubric protocol, and expanded variant matrix be frozen for the full study.
