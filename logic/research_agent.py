@@ -5,8 +5,9 @@ import json
 import os
 import uuid
 
+from agent.llm_utils import UsageTracker
 from logic import prompts
-from logic.experiment import ExperimentConfig
+from logic.experiment import ExperimentConfig, normalize_verifier_output
 from scrape.web_search import web_search
 from scrape.web_scrape import async_browse
 from settings import Config
@@ -30,6 +31,7 @@ class ResearchAgent:
         agent_role_prompt,
         websocket,
         experiment_config=None,
+        usage_tracker=None,
     ):
         """Initialize the research assistant for a single research task."""
         self.question = question
@@ -45,9 +47,15 @@ class ResearchAgent:
         self.dir_path = os.path.dirname(f"./outputs/{self.directory_name}/")
         self.websocket = websocket
         self.experiment_config = experiment_config or ExperimentConfig()
+        self.usage_tracker = usage_tracker or UsageTracker()
 
         # Run instrumentation used by the paper trace logger.
         self.search_queries = []
+        self.search_call_count = 0
+        self.search_records = []
+        self.scheduled_urls = []
+        self.successful_urls = []
+        self.failed_urls = []
         self.browse_attempt_count = 0
         self.browse_success_count = 0
         self.browse_failure_count = 0
@@ -64,6 +72,7 @@ class ResearchAgent:
         return create_chat_completion(
             model=CFG.fast_llm_model,
             messages=messages,
+            usage_tracker=self.usage_tracker,
         )
 
     @property
@@ -94,6 +103,7 @@ class ResearchAgent:
             if not url or url in self.visited_urls:
                 continue
             self.visited_urls.add(url)
+            self.scheduled_urls.append(url)
             new_urls.append(url)
             await self._log(f"✅ Scheduling source URL for research: {url}\n")
         return new_urls
@@ -108,6 +118,7 @@ class ResearchAgent:
             messages=messages,
             stream=stream,
             websocket=websocket,
+            usage_tracker=self.usage_tracker,
         )
 
     async def create_search_queries(self):
@@ -128,8 +139,10 @@ class ResearchAgent:
         if not isinstance(parsed, list):
             raise ValueError("Planner output must be a JSON list")
         queries = [str(query).strip() for query in parsed if str(query).strip()]
-        if not queries:
-            raise ValueError("Planner returned no usable search queries")
+        if len(queries) != 4:
+            raise ValueError(
+                f"Planner must return exactly 4 usable queries; got {len(queries)}"
+            )
 
         await self._log(
             "🧠 Planned research queries: " + json.dumps(queries, ensure_ascii=False)
@@ -137,22 +150,37 @@ class ResearchAgent:
         return queries
 
     async def async_search(self, query, max_sources):
-        """Search and browse unseen sources for one query under a fixed budget.
-
-        Individual browse failures are logged and excluded instead of causing
-        the entire research run to fail when responses are aggregated.
-        """
+        """Search and browse unseen sources for one query under a fixed budget."""
         allowed = min(max(int(max_sources), 0), self.remaining_source_budget)
         if allowed <= 0:
             return []
 
-        search_results = json.loads(web_search(query, num_results=allowed))
+        # Ask the search engine for more candidates than we browse so duplicate
+        # URLs across planner queries do not unnecessarily leave the fixed
+        # browse budget unused. Only scheduled browse calls consume the budget.
+        candidate_limit = min(
+            max(
+                allowed * self.experiment_config.search_candidate_multiplier,
+                allowed,
+            ),
+            20,
+        )
+        self.search_call_count += 1
+        raw_results = web_search(query, num_results=candidate_limit)
+        search_results = json.loads(raw_results)
         candidate_urls = [
             result.get("href")
             for result in search_results
             if isinstance(result, dict) and result.get("href")
         ]
         new_search_urls = await self.get_new_urls(candidate_urls, limit=allowed)
+        self.search_records.append(
+            {
+                "query": query,
+                "candidate_urls": candidate_urls,
+                "scheduled_urls": list(new_search_urls),
+            }
+        )
 
         await self._log(
             "🌐 Browsing the following sites for relevant information: "
@@ -166,7 +194,14 @@ class ResearchAgent:
         self.browse_attempt_count += len(new_search_urls)
 
         tasks = [
-            async_browse(url, query, self.websocket) for url in new_search_urls
+            async_browse(
+                url,
+                query,
+                self.websocket,
+                usage_tracker=self.usage_tracker,
+                raise_on_error=True,
+            )
+            for url in new_search_urls
         ]
         responses = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -174,6 +209,7 @@ class ResearchAgent:
         for url, response in zip(new_search_urls, responses):
             if isinstance(response, Exception) or not response:
                 self.browse_failure_count += 1
+                self.failed_urls.append(url)
                 failure_name = (
                     type(response).__name__
                     if isinstance(response, Exception)
@@ -183,6 +219,7 @@ class ResearchAgent:
                 continue
 
             self.browse_success_count += 1
+            self.successful_urls.append(url)
             successful_responses.append(str(response))
 
         return successful_responses
@@ -237,35 +274,6 @@ class ResearchAgent:
         )
         return self.research_summary
 
-    @staticmethod
-    def _parse_verification_json(raw_result):
-        """Parse and normalize the bounded verifier response."""
-        text = (raw_result or "").strip()
-        if text.startswith("```"):
-            text = text.strip("`")
-            if text.lower().startswith("json"):
-                text = text[4:].lstrip()
-
-        data = json.loads(text)
-        if not isinstance(data, dict):
-            raise ValueError("Verifier output must be a JSON object")
-
-        labels = (
-            "supported",
-            "partially_supported",
-            "unsupported",
-            "contradicted",
-        )
-        normalized = {}
-        for label in labels:
-            value = int(data.get(label, 0))
-            normalized[label] = max(value, 0)
-
-        normalized["claims_checked"] = sum(normalized[label] for label in labels)
-        examples = data.get("examples", [])
-        normalized["examples"] = examples[:8] if isinstance(examples, list) else []
-        return normalized
-
     async def verify_report(self, report_text):
         """Run the paper's first claim-to-evidence verifier without repair."""
         raw_result = await self.call_agent(
@@ -276,7 +284,7 @@ class ResearchAgent:
             )
         )
         try:
-            result = self._parse_verification_json(raw_result)
+            result = normalize_verifier_output(raw_result)
             result["status"] = "ok"
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             result = {
@@ -291,9 +299,7 @@ class ResearchAgent:
             }
 
         self.verification_result = result
-        verification_path = (
-            f"./outputs/{self.directory_name}/verification.json"
-        )
+        verification_path = f"./outputs/{self.directory_name}/verification.json"
         os.makedirs(os.path.dirname(verification_path), exist_ok=True)
         write_to_file(
             verification_path,
@@ -309,7 +315,9 @@ class ResearchAgent:
                 self.research_summary,
             )
         )
-        await self._log(f"I will research based on the following concepts: {result}\n")
+        await self._log(
+            f"I will research based on the following concepts: {result}\n"
+        )
         return json.loads(result)
 
     async def write_report(self, report_type, websocket):
@@ -318,18 +326,37 @@ class ResearchAgent:
         await self._log(
             f"✍️ Writing {report_type} for research task: {self.question}..."
         )
-        answer_awaitable = await self.call_agent(
-            report_type_func(self.question, self.research_summary),
-            stream=True,
-            websocket=websocket,
-        )
-        report_text = await answer_awaitable
+        report_prompt = report_type_func(self.question, self.research_summary)
 
-        path = await write_md_to_pdf(
-            report_type,
-            self.directory_name,
-            report_text,
-        )
+        if self.experiment_config.stream_report:
+            answer_awaitable = await self.call_agent(
+                report_prompt,
+                stream=True,
+                websocket=websocket,
+            )
+            report_text = await answer_awaitable
+        else:
+            # Pilot runs are deliberately non-streaming so the pinned OpenAI
+            # client returns its provider-reported token usage object.
+            report_text = await self.call_agent(report_prompt, stream=False)
+
+        path = None
+        try:
+            path = await write_md_to_pdf(
+                report_type,
+                self.directory_name,
+                report_text,
+            )
+        except Exception as exc:
+            # PDF rendering is not part of the experimental treatment. Preserve
+            # the generated report as Markdown instead of invalidating the run.
+            md_path = f"./outputs/{self.directory_name}/{report_type}.md"
+            os.makedirs(os.path.dirname(md_path), exist_ok=True)
+            write_to_file(md_path, report_text)
+            path = md_path
+            await self._log(
+                f"⚠️ PDF export failed ({type(exc).__name__}); saved Markdown report."
+            )
 
         if self.experiment_config.verification_mode == "verify":
             await self._log("🔬 Verifying report claims against retrieved evidence...")
