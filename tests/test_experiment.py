@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from agent.llm_utils import UsageTracker
+from logic.usage import UsageTracker
 from logic.experiment import (
     ExperimentConfig,
     allocate_source_budgets,
