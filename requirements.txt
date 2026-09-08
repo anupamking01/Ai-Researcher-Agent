@@ -86,7 +86,7 @@ tqdm==4.66.4
 trio==0.25.1
 trio-websocket==0.11.1
 typer==0.12.3
-typing-inspect==1.0.0
+typing-inspect==0.9.0
 typing_extensions==4.12.2
 ujson==5.10.0
 urllib3==2.2.1
