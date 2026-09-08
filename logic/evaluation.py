@@ -28,11 +28,16 @@ class RunTrace:
 
     # Experimental metadata. Defaults preserve compatibility with older traces.
     variant_id: str = ""
+    task_set_id: str = ""
+    task_id: str = ""
     question: str = ""
     planning_mode: str = ""
     verification_mode: str = ""
     source_budget: int = 0
     query_count: int = 0
+    search_call_count: int = 0
+    model_call_count: int = 0
+    unavailable_usage_call_count: int = 0
     supported_claim_count: int = 0
     partially_supported_claim_count: int = 0
     contradicted_claim_count: int = 0
@@ -40,6 +45,7 @@ class RunTrace:
     fast_model: str = ""
     temperature: float = 0.0
     usage_accounting_status: str = "unavailable"
+    cost_accounting_status: str = "not_computed"
 
     @property
     def total_tokens(self) -> int:
@@ -75,11 +81,7 @@ class RunTrace:
 
     @property
     def citation_precision_proxy(self) -> float:
-        """Legacy conservative proxy based on manually flagged unsupported claims.
-
-        This is not a factuality score. It only becomes meaningful when an
-        evaluator has annotated unsupported claims using a fixed protocol.
-        """
+        """Legacy conservative proxy based on manually flagged unsupported claims."""
         if self.citation_count <= 0:
             return 0.0
         supported = max(self.citation_count - self.unsupported_claim_count, 0)
@@ -114,6 +116,8 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
             "avg_citation_precision_proxy": 0.0,
             "avg_latency_seconds": 0.0,
             "avg_total_tokens": 0.0,
+            "avg_model_calls": 0.0,
+            "avg_search_calls": 0.0,
             "avg_estimated_cost_usd": 0.0,
         }
 
@@ -131,6 +135,8 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
         ),
         "avg_latency_seconds": safe_mean(run.latency_seconds for run in runs),
         "avg_total_tokens": safe_mean(float(run.total_tokens) for run in runs),
+        "avg_model_calls": safe_mean(float(run.model_call_count) for run in runs),
+        "avg_search_calls": safe_mean(float(run.search_call_count) for run in runs),
         "avg_estimated_cost_usd": safe_mean(run.estimated_cost_usd for run in runs),
     }
 
