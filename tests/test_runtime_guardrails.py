@@ -57,22 +57,42 @@ def test_metasearch_retries_after_transient_empty_results(monkeypatch):
     assert FakeDDGS.calls == 4
 
 
-def test_research_agent_bounds_concurrent_browses(monkeypatch):
+def test_research_agent_bounds_active_browser_sections(monkeypatch):
     urls = [f"https://example.com/{index}" for index in range(4)]
     monkeypatch.setattr(
         "logic.research_agent.web_search",
         lambda query, num_results: json.dumps([{"href": url} for url in urls]),
     )
 
-    active = 0
-    max_active = 0
+    active_browser_sections = 0
+    max_active_browser_sections = 0
+    active_summaries = 0
+    max_active_summaries = 0
+    semaphore_ids = set()
 
     async def fake_browse(*args, **kwargs):
-        nonlocal active, max_active
-        active += 1
-        max_active = max(max_active, active)
-        await asyncio.sleep(0.01)
-        active -= 1
+        nonlocal active_browser_sections, max_active_browser_sections
+        nonlocal active_summaries, max_active_summaries
+
+        semaphore = kwargs.get("browser_semaphore")
+        assert semaphore is not None
+        semaphore_ids.add(id(semaphore))
+
+        # Simulate the Selenium-only critical section inside async_browse.
+        async with semaphore:
+            active_browser_sections += 1
+            max_active_browser_sections = max(
+                max_active_browser_sections, active_browser_sections
+            )
+            await asyncio.sleep(0.01)
+            active_browser_sections -= 1
+
+        # Simulate source summarization after Chrome has been released. These
+        # calls should remain free to overlap and must not hold the semaphore.
+        active_summaries += 1
+        max_active_summaries = max(max_active_summaries, active_summaries)
+        await asyncio.sleep(0.02)
+        active_summaries -= 1
         return "Information gathered from url: useful evidence"
 
     monkeypatch.setattr("logic.research_agent.async_browse", fake_browse)
@@ -96,7 +116,9 @@ def test_research_agent_bounds_concurrent_browses(monkeypatch):
     assert len(responses) == 4
     assert agent.browse_attempt_count == 4
     assert agent.browse_success_count == 4
-    assert max_active == 2
+    assert len(semaphore_ids) == 1
+    assert max_active_browser_sections == 2
+    assert max_active_summaries > max_active_browser_sections
 
 
 def _write_json(path, payload):
