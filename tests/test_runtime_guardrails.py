@@ -8,6 +8,7 @@ from logic.research_agent import ResearchAgent
 from scripts.validate_pilot_artifacts import validate_pilot
 import scrape.web_scrape as web_scrape
 import scrape.web_search as web_search_module
+import text_preprocess.text as text_module
 
 
 def test_missing_overlay_is_optional(monkeypatch, tmp_path):
@@ -55,6 +56,41 @@ def test_metasearch_retries_after_transient_empty_results(monkeypatch):
     results = json.loads(web_search_module.web_search("example query", num_results=1))
     assert results[0]["href"] == "https://example.com/"
     assert FakeDDGS.calls == 4
+
+
+def test_source_text_sampling_is_bounded_and_spans_page():
+    text = "A" * 10_000 + "B" * 10_000 + "C" * 10_000
+    sampled = text_module.select_source_text(text, max_chars=9_000)
+
+    assert len(sampled) <= 9_000
+    assert "A" in sampled
+    assert "B" in sampled
+    assert "C" in sampled
+    assert sampled.count("[...source text omitted...]") == 2
+
+
+def test_source_summary_uses_exactly_one_bounded_model_call(monkeypatch):
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        return "bounded evidence summary"
+
+    monkeypatch.setattr(text_module, "create_chat_completion", fake_completion)
+    very_long_text = "evidence " * 10_000
+    result = text_module.summarize_text(
+        "https://example.com",
+        very_long_text,
+        "What does the evidence show?",
+    )
+
+    assert result == "bounded evidence summary"
+    assert len(calls) == 1
+    assert calls[0]["request_timeout_seconds"] == text_module.SOURCE_SUMMARY_REQUEST_TIMEOUT_SECONDS
+    prompt = calls[0]["messages"][0]["content"]
+    # The wrapper/question text adds a small amount around the bounded source.
+    assert len(prompt) < text_module.SOURCE_TEXT_MAX_CHARS + 1_000
+    assert text_module.NO_RELEVANT_EVIDENCE in prompt
 
 
 def test_research_agent_bounds_active_browser_sections(monkeypatch):
