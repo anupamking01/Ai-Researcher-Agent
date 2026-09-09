@@ -11,6 +11,17 @@ from md2pdf.core import md2pdf
 
 CFG = Config()
 
+# Fixed source-condensation guardrails for the research pipeline. A webpage can
+# contain hundreds of thousands of characters; the legacy implementation made
+# one LLM call per 8K-character chunk, so page length silently changed compute
+# budget and timed-out calls kept running in executor threads. The pilot now
+# uses exactly one fast-model call per successfully extracted source with a
+# deterministic head/middle/tail sample of the page text.
+SOURCE_TEXT_MAX_CHARS = 18_000
+SOURCE_SUMMARY_REQUEST_TIMEOUT_SECONDS = 50
+SOURCE_SUMMARY_MAX_WORDS = 450
+NO_RELEVANT_EVIDENCE = "NO_RELEVANT_EVIDENCE"
+
 
 def split_text(text: str, max_length: int = 8192) -> Generator[str, None, None]:
     """Split text into chunks of a maximum length."""
@@ -31,6 +42,53 @@ def split_text(text: str, max_length: int = 8192) -> Generator[str, None, None]:
         yield "\n".join(current_chunk)
 
 
+def select_source_text(text: str, max_chars: int = SOURCE_TEXT_MAX_CHARS) -> str:
+    """Return a deterministic bounded sample spanning a long source.
+
+    Short pages are retained verbatim. Long pages contribute equal-sized
+    samples from the beginning, middle, and end so a fixed input cap does not
+    systematically discard later sections such as migration notes or caveats.
+    """
+    if max_chars <= 0:
+        raise ValueError("max_chars must be positive")
+    if len(text) <= max_chars:
+        return text
+
+    separator = "\n\n[...source text omitted...]\n\n"
+    separator_budget = 2 * len(separator)
+    if max_chars <= separator_budget + 3:
+        return text[:max_chars]
+
+    content_budget = max_chars - separator_budget
+    base, remainder = divmod(content_budget, 3)
+    lengths = [base + (1 if index < remainder else 0) for index in range(3)]
+    head_len, middle_len, tail_len = lengths
+
+    head = text[:head_len]
+    middle_start = max((len(text) - middle_len) // 2, head_len)
+    middle = text[middle_start : middle_start + middle_len]
+    tail = text[-tail_len:] if tail_len else ""
+    sampled = separator.join((head, middle, tail))
+    return sampled[:max_chars]
+
+
+def create_source_summary_message(chunk: str, question: str) -> Dict[str, str]:
+    """Create the bounded, evidence-only prompt used for one web source."""
+    return {
+        "role": "user",
+        "content": (
+            f'"""{chunk}"""\n\n'
+            "Using ONLY the source text above, extract and summarize the evidence "
+            f'relevant to this research question: "{question}". '
+            "Preserve concrete facts, numbers, dates, limitations, and contrary "
+            f"evidence. Keep the response under {SOURCE_SUMMARY_MAX_WORDS} words. "
+            "Do not add outside knowledge. If the source text contains no substantive "
+            f"evidence relevant to the question (for example a block/error page), "
+            f"respond exactly with {NO_RELEVANT_EVIDENCE}."
+        ),
+    }
+
+
 def summarize_text(
     url: str,
     text: str,
@@ -38,38 +96,24 @@ def summarize_text(
     driver: Optional[WebDriver] = None,
     usage_tracker: Optional[UsageTracker] = None,
 ) -> str:
-    """Summarize scraped text with respect to the research question.
+    """Condense one scraped source with one bounded fast-model call.
 
-    When a UsageTracker is supplied, every non-streaming provider call made
-    while condensing this source contributes its provider-reported token usage
-    to the current experiment trace.
+    The URL and optional driver are retained for compatibility with the legacy
+    application. Research-mode callers release the browser before this function
+    runs. Provider-reported usage is recorded when a UsageTracker is supplied.
     """
     if not text:
         return "Error: No text to summarize"
 
-    summaries = []
-    chunks = list(split_text(text))
-    scroll_ratio = 1 / len(chunks)
-
-    for i, chunk in enumerate(chunks):
-        if driver:
-            scroll_to_percentage(driver, scroll_ratio * i)
-
-        messages = [create_message(chunk, question)]
-        summary = create_chat_completion(
-            model=CFG.fast_llm_model,
-            messages=messages,
-            usage_tracker=usage_tracker,
-        )
-        summaries.append(summary)
-
-    combined_summary = "\n".join(summaries)
-    messages = [create_message(combined_summary, question)]
+    selected_text = select_source_text(text)
+    if driver:
+        scroll_to_percentage(driver, 0.5)
 
     return create_chat_completion(
         model=CFG.fast_llm_model,
-        messages=messages,
+        messages=[create_source_summary_message(selected_text, question)],
         usage_tracker=usage_tracker,
+        request_timeout_seconds=SOURCE_SUMMARY_REQUEST_TIMEOUT_SECONDS,
     )
 
 
@@ -81,7 +125,7 @@ def scroll_to_percentage(driver: WebDriver, ratio: float) -> None:
 
 
 def create_message(chunk: str, question: str) -> Dict[str, str]:
-    """Create a message for the chat completion."""
+    """Create a legacy question-focused message for non-source call sites."""
     return {
         "role": "user",
         "content": f'"""{chunk}""" Using the above text, answer the following'
@@ -109,7 +153,7 @@ async def write_md_to_pdf(task: str, directory_name: str, text: str) -> None:
 
 def read_txt_files(directory):
     all_text = ""
-    for filename in os.listdir(directory):
+    for filename in sorted(os.listdir(directory)):
         if filename.endswith(".txt"):
             with open(os.path.join(directory, filename), "r") as file:
                 all_text += file.read() + "\n"
