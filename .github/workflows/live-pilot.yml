@@ -28,11 +28,6 @@ on:
         required: false
         default: ""
         type: string
-  push:
-    branches:
-      - research-paper-eval-2027
-    paths:
-      - experiments/run_live_pilot.trigger
 
 concurrency:
   group: live-research-pilot-${{ github.ref }}
@@ -47,11 +42,11 @@ jobs:
       actions: write
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      SMART_LLM_MODEL: ${{ github.event.inputs.smart_model || 'gpt-5.6-terra' }}
-      FAST_LLM_MODEL: ${{ github.event.inputs.fast_model || 'gpt-5.6-luna' }}
-      TEMPERATURE: ${{ github.event.inputs.temperature || '1' }}
-      PILOT_VARIANTS: ${{ github.event.inputs.variants || 'D6 P6 P6V' }}
-      PILOT_TASK_IDS: ${{ github.event.inputs.task_ids || '' }}
+      SMART_LLM_MODEL: ${{ github.event.inputs.smart_model }}
+      FAST_LLM_MODEL: ${{ github.event.inputs.fast_model }}
+      TEMPERATURE: ${{ github.event.inputs.temperature }}
+      PILOT_VARIANTS: ${{ github.event.inputs.variants }}
+      PILOT_TASK_IDS: ${{ github.event.inputs.task_ids }}
       USE_WEB_BROWSER: chrome
       PYTHONUNBUFFERED: "1"
 
@@ -77,38 +72,6 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-
-      - name: Load push-trigger configuration
-        if: github.event_name == 'push'
-        shell: bash
-        run: |
-          python - <<'PY'
-          import os
-          from pathlib import Path
-
-          path = Path("experiments/run_live_pilot.trigger")
-          mapping = {
-              "smart_model": "SMART_LLM_MODEL",
-              "fast_model": "FAST_LLM_MODEL",
-              "temperature": "TEMPERATURE",
-              "variants": "PILOT_VARIANTS",
-              "task_ids": "PILOT_TASK_IDS",
-          }
-          values = {}
-          for raw_line in path.read_text(encoding="utf-8").splitlines():
-              if ":" not in raw_line or raw_line.lstrip().startswith("#"):
-                  continue
-              key, value = raw_line.split(":", 1)
-              key = key.strip()
-              value = value.strip()
-              if key in mapping:
-                  values[mapping[key]] = value
-
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
-              for env_name, value in values.items():
-                  handle.write(f"{env_name}={value}\n")
-                  print(f"Loaded {env_name}={value}")
-          PY
 
       - name: Validate API secret is configured
         shell: bash
