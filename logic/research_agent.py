@@ -193,13 +193,19 @@ class ResearchAgent:
         # experimental tool budget comparable even when websites fail.
         self.browse_attempt_count += len(new_search_urls)
 
+        # Every site browse is independently bounded. A single broken website,
+        # browser renderer, or summarization call therefore becomes a recorded
+        # failed source instead of hanging the entire experiment indefinitely.
         tasks = [
-            async_browse(
-                url,
-                query,
-                self.websocket,
-                usage_tracker=self.usage_tracker,
-                raise_on_error=True,
+            asyncio.wait_for(
+                async_browse(
+                    url,
+                    query,
+                    self.websocket,
+                    usage_tracker=self.usage_tracker,
+                    raise_on_error=True,
+                ),
+                timeout=self.experiment_config.browse_timeout_seconds,
             )
             for url in new_search_urls
         ]
@@ -210,11 +216,14 @@ class ResearchAgent:
             if isinstance(response, Exception) or not response:
                 self.browse_failure_count += 1
                 self.failed_urls.append(url)
-                failure_name = (
-                    type(response).__name__
-                    if isinstance(response, Exception)
-                    else "empty_response"
-                )
+                if isinstance(response, asyncio.TimeoutError):
+                    failure_name = "browse_timeout"
+                else:
+                    failure_name = (
+                        type(response).__name__
+                        if isinstance(response, Exception)
+                        else "empty_response"
+                    )
                 await self._log(f"⚠️ Could not browse {url}: {failure_name}")
                 continue
 
