@@ -105,6 +105,7 @@ def _write_manifest(task_set_id, tasks, variants, base_config):
         "provider": "OpenAI ChatCompletion via pinned openai client",
         "browse_timeout_seconds": base_config.browse_timeout_seconds,
         "run_timeout_seconds": base_config.run_timeout_seconds,
+        "max_concurrent_browses": base_config.max_concurrent_browses,
         "cost_accounting": "not_computed_without_frozen_pricing_table",
     }
     path = output_root / "pilot_manifest.json"
@@ -264,6 +265,7 @@ async def main():
     print(f"temperature={os.environ['TEMPERATURE']}", flush=True)
     print(f"browse_timeout_seconds={base_config.browse_timeout_seconds}", flush=True)
     print(f"run_timeout_seconds={base_config.run_timeout_seconds}", flush=True)
+    print(f"max_concurrent_browses={base_config.max_concurrent_browses}", flush=True)
     print(f"manifest={manifest_path}", flush=True)
     print(f"progress={progress_path}", flush=True)
 
@@ -274,6 +276,16 @@ async def main():
     _write_progress(progress)
     print("\nPilot execution finished. Summarize with:", flush=True)
     print("python scripts/summarize_pilot.py", flush=True)
+
+    # Do not allow a research-invalid run to appear green in CI. All traces and
+    # progress checkpoints remain on disk and are uploaded by the workflow's
+    # `if: always()` steps for diagnosis.
+    failed = int(progress.get("failed_runs", 0) or 0)
+    timed_out = int(progress.get("timeout_runs", 0) or 0)
+    if failed or timed_out:
+        raise SystemExit(
+            f"Pilot completed with {failed} failed and {timed_out} timed-out runs"
+        )
 
 
 if __name__ == "__main__":
