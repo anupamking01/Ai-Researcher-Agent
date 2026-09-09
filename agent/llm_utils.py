@@ -17,6 +17,10 @@ from settings import Config
 
 
 CFG = Config()
+# A synchronous provider request must not be able to block the event loop or a
+# source-summary worker forever. This is an infrastructure guardrail; the
+# higher-level pilot also has per-source and per-run timeouts.
+OPENAI_REQUEST_TIMEOUT_SECONDS = 120
 
 
 def _choice_content(response: Any) -> str:
@@ -40,6 +44,7 @@ async def _stream_completion(
         messages=list(messages),
         temperature=temperature,
         stream=True,
+        request_timeout=OPENAI_REQUEST_TIMEOUT_SECONDS,
     )
 
     # openai==0.27.10 streaming responses do not reliably expose a final usage
@@ -92,6 +97,7 @@ def create_chat_completion(
         model=model,
         messages=list(messages),
         temperature=resolved_temperature,
+        request_timeout=OPENAI_REQUEST_TIMEOUT_SECONDS,
     )
     if usage_tracker is not None:
         usage_tracker.record_response(model, response)
