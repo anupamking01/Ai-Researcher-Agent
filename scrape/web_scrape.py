@@ -72,9 +72,7 @@ async def async_browse(
 
         # The source text has already been captured. Release Chrome before the
         # LLM summarization calls so hosted CI does not keep multiple renderers
-        # alive for tens of seconds while waiting on model responses. Scrolling
-        # during summarization was only a visual web-app behavior and does not
-        # affect the captured evidence text used by the research experiment.
+        # alive while waiting on model responses.
         await asyncio.wait_for(
             loop.run_in_executor(local_executor, close_browser, driver),
             timeout=BROWSER_CLOSE_TIMEOUT_SECONDS,
@@ -99,18 +97,21 @@ async def async_browse(
             usage_tracker,
         )
 
-        if not summary_text or str(summary_text).startswith("Error:"):
-            raise RuntimeError(str(summary_text) or "empty source summary")
+        normalized_summary = str(summary_text or "").strip()
+        if not normalized_summary or normalized_summary.startswith("Error:"):
+            raise RuntimeError(normalized_summary or "empty source summary")
+        if normalized_summary == summary.NO_RELEVANT_EVIDENCE:
+            raise RuntimeError("source contained no substantive relevant evidence")
 
         if websocket is not None and hasattr(websocket, "send_json"):
             await websocket.send_json(
                 {
                     "type": "logs",
-                    "output": f"📝 Information gathered from url {url}: {summary_text}",
+                    "output": f"📝 Information gathered from url {url}: {normalized_summary}",
                 }
             )
 
-        return f"Information gathered from url {url}: {summary_text}"
+        return f"Information gathered from url {url}: {normalized_summary}"
     except Exception as exc:
         print(f"An error occurred while processing the url {url}: {exc}")
         if raise_on_error:
