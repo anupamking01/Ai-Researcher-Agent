@@ -134,7 +134,10 @@ def scrape_text_with_selenium(url: str) -> tuple[WebDriver, str]:
     else:
         if platform == "linux" or platform == "linux2":
             options.add_argument("--disable-dev-shm-usage")
-            options.add_argument("--remote-debugging-port=9222")
+            # A fixed port (9222) collides when multiple research sources are
+            # browsed concurrently on CI. Port 0 asks Chrome to choose an
+            # available ephemeral debugging port for each browser instance.
+            options.add_argument("--remote-debugging-port=0")
         options.add_argument("--no-sandbox")
         options.add_experimental_option("prefs", {"download_restrictions": 3})
         # Selenium Manager resolves a driver compatible with the installed
@@ -183,5 +186,13 @@ def close_browser(driver: WebDriver) -> None:
 
 
 def add_header(driver: WebDriver) -> None:
-    """Add the existing in-browser overlay used by the application."""
-    driver.execute_script(open(f"{FILE_DIR}/js/overlay.js", "r").read())
+    """Add the optional in-browser overlay used by the original web app.
+
+    The research pipeline does not depend on this visual overlay. Some copies
+    of the legacy repository do not contain ``js/overlay.js``; in that case we
+    skip it instead of failing an otherwise successful source browse.
+    """
+    overlay_path = FILE_DIR / "js" / "overlay.js"
+    if not overlay_path.is_file():
+        return
+    driver.execute_script(overlay_path.read_text(encoding="utf-8"))
