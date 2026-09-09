@@ -74,7 +74,7 @@ async def run_agent(
 
     The public return value remains ``(report, path)`` for compatibility with
     the existing web application. A machine-readable trace is persisted for
-    every attempted run, including failed runs.
+    every attempted run, including failed and timed-out runs.
     """
     check_openai_api_key()
     config = experiment_config or ExperimentConfig()
@@ -95,9 +95,20 @@ async def run_agent(
     path = None
     run_error = None
 
-    try:
+    async def _execute_run():
         await assistant.conduct_research()
-        report, path = await assistant.write_report(report_type, websocket)
+        return await assistant.write_report(report_type, websocket)
+
+    try:
+        report, path = await asyncio.wait_for(
+            _execute_run(),
+            timeout=config.run_timeout_seconds,
+        )
+    except asyncio.TimeoutError as exc:
+        run_error = TimeoutError(
+            f"Experiment exceeded {config.run_timeout_seconds:.0f}s run timeout"
+        )
+        run_error.__cause__ = exc
     except Exception as exc:  # Trace the failure, then preserve existing behavior.
         run_error = exc
     finally:
@@ -164,6 +175,8 @@ async def run_agent(
         )
         trace_payload["report_words"] = len(report.split()) if report else 0
         trace_payload["report_path"] = path
+        trace_payload["browse_timeout_seconds"] = config.browse_timeout_seconds
+        trace_payload["run_timeout_seconds"] = config.run_timeout_seconds
         if run_error is not None:
             trace_payload["error_type"] = type(run_error).__name__
             trace_payload["error_message"] = str(run_error)[:1000]
