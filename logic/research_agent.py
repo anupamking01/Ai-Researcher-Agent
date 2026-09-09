@@ -166,8 +166,27 @@ class ResearchAgent:
             20,
         )
         self.search_call_count += 1
-        raw_results = web_search(query, num_results=candidate_limit)
-        search_results = json.loads(raw_results)
+        try:
+            raw_results = web_search(query, num_results=candidate_limit)
+            search_results = json.loads(raw_results)
+        except RuntimeError as exc:
+            # A transient metasearch outage should not abort the whole agent
+            # before later planned queries are attempted. The artifact validator
+            # still rejects a final run that fails to spend the frozen source
+            # budget, so this improves resilience without hiding under-retrieval.
+            self.search_records.append(
+                {
+                    "query": query,
+                    "candidate_urls": [],
+                    "scheduled_urls": [],
+                    "search_error": str(exc)[:1000],
+                }
+            )
+            await self._log(
+                f"⚠️ Search failed for query '{query}': {type(exc).__name__}"
+            )
+            return []
+
         candidate_urls = [
             result.get("href")
             for result in search_results
@@ -193,22 +212,29 @@ class ResearchAgent:
         # experimental tool budget comparable even when websites fail.
         self.browse_attempt_count += len(new_search_urls)
 
-        # Every site browse is independently bounded. A single broken website,
-        # browser renderer, or summarization call therefore becomes a recorded
-        # failed source instead of hanging the entire experiment indefinitely.
-        tasks = [
-            asyncio.wait_for(
-                async_browse(
-                    url,
-                    query,
-                    self.websocket,
-                    usage_tracker=self.usage_tracker,
-                    raise_on_error=True,
-                ),
-                timeout=self.experiment_config.browse_timeout_seconds,
-            )
-            for url in new_search_urls
-        ]
+        # Browser-heavy source processing is deliberately bounded. The earlier
+        # CI implementation could launch six independent Chrome renderers at
+        # once, exhausting the hosted runner and producing renderer disconnects.
+        # This guardrail is identical for every variant and is recorded in the
+        # ExperimentConfig for auditability.
+        semaphore = asyncio.Semaphore(
+            self.experiment_config.max_concurrent_browses
+        )
+
+        async def browse_one(url):
+            async with semaphore:
+                return await asyncio.wait_for(
+                    async_browse(
+                        url,
+                        query,
+                        self.websocket,
+                        usage_tracker=self.usage_tracker,
+                        raise_on_error=True,
+                    ),
+                    timeout=self.experiment_config.browse_timeout_seconds,
+                )
+
+        tasks = [browse_one(url) for url in new_search_urls]
         responses = await asyncio.gather(*tasks, return_exceptions=True)
 
         successful_responses = []
