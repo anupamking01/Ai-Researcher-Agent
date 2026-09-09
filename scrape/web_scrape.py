@@ -29,6 +29,9 @@ from text_preprocess.html import extract_hyperlinks, format_hyperlinks
 executor = ThreadPoolExecutor()
 FILE_DIR = Path(__file__).parent.parent
 CFG = Config()
+PAGE_LOAD_TIMEOUT_SECONDS = 45
+SCRIPT_TIMEOUT_SECONDS = 20
+BROWSER_CLOSE_TIMEOUT_SECONDS = 10
 
 
 async def async_browse(
@@ -92,14 +95,17 @@ async def async_browse(
     finally:
         if driver is not None:
             try:
-                await loop.run_in_executor(local_executor, close_browser, driver)
+                await asyncio.wait_for(
+                    loop.run_in_executor(local_executor, close_browser, driver),
+                    timeout=BROWSER_CLOSE_TIMEOUT_SECONDS,
+                )
             except Exception:
                 pass
         local_executor.shutdown(wait=False)
 
 
 def browse_website(url: str, question: str) -> tuple[str, WebDriver]:
-    """Browse a website and return a summary and its driver."""
+    """Browse one website and return a summary and its driver."""
     if not url:
         return "A URL was not specified, cancelling request to browse website.", None
 
@@ -144,6 +150,11 @@ def scrape_text_with_selenium(url: str) -> tuple[WebDriver, str]:
         # Chrome instead of relying on the repository's old ChromeDriver 119.
         driver = webdriver.Chrome(options=options)
 
+    # Bound Selenium itself in addition to the coroutine-level timeout. This
+    # prevents a driver thread from waiting forever on a site that never
+    # completes navigation or on a stuck JavaScript execution.
+    driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT_SECONDS)
+    driver.set_script_timeout(SCRIPT_TIMEOUT_SECONDS)
     driver.get(url)
     WebDriverWait(driver, 10).until(
         EC.presence_of_element_located((By.TAG_NAME, "body"))
