@@ -4,7 +4,7 @@ Example:
     OPENAI_API_KEY=... \
     SMART_LLM_MODEL=<exact-model-id> \
     FAST_LLM_MODEL=<exact-model-id> \
-    TEMPERATURE=0 \
+    TEMPERATURE=1 \
     python scripts/run_pilot.py --variants D6 P6 P6V
 
 No API keys or model IDs are stored in the repository. The script deliberately
@@ -38,14 +38,18 @@ REQUIRED_ENV = (
 )
 
 
+def _utc_now():
+    return datetime.now(timezone.utc).isoformat()
+
+
 class ConsoleWebSocket:
     """Minimal websocket-compatible sink for running the agent from a shell."""
 
     async def send_json(self, payload):
         if payload.get("type") == "logs":
-            print(payload.get("output", ""))
+            print(payload.get("output", ""), flush=True)
         elif payload.get("type") == "path":
-            print(f"report_path={payload.get('output')}")
+            print(f"report_path={payload.get('output')}", flush=True)
 
     async def send_text(self, text):
         print(text, end="", flush=True)
@@ -85,12 +89,12 @@ def _git_commit():
         return "unavailable"
 
 
-def _write_manifest(task_set_id, tasks, variants):
+def _write_manifest(task_set_id, tasks, variants, base_config):
     output_root = REPO_ROOT / "outputs"
     output_root.mkdir(parents=True, exist_ok=True)
     manifest = {
         "schema_version": 1,
-        "started_at_utc": datetime.now(timezone.utc).isoformat(),
+        "started_at_utc": _utc_now(),
         "task_set_id": task_set_id,
         "task_ids": [task["id"] for task in tasks],
         "variants": list(variants),
@@ -99,6 +103,8 @@ def _write_manifest(task_set_id, tasks, variants):
         "temperature": float(os.environ["TEMPERATURE"]),
         "git_commit": _git_commit(),
         "provider": "OpenAI ChatCompletion via pinned openai client",
+        "browse_timeout_seconds": base_config.browse_timeout_seconds,
+        "run_timeout_seconds": base_config.run_timeout_seconds,
         "cost_accounting": "not_computed_without_frozen_pricing_table",
     }
     path = output_root / "pilot_manifest.json"
@@ -109,7 +115,22 @@ def _write_manifest(task_set_id, tasks, variants):
     return path
 
 
-async def _run_variant(variant_id, tasks, task_set_id):
+def _write_progress(progress):
+    """Atomically persist a small live checkpoint for the current pilot."""
+    output_root = REPO_ROOT / "outputs"
+    output_root.mkdir(parents=True, exist_ok=True)
+    path = output_root / "pilot_progress.json"
+    temp_path = output_root / "pilot_progress.json.tmp"
+    progress["updated_at_utc"] = _utc_now()
+    temp_path.write_text(
+        json.dumps(progress, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    temp_path.replace(path)
+    return path
+
+
+async def _run_variant(variant_id, tasks, task_set_id, progress):
     # Import after environment validation so Config reads explicit model IDs.
     from logic.experiment import ExperimentConfig
     from logic.run import run_agent
@@ -123,11 +144,28 @@ async def _run_variant(variant_id, tasks, task_set_id):
             task_set_id=task_set_id,
             task_id=task["id"],
         )
-        print("\n" + "=" * 80)
-        print(f"variant={config.variant_id} task={task['id']}")
-        print(task["question"])
-        print("=" * 80)
+        print("\n" + "=" * 80, flush=True)
+        print(f"variant={config.variant_id} task={task['id']}", flush=True)
+        print(task["question"], flush=True)
+        print("=" * 80, flush=True)
 
+        started_at = _utc_now()
+        progress["current"] = {
+            "variant": config.variant_id,
+            "task_id": task["id"],
+            "status": "running",
+            "started_at_utc": started_at,
+        }
+        checkpoint_path = _write_progress(progress)
+        print(
+            f"CHECKPOINT start variant={config.variant_id} task={task['id']} "
+            f"progress={checkpoint_path}",
+            flush=True,
+        )
+
+        status = "completed"
+        error_type = None
+        error_message = None
         try:
             await run_agent(
                 task=task["question"],
@@ -138,8 +176,35 @@ async def _run_variant(variant_id, tasks, task_set_id):
                 experiment_config=config,
             )
         except Exception as exc:
-            # run_agent persists a failed trace before re-raising.
-            print(f"FAILED {task['id']}: {type(exc).__name__}: {exc}")
+            status = "timeout" if isinstance(exc, TimeoutError) else "failed"
+            error_type = type(exc).__name__
+            error_message = str(exc)[:1000]
+            print(
+                f"FAILED {task['id']}: {error_type}: {error_message}",
+                flush=True,
+            )
+
+        progress["attempted_runs"] += 1
+        progress[f"{status}_runs"] += 1
+        event = {
+            "variant": config.variant_id,
+            "task_id": task["id"],
+            "status": status,
+            "started_at_utc": started_at,
+            "finished_at_utc": _utc_now(),
+        }
+        if error_type:
+            event["error_type"] = error_type
+            event["error_message"] = error_message
+        progress["events"].append(event)
+        progress["current"] = None
+        _write_progress(progress)
+        print(
+            f"CHECKPOINT finish variant={config.variant_id} task={task['id']} "
+            f"status={status} attempted={progress['attempted_runs']}/"
+            f"{progress['total_expected_runs']}",
+            flush=True,
+        )
 
 
 async def main():
@@ -172,18 +237,43 @@ async def main():
         if missing:
             raise SystemExit(f"Unknown task IDs: {sorted(missing)}")
 
-    manifest_path = _write_manifest(task_set_id, tasks, args.variants)
-    print(f"task_set={task_set_id}")
-    print(f"smart_model={os.environ['SMART_LLM_MODEL']}")
-    print(f"fast_model={os.environ['FAST_LLM_MODEL']}")
-    print(f"temperature={os.environ['TEMPERATURE']}")
-    print(f"manifest={manifest_path}")
+    from logic.experiment import ExperimentConfig
+
+    base_config = ExperimentConfig.from_variant(args.variants[0])
+    manifest_path = _write_manifest(task_set_id, tasks, args.variants, base_config)
+    progress = {
+        "schema_version": 1,
+        "started_at_utc": _utc_now(),
+        "updated_at_utc": _utc_now(),
+        "task_set_id": task_set_id,
+        "variants": list(args.variants),
+        "task_ids": [task["id"] for task in tasks],
+        "total_expected_runs": len(args.variants) * len(tasks),
+        "attempted_runs": 0,
+        "completed_runs": 0,
+        "failed_runs": 0,
+        "timeout_runs": 0,
+        "current": None,
+        "events": [],
+    }
+    progress_path = _write_progress(progress)
+
+    print(f"task_set={task_set_id}", flush=True)
+    print(f"smart_model={os.environ['SMART_LLM_MODEL']}", flush=True)
+    print(f"fast_model={os.environ['FAST_LLM_MODEL']}", flush=True)
+    print(f"temperature={os.environ['TEMPERATURE']}", flush=True)
+    print(f"browse_timeout_seconds={base_config.browse_timeout_seconds}", flush=True)
+    print(f"run_timeout_seconds={base_config.run_timeout_seconds}", flush=True)
+    print(f"manifest={manifest_path}", flush=True)
+    print(f"progress={progress_path}", flush=True)
 
     for variant_id in args.variants:
-        await _run_variant(variant_id, tasks, task_set_id)
+        await _run_variant(variant_id, tasks, task_set_id, progress)
 
-    print("\nPilot execution finished. Summarize with:")
-    print("python scripts/summarize_pilot.py")
+    progress["finished_at_utc"] = _utc_now()
+    _write_progress(progress)
+    print("\nPilot execution finished. Summarize with:", flush=True)
+    print("python scripts/summarize_pilot.py", flush=True)
 
 
 if __name__ == "__main__":
