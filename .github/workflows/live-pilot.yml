@@ -23,6 +23,11 @@ on:
         required: true
         default: "D6 P6 P6V"
         type: string
+      task_ids:
+        description: Optional space-separated task IDs for a targeted diagnostic rerun
+        required: false
+        default: ""
+        type: string
   push:
     branches:
       - research-paper-eval-2027
@@ -46,6 +51,7 @@ jobs:
       FAST_LLM_MODEL: ${{ github.event.inputs.fast_model || 'gpt-5.6-luna' }}
       TEMPERATURE: ${{ github.event.inputs.temperature || '1' }}
       PILOT_VARIANTS: ${{ github.event.inputs.variants || 'D6 P6 P6V' }}
+      PILOT_TASK_IDS: ${{ github.event.inputs.task_ids || '' }}
       USE_WEB_BROWSER: chrome
       PYTHONUNBUFFERED: "1"
 
@@ -72,6 +78,38 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      - name: Load push-trigger configuration
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path("experiments/run_live_pilot.trigger")
+          mapping = {
+              "smart_model": "SMART_LLM_MODEL",
+              "fast_model": "FAST_LLM_MODEL",
+              "temperature": "TEMPERATURE",
+              "variants": "PILOT_VARIANTS",
+              "task_ids": "PILOT_TASK_IDS",
+          }
+          values = {}
+          for raw_line in path.read_text(encoding="utf-8").splitlines():
+              if ":" not in raw_line or raw_line.lstrip().startswith("#"):
+                  continue
+              key, value = raw_line.split(":", 1)
+              key = key.strip()
+              value = value.strip()
+              if key in mapping:
+                  values[mapping[key]] = value
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              for env_name, value in values.items():
+                  handle.write(f"{env_name}={value}\n")
+                  print(f"Loaded {env_name}={value}")
+          PY
+
       - name: Validate API secret is configured
         shell: bash
         run: |
@@ -86,6 +124,7 @@ jobs:
           echo "FAST_LLM_MODEL=$FAST_LLM_MODEL"
           echo "TEMPERATURE=$TEMPERATURE"
           echo "PILOT_VARIANTS=$PILOT_VARIANTS"
+          echo "PILOT_TASK_IDS=$PILOT_TASK_IDS"
 
       - name: Show browser version
         run: google-chrome --version || google-chrome-stable --version
@@ -101,10 +140,23 @@ jobs:
           python -m compileall -q agent logic scripts tests settings scrape text_preprocess
           python -m pytest -q
 
+      - name: Preflight live search and concurrent browser extraction
+        timeout-minutes: 5
+        run: python scripts/preflight_live_pilot.py
+
       - name: Run frozen live pilot
         timeout-minutes: 125
         shell: bash
-        run: python scripts/run_pilot.py --variants $PILOT_VARIANTS
+        run: |
+          read -r -a variants <<< "$PILOT_VARIANTS"
+          args=(--variants "${variants[@]}")
+          if [ -n "$PILOT_TASK_IDS" ]; then
+            read -r -a task_ids <<< "$PILOT_TASK_IDS"
+            for task_id in "${task_ids[@]}"; do
+              args+=(--task-id "$task_id")
+            done
+          fi
+          python scripts/run_pilot.py "${args[@]}"
 
       - name: Summarize pilot
         if: always()
@@ -114,6 +166,10 @@ jobs:
           else
             echo "No experiment traces were produced."
           fi
+
+      - name: Validate research artifacts
+        if: always()
+        run: python scripts/validate_pilot_artifacts.py
 
       - name: Upload research artifacts
         if: always()
