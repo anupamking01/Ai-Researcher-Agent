@@ -48,7 +48,7 @@ async def async_browse(
     could accidentally be counted as successful evidence.
     """
     loop = asyncio.get_event_loop()
-    local_executor = ThreadPoolExecutor(max_workers=8)
+    local_executor = ThreadPoolExecutor(max_workers=4)
     driver = None
 
     print(f"Scraping url {url} with question {question}")
@@ -65,13 +65,25 @@ async def async_browse(
             local_executor, scrape_text_with_selenium, url
         )
         await loop.run_in_executor(local_executor, add_header, driver)
+
+        # The source text has already been captured. Release Chrome before the
+        # LLM summarization calls so hosted CI does not keep multiple renderers
+        # alive for tens of seconds while waiting on model responses. Scrolling
+        # during summarization was only a visual web-app behavior and does not
+        # affect the captured evidence text used by the research experiment.
+        await asyncio.wait_for(
+            loop.run_in_executor(local_executor, close_browser, driver),
+            timeout=BROWSER_CLOSE_TIMEOUT_SECONDS,
+        )
+        driver = None
+
         summary_text = await loop.run_in_executor(
             local_executor,
             summary.summarize_text,
             url,
             text,
             question,
-            driver,
+            None,
             usage_tracker,
         )
 
@@ -144,6 +156,15 @@ def scrape_text_with_selenium(url: str) -> tuple[WebDriver, str]:
             # browsed concurrently on CI. Port 0 asks Chrome to choose an
             # available ephemeral debugging port for each browser instance.
             options.add_argument("--remote-debugging-port=0")
+            # Keep each CI renderer small and deterministic. These flags avoid
+            # background services/extensions that are irrelevant to extracting
+            # the rendered page body and reduce renderer exhaustion on runners.
+            options.add_argument("--disable-gpu")
+            options.add_argument("--disable-extensions")
+            options.add_argument("--disable-background-networking")
+            options.add_argument("--disable-default-apps")
+            options.add_argument("--no-first-run")
+            options.add_argument("--window-size=1280,1024")
         options.add_argument("--no-sandbox")
         options.add_experimental_option("prefs", {"download_restrictions": 3})
         # Selenium Manager resolves a driver compatible with the installed
