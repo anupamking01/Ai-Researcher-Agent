@@ -29,12 +29,17 @@ on:
     paths:
       - experiments/run_live_pilot.trigger
 
+concurrency:
+  group: live-research-pilot-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   pilot:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
       contents: read
+      actions: write
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       SMART_LLM_MODEL: ${{ github.event.inputs.smart_model || 'gpt-5.6-terra' }}
@@ -47,6 +52,19 @@ jobs:
     steps:
       - name: Check out research branch
         uses: actions/checkout@v4
+
+      - name: Cancel older live-pilot runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/live-pilot.yml/runs?status=in_progress&per_page=20" \
+            --jq '.workflow_runs[].id' | while read -r run_id; do
+              if [ -n "$run_id" ] && [ "$run_id" != "$GITHUB_RUN_ID" ]; then
+                echo "Cancelling stale live-pilot run $run_id"
+                gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/cancel" || true
+              fi
+            done
 
       - name: Set up Python
         uses: actions/setup-python@v5
