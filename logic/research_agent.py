@@ -212,27 +212,26 @@ class ResearchAgent:
         # experimental tool budget comparable even when websites fail.
         self.browse_attempt_count += len(new_search_urls)
 
-        # Browser-heavy source processing is deliberately bounded. The earlier
-        # CI implementation could launch six independent Chrome renderers at
-        # once, exhausting the hosted runner and producing renderer disconnects.
-        # This guardrail is identical for every variant and is recorded in the
-        # ExperimentConfig for auditability.
-        semaphore = asyncio.Semaphore(
+        # Limit only concurrent Selenium/Chrome renderers. Once a page's text is
+        # captured, async_browse releases the semaphore and browser before doing
+        # LLM summarization, preserving source-summary concurrency while avoiding
+        # the renderer exhaustion seen on GitHub-hosted runners.
+        browser_semaphore = asyncio.Semaphore(
             self.experiment_config.max_concurrent_browses
         )
 
         async def browse_one(url):
-            async with semaphore:
-                return await asyncio.wait_for(
-                    async_browse(
-                        url,
-                        query,
-                        self.websocket,
-                        usage_tracker=self.usage_tracker,
-                        raise_on_error=True,
-                    ),
-                    timeout=self.experiment_config.browse_timeout_seconds,
-                )
+            return await asyncio.wait_for(
+                async_browse(
+                    url,
+                    query,
+                    self.websocket,
+                    usage_tracker=self.usage_tracker,
+                    raise_on_error=True,
+                    browser_semaphore=browser_semaphore,
+                ),
+                timeout=self.experiment_config.browse_timeout_seconds,
+            )
 
         tasks = [browse_one(url) for url in new_search_urls]
         responses = await asyncio.gather(*tasks, return_exceptions=True)
