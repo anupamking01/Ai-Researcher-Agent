@@ -22,6 +22,11 @@ class ExperimentConfig:
     browsing during one run. This is an attempted-browse budget rather than a
     successful-source target so variants receive the same maximum number of
     external browsing calls even when some pages fail.
+
+    Timeout values are infrastructure guardrails rather than experimental
+    treatments. They are persisted in every trace so stalled websites or model
+    calls cannot hold an entire pilot indefinitely and the guardrails remain
+    auditable when results are compared.
     """
 
     variant_id: str = "P6"
@@ -33,6 +38,8 @@ class ExperimentConfig:
     task_id: str = ""
     stream_report: bool = True
     search_candidate_multiplier: int = 3
+    browse_timeout_seconds: float = 60.0
+    run_timeout_seconds: float = 480.0
 
     def __post_init__(self) -> None:
         if self.planning_mode not in _VALID_PLANNING_MODES:
@@ -50,6 +57,10 @@ class ExperimentConfig:
             raise ValueError("variant_id must be non-empty")
         if self.search_candidate_multiplier <= 0:
             raise ValueError("search_candidate_multiplier must be positive")
+        if self.browse_timeout_seconds <= 0:
+            raise ValueError("browse_timeout_seconds must be positive")
+        if self.run_timeout_seconds <= 0:
+            raise ValueError("run_timeout_seconds must be positive")
 
     @classmethod
     def from_variant(cls, variant_id: str) -> "ExperimentConfig":
