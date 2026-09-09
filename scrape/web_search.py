@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Iterable
 
 from ddgs import DDGS
@@ -14,6 +15,8 @@ _BACKEND_POOLS = (
     "mojeek,startpage,yahoo",
     "duckduckgo",
 )
+_SEARCH_ATTEMPTS = 2
+_SEARCH_RETRY_DELAY_SECONDS = 1.0
 
 
 def _normalize_results(
@@ -44,35 +47,46 @@ def web_search(query: str, num_results: int = 4) -> str:
     """Search the web using fixed metasearch backend pools.
 
     A fresh DDGS client is created for each backend attempt to avoid carrying a
-    rate-limited client state across pilot queries. Search-provider failure does
-    not silently change the experiment definition: only the three frozen pools
-    above are tried, in order.
+    rate-limited client state across pilot queries. The same frozen backend
+    pools are retried once after a short delay because the public metasearch
+    providers can transiently return an empty page or connection error. This is
+    an infrastructure retry only: the query, backend pools, and requested result
+    count are unchanged.
     """
     print(f"Searching with query {query}...")
     if not query or num_results <= 0:
         return "[]"
 
     errors = []
-    for backend_pool in _BACKEND_POOLS:
-        try:
-            results = DDGS(timeout=20).text(
-                query=query,
-                region="us-en",
-                safesearch="moderate",
-                max_results=num_results,
-                backend=backend_pool,
-            )
-            normalized = _normalize_results(
-                results,
-                backend_pool=backend_pool,
-                limit=num_results,
-            )
-            if normalized:
-                return json.dumps(normalized, ensure_ascii=False, indent=4)
-        except Exception as exc:
-            errors.append(f"{backend_pool}: {type(exc).__name__}: {exc}")
-            print(f"Search backend pool failed ({backend_pool}): {exc}")
+    for attempt in range(1, _SEARCH_ATTEMPTS + 1):
+        for backend_pool in _BACKEND_POOLS:
+            try:
+                results = DDGS(timeout=20).text(
+                    query=query,
+                    region="us-en",
+                    safesearch="moderate",
+                    max_results=num_results,
+                    backend=backend_pool,
+                )
+                normalized = _normalize_results(
+                    results,
+                    backend_pool=backend_pool,
+                    limit=num_results,
+                )
+                if normalized:
+                    return json.dumps(normalized, ensure_ascii=False, indent=4)
+                message = f"attempt {attempt}: no results"
+                errors.append(f"{backend_pool}: {message}")
+                print(f"Search backend pool returned no results ({backend_pool}, {message})")
+            except Exception as exc:
+                message = f"attempt {attempt}: {type(exc).__name__}: {exc}"
+                errors.append(f"{backend_pool}: {message}")
+                print(f"Search backend pool failed ({backend_pool}, attempt {attempt}): {exc}")
+
+        if attempt < _SEARCH_ATTEMPTS:
+            time.sleep(_SEARCH_RETRY_DELAY_SECONDS)
 
     raise RuntimeError(
-        "All frozen metasearch backend pools failed for query. " + " | ".join(errors)
+        "All frozen metasearch backend pools failed after retries for query. "
+        + " | ".join(errors)
     )
