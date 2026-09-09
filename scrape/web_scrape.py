@@ -40,12 +40,15 @@ async def async_browse(
     websocket: WebSocket,
     usage_tracker: UsageTracker | None = None,
     raise_on_error: bool = False,
+    browser_semaphore: asyncio.Semaphore | None = None,
 ) -> str:
     """Browse one website and return a question-focused source summary.
 
     Research experiments set ``raise_on_error=True`` so failed scraping is
     represented as a failed source rather than a non-empty error string that
-    could accidentally be counted as successful evidence.
+    could accidentally be counted as successful evidence. ``browser_semaphore``
+    limits only the Selenium/Chrome portion; LLM source summaries can still run
+    concurrently after the browser has been released.
     """
     loop = asyncio.get_event_loop()
     local_executor = ThreadPoolExecutor(max_workers=4)
@@ -60,7 +63,8 @@ async def async_browse(
             }
         )
 
-    try:
+    async def capture_text() -> str:
+        nonlocal driver
         driver, text = await loop.run_in_executor(
             local_executor, scrape_text_with_selenium, url
         )
@@ -76,6 +80,14 @@ async def async_browse(
             timeout=BROWSER_CLOSE_TIMEOUT_SECONDS,
         )
         driver = None
+        return text
+
+    try:
+        if browser_semaphore is None:
+            text = await capture_text()
+        else:
+            async with browser_semaphore:
+                text = await capture_text()
 
         summary_text = await loop.run_in_executor(
             local_executor,
