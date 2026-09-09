@@ -17,10 +17,12 @@ from settings import Config
 
 
 CFG = Config()
-# A synchronous provider request must not be able to block the event loop or a
-# source-summary worker forever. This is an infrastructure guardrail; the
-# higher-level pilot also has per-source and per-run timeouts.
-OPENAI_REQUEST_TIMEOUT_SECONDS = 120
+# Default timeout for planner/report/verifier calls. Source summarization uses a
+# shorter explicit timeout because it is nested inside a per-source guardrail.
+# Keeping the provider timeout below the experiment run timeout prevents a
+# single request from blocking an entire pilot indefinitely while allowing the
+# larger Terra report calls enough time to finish on hosted CI.
+OPENAI_REQUEST_TIMEOUT_SECONDS = 150
 
 
 def _choice_content(response: Any) -> str:
@@ -38,13 +40,14 @@ async def _stream_completion(
     websocket: Any,
     temperature: float,
     usage_tracker: UsageTracker | None = None,
+    request_timeout_seconds: float = OPENAI_REQUEST_TIMEOUT_SECONDS,
 ) -> str:
     response = openai.ChatCompletion.create(
         model=model,
         messages=list(messages),
         temperature=temperature,
         stream=True,
-        request_timeout=OPENAI_REQUEST_TIMEOUT_SECONDS,
+        request_timeout=request_timeout_seconds,
     )
 
     # openai==0.27.10 streaming responses do not reliably expose a final usage
@@ -80,9 +83,17 @@ def create_chat_completion(
     websocket: Any = None,
     temperature: float | None = None,
     usage_tracker: UsageTracker | None = None,
+    request_timeout_seconds: float | None = None,
 ):
     """Create a chat completion using the repository's pinned OpenAI client."""
     resolved_temperature = CFG.temperature if temperature is None else temperature
+    resolved_timeout = (
+        OPENAI_REQUEST_TIMEOUT_SECONDS
+        if request_timeout_seconds is None
+        else float(request_timeout_seconds)
+    )
+    if resolved_timeout <= 0:
+        raise ValueError("request_timeout_seconds must be positive")
 
     if stream:
         return _stream_completion(
@@ -91,13 +102,14 @@ def create_chat_completion(
             websocket=websocket,
             temperature=resolved_temperature,
             usage_tracker=usage_tracker,
+            request_timeout_seconds=resolved_timeout,
         )
 
     response = openai.ChatCompletion.create(
         model=model,
         messages=list(messages),
         temperature=resolved_temperature,
-        request_timeout=OPENAI_REQUEST_TIMEOUT_SECONDS,
+        request_timeout=resolved_timeout,
     )
     if usage_tracker is not None:
         usage_tracker.record_response(model, response)
