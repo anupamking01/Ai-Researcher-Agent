@@ -14,9 +14,9 @@ on:
         default: "gpt-5.6-luna"
         type: string
       temperature:
-        description: Sampling temperature; use 0 for the frozen pilot
+        description: Sampling temperature; GPT-5.6 currently supports the provider default of 1
         required: true
-        default: "0"
+        default: "1"
         type: string
       variants:
         description: Space-separated variants to run
@@ -39,7 +39,7 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       SMART_LLM_MODEL: ${{ github.event.inputs.smart_model || 'gpt-5.6-terra' }}
       FAST_LLM_MODEL: ${{ github.event.inputs.fast_model || 'gpt-5.6-luna' }}
-      TEMPERATURE: ${{ github.event.inputs.temperature || '0' }}
+      TEMPERATURE: ${{ github.event.inputs.temperature || '1' }}
       PILOT_VARIANTS: ${{ github.event.inputs.variants || 'D6 P6 P6V' }}
       USE_WEB_BROWSER: chrome
       PYTHONUNBUFFERED: "1"
