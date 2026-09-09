@@ -24,6 +24,8 @@ Both selected workflow manifests used the same research configuration for the re
 
 The targeted rerun changed only the selected variant/task IDs needed to replace the two credit-exhaustion failures.
 
+**Budget interpretation:** the pilot equalizes scheduled browse calls, not total compute. Model calls, tokens, latency, and dollar cost are measured outcomes and differ across variants. These pilot results therefore must not be described as an equal-total-budget comparison.
+
 ## Validation
 
 The canonical dataset passes the following checks:
@@ -94,6 +96,7 @@ Do not promote these numbers to the paper's main empirical claims yet.
 4. Two P6V tasks were rerun later because of an external billing failure; the agent configuration was unchanged, but live-web conditions may differ.
 5. Browse success is partly an infrastructure/web-availability outcome, not solely an agent-quality measure.
 6. The current pilot compares D6, P6, and P6V only; it does not answer the planned retrieval-depth ablation (3/6/12 sources).
+7. The fixed six-call retrieval cap is **not** an equal-total-token/cost budget. P6 and especially P6V consumed more inference than D6; the main study must enforce a total budget or use explicit Pareto analysis.
 
 ## Go/no-go conclusion
 
