@@ -67,8 +67,15 @@ class ExperimentConfig:
 
     @classmethod
     def from_variant(cls, variant_id: str) -> "ExperimentConfig":
-        """Return one of the frozen initial pilot variants used by the paper."""
+        """Return a predeclared research variant used by the study."""
         variants = {
+            "D3": cls(
+                variant_id="D3",
+                planning_mode="direct",
+                source_budget=3,
+                verification_mode="none",
+                stream_report=False,
+            ),
             "D6": cls(
                 variant_id="D6",
                 planning_mode="direct",
@@ -95,7 +102,7 @@ class ExperimentConfig:
             return variants[variant_id.upper()]
         except KeyError as exc:
             raise ValueError(
-                f"Unknown pilot variant {variant_id!r}; choose D6, P6, or P6V"
+                f"Unknown research variant {variant_id!r}; choose D3, D6, P6, or P6V"
             ) from exc
 
     def to_dict(self) -> dict[str, Any]:
