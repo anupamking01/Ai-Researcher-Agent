@@ -2,11 +2,6 @@ name: budget-main-study
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - research-paper-eval-2027
-    paths:
-      - experiments/run_budget_main.trigger
 
 concurrency:
   group: budget-main-study-${{ github.ref }}
