@@ -9,13 +9,20 @@ from logic.experiment import (
     normalize_verifier_output,
     save_run_trace,
 )
+from logic.prompts import generate_verification_prompt
 from scripts.summarize_pilot import _estimate_reported_token_cost
 
 
-def test_initial_pilot_variants_are_explicit():
+def test_predeclared_research_variants_are_explicit():
+    direct_small = ExperimentConfig.from_variant("D3")
     direct = ExperimentConfig.from_variant("D6")
     planner = ExperimentConfig.from_variant("P6")
     verifier = ExperimentConfig.from_variant("P6V")
+
+    assert direct_small.planning_mode == "direct"
+    assert direct_small.source_budget == 3
+    assert direct_small.verification_mode == "none"
+    assert direct_small.stream_report is False
 
     assert direct.planning_mode == "direct"
     assert direct.source_budget == 6
@@ -76,6 +83,13 @@ def test_verifier_accepts_json_code_fence():
 ```"""
     parsed = normalize_verifier_output(raw)
     assert parsed["claims_checked"] == 1
+
+
+def test_posthoc_verifier_claim_cap_is_parameterized():
+    prompt = generate_verification_prompt("q", "report", "evidence", max_claims=12)
+    assert "up to 12 important atomic factual claims" in prompt
+    with pytest.raises(ValueError):
+        generate_verification_prompt("q", "report", "evidence", max_claims=0)
 
 
 def test_usage_tracker_aggregates_provider_usage_by_model():
