@@ -33,13 +33,16 @@ def generate_search_queries_prompt(question):
     )
 
 
-def generate_verification_prompt(question, report, research_summary):
+def generate_verification_prompt(question, report, research_summary, max_claims=20):
     """Generate a bounded claim-to-evidence verification prompt.
 
-    This first verifier does not repair the report. It labels a sample of
-    factual claims against the evidence already gathered by the agent so the
-    verification condition can be measured separately from retrieval.
+    ``max_claims`` defaults to 20 for the in-treatment P6V verifier. The common
+    post-hoc evaluator uses a lower predeclared cap to control evaluation cost
+    while applying the identical rubric to every treatment variant.
     """
+    max_claims = int(max_claims)
+    if max_claims <= 0:
+        raise ValueError("max_claims must be positive")
     return f"""
 You are evaluating factual support in a generated web-research report.
 
@@ -57,7 +60,7 @@ Retrieved evidence available to the writer:
 --- EVIDENCE END ---
 
 Instructions:
-1. Identify up to 20 important atomic factual claims from the report. Ignore purely subjective recommendations, headings, and rhetorical statements.
+1. Identify up to {max_claims} important atomic factual claims from the report. Ignore purely subjective recommendations, headings, and rhetorical statements.
 2. For each selected claim, compare it only with the evidence above. Do not use outside knowledge.
 3. Label each claim exactly one of: supported, partially_supported, unsupported, contradicted.
 4. Return ONLY valid JSON; do not wrap it in Markdown.
