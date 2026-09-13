@@ -4,6 +4,13 @@ The evaluator is measurement-only. It does not repair reports and it evaluates
 all variants with the same prompt, model, 12-claim cap, evidence restriction,
 and frozen cost accounting. A separate $1.25 evaluator spend guard preserves
 the user's fixed remaining API-credit budget.
+
+A completed treatment run with zero successful retrieved sources is a valid
+experimental outcome, not missing data. For that edge case the evaluator gets
+an explicit no-evidence sentinel so it can identify report claims under the
+same rubric while being prohibited from using outside knowledge. If a trace
+claims successful sources but its saved evidence is missing, evaluation still
+fails as a provenance error.
 """
 
 from __future__ import annotations
@@ -24,6 +31,10 @@ EVAL_ROOT = REPO_ROOT / "outputs" / "posthoc_evaluations"
 PRICING_FILE = REPO_ROOT / "experiments" / "openai_pricing_2026-09-08.json"
 VARIANTS = ("D3", "D6", "P6", "P6V")
 MAX_CLAIMS = 12
+NO_EVIDENCE_SENTINEL = (
+    "[NO RETRIEVED EVIDENCE WAS AVAILABLE FOR THIS TREATMENT RUN. "
+    "The run recorded zero successful retrieved sources. Do not use outside knowledge.]"
+)
 
 
 def _load_json(path: Path) -> dict:
@@ -64,6 +75,21 @@ def _existing_evaluator_cost(pricing: dict) -> float:
         payload = _load_json(path)
         total += float(payload.get("estimated_cost_usd", 0.0) or 0.0)
     return total
+
+
+def _evidence_for_trace(trace: dict, variant: str, task_id: str, run_id: str) -> tuple[str, str]:
+    evidence = _research_context(run_id)
+    if evidence.strip():
+        return evidence, "retrieved_evidence"
+
+    successful_sources = int(trace.get("successful_source_count", 0) or 0)
+    if successful_sources == 0:
+        return NO_EVIDENCE_SENTINEL, "zero_successful_sources"
+
+    raise SystemExit(
+        f"Saved evidence missing for {variant}/{task_id} despite "
+        f"successful_source_count={successful_sources}"
+    )
 
 
 def main() -> int:
@@ -109,10 +135,8 @@ def main() -> int:
                 f"cap=${args.max_evaluator_cost_usd:.2f}"
             )
 
-        evidence = _research_context(run_id)
+        evidence, evidence_status = _evidence_for_trace(trace, variant, task_id, run_id)
         report = _report_text(run_id)
-        if not evidence.strip():
-            raise SystemExit(f"No saved evidence context for {variant}/{task_id}")
 
         tracker = UsageTracker()
         prompt = generate_verification_prompt(
@@ -141,6 +165,7 @@ def main() -> int:
             "evaluator_model": os.environ["SMART_LLM_MODEL"],
             "temperature": float(os.environ["TEMPERATURE"]),
             "max_claims": MAX_CLAIMS,
+            "evidence_status": evidence_status,
             "claims_checked": result["claims_checked"],
             "supported": result["supported"],
             "partially_supported": result["partially_supported"],
@@ -157,8 +182,9 @@ def main() -> int:
         out_path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
         rows.append(record)
         print(
-            f"evaluated {variant}/{task_id}: claims={result['claims_checked']} "
-            f"support={record['strict_support_rate']:.3f} cost=${cost:.4f}",
+            f"evaluated {variant}/{task_id}: evidence={evidence_status} "
+            f"claims={result['claims_checked']} support={record['strict_support_rate']:.3f} "
+            f"cost=${cost:.4f}",
             flush=True,
         )
 
@@ -170,6 +196,9 @@ def main() -> int:
         "expected_evaluations": len(expected),
         "max_claims_per_report": MAX_CLAIMS,
         "estimated_evaluator_cost_usd": sum(float(r["estimated_cost_usd"]) for r in rows),
+        "zero_evidence_evaluations": sum(
+            1 for r in rows if r.get("evidence_status") == "zero_successful_sources"
+        ),
         "variant_summary": {},
     }
     for variant in VARIANTS:
@@ -190,7 +219,7 @@ def main() -> int:
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
     csv_path = REPO_ROOT / "outputs" / "posthoc_support_runs.csv"
     fieldnames = [
-        "variant_id", "task_id", "run_id", "claims_checked", "supported",
+        "variant_id", "task_id", "run_id", "evidence_status", "claims_checked", "supported",
         "partially_supported", "unsupported", "contradicted", "strict_support_rate",
         "total_tokens", "estimated_cost_usd",
     ]
