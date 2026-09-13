@@ -1,6 +1,11 @@
 name: evaluator-recovery
 
 on:
+  push:
+    branches:
+      - research-paper-eval-2027
+    paths:
+      - .github/workflows/evaluator-recovery.yml
   workflow_dispatch:
 
 concurrency:
