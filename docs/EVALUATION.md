@@ -1,113 +1,126 @@
 # Evaluation Methodology
 
-The purpose of this evaluation plan is to convert the project from a demo-oriented agent into a reproducible experimental system. No benchmark values are reported here until experiments are actually run.
+This repository treats evaluation as part of the research system rather than as a post-hoc demo score. The current experimental program asks a focused systems question:
 
-## Research questions
+> **Where should a web-research agent spend limited retrieval and inference budget: deeper retrieval, explicit planning, or verification?**
 
-**RQ1 — Research quality:** Does agentic task decomposition improve answer completeness and source coverage compared with a single-pass research prompt?
+The project has progressed beyond the original proposed-study document. Pilot infrastructure, D3/D6/P6/P6V treatments, persisted traces, a common post-hoc support evaluator, cost accounting, a frozen paired analysis plan, evaluator-only recovery, and deterministic blinded-human-evaluation packet generation are implemented on the research branch.
 
-**RQ2 — Reliability:** Which failure modes dominate the pipeline: search, browsing, source relevance, synthesis, or citation support?
+Human quality ratings are **not yet results**. They remain pending and must be collected under `paper/HUMAN_EVAL_PROTOCOL.md` before any human-quality claim is made.
 
-**RQ3 — Efficiency:** What quality–cost–latency trade-off is produced by different model and orchestration configurations?
+## 1. Research questions
 
-**RQ4 — Verification:** Do claim/source verification and repair loops improve support for generated claims enough to justify their additional cost?
+The main study is organized around three primary stage-wise questions plus a broader systems question:
 
-## Experimental variants
+- **Retrieval depth:** What changes when the direct-retrieval treatment receives six scheduled browse opportunities rather than three (`D6 - D3`)?
+- **Planning:** At the same six-source browse budget, what is the marginal effect of explicit query decomposition (`P6 - D6`)?
+- **Verification:** What is the marginal effect and cost of treatment-time verification (`P6V - P6`)?
+- **Quality–cost trade-off:** Do improvements in evidence support justify additional model tokens, model calls, latency, and estimated dollar cost?
 
-The initial study should compare at least these variants under the same task set:
+The broader research protocol and hypotheses are documented in `paper/RESEARCH_PROTOCOL.md`.
 
-| Variant | Planning | Multi-query retrieval | Concurrent browsing | Verification | Purpose |
-|---|---:|---:|---:|---:|---|
-| Single-pass baseline | No | No | No | No | Establish simple LLM baseline |
-| Retrieval baseline | No | Yes | Yes | No | Isolate retrieval benefit |
-| Current agent | Yes | Yes | Yes | No | Measure planner/execution workflow |
-| + evidence verifier | Yes | Yes | Yes | Yes | Planned reliability extension |
+## 2. Study layers
 
-For model comparisons, hold prompts, retrieval settings, and task set constant wherever possible.
+The project deliberately separates four layers that should not be conflated.
 
-## Task set
+### Layer A — Treatment execution
 
-Use a fixed, versioned task set with a mixture of:
+Each experimental variant generates a report under a defined planning/retrieval/verification configuration. The treatment itself records provenance, usage, costs, source outcomes, and final report artifacts.
 
-- factual multi-source questions;
-- comparison/synthesis questions;
-- time-sensitive questions where current web evidence matters;
-- ambiguous prompts that require careful scope interpretation;
-- questions with conflicting sources;
-- questions where primary sources are preferable to secondary summaries.
+### Layer B — Common automated measurement
 
-Store the task set in machine-readable form before running experiments. Do not modify tasks after seeing results unless the new version is explicitly labeled.
+A fixed post-hoc evaluator is applied to all treatment variants so that support labels are not available only for the verifier-enabled treatment. The evaluator is measurement-only and is kept separate from treatment generation.
 
-## Metrics
+### Layer C — Offline statistical analysis
 
-### 1. Completion rate
+Saved traces/evaluator records are summarized with a frozen paired analysis plan. Analysis operates on persisted artifacts; it does not rerun treatments merely because an observed result is inconvenient.
 
-Fraction of runs that finish and produce a report.
+### Layer D — Blinded human validation
 
-### 2. Source success rate
+A deterministic offline packet builder hides variant identity and prepares the same reports for rubric-based human evaluation. Human annotations are a complementary measure of overall quality and usefulness, not a synthetic replacement for the automated support metric.
 
-For each run:
+## 3. Frozen main-study treatment matrix
 
-`(retrieved sources - failed sources) / retrieved sources`
+The current main-study analysis focuses on the following four conditions over the same frozen task set:
 
-This separates browsing reliability from LLM quality.
+| Variant | Planning | Scheduled browse budget | Treatment verification | Main contrast role |
+|---|---|---:|---|---|
+| `D3` | Direct | 3 | No | Retrieval-depth baseline |
+| `D6` | Direct | 6 | No | Retrieval-depth comparison / planning baseline |
+| `P6` | Planner | 6 | No | Planning comparison / verification baseline |
+| `P6V` | Planner | 6 | Yes | Verification comparison |
 
-### 3. Source coverage
+The full research protocol discusses additional possible retrieval levels, but those should not be silently mixed into the frozen confirmatory analysis unless a new study version explicitly declares them.
 
-Count unique sources used by a report. When possible, also record unique domains and primary-source proportion.
+## 4. Task design
 
-### 4. Claim support / citation precision
+The study uses a versioned, frozen task set. The intended task mixture includes:
 
-Sample or annotate atomic claims in the final report and label each as:
+- multi-source factual synthesis;
+- comparative research;
+- questions where primary sources are preferable;
+- conflicting-source questions;
+- time-sensitive research;
+- long-form synthesis prompts.
 
-- supported by cited evidence;
-- partially supported;
-- unsupported;
-- contradicted by cited evidence.
+Tasks must not be edited after outcomes are observed and still be described as the same study version. New or corrected task sets require a new manifest/version and should be analyzed separately.
 
-The `citation_precision_proxy` in `logic/evaluation.py` is deliberately named a proxy. It should only be used after a fixed human-annotation protocol is applied.
+## 5. Primary automated outcome
 
-### 5. Task quality
+The main automated outcome is **strict evidence support rate** from the common post-hoc evaluator:
 
-Use a blinded rubric such as:
+`supported claims / claims checked`
 
-- correctness: 1–5;
-- completeness: 1–5;
-- source quality: 1–5;
-- synthesis / reasoning: 1–5;
-- clarity: 1–5.
+The evaluator samples/checks a bounded number of factual claims and classifies support using evidence retrieved by the corresponding treatment. The analysis plan distinguishes strict support from broader support and explicitly avoids calling citation support equivalent to universal factual accuracy.
 
-For higher rigor, use at least two evaluators on a subset and report inter-rater agreement.
+The automated evaluator should not be described as an unbiased human judge. It is a reproducible measurement instrument with its own model and prompt limitations.
 
-### 6. Efficiency
+## 6. Secondary outcomes
 
-Track:
+Secondary measurements include:
 
-- wall-clock latency;
-- prompt tokens;
-- completion tokens;
-- estimated model cost;
-- number of search queries;
-- number of browsed sources.
+- broad support rate: `(supported + partially_supported) / claims_checked`;
+- unsupported-or-contradicted rate;
+- successful retrieved sources;
+- scheduled/attempted source counts where available;
+- prompt, completion, and total model tokens;
+- model-call count;
+- treatment latency;
+- treatment-model estimated USD cost;
+- report word count;
+- completion/failure status;
+- failure/provenance diagnostics.
 
-Quality should be discussed together with cost and latency rather than in isolation.
+Evaluator usage and evaluator cost are research-measurement overhead. They must not be mixed into the treatment/deployment cost comparison.
 
-## Ablation plan
+## 7. Budget accounting
 
-When verification features are added, remove one component at a time:
+A central integrity rule is that additional planning or verification computation cannot be described as “free.” Every relevant treatment run should retain enough metadata to reconstruct resource use, including:
 
-1. no task decomposition;
-2. no source deduplication;
-3. sequential instead of concurrent browsing;
-4. no evidence verifier;
-5. no repair loop;
-6. no adaptive stopping / fixed source budget.
+- model/provider identifier;
+- prompt/completion token usage;
+- number of model calls;
+- retrieval/search/browse activity;
+- latency;
+- configured browse budget;
+- estimated cost under a frozen pricing snapshot.
 
-Report both absolute metrics and change relative to the full system.
+When total compute differs across variants, the project uses a **quality–cost/Pareto interpretation** rather than falsely describing the variants as equal-total-budget systems.
 
-## Failure taxonomy
+## 8. Failure handling and provenance
 
-Every failed or low-quality run should be assigned one primary failure category:
+A failed source fetch is not equivalent to a missing experiment. Likewise, zero successful evidence can be a valid treatment outcome rather than a reason to discard the run.
+
+Important rules:
+
+- zero retrieved evidence remains an observable outcome;
+- treatment failures/timeouts are preserved rather than silently rerun until success;
+- duplicate treatment executions are not substituted because their outcomes look better;
+- if treatment execution is complete but measurement is interrupted, evaluator-only recovery may fill missing evaluator records without replacing the original treatment output;
+- saved evidence and trace provenance must agree before an evaluation cell is considered valid;
+- exclusions require an explicit pre-existing validity rule and must be reported.
+
+Representative operational failure categories include:
 
 - `planning_error`
 - `search_failure`
@@ -120,37 +133,127 @@ Every failed or low-quality run should be assigned one primary failure category:
 - `provider_error`
 - `timeout_or_budget`
 
-Keep representative traces for qualitative analysis.
+## 9. Frozen paired statistical analysis
 
-## Reproducibility checklist
+The confirmatory automated analysis is specified in `paper/ANALYSIS_PLAN.md` and was frozen before inspecting main-study outcome summaries.
 
-Record for each experiment:
+Primary paired contrasts are:
 
-- date/time;
-- git commit SHA;
-- task-set version;
-- model/provider and exact model name;
-- model parameters such as temperature;
-- search provider and result limit;
-- maximum source budget;
-- prompt version;
-- hardware/runtime environment where relevant;
-- raw run traces;
-- scoring script version.
+1. `D6 - D3` — retrieval depth;
+2. `P6 - D6` — planning;
+3. `P6V - P6` — verification.
 
-## Statistical reporting
+For the primary strict-support outcome, the analysis reports:
 
-For a sufficiently large task set, report means with dispersion (standard deviation or confidence intervals) rather than only point estimates. When comparing two variants over the same tasks, use paired comparisons where possible.
+- paired mean difference;
+- paired median difference;
+- deterministic paired bootstrap 95% percentile confidence interval for the mean difference;
+- exact two-sided sign-flip/randomization p-value when all paired cells are present;
+- paired standardized mean difference (`d_z`) when defined;
+- counts of positive, negative, and tied task-level effects.
 
-The repository should not report statistical significance unless the assumptions and test are clearly documented.
+The three confirmatory p-values are adjusted together with the Holm step-down procedure. Because the frozen task set is small, effect size, uncertainty, and task-level consistency should be emphasized over binary significance language.
 
-## Result reporting template
+Additional metrics and contrasts are exploratory unless separately preregistered.
 
-| Variant | Completion | Quality | Claim support | Sources | Latency | Tokens | Cost |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Single-pass | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
-| Retrieval baseline | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
-| Current agent | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
-| + verifier | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+## 10. Pilot vs. main study
 
-`TBD` is intentional. Replace values only with reproducibly measured results.
+The repository keeps pilot evidence distinct from the main study.
+
+### Pilot
+
+`paper/PILOT_RESULTS.md` documents the completed diagnostic pilot. It was used to validate instrumentation and expose reliability/accounting issues. It should not be promoted into a universal benchmark claim.
+
+### Main-study infrastructure
+
+The research branch implements:
+
+- D3/D6/P6/P6V treatments;
+- versioned run metadata and trace persistence;
+- treatment usage/cost accounting;
+- common post-hoc support evaluation;
+- workflow validation and evaluator-only recovery;
+- offline summary generation;
+- a frozen paired inference script/analysis plan;
+- deterministic human-evaluation packet generation.
+
+A workflow or recovery run failing operationally must not be rewritten in documentation as a successful end-to-end execution. Final numerical claims should cite the exact canonical artifact set and execution provenance used for analysis.
+
+## 11. Blinded human evaluation
+
+Human evaluation is designed to answer questions the support evaluator does not fully capture.
+
+The frozen rubric scores five dimensions from 1–5:
+
+- correctness;
+- completeness;
+- source quality;
+- synthesis/reasoning;
+- clarity.
+
+Build a packet from completed experiment traces with:
+
+```bash
+python scripts/build_human_eval_packet.py
+```
+
+The script creates:
+
+- `outputs/human_eval/packet.jsonl` — blinded reports and research questions;
+- `outputs/human_eval/ratings_template.csv` — blinded rating sheet;
+- `outputs/human_eval/blinding_key.csv` — coordinator-only treatment mapping;
+- `outputs/human_eval/manifest.json` — packet metadata.
+
+The packet is deterministic under a fixed seed and fails closed on duplicate treatment/task cells, incomplete runs, missing Markdown reports, unexpected variants, or incomplete task matrices.
+
+Annotators must not receive `blinding_key.csv` until ratings are frozen. At least a predeclared subset should be independently double-scored and inter-annotator agreement should be reported before adjudication.
+
+Full instructions are in `paper/HUMAN_EVAL_PROTOCOL.md`.
+
+## 12. Reproducibility map
+
+Key research artifacts:
+
+| Artifact | Purpose |
+|---|---|
+| `paper/RESEARCH_PROTOCOL.md` | Research question, hypotheses, experimental principles |
+| `paper/PILOT_RESULTS.md` | Canonical pilot evidence and caveats |
+| `paper/ANALYSIS_PLAN.md` | Frozen main-study confirmatory analysis |
+| `paper/HUMAN_EVAL_PROTOCOL.md` | Blinded human-quality scoring protocol |
+| `logic/experiment.py` | Experimental configuration/provenance structures |
+| `scripts/run_budget_main_study.py` | Main-study treatment/evaluation orchestration |
+| `scripts/summarize_budget_main_study.py` | Offline aggregation/validation |
+| `scripts/analyze_main_study.py` | Paired preregistered inference |
+| `scripts/build_human_eval_packet.py` | Deterministic blinded human-evaluation packet |
+| `tests/` | Offline invariants and regression tests |
+| `.github/workflows/` | CI and manual research workflows |
+
+## 13. Offline verification
+
+Install test dependencies and run:
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+The ordinary unit-test suite is designed to run without making live LLM or web calls.
+
+The human-evaluation packet builder is also offline; it consumes only persisted traces and Markdown reports.
+
+## 14. Reporting rules
+
+Research-facing documentation should follow these rules:
+
+- do not convert `TBD`, pending annotations, or incomplete workflow artifacts into numerical claims;
+- do not call support scoring “factual accuracy” unless truth is independently verified;
+- do not call variants equal-budget when total compute differs;
+- separate treatment cost from evaluator overhead;
+- tie every reported number to a study/task version, commit/workflow provenance, model configuration, and analysis script;
+- report failed runs and protocol deviations;
+- distinguish pilot, confirmatory main-study, exploratory, and human-validation findings;
+- avoid state-of-the-art or universal-superiority claims without a fair external benchmark.
+
+## 15. Current status
+
+The repository now has a reproducible evaluation architecture and a frozen human-evaluation protocol. The remaining research step is not to invent another metric: it is to collect real blinded annotations, validate the canonical main-study artifact set, run the predeclared analysis against that set, and write conclusions that stay within the measured evidence.
