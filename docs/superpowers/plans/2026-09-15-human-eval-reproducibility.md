@@ -31,27 +31,25 @@
 - Consumes: `outputs/experiment_traces/<variant>/*.json` and each trace's sibling Markdown report.
 - Produces: `outputs/human_eval/packet.jsonl`, `outputs/human_eval/blinding_key.csv`, `outputs/human_eval/ratings_template.csv`, `outputs/human_eval/manifest.json`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Test deterministic ordering, variant-label blinding, one-to-one blind IDs, rejection of duplicate variant/task cells, rejection of missing reports, and ratings-template bounds/schema.
 
-- [ ] **Step 2: Run tests to verify RED**
+- [x] **Step 2: Run tests to verify RED**
 
-Run: `python -m pytest -q tests/test_human_eval.py`
-Expected: FAIL because `scripts.build_human_eval_packet` does not yet exist.
+GitHub Actions run `35004042197` failed after the contract test was added and before the implementation existed, establishing the RED phase.
 
-- [ ] **Step 3: Implement minimal offline builder**
+- [x] **Step 3: Implement minimal offline builder**
 
-Implement `build_packet(trace_root: Path, output_root: Path, seed: int = 20260915) -> dict` plus a CLI. Read trace JSON, resolve `report_path` to the corresponding `.md`, create deterministic randomized rows, write annotator packet without variant labels, write coordinator blinding key separately, and write a 1–5 rubric ratings template.
+Implemented `build_packet(trace_root: Path, output_root: Path, seed: int = 20260915) -> dict` plus CLI. The builder reads persisted trace JSON and sibling Markdown reports, deterministically randomizes the packet, keeps treatment labels out of annotator artifacts, writes the coordinator key separately, and creates a five-dimension ratings template.
 
-- [ ] **Step 4: Run targeted and full tests**
+- [x] **Step 4: Run targeted/full CI verification**
 
-Run: `python -m pytest -q tests/test_human_eval.py` then `python -m pytest -q`.
-Expected: PASS.
+GitHub Actions run `35004173840` completed successfully after the implementation was added.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit implementation**
 
-Commit message: `research: add blinded human evaluation packet builder`.
+Implementation and tests are committed on `research-paper-eval-2027`.
 
 ### Task 2: Freeze the human-evaluation protocol
 
@@ -63,21 +61,21 @@ Commit message: `research: add blinded human evaluation packet builder`.
 - Consumes: packet/key/template generated in Task 1.
 - Produces: reviewer-facing instructions that keep annotators blind to variant identity and define the rubric before scoring.
 
-- [ ] **Step 1: Document rubric and blinding rules**
+- [x] **Step 1: Document rubric and blinding rules**
 
-Define five 1–5 dimensions: correctness, completeness, source quality, synthesis/reasoning, and clarity. Require evidence-based notes for scores 1 or 5, no access to blinding key during annotation, and at least two annotators on a reliability subset.
+Five 1–5 dimensions are frozen: correctness, completeness, source quality, synthesis/reasoning, and clarity. The protocol requires notes for extreme scores, keeps the key hidden during annotation, and requires independent double-scoring on at least a predeclared subset.
 
-- [ ] **Step 2: Document adjudication and agreement**
+- [x] **Step 2: Document adjudication and agreement**
 
-Specify double-scored subset selection, agreement reporting, disagreement handling, missing-score policy, and that human results remain pending until real annotations exist.
+The protocol specifies independent ratings, agreement measurement before adjudication, preservation of raw scores, blinded disagreement handling, missing-score policy, and a freeze-before-unblinding rule.
 
-- [ ] **Step 3: Update evaluation status**
+- [x] **Step 3: Update evaluation status**
 
-Replace stale “planned study” language with the implemented D3/D6/P6/P6V main-study design and distinguish automated support evaluation from pending blinded human quality evaluation.
+`docs/EVALUATION.md` now reflects the implemented D3/D6/P6/P6V study layers, common post-hoc evaluator, frozen paired analysis, and pending blinded human-quality validation.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit documentation**
 
-Commit message: `docs: freeze blinded human evaluation protocol`.
+Protocol and methodology updates are committed on the research branch.
 
 ### Task 3: Make the repository landing page match the actual research state
 
@@ -89,22 +87,22 @@ Commit message: `docs: freeze blinded human evaluation protocol`.
 - Consumes: current branch capabilities and frozen research protocol.
 - Produces: an admissions/reviewer-friendly project overview with accurate implemented/planned status.
 
-- [ ] **Step 1: Update README research question and status**
+- [x] **Step 1: Update README research question and status**
 
-Lead with: “Where should an autonomous research agent spend its inference and retrieval budget?” Describe the implemented D3/D6/P6/P6V matrix, frozen 10-task set, common post-hoc support evaluator, preregistered paired inference, cost accounting, and pending blinded human evaluation.
+The README now leads with the budget-allocation research question and distinguishes implemented treatments/evaluation infrastructure from pending human validation and final paper-level claims.
 
-- [ ] **Step 2: Add reproducibility map**
+- [x] **Step 2: Add reproducibility map**
 
-Link the pilot results, research protocol, analysis plan, human-evaluation protocol, experiment task manifests, analysis script, and manual-only workflows. Remove stale claims that verification/systematic study are merely planned.
+The README links the pilot results, research protocol, analysis plan, human-evaluation protocol, evaluation methodology, orchestration/analysis scripts, tests, and workflows. Stale claims that the systematic study and verification layer are merely future plans were removed.
 
-- [ ] **Step 3: Refresh PR description**
+- [x] **Step 3: Refresh PR description**
 
-Summarize the pilot-to-main-study progression and make the remaining gate human annotation + final research write-up, without claiming unmeasured human-quality gains.
+PR #1 now documents the pilot-to-main-study progression, the preserved 40-treatment artifact, successful evaluator-only recovery, blinded human-evaluation tooling, research-integrity safeguards, and remaining research gates.
 
-- [ ] **Step 4: Verify CI**
+- [x] **Step 4: Verify CI**
 
-Confirm the pull-request test workflow passes at the final head SHA.
+GitHub Actions tests run `35004552088` passed on the updated code/docs head before this plan-status bookkeeping commit.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Record implementation status**
 
-Commit message: `docs: align research overview with main-study pipeline`.
+This file records completion of the scoped implementation while leaving actual human annotation and final scientific interpretation as future research work.
