@@ -69,6 +69,34 @@ def test_websocket_accepts_frontend_start_contract(monkeypatch):
     assert path == {"type": "path", "output": "./outputs/smoke/research_report.md"}
 
 
+def test_websocket_reports_research_failure_without_abrupt_disconnect(monkeypatch):
+    async def failing_start_streaming(*args, **kwargs):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(manager, "start_streaming", failing_start_streaming)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws") as websocket:
+            websocket.send_text(
+                "start "
+                + json.dumps(
+                    {
+                        "task": "smoke test question",
+                        "report_type": "research_report",
+                        "agent": "Default Agent",
+                    }
+                )
+            )
+
+            initiated = websocket.receive_json()
+            error = websocket.receive_json()
+
+    assert initiated["type"] == "logs"
+    assert error["type"] == "error"
+    assert "RuntimeError" in error["output"]
+    assert "provider unavailable" in error["output"]
+
+
 def _load_smoke_module():
     spec = importlib.util.find_spec("scripts.smoke_test_app")
     assert spec is not None, "scripts.smoke_test_app must implement the live smoke client"
@@ -103,6 +131,25 @@ def test_smoke_client_rejects_missing_report():
         assert "report" in str(exc).lower()
     else:
         raise AssertionError("missing report messages must fail the smoke test")
+
+
+def test_smoke_client_surfaces_server_error_message():
+    smoke = _load_smoke_module()
+    messages = [
+        {"type": "logs", "output": "Initiated an Agent: Default Agent"},
+        {
+            "type": "error",
+            "output": "Research run failed: RateLimitError: You have no credits remaining.",
+        },
+    ]
+
+    try:
+        smoke.validate_messages(messages)
+    except RuntimeError as exc:
+        assert "RateLimitError" in str(exc)
+        assert "no credits remaining" in str(exc)
+    else:
+        raise AssertionError("server error messages must fail the smoke test explicitly")
 
 
 def test_smoke_client_resolves_only_output_artifacts():
