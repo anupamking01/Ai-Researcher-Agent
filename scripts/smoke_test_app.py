@@ -31,6 +31,7 @@ def validate_messages(messages: Iterable[dict[str, Any]]) -> SmokeResult:
     report_chars = 0
     output_path = ""
     initiated = False
+    server_error = ""
 
     for message in messages:
         message_type = message.get("type")
@@ -42,9 +43,13 @@ def validate_messages(messages: Iterable[dict[str, Any]]) -> SmokeResult:
             report_chars += len(str(output))
         elif message_type == "path" and str(output or "").strip():
             output_path = str(output)
+        elif message_type == "error" and str(output or "").strip():
+            server_error = str(output)
 
     if not initiated:
         raise ValueError("WebSocket run did not emit the agent-initiation log")
+    if server_error:
+        raise RuntimeError(server_error)
     if report_chunks == 0 or report_chars == 0:
         raise ValueError("WebSocket run did not emit any non-empty report content")
     if not output_path:
@@ -120,7 +125,7 @@ async def _run_websocket(
                 message_type = message.get("type")
                 if message_type == "logs":
                     print(message.get("output", ""), flush=True)
-                elif message_type == "path":
+                elif message_type in {"path", "error"}:
                     break
 
     return messages, validate_messages(messages)
