@@ -1,0 +1,57 @@
+{
+  "task_set_id": "main-budget-v1-2026-09-11",
+  "frozen_before_execution": true,
+  "purpose": "Low-cost original live-web task set for a predeclared D3/D6/P6/P6V study under the user's remaining API-credit constraint. This is not an established public benchmark.",
+  "tasks": [
+    {
+      "id": "main-01",
+      "category": "technical_comparison",
+      "question": "For server-side isolation of untrusted application code, what are the practical security, performance, portability, and operational trade-offs between WebAssembly/WASI sandboxes and Linux containers, and under what conditions is each approach preferable?"
+    },
+    {
+      "id": "main-02",
+      "category": "systems_tradeoff",
+      "question": "For a write-heavy production database workload, how do LSM-tree and B-tree storage engines differ in write amplification, read amplification, compaction behavior, latency predictability, and operational complexity? Synthesize when each design is preferable."
+    },
+    {
+      "id": "main-03",
+      "category": "primary_source_preference",
+      "question": "What are the most consequential architectural and operational differences between HTTP/2 and HTTP/3 for production web services, and which workloads or network conditions are most likely to benefit from HTTP/3? Prefer standards and primary implementation documentation where possible."
+    },
+    {
+      "id": "main-04",
+      "category": "conflicting_evidence",
+      "question": "How does post-training quantization of large language models affect inference latency, memory use, throughput, and task quality at 8-bit and 4-bit precision, and what explains conflicting findings across model families and hardware?"
+    },
+    {
+      "id": "main-05",
+      "category": "multi_source_synthesis",
+      "question": "What does the empirical evidence show about whether four-day workweeks improve or reduce organizational productivity, employee well-being, retention, and customer outcomes, and which study-design choices most affect the conclusions?"
+    },
+    {
+      "id": "main-06",
+      "category": "conflicting_sources",
+      "question": "Across full vehicle life cycles, under what electricity-grid, battery-production, vehicle-size, and mileage assumptions do battery-electric vehicles have lower greenhouse-gas emissions than comparable internal-combustion vehicles, and where do credible estimates disagree?"
+    },
+    {
+      "id": "main-07",
+      "category": "policy_outcomes",
+      "question": "What have real-world congestion-pricing programs shown about traffic volumes, travel times, public-transit use, emissions, equity, and local economic activity, and which design choices appear to matter most?"
+    },
+    {
+      "id": "main-08",
+      "category": "comparative_evidence",
+      "question": "For residential space heating in temperate and cold climates, how do modern heat pumps compare with natural-gas heating on energy efficiency, operating cost, lifecycle emissions, and cold-weather performance, and what local conditions can reverse the comparison?"
+    },
+    {
+      "id": "main-09",
+      "category": "fixed_cutoff_current_information",
+      "question": "Using information available no later than September 1, 2026, how mature is passkey adoption for consumer authentication across major operating systems, browsers, and large online services, and what interoperability, recovery, and deployment limitations still materially constrain password replacement?"
+    },
+    {
+      "id": "main-10",
+      "category": "evidence_synthesis",
+      "question": "What does current evidence show about the relationship between data-center AI workloads and electricity demand, grid constraints, and carbon emissions, and which assumptions most strongly drive differences among published projections?"
+    }
+  ]
+}

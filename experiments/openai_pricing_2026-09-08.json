@@ -1,0 +1,35 @@
+{
+  "effective_date": "2026-09-08",
+  "currency": "USD",
+  "unit": "per_1m_text_tokens",
+  "source": "OpenAI model documentation checked 2026-09-08",
+  "models": {
+    "gpt-5.6-sol": {
+      "input": 4.0,
+      "cached_input": 0.4,
+      "output": 20.0,
+      "note": "Promotional Sol pricing current on 2026-09-08."
+    },
+    "gpt-5.6": {
+      "input": 4.0,
+      "cached_input": 0.4,
+      "output": 20.0,
+      "note": "Alias priced as GPT-5.6 Sol on 2026-09-08."
+    },
+    "gpt-5.6-terra": {
+      "input": 2.0,
+      "cached_input": 0.2,
+      "output": 12.0
+    },
+    "gpt-5.6-luna": {
+      "input": 0.2,
+      "cached_input": 0.02,
+      "output": 1.2
+    }
+  },
+  "limitations": [
+    "Pilot cost estimates use uncached input rates because the current usage ledger does not separately capture cached input tokens.",
+    "Long-context requests above the provider pricing threshold may use different multipliers and must be reviewed before publication claims.",
+    "This table is a dated research artifact and must not be silently updated after the experiment is frozen."
+  ]
+}

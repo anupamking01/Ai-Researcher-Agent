@@ -7,7 +7,7 @@ benchmark results; it only defines metrics and aggregation utilities.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from typing import Iterable, Sequence
 
 
@@ -26,24 +26,62 @@ class RunTrace:
     completion_tokens: int = 0
     estimated_cost_usd: float = 0.0
 
+    # Experimental metadata. Defaults preserve compatibility with older traces.
+    variant_id: str = ""
+    task_set_id: str = ""
+    task_id: str = ""
+    question: str = ""
+    planning_mode: str = ""
+    verification_mode: str = ""
+    source_budget: int = 0
+    query_count: int = 0
+    search_call_count: int = 0
+    model_call_count: int = 0
+    unavailable_usage_call_count: int = 0
+    supported_claim_count: int = 0
+    partially_supported_claim_count: int = 0
+    contradicted_claim_count: int = 0
+    smart_model: str = ""
+    fast_model: str = ""
+    temperature: float = 0.0
+    usage_accounting_status: str = "unavailable"
+    cost_accounting_status: str = "not_computed"
+
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
 
     @property
+    def successful_source_count(self) -> int:
+        return max(self.source_count - self.failed_source_count, 0)
+
+    @property
     def source_success_rate(self) -> float:
         if self.source_count <= 0:
             return 0.0
-        successful = max(self.source_count - self.failed_source_count, 0)
-        return successful / self.source_count
+        return self.successful_source_count / self.source_count
+
+    @property
+    def verified_claim_count(self) -> int:
+        explicit_total = (
+            self.supported_claim_count
+            + self.partially_supported_claim_count
+            + self.unsupported_claim_count
+            + self.contradicted_claim_count
+        )
+        return explicit_total if explicit_total > 0 else self.citation_count
+
+    @property
+    def claim_support_rate(self) -> float:
+        """Strict support rate: fully supported claims / all verified claims."""
+        total = self.verified_claim_count
+        if total <= 0:
+            return 0.0
+        return self.supported_claim_count / total
 
     @property
     def citation_precision_proxy(self) -> float:
-        """A conservative proxy based on manually flagged unsupported claims.
-
-        This is not a factuality score. It only becomes meaningful when an
-        evaluator has annotated unsupported claims using a fixed protocol.
-        """
+        """Legacy conservative proxy based on manually flagged unsupported claims."""
         if self.citation_count <= 0:
             return 0.0
         supported = max(self.citation_count - self.unsupported_claim_count, 0)
@@ -52,7 +90,10 @@ class RunTrace:
     def to_dict(self) -> dict:
         data = asdict(self)
         data["total_tokens"] = self.total_tokens
+        data["successful_source_count"] = self.successful_source_count
         data["source_success_rate"] = self.source_success_rate
+        data["verified_claim_count"] = self.verified_claim_count
+        data["claim_support_rate"] = self.claim_support_rate
         data["citation_precision_proxy"] = self.citation_precision_proxy
         return data
 
@@ -69,10 +110,14 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
             "n_runs": 0,
             "completion_rate": 0.0,
             "avg_sources": 0.0,
+            "avg_successful_sources": 0.0,
             "avg_source_success_rate": 0.0,
+            "avg_claim_support_rate": 0.0,
             "avg_citation_precision_proxy": 0.0,
             "avg_latency_seconds": 0.0,
             "avg_total_tokens": 0.0,
+            "avg_model_calls": 0.0,
+            "avg_search_calls": 0.0,
             "avg_estimated_cost_usd": 0.0,
         }
 
@@ -80,12 +125,18 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
         "n_runs": len(runs),
         "completion_rate": safe_mean(1.0 if run.completed else 0.0 for run in runs),
         "avg_sources": safe_mean(float(run.source_count) for run in runs),
+        "avg_successful_sources": safe_mean(
+            float(run.successful_source_count) for run in runs
+        ),
         "avg_source_success_rate": safe_mean(run.source_success_rate for run in runs),
+        "avg_claim_support_rate": safe_mean(run.claim_support_rate for run in runs),
         "avg_citation_precision_proxy": safe_mean(
             run.citation_precision_proxy for run in runs
         ),
         "avg_latency_seconds": safe_mean(run.latency_seconds for run in runs),
         "avg_total_tokens": safe_mean(float(run.total_tokens) for run in runs),
+        "avg_model_calls": safe_mean(float(run.model_call_count) for run in runs),
+        "avg_search_calls": safe_mean(float(run.search_call_count) for run in runs),
         "avg_estimated_cost_usd": safe_mean(run.estimated_cost_usd for run in runs),
     }
 

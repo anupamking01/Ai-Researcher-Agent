@@ -1,135 +1,174 @@
 # AI Research Agent
 
-**Planner–execution web research system for studying reliable, source-grounded LLM agents**
+**A reproducible web-research agent for studying how planning, retrieval depth, and verification should share a limited research budget.**
 
 [![tests](https://github.com/anupamking01/Ai-Researcher-Agent/actions/workflows/tests.yml/badge.svg)](https://github.com/anupamking01/Ai-Researcher-Agent/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-This repository implements an agentic research workflow that decomposes a user question into focused search queries, retrieves and browses web sources, accumulates research context, and synthesizes a long-form report through an LLM. The current research direction is to make the pipeline **measurable and more reliable**, rather than treating agent orchestration as a black-box demo.
+> ## Research question
+> **Where should an autonomous research agent spend its inference and retrieval budget: deeper retrieval, explicit planning, or verification?**
 
-> **Research status:** active experimental project. The repository does **not** claim benchmark improvements or factuality gains that have not yet been measured.
+This project is an end-to-end planner/execution web-research system **and** an experimental platform for measuring evidence support, resource use, failure modes, and quality–cost trade-offs. The research branch is intentionally designed so that treatment generation, post-hoc measurement, statistical analysis, and blinded human validation are separate stages.
 
-## Why this project matters
+> **Research integrity:** the repository does not claim benchmark superiority, factuality gains, or human-quality improvements that have not been reproducibly measured. Pilot evidence, main-study infrastructure, automated evaluation, and pending human evaluation are labeled separately.
 
-Web-research agents combine several hard problems: planning, retrieval, source selection, asynchronous tool execution, evidence synthesis, failure recovery, and cost control. A system can produce fluent reports while still failing because it searched poorly, browsed inaccessible pages, used weak evidence, or generated unsupported claims.
+## Research status
 
-This project therefore separates two goals:
+| Component | Status |
+|---|---|
+| End-to-end web research agent | ✅ Implemented |
+| Versioned experiment traces and provenance | ✅ Implemented |
+| Token / latency / model-call / cost accounting | ✅ Implemented |
+| D3 / D6 / P6 / P6V treatment variants | ✅ Implemented |
+| Diagnostic pilot | ✅ Completed and documented |
+| Common post-hoc claim-support evaluator | ✅ Implemented |
+| Frozen 10-task paired main-study design | ✅ Implemented |
+| Evaluator-only recovery without replacing treatments | ✅ Implemented |
+| Predeclared paired statistical analysis | ✅ Implemented and frozen |
+| Deterministic blinded human-evaluation packets | ✅ Implemented |
+| Human rubric annotations | ⏳ Pending real annotators |
+| Final paper-level claims | ⏳ Pending canonical analysis + human validation |
 
-1. **Build an end-to-end autonomous research workflow.**
-2. **Evaluate where the workflow succeeds or fails using reproducible metrics and ablations.**
+A GitHub Actions workflow or recovery job can fail for operational reasons even when some treatment artifacts were produced. Final results must therefore be tied to the exact canonical artifact set and provenance used for analysis rather than inferred from a workflow label alone.
 
-## Current capabilities
+## Experimental design
 
-- task-specific **Auto Agent** role selection;
-- LLM-driven decomposition of a research task into focused search queries;
-- DuckDuckGo-based web search;
-- order-preserving source tracking and URL deduplication during a run;
-- asynchronous browsing/scraping across retrieved sources;
-- accumulation of research context across queries;
-- streamed report generation over WebSockets;
-- FastAPI web application with a browser UI;
-- PDF-oriented report export pipeline;
-- offline evaluation utilities for completion, source success, latency, token/cost, and citation-support proxies;
-- lightweight unit tests and GitHub Actions CI for the offline evaluation layer.
+The frozen main analysis isolates three stage-wise effects on the same task set:
 
-## System architecture
+| Variant | Planning | Scheduled browse budget | Treatment verification | Comparison |
+|---|---|---:|---|---|
+| **D3** | Direct | 3 | No | Retrieval baseline |
+| **D6** | Direct | 6 | No | `D6 - D3`: retrieval depth |
+| **P6** | Planner | 6 | No | `P6 - D6`: planning |
+| **P6V** | Planner | 6 | Yes | `P6V - P6`: verification |
+
+The study does **not** assume these variants consume equal total compute. Tokens, model calls, latency, web activity, and estimated cost are recorded so quality can be interpreted together with resource use.
+
+## Research pipeline
 
 ```mermaid
-flowchart TD
-    U[User research task] --> API[FastAPI + WebSocket UI]
-    API --> SEL{Agent mode}
-    SEL -->|Auto Agent| ROLE[LLM selects task-specific role]
-    SEL -->|Named agent| PLAN[Research planner]
-    ROLE --> PLAN
-    PLAN --> Q[Generate focused search queries]
-    Q --> SEARCH[Web search]
-    SEARCH --> TRACK[Track / deduplicate URLs]
-    TRACK --> BROWSE[Concurrent browsing]
-    BROWSE --> CONTEXT[Research evidence/context]
-    CONTEXT --> WRITE[LLM report synthesis]
-    WRITE --> STREAM[Stream report to UI]
-    WRITE --> OUTPUT[Persist/export output]
+flowchart LR
+    T[Frozen research task] --> V{Treatment variant}
+    V -->|D3 / D6| DIRECT[Direct retrieval]
+    V -->|P6 / P6V| PLAN[LLM query planning]
+    DIRECT --> WEB[Search + bounded browsing]
+    PLAN --> WEB
+    WEB --> EVIDENCE[Persist retrieved evidence]
+    EVIDENCE --> REPORT[Generate report]
+    REPORT --> VERIFY{Treatment verifier?}
+    VERIFY -->|P6V| VCHECK[Claim/evidence verification]
+    VERIFY -->|No| TRACE[Persist trace + usage]
+    VCHECK --> TRACE
+    TRACE --> COMMON[Common post-hoc support evaluator]
+    COMMON --> ANALYSIS[Offline paired analysis]
+    TRACE --> BLIND[Deterministic blinded packet]
+    BLIND --> HUMAN[Human rubric evaluation]
 ```
 
-The core implementation lives in [`logic/research_agent.py`](logic/research_agent.py), with execution orchestration in [`logic/run.py`](logic/run.py) and model access / Auto Agent selection in [`logic/llm_utils.py`](logic/llm_utils.py).
+This separation matters. `P6V` may use verification as part of the treatment, but every compared report can still receive the **same common post-hoc evaluator**, avoiding a measurement advantage that exists only for one treatment.
 
-For a detailed code-level walkthrough, see **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+## What is measured
 
-## Implemented vs. research roadmap
+The primary automated outcome is **strict evidence support rate**:
 
-| Capability | Status |
+```text
+supported claims / claims checked
+```
+
+Secondary measurements include broad support, unsupported/contradicted claims, successful sources, total tokens, model calls, latency, report length, and estimated treatment cost.
+
+The frozen main-study analysis uses paired task-level contrasts and reports mean/median differences, deterministic bootstrap confidence intervals, exact sign-flip/randomization p-values where the complete paired matrix exists, standardized paired effects when defined, and Holm adjustment across the three primary contrasts.
+
+Because the task set is small, the project emphasizes **effect sizes, uncertainty, paired consistency, and transparent limitations** rather than binary significance claims.
+
+## Human evaluation
+
+Automated evidence-support scoring cannot fully answer whether a report is useful, complete, well sourced, well reasoned, and readable. The repository therefore includes a blinded human-evaluation workflow with five 1–5 rubric dimensions:
+
+- correctness;
+- completeness;
+- source quality;
+- synthesis / reasoning;
+- clarity.
+
+Build a deterministic offline packet from completed traces:
+
+```bash
+python scripts/build_human_eval_packet.py
+```
+
+The builder creates annotator-facing blinded reports and a ratings template while keeping the treatment mapping in a separate coordinator-only key. It fails closed on duplicate treatment/task cells, missing reports, incomplete runs, unexpected variants, or an incomplete task matrix.
+
+**No human ratings are fabricated or generated by the system.** Real annotations remain pending.
+
+See **[paper/HUMAN_EVAL_PROTOCOL.md](paper/HUMAN_EVAL_PROTOCOL.md)** for the frozen annotation procedure.
+
+## Reproducibility map
+
+A reviewer should be able to trace the project from question → treatment → evidence → measurement → inference:
+
+| Artifact | Role |
 |---|---|
-| Planner-style query decomposition | Implemented |
-| Concurrent web research | Implemented |
-| Source URL tracking | Implemented |
-| Task-specific agent role selection | Implemented |
-| Streamed report generation | Implemented |
-| Offline run-metric aggregation | Implemented |
-| Unit tests for evaluation utilities | Implemented |
-| Claim-to-source verification | Planned |
-| Verifier-guided report repair | Planned |
-| Confidence-aware source filtering | Planned |
-| Adaptive stopping / source budget | Planned |
-| Systematic benchmark study | Planned |
+| **[paper/RESEARCH_PROTOCOL.md](paper/RESEARCH_PROTOCOL.md)** | Research question, hypotheses, budget principles, threats to validity |
+| **[paper/PILOT_RESULTS.md](paper/PILOT_RESULTS.md)** | Canonical diagnostic pilot and caveats |
+| **[paper/ANALYSIS_PLAN.md](paper/ANALYSIS_PLAN.md)** | Frozen confirmatory main-study inference |
+| **[paper/HUMAN_EVAL_PROTOCOL.md](paper/HUMAN_EVAL_PROTOCOL.md)** | Blinded human-quality evaluation |
+| **[docs/EVALUATION.md](docs/EVALUATION.md)** | End-to-end evaluation methodology |
+| `logic/experiment.py` | Experiment configuration / provenance data structures |
+| `scripts/run_budget_main_study.py` | Main-study orchestration |
+| `scripts/summarize_budget_main_study.py` | Offline validation and aggregation |
+| `scripts/analyze_main_study.py` | Paired statistical analysis |
+| `scripts/build_human_eval_packet.py` | Blinded human-evaluation packet builder |
+| `tests/` | Offline experiment and analysis invariants |
+| `.github/workflows/` | CI and explicitly controlled research workflows |
 
-This distinction is deliberate: planned features are not presented as completed work.
+## Core agent capabilities
 
-## Research questions
+Outside the experimental layer, the application supports:
 
-The current experimental plan focuses on four questions:
+- task-specific **Auto Agent** role selection;
+- LLM-driven research-question decomposition;
+- DuckDuckGo-based web search;
+- URL tracking and deduplication;
+- asynchronous source browsing;
+- accumulated evidence/context across research steps;
+- streamed report generation over WebSockets;
+- FastAPI browser UI;
+- Markdown/PDF report persistence;
+- retry/failure handling and trace instrumentation.
 
-- **RQ1 — Research quality:** Does agentic task decomposition improve completeness and source coverage over a single-pass baseline?
-- **RQ2 — Reliability:** Which stage contributes most to failures: planning, search, browsing, retrieval relevance, or synthesis?
-- **RQ3 — Efficiency:** What quality–latency–cost trade-off is produced by different model and orchestration configurations?
-- **RQ4 — Verification:** Can explicit evidence verification reduce unsupported claims enough to justify the additional inference cost?
+The core implementation lives in [`logic/research_agent.py`](logic/research_agent.py), orchestration in [`logic/run.py`](logic/run.py), experiment structures in [`logic/experiment.py`](logic/experiment.py), and model access in [`logic/llm_utils.py`](logic/llm_utils.py).
 
-The full protocol is documented in **[docs/EVALUATION.md](docs/EVALUATION.md)**.
-
-## Evaluation design
-
-The planned study compares progressively stronger systems under the same fixed task set:
-
-| Variant | Planning | Multi-query retrieval | Concurrent browsing | Verification |
-|---|---:|---:|---:|---:|
-| Single-pass LLM baseline | No | No | No | No |
-| Retrieval baseline | No | Yes | Yes | No |
-| Current research agent | Yes | Yes | Yes | No |
-| Research agent + verifier | Yes | Yes | Yes | Planned |
-
-Metrics include:
-
-- run completion rate;
-- unique source coverage;
-- source/browse success rate;
-- manually evaluated claim support;
-- report-quality rubric scores;
-- wall-clock latency;
-- prompt/completion tokens;
-- estimated inference cost;
-- failure categories and qualitative trace analysis.
-
-The lightweight metric implementation is in [`logic/evaluation.py`](logic/evaluation.py). It is dependency-free so that experiment traces can be analyzed without network or model access.
+For the code-level architecture, see **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## Repository structure
 
 ```text
 Ai-Researcher-Agent/
-├── app.py                    # FastAPI + WebSocket application
+├── app.py
 ├── logic/
-│   ├── research_agent.py     # planning, retrieval and report workflow
-│   ├── llm_utils.py          # LLM access + Auto Agent selection
-│   ├── prompts.py            # agent/report prompt definitions
-│   ├── run.py                # run orchestration
-│   └── evaluation.py         # offline experimental metrics
-├── scrape/                   # search and web-browsing utilities
-├── text_preprocess/          # text / report processing
-├── frontend/                 # browser UI
-├── settings/                 # configuration
+│   ├── research_agent.py
+│   ├── run.py
+│   ├── experiment.py
+│   ├── evaluation.py
+│   ├── llm_utils.py
+│   └── prompts.py
+├── scripts/
+│   ├── run_budget_main_study.py
+│   ├── summarize_budget_main_study.py
+│   ├── analyze_main_study.py
+│   └── build_human_eval_packet.py
+├── paper/
+│   ├── RESEARCH_PROTOCOL.md
+│   ├── PILOT_RESULTS.md
+│   ├── ANALYSIS_PLAN.md
+│   └── HUMAN_EVAL_PROTOCOL.md
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   └── EVALUATION.md
+├── experiments/
 ├── tests/
-│   └── test_evaluation.py
+├── .github/workflows/
 ├── requirements.txt
 ├── requirements-dev.txt
 └── CITATION.cff
@@ -137,88 +176,81 @@ Ai-Researcher-Agent/
 
 ## Quick start
 
-### 1. Clone
+### Install
 
 ```bash
 git clone https://github.com/anupamking01/Ai-Researcher-Agent.git
 cd Ai-Researcher-Agent
-```
-
-### 2. Install application dependencies
-
-```bash
 pip install -r requirements.txt
 ```
 
-### 3. Configure the model API key
+Configure the model key without committing it:
 
 ```bash
 export OPENAI_API_KEY="YOUR_KEY"
 ```
 
-You can also use a local `.env` file if preferred. Never commit API keys.
-
-### 4. Run the application
+Run the application:
 
 ```bash
 uvicorn app:app --reload
 ```
 
-Open `http://localhost:8000`.
+Then open `http://localhost:8000`.
 
-### 5. Run offline tests
+## Offline verification
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q
+python -m pytest -q
 ```
 
-The unit tests do not call an LLM or the web.
+The ordinary unit-test suite is offline and should not call an LLM or the web.
+
+Research analysis should be performed from persisted traces/artifacts. Treatment runs that require live web/model access are intentionally separate from ordinary CI.
+
+## Research integrity rules
+
+This project follows several explicit guardrails:
+
+1. **Freeze before looking.** Task sets and confirmatory analysis choices are versioned/frozen before inspecting the outcomes they govern.
+2. **Preserve failures.** Treatment failures, zero-evidence outcomes, and infrastructure problems are retained rather than silently retried until a favorable result appears.
+3. **Separate treatment from measurement.** Treatment-time verification is distinct from the common evaluator applied across variants.
+4. **Account for resource differences.** More inference/tool usage is reported as cost, not disguised as an equal-budget comparison.
+5. **No fabricated validation.** Pending human scores stay pending.
+6. **Limit the claim.** A small original live-web task set cannot establish universal superiority or state-of-the-art performance.
+
+## Limitations and threats to validity
+
+- Live-web retrieval can change as pages, rankings, and source availability change.
+- Search-provider behavior can introduce systematic retrieval bias.
+- LLM/provider versions may change over time.
+- Automated claim-support evaluation is itself model-dependent.
+- Support by retrieved evidence is not identical to external truth.
+- The frozen task set is small and not a universal benchmark.
+- Treatment variants may differ in total compute, making quality–cost interpretation essential.
+- Human evaluation is still pending and will introduce normal annotator subjectivity even under blinding.
+
+Generated reports should not be treated as authoritative for high-stakes decisions without independent verification.
 
 ## Demo videos
 
 - [Live Demo 1](https://www.loom.com/share/8c2be0f1afec491d8c1399da0fb50f47?sid=2cb8877f-ddfc-479c-ae52-9a84c145cdba)
 - [Live Demo 2](https://www.loom.com/share/81ebdeb4f0004f4c94164d61266a4b09?sid=a7e69af2-c251-4e5e-bc02-3393d5e252bf)
 
-## Limitations
-
-The current system should be treated as an experimental research tool, not an authority.
-
-- Web retrieval quality depends on the search provider and source availability.
-- The default search utility currently retrieves a small fixed number of results per query.
-- A larger number of sources does **not** automatically imply factual correctness or reduced bias.
-- LLM synthesis can introduce unsupported statements even when useful evidence was retrieved.
-- The current pipeline does not yet perform formal claim-to-citation verification.
-- Provider/model behavior, cost, and latency can change over time.
-- Generated research should be independently verified for high-stakes or academic use.
-
 ## Related work and architectural lineage
 
-This project sits in the broader line of retrieval- and tool-augmented language-model research. The planner/execution research pattern and parts of the early project framing were influenced by the open-source **GPT Researcher** architecture; that lineage is explicitly acknowledged here.
+The project sits in the broader line of retrieval- and tool-augmented language-model research. Its early planner/execution framing was influenced by the open-source GPT Researcher architecture, which is explicitly acknowledged rather than presented as original lineage.
 
-Recommended references:
+Relevant references include:
 
-1. Yao et al., **“ReAct: Synergizing Reasoning and Acting in Language Models.”** arXiv:2210.03629, 2022. https://arxiv.org/abs/2210.03629
-2. Lewis et al., **“Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks.”** NeurIPS 2020. https://arxiv.org/abs/2005.11401
-3. Wang et al., **“Plan-and-Solve Prompting: Improving Zero-Shot Chain-of-Thought Reasoning by Large Language Models.”** arXiv:2305.04091, 2023. https://arxiv.org/abs/2305.04091
-4. Shao et al., **“Assisting in Writing Wikipedia-like Articles From Scratch with Large Language Models (STORM).”** 2024. https://arxiv.org/abs/2402.14207
-5. Elovic et al., **GPT Researcher**, open-source autonomous research-agent project. https://github.com/assafelovic/gpt-researcher
+1. Yao et al., **“ReAct: Synergizing Reasoning and Acting in Language Models.”** arXiv:2210.03629, 2022.
+2. Lewis et al., **“Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks.”** NeurIPS 2020.
+3. Wang et al., **“Plan-and-Solve Prompting: Improving Zero-Shot Chain-of-Thought Reasoning by Large Language Models.”** arXiv:2305.04091, 2023.
+4. Shao et al., **“Assisting in Writing Wikipedia-like Articles From Scratch with Large Language Models (STORM).”** 2024.
+5. Elovic et al., **GPT Researcher**, open-source autonomous research-agent project.
 
-These references provide context; inclusion does not imply that every method in those systems is implemented here.
-
-## Reproducibility and research integrity
-
-For future experimental results, each reported number should be tied to:
-
-- a fixed task-set version;
-- a Git commit SHA;
-- exact model/provider identifiers;
-- prompt and model parameters;
-- retrieval configuration;
-- raw run traces;
-- the evaluation script used to compute the metric.
-
-No `TBD` result should be converted into a numerical claim until it has been measured reproducibly.
+Inclusion here provides research context; it does not imply that every method in those systems is implemented by this repository.
 
 ## Citation
 

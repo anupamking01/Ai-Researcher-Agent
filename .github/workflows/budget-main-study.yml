@@ -1,0 +1,130 @@
+name: budget-main-study
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: budget-main-study-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      SMART_LLM_MODEL: gpt-5.6-terra
+      FAST_LLM_MODEL: gpt-5.6-luna
+      TEMPERATURE: "1"
+      USE_WEB_BROWSER: chrome
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout research branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Validate API secret
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "OPENAI_API_KEY repository secret is not configured."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Compile and run offline tests
+        run: |
+          python -m compileall -q agent logic scripts tests settings scrape text_preprocess
+          python -m pytest -q
+
+      - name: Preflight live search and browser extraction
+        timeout-minutes: 5
+        run: python scripts/preflight_live_pilot.py
+
+      - name: Run 10-task four-variant treatment matrix
+        timeout-minutes: 190
+        run: python scripts/run_budget_main_study.py --max-agent-cost-usd 3.00
+
+      - name: Apply common post-hoc support evaluator
+        timeout-minutes: 45
+        run: python scripts/evaluate_posthoc_support.py --max-evaluator-cost-usd 1.25
+
+      - name: Summarize main study
+        run: python scripts/summarize_budget_main_study.py
+
+      - name: Validate complete study cardinality and budget
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('outputs')
+          manifest = json.loads((root / 'main_study_manifest.json').read_text())
+          progress = json.loads((root / 'main_study_progress.json').read_text())
+          summary = json.loads((root / 'main_study_summary.json').read_text())
+          support = json.loads((root / 'posthoc_support_summary.json').read_text())
+
+          expected = 40
+          errors = []
+          if manifest.get('expected_runs') != expected:
+              errors.append(f"manifest expected_runs={manifest.get('expected_runs')}")
+          if progress.get('completed_runs') != expected:
+              errors.append(f"completed_runs={progress.get('completed_runs')}")
+          if progress.get('failed_runs') != 0 or progress.get('timeout_runs') != 0:
+              errors.append('treatment failures/timeouts are nonzero')
+          if summary.get('n_runs') != expected:
+              errors.append(f"summary n_runs={summary.get('n_runs')}")
+          if summary.get('n_posthoc_evaluations') != expected:
+              errors.append(f"posthoc evaluations={summary.get('n_posthoc_evaluations')}")
+          if support.get('n_evaluations') != expected:
+              errors.append(f"support n_evaluations={support.get('n_evaluations')}")
+          if float(summary.get('estimated_treatment_cost_usd', 999)) > 3.10:
+              errors.append('treatment cost exceeded hard guard allowance')
+          if float(summary.get('estimated_common_evaluator_cost_usd', 999)) > 1.25:
+              errors.append('evaluator cost exceeded cap')
+          if float(summary.get('estimated_total_cost_usd', 999)) > 4.35:
+              errors.append('combined estimated study cost exceeded $4.35')
+          for variant in ('D3', 'D6', 'P6', 'P6V'):
+              stats = summary.get('variant_summary', {}).get(variant, {})
+              if stats.get('n') != 10 or stats.get('posthoc_evaluated_runs') != 10:
+                  errors.append(f"{variant} incomplete: {stats}")
+
+          if errors:
+              print('BUDGET MAIN STUDY VALIDATION: FAIL')
+              for error in errors:
+                  print(' -', error)
+              raise SystemExit(1)
+          print('BUDGET MAIN STUDY VALIDATION: PASS')
+          PY
+
+      - name: Upload study artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: budget-main-study-${{ github.run_id }}
+          path: |
+            outputs/main_study_manifest.json
+            outputs/main_study_progress.json
+            outputs/main_study_summary.json
+            outputs/main_study_runs.csv
+            outputs/posthoc_support_summary.json
+            outputs/posthoc_support_runs.csv
+            outputs/posthoc_evaluations/**
+            outputs/experiment_traces/**
+            outputs/*/research_report.md
+            outputs/*/research-query-*.txt
+            outputs/*/verification.json
+          if-no-files-found: warn
+          retention-days: 30
