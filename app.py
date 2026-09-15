@@ -64,9 +64,31 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 await websocket.send_json({"type": "logs", "output": f"Initiated an Agent: {agent}"})
                 if task and report_type and agent:
-                    await manager.start_streaming(task, report_type, agent, agent_role_prompt, websocket)
+                    try:
+                        await manager.start_streaming(
+                            task,
+                            report_type,
+                            agent,
+                            agent_role_prompt,
+                            websocket,
+                        )
+                    except WebSocketDisconnect:
+                        raise
+                    except Exception as exc:
+                        error_message = (
+                            f"Research run failed: {type(exc).__name__}: {exc}"
+                        )
+                        print(error_message)
+                        await websocket.send_json(
+                            {"type": "error", "output": error_message}
+                        )
                 else:
-                    print("Error: not enough parameters provided.")
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "output": "Research run failed: missing required parameters.",
+                        }
+                    )
 
     except WebSocketDisconnect:
         await manager.disconnect(websocket)
