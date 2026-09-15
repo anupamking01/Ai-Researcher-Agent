@@ -15,10 +15,11 @@ class ResearchRequest(BaseModel):
     agent: str
 
 
-
 app = FastAPI()
 app.mount("/site", StaticFiles(directory="frontend"), name="site")
 app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
+
+
 # Dynamic directory for outputs once first research is run
 @app.on_event("startup")
 def startup_event():
@@ -26,9 +27,15 @@ def startup_event():
         os.makedirs("outputs")
     app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
 
+
 templates = Jinja2Templates(directory="frontend")
 
 manager = WebSocketManager()
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 
 @app.get("/")
