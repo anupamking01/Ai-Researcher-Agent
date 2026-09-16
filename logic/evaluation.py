@@ -84,6 +84,32 @@ def population_stddev(values: Iterable[float]) -> float:
     return sqrt(safe_mean((value - mean) ** 2 for value in values))
 
 
+def paired_metric_comparison(
+    baseline: Sequence[float], candidate: Sequence[float]
+) -> dict:
+    """Summarize per-task deltas for two variants evaluated on the same tasks.
+
+    Values must be aligned by task and use a metric where larger is better.
+    Keeping the comparison paired prevents task difficulty from being hidden by
+    comparing two unrelated aggregate means. Statistical significance is not
+    inferred here; the returned dispersion and win/tie/loss counts are
+    descriptive evidence only.
+    """
+    if len(baseline) != len(candidate):
+        raise ValueError("paired comparisons require equal-length sequences")
+
+    deltas = [float(new) - float(old) for old, new in zip(baseline, candidate)]
+    return {
+        "n_pairs": len(deltas),
+        "mean_delta": safe_mean(deltas),
+        "median_delta": safe_median(deltas),
+        "delta_stddev": population_stddev(deltas),
+        "wins": sum(delta > 0 for delta in deltas),
+        "ties": sum(delta == 0 for delta in deltas),
+        "losses": sum(delta < 0 for delta in deltas),
+    }
+
+
 def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
     """Aggregate run-level traces into experiment-level summary metrics.
 
