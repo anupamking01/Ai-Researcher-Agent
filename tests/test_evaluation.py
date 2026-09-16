@@ -1,4 +1,12 @@
-from logic.evaluation import RunTrace, aggregate_runs, deduplicate_sources
+import pytest
+
+from logic.evaluation import (
+    RunTrace,
+    aggregate_runs,
+    deduplicate_sources,
+    population_stddev,
+    safe_median,
+)
 
 
 def test_run_trace_metrics():
@@ -49,14 +57,32 @@ def test_aggregate_runs():
     assert summary["avg_sources"] == 7.5
     assert summary["avg_source_success_rate"] == 0.4
     assert summary["avg_latency_seconds"] == 15.0
+    assert summary["median_latency_seconds"] == 15.0
+    assert summary["latency_stddev_seconds"] == 5.0
     assert summary["avg_total_tokens"] == 112.5
-    assert summary["avg_estimated_cost_usd"] == 0.035
+    assert summary["total_tokens_stddev"] == 37.5
+    assert summary["avg_estimated_cost_usd"] == pytest.approx(0.035)
+    assert summary["median_estimated_cost_usd"] == pytest.approx(0.035)
 
 
 def test_empty_aggregate_is_defined():
     summary = aggregate_runs([])
     assert summary["n_runs"] == 0
     assert summary["completion_rate"] == 0.0
+    assert summary["median_latency_seconds"] == 0.0
+    assert summary["latency_stddev_seconds"] == 0.0
+    assert summary["total_tokens_stddev"] == 0.0
+    assert summary["median_estimated_cost_usd"] == 0.0
+
+
+def test_robust_statistics_handle_odd_even_and_empty_inputs():
+    assert safe_median([]) == 0.0
+    assert safe_median([9.0]) == 9.0
+    assert safe_median([1.0, 9.0, 3.0]) == 3.0
+    assert safe_median([1.0, 7.0, 3.0, 5.0]) == 4.0
+    assert population_stddev([]) == 0.0
+    assert population_stddev([2.0, 2.0, 2.0]) == 0.0
+    assert population_stddev([10.0, 20.0]) == 5.0
 
 
 def test_deduplicate_sources_preserves_order():
