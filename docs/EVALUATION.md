@@ -27,122 +27,43 @@ For model comparisons, hold prompts, retrieval settings, and task set constant w
 
 ## Task set
 
-Use a fixed, versioned task set with a mixture of:
-
-- factual multi-source questions;
-- comparison/synthesis questions;
-- time-sensitive questions where current web evidence matters;
-- ambiguous prompts that require careful scope interpretation;
-- questions with conflicting sources;
-- questions where primary sources are preferable to secondary summaries.
-
-Store the task set in machine-readable form before running experiments. Do not modify tasks after seeing results unless the new version is explicitly labeled.
+Use a fixed, versioned task set with a mixture of factual multi-source questions, comparison/synthesis questions, time-sensitive questions, ambiguous prompts, conflicting-source questions, and questions where primary sources are preferable. Store the task set in machine-readable form before running experiments and version changes explicitly.
 
 ## Metrics
 
-### 1. Completion rate
+Track completion rate, source/browse success, unique source/domain coverage, claim support, blinded task-quality rubric scores, latency, prompt/completion tokens, estimated cost, search-query count, and browsed-source count. The `citation_precision_proxy` in `logic/evaluation.py` is deliberately a proxy and should only be used after a fixed human-annotation protocol is applied.
 
-Fraction of runs that finish and produce a report.
+For task quality, a suitable 1–5 rubric includes correctness, completeness, source quality, synthesis/reasoning, and clarity. For higher rigor, use at least two evaluators on a subset and report inter-rater agreement.
 
-### 2. Source success rate
+## Paired variant comparisons
 
-For each run:
+Variants should be run on the **same task IDs** whenever possible. Comparing only two global averages can hide task difficulty: a candidate may look better simply because it was evaluated on easier prompts. For every scalar metric where larger is better, align baseline and candidate values by task ID and report:
 
-`(retrieved sources - failed sources) / retrieved sources`
+- number of paired tasks;
+- mean per-task delta (`candidate - baseline`);
+- median per-task delta;
+- standard deviation of per-task deltas;
+- task-level wins, ties, and losses.
 
-This separates browsing reliability from LLM quality.
+`logic.evaluation.paired_metric_comparison` implements this descriptive summary without external dependencies. For metrics where smaller is better (for example latency or cost), either negate the metric before comparison or clearly interpret negative deltas as improvements. Do not treat win counts or descriptive deltas as statistical significance.
 
-### 3. Source coverage
-
-Count unique sources used by a report. When possible, also record unique domains and primary-source proportion.
-
-### 4. Claim support / citation precision
-
-Sample or annotate atomic claims in the final report and label each as:
-
-- supported by cited evidence;
-- partially supported;
-- unsupported;
-- contradicted by cited evidence.
-
-The `citation_precision_proxy` in `logic/evaluation.py` is deliberately named a proxy. It should only be used after a fixed human-annotation protocol is applied.
-
-### 5. Task quality
-
-Use a blinded rubric such as:
-
-- correctness: 1–5;
-- completeness: 1–5;
-- source quality: 1–5;
-- synthesis / reasoning: 1–5;
-- clarity: 1–5.
-
-For higher rigor, use at least two evaluators on a subset and report inter-rater agreement.
-
-### 6. Efficiency
-
-Track:
-
-- wall-clock latency;
-- prompt tokens;
-- completion tokens;
-- estimated model cost;
-- number of search queries;
-- number of browsed sources.
-
-Quality should be discussed together with cost and latency rather than in isolation.
+If a task is missing from one variant because of a failed run, report the missingness and completion-rate difference separately rather than silently dropping failures until both systems appear successful.
 
 ## Ablation plan
 
-When verification features are added, remove one component at a time:
-
-1. no task decomposition;
-2. no source deduplication;
-3. sequential instead of concurrent browsing;
-4. no evidence verifier;
-5. no repair loop;
-6. no adaptive stopping / fixed source budget.
-
-Report both absolute metrics and change relative to the full system.
+When verification features are added, remove one component at a time: task decomposition, source deduplication, concurrent browsing, evidence verification, repair loop, and adaptive stopping/source budget. Report both absolute metrics and paired change relative to the full system.
 
 ## Failure taxonomy
 
-Every failed or low-quality run should be assigned one primary failure category:
-
-- `planning_error`
-- `search_failure`
-- `browse_failure`
-- `irrelevant_retrieval`
-- `insufficient_evidence`
-- `synthesis_error`
-- `unsupported_claim`
-- `citation_mismatch`
-- `provider_error`
-- `timeout_or_budget`
-
-Keep representative traces for qualitative analysis.
+Assign failed or low-quality runs one primary category: `planning_error`, `search_failure`, `browse_failure`, `irrelevant_retrieval`, `insufficient_evidence`, `synthesis_error`, `unsupported_claim`, `citation_mismatch`, `provider_error`, or `timeout_or_budget`. Keep representative traces for qualitative analysis.
 
 ## Reproducibility checklist
 
-Record for each experiment:
-
-- date/time;
-- git commit SHA;
-- task-set version;
-- model/provider and exact model name;
-- model parameters such as temperature;
-- search provider and result limit;
-- maximum source budget;
-- prompt version;
-- hardware/runtime environment where relevant;
-- raw run traces;
-- scoring script version.
+Record date/time, git commit SHA, task-set version, provider/model identifier, model parameters, search provider/result limit, maximum source budget, prompt version, runtime environment where relevant, raw traces, and scoring-script version.
 
 ## Statistical reporting
 
-For a sufficiently large task set, report means with dispersion (standard deviation or confidence intervals) rather than only point estimates. When comparing two variants over the same tasks, use paired comparisons where possible.
-
-The repository should not report statistical significance unless the assumptions and test are clearly documented.
+For a sufficiently large task set, report means with dispersion rather than only point estimates. When comparing variants over the same tasks, use paired comparisons. The repository should not report statistical significance unless the assumptions and test are clearly documented.
 
 ## Result reporting template
 
