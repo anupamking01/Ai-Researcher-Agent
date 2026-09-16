@@ -8,6 +8,7 @@ benchmark results; it only defines metrics and aggregation utilities.
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
+from math import sqrt
 from typing import Iterable, Sequence
 
 
@@ -62,8 +63,34 @@ def safe_mean(values: Iterable[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
+def safe_median(values: Iterable[float]) -> float:
+    """Return the median, or 0.0 for an empty iterable."""
+    ordered = sorted(values)
+    size = len(ordered)
+    if size == 0:
+        return 0.0
+    midpoint = size // 2
+    if size % 2:
+        return float(ordered[midpoint])
+    return (ordered[midpoint - 1] + ordered[midpoint]) / 2
+
+
+def population_stddev(values: Iterable[float]) -> float:
+    """Return population standard deviation, defined as 0.0 when empty."""
+    values = list(values)
+    if not values:
+        return 0.0
+    mean = safe_mean(values)
+    return sqrt(safe_mean((value - mean) ** 2 for value in values))
+
+
 def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
-    """Aggregate run-level traces into experiment-level summary metrics."""
+    """Aggregate run-level traces into experiment-level summary metrics.
+
+    Means remain available for backwards compatibility. Median latency/cost
+    and dispersion metrics make comparisons less sensitive to occasional
+    network/model outliers and expose run-to-run instability explicitly.
+    """
     if not runs:
         return {
             "n_runs": 0,
@@ -72,9 +99,17 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
             "avg_source_success_rate": 0.0,
             "avg_citation_precision_proxy": 0.0,
             "avg_latency_seconds": 0.0,
+            "median_latency_seconds": 0.0,
+            "latency_stddev_seconds": 0.0,
             "avg_total_tokens": 0.0,
+            "total_tokens_stddev": 0.0,
             "avg_estimated_cost_usd": 0.0,
+            "median_estimated_cost_usd": 0.0,
         }
+
+    latencies = [run.latency_seconds for run in runs]
+    total_tokens = [float(run.total_tokens) for run in runs]
+    costs = [run.estimated_cost_usd for run in runs]
 
     return {
         "n_runs": len(runs),
@@ -84,9 +119,13 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
         "avg_citation_precision_proxy": safe_mean(
             run.citation_precision_proxy for run in runs
         ),
-        "avg_latency_seconds": safe_mean(run.latency_seconds for run in runs),
-        "avg_total_tokens": safe_mean(float(run.total_tokens) for run in runs),
-        "avg_estimated_cost_usd": safe_mean(run.estimated_cost_usd for run in runs),
+        "avg_latency_seconds": safe_mean(latencies),
+        "median_latency_seconds": safe_median(latencies),
+        "latency_stddev_seconds": population_stddev(latencies),
+        "avg_total_tokens": safe_mean(total_tokens),
+        "total_tokens_stddev": population_stddev(total_tokens),
+        "avg_estimated_cost_usd": safe_mean(costs),
+        "median_estimated_cost_usd": safe_median(costs),
     }
 
 
