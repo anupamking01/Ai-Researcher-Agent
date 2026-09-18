@@ -3,6 +3,7 @@ import pytest
 from logic.evaluation import (
     RunTrace,
     aggregate_runs,
+    bootstrap_confidence_interval,
     deduplicate_sources,
     paired_metric_comparison,
     population_stddev,
@@ -64,6 +65,23 @@ def test_robust_statistics_handle_odd_even_and_empty_inputs():
     assert population_stddev([]) == 0.0
     assert population_stddev([2.0, 2.0, 2.0]) == 0.0
     assert population_stddev([10.0, 20.0]) == 5.0
+
+
+def test_bootstrap_confidence_interval_is_reproducible_and_bounded():
+    first = bootstrap_confidence_interval([1, 2, 3, 4, 5], n_resamples=500, seed=42)
+    second = bootstrap_confidence_interval([1, 2, 3, 4, 5], n_resamples=500, seed=42)
+    assert first == second
+    assert first["estimate"] == 3.0
+    assert 1.0 <= first["lower"] <= first["estimate"] <= first["upper"] <= 5.0
+
+
+def test_bootstrap_confidence_interval_handles_empty_and_invalid_settings():
+    empty = bootstrap_confidence_interval([], n_resamples=10)
+    assert empty["estimate"] == empty["lower"] == empty["upper"] == 0.0
+    with pytest.raises(ValueError, match="confidence"):
+        bootstrap_confidence_interval([1.0], confidence=1.0)
+    with pytest.raises(ValueError, match="n_resamples"):
+        bootstrap_confidence_interval([1.0], n_resamples=0)
 
 
 def test_paired_metric_comparison_preserves_task_pairing():

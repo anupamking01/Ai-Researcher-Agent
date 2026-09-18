@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, asdict
 from math import sqrt
-from typing import Iterable, Sequence
+from random import Random
+from typing import Callable, Iterable, Sequence
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,50 @@ def population_stddev(values: Iterable[float]) -> float:
         return 0.0
     mean = safe_mean(values)
     return sqrt(safe_mean((value - mean) ** 2 for value in values))
+
+
+def bootstrap_confidence_interval(
+    values: Sequence[float],
+    statistic: Callable[[Iterable[float]], float] = safe_mean,
+    confidence: float = 0.95,
+    n_resamples: int = 2000,
+    seed: int = 0,
+) -> dict:
+    """Return a reproducible percentile-bootstrap interval for a statistic.
+
+    A local seeded RNG keeps reports reproducible without mutating global random
+    state. The returned interval is descriptive uncertainty and does not imply
+    statistical significance.
+    """
+    if not 0.0 < confidence < 1.0:
+        raise ValueError("confidence must be between 0 and 1")
+    if n_resamples <= 0:
+        raise ValueError("n_resamples must be positive")
+
+    sample = [float(value) for value in values]
+    if not sample:
+        return {
+            "estimate": 0.0,
+            "lower": 0.0,
+            "upper": 0.0,
+            "confidence": confidence,
+            "n_resamples": n_resamples,
+        }
+
+    rng = Random(seed)
+    estimates = sorted(
+        statistic(rng.choices(sample, k=len(sample))) for _ in range(n_resamples)
+    )
+    alpha = (1.0 - confidence) / 2.0
+    lower_index = max(0, int(alpha * n_resamples))
+    upper_index = min(n_resamples - 1, int((1.0 - alpha) * n_resamples) - 1)
+    return {
+        "estimate": float(statistic(sample)),
+        "lower": float(estimates[lower_index]),
+        "upper": float(estimates[upper_index]),
+        "confidence": confidence,
+        "n_resamples": n_resamples,
+    }
 
 
 def paired_metric_comparison(
