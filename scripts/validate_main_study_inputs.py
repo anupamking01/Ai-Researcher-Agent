@@ -1,8 +1,8 @@
 """Fail-closed preflight validation for canonical main-study CSV inputs.
 
-Run this before inferential analysis to detect malformed scientific measurements
-or mismatched treatment/evaluator identities without modifying or repairing the
-preserved experiment artifacts.
+Run this before inferential analysis to detect malformed scientific measurements,
+mismatched treatment/evaluator identities, or drift from the preregistered study
+matrix without modifying or repairing preserved experiment artifacts.
 """
 from __future__ import annotations
 
@@ -16,15 +16,12 @@ MAIN_CSV = REPO_ROOT / "outputs" / "main_study_runs.csv"
 SUPPORT_CSV = REPO_ROOT / "outputs" / "posthoc_support_runs.csv"
 
 COUNT_FIELDS = ("claims_checked", "supported", "partially_supported", "unsupported", "contradicted")
-MEASUREMENT_FIELDS = (
-    "successful_sources",
-    "total_tokens",
-    "treatment_cost_usd",
-    "latency_seconds",
-    "model_calls",
-    "report_words",
-)
+INTEGER_MEASUREMENT_FIELDS = ("successful_sources", "total_tokens", "model_calls", "report_words")
+CONTINUOUS_MEASUREMENT_FIELDS = ("treatment_cost_usd", "latency_seconds")
 IDENTITY_FIELDS = ("variant_id", "task_id")
+EXPECTED_VARIANTS = frozenset({"D3", "D6", "P6", "P6V"})
+EXPECTED_TASKS = frozenset(f"main-{index:02d}" for index in range(1, 11))
+EXPECTED_CELLS = frozenset((variant, task) for variant in EXPECTED_VARIANTS for task in EXPECTED_TASKS)
 
 
 def _rows(path: Path) -> list[dict[str, str]]:
@@ -60,25 +57,53 @@ def _identity_keys(rows: list[dict[str, str]], *, label: str) -> set[tuple[str, 
     return keys
 
 
-def validate_rows(main_rows: list[dict[str, str]], support_rows: list[dict[str, str]]) -> None:
-    """Validate scientific domains, identities, and evaluator conservation."""
+def _validate_canonical_matrix(keys: set[tuple[str, str]], *, label: str) -> None:
+    """Require exactly the preregistered 4 x 10 confirmatory study matrix."""
+    if keys != EXPECTED_CELLS:
+        missing = sorted(EXPECTED_CELLS - keys)
+        unexpected = sorted(keys - EXPECTED_CELLS)
+        raise ValueError(
+            f"{label} does not match frozen 4x10 main-study matrix: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+
+
+def validate_rows(
+    main_rows: list[dict[str, str]],
+    support_rows: list[dict[str, str]],
+    *,
+    require_canonical_matrix: bool = False,
+) -> None:
+    """Validate scientific domains, identities, and evaluator conservation.
+
+    ``require_canonical_matrix`` is enabled by the command-line preflight used for
+    the real study. Tests and small reusable fixtures can leave it disabled while
+    still exercising row-level invariants.
+    """
     main_keys = _identity_keys(main_rows, label="treatment")
     support_keys = _identity_keys(support_rows, label="evaluator")
     if (main_keys is None) != (support_keys is None):
         raise ValueError("treatment/evaluator identity columns must be present in both inputs")
-    if main_keys is not None and support_keys is not None and main_keys != support_keys:
-        missing_eval = sorted(main_keys - support_keys)
-        orphan_eval = sorted(support_keys - main_keys)
-        raise ValueError(
-            "treatment/evaluator cell mismatch: "
-            f"missing_evaluator={missing_eval}, orphan_evaluator={orphan_eval}"
-        )
+    if main_keys is not None and support_keys is not None:
+        if main_keys != support_keys:
+            missing_eval = sorted(main_keys - support_keys)
+            orphan_eval = sorted(support_keys - main_keys)
+            raise ValueError(
+                "treatment/evaluator cell mismatch: "
+                f"missing_evaluator={missing_eval}, orphan_evaluator={orphan_eval}"
+            )
+        if require_canonical_matrix:
+            _validate_canonical_matrix(main_keys, label="treatment/evaluator inputs")
+    elif require_canonical_matrix:
+        raise ValueError("canonical main-study inputs must expose variant_id and task_id")
 
     for index, row in enumerate(main_rows, start=2):
         completed = row.get("completed")
         if completed is not None and str(completed).strip().lower() not in {"true", "1", "yes"}:
             raise ValueError(f"main row {index} is not a completed treatment")
-        for field in MEASUREMENT_FIELDS:
+        for field in INTEGER_MEASUREMENT_FIELDS:
+            require_nonnegative_integer(row.get(field), f"main row {index} {field}")
+        for field in CONTINUOUS_MEASUREMENT_FIELDS:
             require_nonnegative(row.get(field), f"main row {index} {field}")
 
     for index, row in enumerate(support_rows, start=2):
@@ -97,8 +122,8 @@ def validate_rows(main_rows: list[dict[str, str]], support_rows: list[dict[str, 
 
 
 def main() -> int:
-    validate_rows(_rows(MAIN_CSV), _rows(SUPPORT_CSV))
-    print("main-study identity/numeric preflight: OK")
+    validate_rows(_rows(MAIN_CSV), _rows(SUPPORT_CSV), require_canonical_matrix=True)
+    print("main-study identity/numeric/matrix preflight: OK")
     return 0
 
 
