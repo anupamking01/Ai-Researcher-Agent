@@ -1,6 +1,6 @@
 import pytest
 
-from scripts.validate_main_study_inputs import validate_rows
+from scripts.validate_main_study_inputs import EXPECTED_CELLS, validate_rows
 
 
 def _main_row(**overrides):
@@ -36,6 +36,12 @@ def test_preflight_accepts_well_formed_rows():
 def test_preflight_rejects_invalid_measurements(value):
     with pytest.raises(ValueError):
         validate_rows([_main_row(latency_seconds=value)], [_support_row()])
+
+
+@pytest.mark.parametrize("field", ["successful_sources", "total_tokens", "model_calls", "report_words"])
+def test_preflight_rejects_fractional_count_measurements(field):
+    with pytest.raises(ValueError):
+        validate_rows([_main_row(**{field: "3.6"})], [_support_row()])
 
 
 @pytest.mark.parametrize("value", ["3.6", "nan", "inf", "-1"])
@@ -95,3 +101,33 @@ def test_preflight_requires_identity_columns_on_both_inputs():
             [_main_row(variant_id="D3", task_id="main-01", completed="True")],
             [_support_row()],
         )
+
+
+def _canonical_rows():
+    main_rows = []
+    support_rows = []
+    for variant, task in sorted(EXPECTED_CELLS):
+        main_rows.append(_main_row(variant_id=variant, task_id=task, completed="True"))
+        support_rows.append(_support_row(variant_id=variant, task_id=task))
+    return main_rows, support_rows
+
+
+def test_canonical_preflight_accepts_exact_frozen_4x10_matrix():
+    main_rows, support_rows = _canonical_rows()
+    validate_rows(main_rows, support_rows, require_canonical_matrix=True)
+
+
+def test_canonical_preflight_rejects_missing_preregistered_cell():
+    main_rows, support_rows = _canonical_rows()
+    main_rows.pop()
+    support_rows.pop()
+    with pytest.raises(ValueError, match="frozen 4x10 main-study matrix"):
+        validate_rows(main_rows, support_rows, require_canonical_matrix=True)
+
+
+def test_canonical_preflight_rejects_unexpected_variant_even_when_files_match():
+    main_rows, support_rows = _canonical_rows()
+    main_rows[-1]["variant_id"] = "P12"
+    support_rows[-1]["variant_id"] = "P12"
+    with pytest.raises(ValueError, match="unexpected"):
+        validate_rows(main_rows, support_rows, require_canonical_matrix=True)
