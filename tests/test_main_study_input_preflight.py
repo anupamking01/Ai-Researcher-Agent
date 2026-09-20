@@ -55,3 +55,43 @@ def test_preflight_requires_positive_claim_denominator():
             [_main_row()],
             [_support_row(claims_checked="0", supported="0", partially_supported="0", unsupported="0")],
         )
+
+
+def test_preflight_accepts_matching_cross_file_identities():
+    validate_rows(
+        [_main_row(variant_id="D3", task_id="main-01", completed="True")],
+        [_support_row(variant_id="D3", task_id="main-01")],
+    )
+
+
+def test_preflight_rejects_duplicate_treatment_cells():
+    rows = [
+        _main_row(variant_id="D3", task_id="main-01", completed="True"),
+        _main_row(variant_id="D3", task_id="main-01", completed="True"),
+    ]
+    with pytest.raises(ValueError, match="duplicate treatment treatment cell"):
+        validate_rows(rows, [_support_row(variant_id="D3", task_id="main-01")])
+
+
+def test_preflight_rejects_cross_file_cell_mismatch():
+    with pytest.raises(ValueError, match="treatment/evaluator cell mismatch"):
+        validate_rows(
+            [_main_row(variant_id="D3", task_id="main-01", completed="True")],
+            [_support_row(variant_id="D6", task_id="main-01")],
+        )
+
+
+def test_preflight_rejects_incomplete_treatment_before_inference():
+    with pytest.raises(ValueError, match="not a completed treatment"):
+        validate_rows(
+            [_main_row(variant_id="D3", task_id="main-01", completed="False")],
+            [_support_row(variant_id="D3", task_id="main-01")],
+        )
+
+
+def test_preflight_requires_identity_columns_on_both_inputs():
+    with pytest.raises(ValueError, match="identity columns must be present in both"):
+        validate_rows(
+            [_main_row(variant_id="D3", task_id="main-01", completed="True")],
+            [_support_row()],
+        )
