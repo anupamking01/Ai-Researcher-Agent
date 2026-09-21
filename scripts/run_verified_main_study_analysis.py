@@ -69,18 +69,28 @@ def verify_run_and_record(
 ) -> int:
     """Run verified inference and persist provenance only for a successful run.
 
-    The receipt is built before inference so missing/drifted analysis code or
-    plan fails closed. It is written only when the analysis returns zero, so a
-    receipt can never be mistaken for evidence that a failed analysis finished.
+    Any receipt from an earlier run is invalidated before this attempt starts.
+    This fail-closed rule prevents a stale success receipt from surviving a
+    later failed or drifted rerun and being mistaken for provenance of the most
+    recent attempt. The new receipt is built before inference so missing/drifted
+    analysis code or plan blocks execution, and is written only after analysis
+    returns zero.
     """
+    destination = output or root / DEFAULT_PROVENANCE_OUTPUT
+    if not destination.is_absolute():
+        destination = root / destination
+
+    # A receipt is a success attestation, not merely cached metadata. Once a new
+    # attempt begins, an older attestation must not remain at the canonical path.
+    # missing_ok keeps first runs simple while propagating genuine filesystem
+    # errors rather than silently weakening the provenance guarantee.
+    destination.unlink(missing_ok=True)
+
     receipt = receipt_builder(manifest, root=root)
     result = verify_and_run(manifest, root=root, analyze=analyze)
     if result != 0:
         return result
 
-    destination = output or root / DEFAULT_PROVENANCE_OUTPUT
-    if not destination.is_absolute():
-        destination = root / destination
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return result
