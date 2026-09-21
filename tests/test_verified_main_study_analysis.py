@@ -102,6 +102,47 @@ def test_failed_analysis_does_not_emit_success_receipt(tmp_path):
     assert not output.exists()
 
 
+def test_failed_rerun_invalidates_stale_success_receipt(tmp_path):
+    main, support = _study(tmp_path)
+    manifest = build_manifest([main, support], root=tmp_path)
+    output = tmp_path / "receipt.json"
+    output.write_text('{"status":"old-success"}\n', encoding="utf-8")
+
+    result = verify_run_and_record(
+        manifest,
+        root=tmp_path,
+        analyze=lambda: 3,
+        receipt_builder=lambda payload, root: {"prepared": True},
+        output=output,
+    )
+
+    assert result == 3
+    assert not output.exists()
+
+
+def test_preflight_failure_invalidates_stale_success_receipt(tmp_path):
+    main, support = _study(tmp_path)
+    manifest = build_manifest([main, support], root=tmp_path)
+    output = tmp_path / "receipt.json"
+    output.write_text('{"status":"old-success"}\n', encoding="utf-8")
+    calls = []
+
+    def fail_receipt(payload, root):
+        raise ValueError("analysis plan drift")
+
+    with pytest.raises(ValueError, match="analysis plan drift"):
+        verify_run_and_record(
+            manifest,
+            root=tmp_path,
+            analyze=lambda: calls.append("ran") or 0,
+            receipt_builder=fail_receipt,
+            output=output,
+        )
+
+    assert calls == []
+    assert not output.exists()
+
+
 def test_receipt_preflight_failure_blocks_analysis(tmp_path):
     main, support = _study(tmp_path)
     manifest = build_manifest([main, support], root=tmp_path)
