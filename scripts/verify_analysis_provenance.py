@@ -1,8 +1,8 @@
 """Independently verify a recorded main-study analysis provenance receipt.
 
 This reviewer-facing verifier checks that a success receipt still describes the
-exact current analysis implementation, frozen plan, configuration, and final
-result artifacts. It makes no network calls and does not regenerate results.
+exact current analysis inputs, implementation, frozen plan, configuration, and
+final result artifacts. It makes no network calls and does not regenerate results.
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from pathlib import Path
 
 from scripts import analyze_main_study
 from scripts.build_analysis_provenance import ANALYSIS_PLAN, ANALYSIS_SCRIPT
-from scripts.verify_research_artifact_manifest import REPO_ROOT
+from scripts.verify_research_artifact_manifest import REPO_ROOT, verify_manifest
 
 DEFAULT_RECEIPT = Path("outputs/main_study_analysis_provenance.json")
 
@@ -36,13 +36,30 @@ def _require_hash(entry: object, *, label: str, root: Path) -> None:
         raise ValueError(f"{label} SHA-256 mismatch: {path}")
 
 
+def _verify_inputs(receipt: dict, *, root: Path) -> None:
+    """Reconstruct and verify the original input manifest from the receipt."""
+    aggregate = receipt.get("input_manifest_aggregate_sha256")
+    if not isinstance(aggregate, str) or len(aggregate) != 64:
+        raise ValueError("receipt is missing a valid input-manifest aggregate SHA-256")
+    inputs = receipt.get("verified_inputs")
+    if not isinstance(inputs, list) or not inputs:
+        raise ValueError("receipt must embed the verified analysis inputs")
+    verify_manifest(
+        {
+            "schema_version": 1,
+            "algorithm": "sha256",
+            "artifacts": inputs,
+            "aggregate_sha256": aggregate,
+        },
+        root=root,
+    )
+
+
 def verify_receipt(receipt: dict, *, root: Path = REPO_ROOT) -> None:
     """Fail closed unless the receipt matches every current bound artifact/knob."""
     if not isinstance(receipt, dict) or receipt.get("schema_version") != 1:
         raise ValueError("unsupported or malformed analysis provenance receipt")
-    aggregate = receipt.get("input_manifest_aggregate_sha256")
-    if not isinstance(aggregate, str) or len(aggregate) != 64:
-        raise ValueError("receipt is missing a valid input-manifest aggregate SHA-256")
+    _verify_inputs(receipt, root=root)
 
     implementation = receipt.get("analysis_implementation")
     plan = receipt.get("analysis_plan")
