@@ -104,9 +104,13 @@ def verify_run_and_record(
     Any receipt from an earlier run is invalidated before this attempt starts.
     The input/code/plan receipt is prepared before inference so drift blocks
     execution. After inference succeeds, canonical JSON and manuscript Markdown
-    must pass deterministic consistency verification; their exact bytes are then
-    SHA-256-bound into the final receipt. Thus the receipt attests to the precise
-    outputs that passed verification, not merely to the process that produced them.
+    must pass deterministic consistency verification; in the production path
+    their exact bytes are then SHA-256-bound into the final receipt. Thus the
+    receipt attests to the precise outputs that passed verification.
+
+    An injected verifier is supported for unit tests; because such a verifier
+    does not establish the canonical-output contract, output hashes are not
+    attached in that dependency-injected path.
     """
     destination = output or root / DEFAULT_PROVENANCE_OUTPUT
     if not destination.is_absolute():
@@ -120,7 +124,8 @@ def verify_run_and_record(
         return result
 
     output_verifier(root=root)
-    receipt = _bind_verified_outputs(receipt, root=root)
+    if output_verifier is verify_outputs:
+        receipt = _bind_verified_outputs(receipt, root=root)
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
