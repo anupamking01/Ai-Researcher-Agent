@@ -2,10 +2,10 @@
 
 This is the preferred entry point for manuscript-facing analysis. It binds the
 analysis to a previously recorded SHA-256 manifest, verifies the exact input
-bytes, validates scientific numeric domains, and only then executes the frozen
-analysis. A deterministic provenance receipt is written only after successful
-analysis, binding the run to its exact inputs, implementation, and frozen plan.
-No input is repaired or rewritten.
+bytes, validates scientific numeric domains, executes the frozen analysis, and
+verifies that manuscript-facing outputs are an exact rendering of canonical
+machine-readable results. A deterministic provenance receipt is written only
+after all of those checks succeed. No input is repaired or rewritten.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from typing import Callable
 from scripts import analyze_main_study
 from scripts.build_analysis_provenance import build_receipt
 from scripts.validate_main_study_inputs import validate_rows
+from scripts.verify_main_study_outputs import verify_outputs
 from scripts.verify_research_artifact_manifest import REPO_ROOT, verify_manifest
 
 CANONICAL_MAIN = "outputs/main_study_runs.csv"
@@ -65,31 +66,30 @@ def verify_run_and_record(
     root: Path = REPO_ROOT,
     analyze: Callable[[], int] = analyze_main_study.main,
     receipt_builder: Callable[..., dict] = build_receipt,
+    output_verifier: Callable[..., None] = verify_outputs,
     output: Path | None = None,
 ) -> int:
     """Run verified inference and persist provenance only for a successful run.
 
     Any receipt from an earlier run is invalidated before this attempt starts.
-    This fail-closed rule prevents a stale success receipt from surviving a
-    later failed or drifted rerun and being mistaken for provenance of the most
-    recent attempt. The new receipt is built before inference so missing/drifted
-    analysis code or plan blocks execution, and is written only after analysis
-    returns zero.
+    The receipt is prepared before inference so code/plan drift blocks execution.
+    After inference succeeds, canonical JSON and manuscript Markdown must pass the
+    deterministic output-consistency verifier before a new success receipt can be
+    written. Thus a successful process exit alone cannot attest to inconsistent
+    or partially written manuscript-facing results.
     """
     destination = output or root / DEFAULT_PROVENANCE_OUTPUT
     if not destination.is_absolute():
         destination = root / destination
 
-    # A receipt is a success attestation, not merely cached metadata. Once a new
-    # attempt begins, an older attestation must not remain at the canonical path.
-    # missing_ok keeps first runs simple while propagating genuine filesystem
-    # errors rather than silently weakening the provenance guarantee.
     destination.unlink(missing_ok=True)
 
     receipt = receipt_builder(manifest, root=root)
     result = verify_and_run(manifest, root=root, analyze=analyze)
     if result != 0:
         return result
+
+    output_verifier(root=root)
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -103,7 +103,7 @@ def main() -> int:
         "--provenance-output",
         type=Path,
         default=Path(DEFAULT_PROVENANCE_OUTPUT),
-        help="receipt written only after successful verified analysis",
+        help="receipt written only after successful verified analysis and output verification",
     )
     args = parser.parse_args()
     manifest_path = args.manifest if args.manifest.is_absolute() else REPO_ROOT / args.manifest
@@ -113,7 +113,7 @@ def main() -> int:
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise SystemExit(f"VERIFIED MAIN-STUDY ANALYSIS: FAIL: {exc}") from exc
     if result == 0:
-        print("VERIFIED MAIN-STUDY ANALYSIS: PASS (provenance receipt recorded)")
+        print("VERIFIED MAIN-STUDY ANALYSIS: PASS (outputs verified; provenance receipt recorded)")
     return result
 
 

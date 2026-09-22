@@ -28,9 +28,7 @@ def test_verified_gate_runs_analysis_only_after_checks(tmp_path):
     main, support = _study(tmp_path)
     manifest = build_manifest([main, support], root=tmp_path)
     calls = []
-
     result = verify_and_run(manifest, root=tmp_path, analyze=lambda: calls.append("ran") or 7)
-
     assert result == 7
     assert calls == ["ran"]
 
@@ -40,7 +38,6 @@ def test_verified_gate_blocks_mutated_input_before_analysis(tmp_path):
     manifest = build_manifest([main, support], root=tmp_path)
     main.write_text(MAIN_HEADER + "9,100,0.05,1.2,3,250\n", encoding="utf-8")
     calls = []
-
     with pytest.raises(ValueError, match="SHA-256 mismatch"):
         verify_and_run(manifest, root=tmp_path, analyze=lambda: calls.append("ran") or 0)
     assert calls == []
@@ -50,7 +47,6 @@ def test_verified_gate_rejects_manifest_for_wrong_artifacts(tmp_path):
     main, _ = _study(tmp_path)
     manifest = build_manifest([main], root=tmp_path)
     calls = []
-
     with pytest.raises(ValueError, match="exactly the canonical analysis inputs"):
         verify_and_run(manifest, root=tmp_path, analyze=lambda: calls.append("ran") or 0)
     assert calls == []
@@ -61,44 +57,88 @@ def test_verified_gate_blocks_invalid_scientific_counts(tmp_path):
     support.write_text(SUPPORT_HEADER + "4,2.5,0.5,1,0\n", encoding="utf-8")
     manifest = build_manifest([main, support], root=tmp_path)
     calls = []
-
     with pytest.raises(ValueError, match="non-integer value"):
         verify_and_run(manifest, root=tmp_path, analyze=lambda: calls.append("ran") or 0)
     assert calls == []
 
 
-def test_successful_verified_run_records_receipt(tmp_path):
+def test_successful_verified_run_records_receipt_only_after_output_verification(tmp_path):
     main, support = _study(tmp_path)
     manifest = build_manifest([main, support], root=tmp_path)
     output = tmp_path / "receipt.json"
     expected = {"schema_version": 1, "bound": manifest["aggregate_sha256"]}
+    events = []
 
     result = verify_run_and_record(
         manifest,
         root=tmp_path,
-        analyze=lambda: 0,
+        analyze=lambda: events.append("analysis") or 0,
         receipt_builder=lambda payload, root: expected,
+        output_verifier=lambda root: events.append("outputs-verified"),
         output=output,
     )
 
     assert result == 0
+    assert events == ["analysis", "outputs-verified"]
     assert json.loads(output.read_text(encoding="utf-8")) == expected
 
 
-def test_failed_analysis_does_not_emit_success_receipt(tmp_path):
+def test_failed_analysis_does_not_verify_outputs_or_emit_receipt(tmp_path):
     main, support = _study(tmp_path)
     manifest = build_manifest([main, support], root=tmp_path)
     output = tmp_path / "receipt.json"
-
+    verifier_calls = []
     result = verify_run_and_record(
         manifest,
         root=tmp_path,
         analyze=lambda: 3,
         receipt_builder=lambda payload, root: {"prepared": True},
+        output_verifier=lambda root: verifier_calls.append("verified"),
         output=output,
     )
-
     assert result == 3
+    assert verifier_calls == []
+    assert not output.exists()
+
+
+def test_output_verification_failure_does_not_emit_success_receipt(tmp_path):
+    main, support = _study(tmp_path)
+    manifest = build_manifest([main, support], root=tmp_path)
+    output = tmp_path / "receipt.json"
+
+    def fail_outputs(*, root):
+        raise ValueError("manuscript inference Markdown does not match canonical JSON")
+
+    with pytest.raises(ValueError, match="does not match canonical JSON"):
+        verify_run_and_record(
+            manifest,
+            root=tmp_path,
+            analyze=lambda: 0,
+            receipt_builder=lambda payload, root: {"prepared": True},
+            output_verifier=fail_outputs,
+            output=output,
+        )
+    assert not output.exists()
+
+
+def test_output_verification_failure_invalidates_stale_success_receipt(tmp_path):
+    main, support = _study(tmp_path)
+    manifest = build_manifest([main, support], root=tmp_path)
+    output = tmp_path / "receipt.json"
+    output.write_text('{"status":"old-success"}\n', encoding="utf-8")
+
+    def fail_outputs(*, root):
+        raise ValueError("malformed canonical output")
+
+    with pytest.raises(ValueError, match="malformed canonical output"):
+        verify_run_and_record(
+            manifest,
+            root=tmp_path,
+            analyze=lambda: 0,
+            receipt_builder=lambda payload, root: {"prepared": True},
+            output_verifier=fail_outputs,
+            output=output,
+        )
     assert not output.exists()
 
 
@@ -107,15 +147,14 @@ def test_failed_rerun_invalidates_stale_success_receipt(tmp_path):
     manifest = build_manifest([main, support], root=tmp_path)
     output = tmp_path / "receipt.json"
     output.write_text('{"status":"old-success"}\n', encoding="utf-8")
-
     result = verify_run_and_record(
         manifest,
         root=tmp_path,
         analyze=lambda: 3,
         receipt_builder=lambda payload, root: {"prepared": True},
+        output_verifier=lambda root: None,
         output=output,
     )
-
     assert result == 3
     assert not output.exists()
 
@@ -126,19 +165,17 @@ def test_preflight_failure_invalidates_stale_success_receipt(tmp_path):
     output = tmp_path / "receipt.json"
     output.write_text('{"status":"old-success"}\n', encoding="utf-8")
     calls = []
-
     def fail_receipt(payload, root):
         raise ValueError("analysis plan drift")
-
     with pytest.raises(ValueError, match="analysis plan drift"):
         verify_run_and_record(
             manifest,
             root=tmp_path,
             analyze=lambda: calls.append("ran") or 0,
             receipt_builder=fail_receipt,
+            output_verifier=lambda root: None,
             output=output,
         )
-
     assert calls == []
     assert not output.exists()
 
@@ -147,16 +184,14 @@ def test_receipt_preflight_failure_blocks_analysis(tmp_path):
     main, support = _study(tmp_path)
     manifest = build_manifest([main, support], root=tmp_path)
     calls = []
-
     def fail_receipt(payload, root):
         raise ValueError("analysis plan drift")
-
     with pytest.raises(ValueError, match="analysis plan drift"):
         verify_run_and_record(
             manifest,
             root=tmp_path,
             analyze=lambda: calls.append("ran") or 0,
             receipt_builder=fail_receipt,
+            output_verifier=lambda root: None,
         )
-
     assert calls == []
