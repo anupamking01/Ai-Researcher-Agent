@@ -27,6 +27,12 @@ def test_receipt_binds_inputs_code_plan_and_configuration(tmp_path):
     receipt = build_receipt(manifest, root=tmp_path)
 
     assert receipt["input_manifest_aggregate_sha256"] == manifest["aggregate_sha256"]
+    assert receipt["verified_inputs"] == manifest["artifacts"]
+    assert {entry["path"] for entry in receipt["verified_inputs"]} == {
+        "outputs/main_study_runs.csv",
+        "outputs/posthoc_support_runs.csv",
+    }
+    assert all(len(entry["sha256"]) == 64 for entry in receipt["verified_inputs"])
     assert len(receipt["analysis_implementation"]["sha256"]) == 64
     assert len(receipt["analysis_plan"]["sha256"]) == 64
     assert receipt["frozen_configuration"]["bootstrap_draws"] == 20_000
