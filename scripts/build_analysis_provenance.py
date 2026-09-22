@@ -26,11 +26,18 @@ def _sha256(path: Path) -> str:
 
 
 def build_receipt(manifest: dict, *, root: Path = REPO_ROOT) -> dict:
-    """Return deterministic provenance for inputs, code, plan, and frozen knobs."""
-    verify_manifest(manifest, root=root)
+    """Return deterministic provenance for inputs, code, plan, and frozen knobs.
+
+    The validated manifest entries are embedded in the receipt rather than only
+    retaining their aggregate digest. This lets an independent reviewer later
+    re-verify the exact input files without needing the original manifest as a
+    separate sidecar artifact.
+    """
+    verified_inputs = verify_manifest(manifest, root=root)
     return {
         "schema_version": 1,
         "input_manifest_aggregate_sha256": manifest["aggregate_sha256"],
+        "verified_inputs": verified_inputs,
         "analysis_implementation": {
             "path": ANALYSIS_SCRIPT,
             "sha256": _sha256(root / ANALYSIS_SCRIPT),
