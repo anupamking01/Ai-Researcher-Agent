@@ -19,6 +19,7 @@ from scripts.build_analysis_provenance import (
     ANALYSIS_REQUIREMENTS,
     ANALYSIS_SCRIPT,
 )
+from scripts.verify_main_study_outputs import DEFAULT_JSON, DEFAULT_MARKDOWN
 from scripts.verify_research_artifact_manifest import REPO_ROOT, verify_manifest
 
 DEFAULT_RECEIPT = Path("outputs/main_study_analysis_provenance.json")
@@ -40,6 +41,13 @@ def _require_hash(entry: object, *, label: str, root: Path) -> None:
     actual = _sha256(root / path)
     if actual != digest:
         raise ValueError(f"{label} SHA-256 mismatch: {path}")
+
+
+def _require_canonical_hash(entry: object, *, label: str, expected_path: Path, root: Path) -> None:
+    """Verify a hash entry only after pinning it to its canonical repository path."""
+    if not isinstance(entry, dict) or entry.get("path") != expected_path.as_posix():
+        raise ValueError(f"{label} provenance must bind canonical path: {expected_path.as_posix()}")
+    _require_hash(entry, label=label, root=root)
 
 
 def _verify_inputs(receipt: dict, *, root: Path) -> None:
@@ -101,8 +109,18 @@ def verify_receipt(receipt: dict, *, root: Path = REPO_ROOT) -> None:
     outputs = receipt.get("verified_outputs")
     if not isinstance(outputs, dict) or set(outputs) != {"canonical_inference", "manuscript_rendering"}:
         raise ValueError("receipt must bind exactly both verified main-study outputs")
-    _require_hash(outputs["canonical_inference"], label="canonical inference", root=root)
-    _require_hash(outputs["manuscript_rendering"], label="manuscript rendering", root=root)
+    _require_canonical_hash(
+        outputs["canonical_inference"],
+        label="canonical inference",
+        expected_path=DEFAULT_JSON,
+        root=root,
+    )
+    _require_canonical_hash(
+        outputs["manuscript_rendering"],
+        label="manuscript rendering",
+        expected_path=DEFAULT_MARKDOWN,
+        root=root,
+    )
 
 
 def main() -> int:

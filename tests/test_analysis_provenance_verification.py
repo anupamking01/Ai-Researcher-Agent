@@ -122,3 +122,27 @@ def test_receipt_without_verified_outputs_fails_closed(tmp_path: Path):
     receipt.pop("verified_outputs")
     with pytest.raises(ValueError, match="bind exactly both"):
         verify_receipt(receipt, root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("key", "canonical", "alternate"),
+    [
+        ("canonical_inference", "outputs/main_study_inference.json", "outputs/alternate_inference.json"),
+        ("manuscript_rendering", "paper/MAIN_STUDY_INFERENCE.md", "paper/ALTERNATE_INFERENCE.md"),
+    ],
+)
+def test_verified_output_path_substitution_fails_closed(
+    tmp_path: Path, key: str, canonical: str, alternate: str
+):
+    """A valid digest for another file must not satisfy canonical output provenance."""
+    receipt = _fixture(tmp_path)
+    alternate_path = tmp_path / alternate
+    alternate_path.parent.mkdir(parents=True, exist_ok=True)
+    alternate_path.write_bytes((tmp_path / canonical).read_bytes())
+    receipt["verified_outputs"][key] = {
+        "path": alternate,
+        "sha256": _digest(alternate_path),
+    }
+
+    with pytest.raises(ValueError, match="must bind canonical path"):
+        verify_receipt(receipt, root=tmp_path)
