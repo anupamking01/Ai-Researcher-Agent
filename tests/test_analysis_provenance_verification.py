@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 
 from scripts import analyze_main_study
-from scripts.build_analysis_provenance import ANALYSIS_PLAN, ANALYSIS_REQUIREMENTS, ANALYSIS_SCRIPT
+from scripts.build_analysis_provenance import (
+    ANALYSIS_PLAN,
+    ANALYSIS_PYTHON_VERSION,
+    ANALYSIS_REQUIREMENTS,
+    ANALYSIS_SCRIPT,
+)
 from scripts.fingerprint_research_artifacts import build_manifest
 from scripts.verify_analysis_provenance import verify_receipt
 
@@ -19,6 +24,7 @@ def _fixture(tmp_path: Path) -> dict:
         ANALYSIS_SCRIPT: "# frozen analyzer\n",
         ANALYSIS_PLAN: "# frozen plan\n",
         ANALYSIS_REQUIREMENTS: "numpy==1.26.4\n",
+        ANALYSIS_PYTHON_VERSION: "3.11\n",
         "outputs/main_study_runs.csv": "variant_id,task_id\nD3,main-01\n",
         "outputs/posthoc_support_runs.csv": "variant_id,task_id\nD3,main-01\n",
         "outputs/main_study_inference.json": "{}\n",
@@ -39,6 +45,7 @@ def _fixture(tmp_path: Path) -> dict:
         "analysis_plan": {"path": ANALYSIS_PLAN, "sha256": _digest(tmp_path / ANALYSIS_PLAN)},
         "analysis_environment": {
             "requirements": {"path": ANALYSIS_REQUIREMENTS, "sha256": _digest(tmp_path / ANALYSIS_REQUIREMENTS)},
+            "python_version": {"path": ANALYSIS_PYTHON_VERSION, "sha256": _digest(tmp_path / ANALYSIS_PYTHON_VERSION)},
         },
         "frozen_configuration": {
             "variants": list(analyze_main_study.VARIANTS),
@@ -64,6 +71,7 @@ def test_complete_current_receipt_verifies(tmp_path: Path):
     ANALYSIS_SCRIPT,
     ANALYSIS_PLAN,
     ANALYSIS_REQUIREMENTS,
+    ANALYSIS_PYTHON_VERSION,
     "outputs/main_study_inference.json",
     "paper/MAIN_STUDY_INFERENCE.md",
 ])
@@ -98,7 +106,14 @@ def test_tampered_input_aggregate_fails_closed(tmp_path: Path):
 def test_receipt_without_analysis_environment_fails_closed(tmp_path: Path):
     receipt = _fixture(tmp_path)
     receipt.pop("analysis_environment")
-    with pytest.raises(ValueError, match="dependency environment"):
+    with pytest.raises(ValueError, match="Python environment"):
+        verify_receipt(receipt, root=tmp_path)
+
+
+def test_receipt_without_python_version_contract_fails_closed(tmp_path: Path):
+    receipt = _fixture(tmp_path)
+    receipt["analysis_environment"].pop("python_version")
+    with pytest.raises(ValueError, match="Python environment"):
         verify_receipt(receipt, root=tmp_path)
 
 

@@ -2,8 +2,8 @@
 
 This reviewer-facing verifier checks that a success receipt still describes the
 exact current analysis inputs, implementation, frozen plan, pinned dependency
-environment, configuration, and final result artifacts. It makes no network calls
-and does not regenerate results.
+environment, interpreter contract, configuration, and final result artifacts. It
+makes no network calls and does not regenerate results.
 """
 from __future__ import annotations
 
@@ -13,7 +13,12 @@ import json
 from pathlib import Path
 
 from scripts import analyze_main_study
-from scripts.build_analysis_provenance import ANALYSIS_PLAN, ANALYSIS_REQUIREMENTS, ANALYSIS_SCRIPT
+from scripts.build_analysis_provenance import (
+    ANALYSIS_PLAN,
+    ANALYSIS_PYTHON_VERSION,
+    ANALYSIS_REQUIREMENTS,
+    ANALYSIS_SCRIPT,
+)
 from scripts.verify_research_artifact_manifest import REPO_ROOT, verify_manifest
 
 DEFAULT_RECEIPT = Path("outputs/main_study_analysis_provenance.json")
@@ -72,12 +77,16 @@ def verify_receipt(receipt: dict, *, root: Path = REPO_ROOT) -> None:
     _require_hash(plan, label="analysis plan", root=root)
 
     environment = receipt.get("analysis_environment")
-    if not isinstance(environment, dict) or set(environment) != {"requirements"}:
-        raise ValueError("receipt must bind the pinned analysis dependency environment")
+    if not isinstance(environment, dict) or set(environment) != {"requirements", "python_version"}:
+        raise ValueError("receipt must bind the pinned analysis dependency and Python environment")
     requirements = environment["requirements"]
     if not isinstance(requirements, dict) or requirements.get("path") != ANALYSIS_REQUIREMENTS:
         raise ValueError("receipt does not bind the canonical pinned requirements")
     _require_hash(requirements, label="analysis requirements", root=root)
+    python_version = environment["python_version"]
+    if not isinstance(python_version, dict) or python_version.get("path") != ANALYSIS_PYTHON_VERSION:
+        raise ValueError("receipt does not bind the canonical Python version contract")
+    _require_hash(python_version, label="analysis Python version", root=root)
 
     expected_configuration = {
         "variants": list(analyze_main_study.VARIANTS),
