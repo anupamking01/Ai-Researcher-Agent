@@ -1,9 +1,9 @@
 """Build a deterministic provenance receipt for manuscript-facing inference.
 
-The receipt binds exact input bytes to the frozen analysis implementation and
-analysis plan. It contains no experimental conclusions and makes no network
-calls. A changed dataset, analysis script, or preregistered plan necessarily
-changes the receipt.
+The receipt binds exact input bytes to the frozen analysis implementation,
+analysis plan, and pinned dependency environment. It contains no experimental
+conclusions and makes no network calls. A changed dataset, analysis script,
+preregistered plan, or dependency specification necessarily changes the receipt.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from scripts.verify_research_artifact_manifest import REPO_ROOT, verify_manifest
 
 ANALYSIS_SCRIPT = "scripts/analyze_main_study.py"
 ANALYSIS_PLAN = "paper/ANALYSIS_PLAN.md"
+ANALYSIS_REQUIREMENTS = "requirements.txt"
 
 
 def _sha256(path: Path) -> str:
@@ -26,7 +27,7 @@ def _sha256(path: Path) -> str:
 
 
 def build_receipt(manifest: dict, *, root: Path = REPO_ROOT) -> dict:
-    """Return deterministic provenance for inputs, code, plan, and frozen knobs.
+    """Return deterministic provenance for inputs, code, plan, environment, and knobs.
 
     The validated manifest entries are embedded in the receipt rather than only
     retaining their aggregate digest. This lets an independent reviewer later
@@ -45,6 +46,12 @@ def build_receipt(manifest: dict, *, root: Path = REPO_ROOT) -> dict:
         "analysis_plan": {
             "path": ANALYSIS_PLAN,
             "sha256": _sha256(root / ANALYSIS_PLAN),
+        },
+        "analysis_environment": {
+            "requirements": {
+                "path": ANALYSIS_REQUIREMENTS,
+                "sha256": _sha256(root / ANALYSIS_REQUIREMENTS),
+            },
         },
         "frozen_configuration": {
             "variants": list(analyze_main_study.VARIANTS),
