@@ -23,6 +23,7 @@ from scripts.verify_main_study_outputs import DEFAULT_JSON, DEFAULT_MARKDOWN
 from scripts.verify_research_artifact_manifest import REPO_ROOT, verify_manifest
 
 DEFAULT_RECEIPT = Path("outputs/main_study_analysis_provenance.json")
+CANONICAL_INPUTS = {"outputs/main_study_runs.csv", "outputs/posthoc_support_runs.csv"}
 
 
 def _sha256(path: Path) -> str:
@@ -51,13 +52,18 @@ def _require_canonical_hash(entry: object, *, label: str, expected_path: Path, r
 
 
 def _verify_inputs(receipt: dict, *, root: Path) -> None:
-    """Reconstruct and verify the original input manifest from the receipt."""
+    """Reconstruct and verify the original canonical input manifest from the receipt."""
     aggregate = receipt.get("input_manifest_aggregate_sha256")
     if not isinstance(aggregate, str) or len(aggregate) != 64:
         raise ValueError("receipt is missing a valid input-manifest aggregate SHA-256")
     inputs = receipt.get("verified_inputs")
     if not isinstance(inputs, list) or not inputs:
         raise ValueError("receipt must embed the verified analysis inputs")
+    manifested = {
+        entry.get("path") for entry in inputs if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+    }
+    if len(manifested) != len(inputs) or manifested != CANONICAL_INPUTS:
+        raise ValueError("receipt must bind exactly the canonical analysis input paths")
     verify_manifest(
         {
             "schema_version": 1,
