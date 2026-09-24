@@ -129,6 +129,11 @@ def _load_ratings(rating_paths: list[Path], *, allowed_blind_ids: set[str]) -> t
         with path.open("r", encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
             fieldnames = reader.fieldnames or []
+            # A set-only schema check loses duplicate headers; DictReader would
+            # then silently replace an earlier score with the last same-name cell.
+            duplicates = sorted({name for name in fieldnames if fieldnames.count(name) > 1})
+            if duplicates:
+                raise ValueError(f"{path.name}: duplicate ratings CSV columns: {duplicates}")
             unexpected = set(fieldnames) - set(RATING_FIELDS)
             forbidden = set(fieldnames) & FORBIDDEN_COLUMNS
             missing = set(RATING_FIELDS) - set(fieldnames)
@@ -142,7 +147,18 @@ def _load_ratings(rating_paths: list[Path], *, allowed_blind_ids: set[str]) -> t
                     f"missing={sorted(missing)}, unexpected={sorted(unexpected)}"
                 )
 
-            for line_number, raw in enumerate(reader, start=2):
+            for raw in reader:
+                line_number = reader.line_num
+                # Surplus cells are stored under None, and absent cells have
+                # value None. Neither is the explicit empty string allowed by
+                # the rubric; reject both before normalizing or dropping data.
+                if None in raw:
+                    raise ValueError(f"{path.name}:{line_number}: extra ratings CSV fields")
+                missing_fields = [name for name, value in raw.items() if value is None]
+                if missing_fields:
+                    raise ValueError(
+                        f"{path.name}:{line_number}: missing ratings CSV fields: {missing_fields}"
+                    )
                 annotator_id = str(raw.get("annotator_id") or "").strip()
                 blind_id = str(raw.get("blind_id") or "").strip()
                 notes = str(raw.get("notes") or "").strip()
