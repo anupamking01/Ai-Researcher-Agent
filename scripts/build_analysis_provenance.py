@@ -1,10 +1,11 @@
 """Build a deterministic provenance receipt for manuscript-facing inference.
 
 The receipt binds exact input bytes to the frozen analysis implementation,
-analysis plan, pinned dependency environment, interpreter contract, and both
-verification implementations. It contains no experimental conclusions and makes no
-network calls. A changed dataset, analysis script, preregistered plan, dependency
-specification, Python version contract, or verifier necessarily changes the receipt.
+analysis plan, pinned dependency environment, interpreter contract, receipt builder,
+and verification implementations. It contains no experimental conclusions and makes
+no network calls. A changed dataset, analysis script, preregistered plan, dependency
+specification, Python version contract, receipt builder, or verifier necessarily
+changes the receipt.
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ ANALYSIS_SCRIPT = "scripts/analyze_main_study.py"
 ANALYSIS_PLAN = "paper/ANALYSIS_PLAN.md"
 ANALYSIS_REQUIREMENTS = "requirements.txt"
 ANALYSIS_PYTHON_VERSION = ".python-version"
+ANALYSIS_PROVENANCE_BUILDER = "scripts/build_analysis_provenance.py"
 ANALYSIS_VERIFIER = "scripts/verify_analysis_provenance.py"
 ANALYSIS_OUTPUT_VERIFIER = "scripts/verify_main_study_outputs.py"
 
@@ -60,6 +62,10 @@ def build_receipt(manifest: dict, *, root: Path = REPO_ROOT) -> dict:
                 "path": ANALYSIS_PYTHON_VERSION,
                 "sha256": _sha256(root / ANALYSIS_PYTHON_VERSION),
             },
+        },
+        "provenance_builder": {
+            "path": ANALYSIS_PROVENANCE_BUILDER,
+            "sha256": _sha256(root / ANALYSIS_PROVENANCE_BUILDER),
         },
         "verification_implementations": {
             "provenance": {
