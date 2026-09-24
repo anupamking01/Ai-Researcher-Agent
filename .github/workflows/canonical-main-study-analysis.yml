@@ -75,16 +75,16 @@ jobs:
 
       - name: Fingerprint exact canonical analysis inputs
         run: |
-          python scripts/fingerprint_research_artifacts.py             outputs/main_study_runs.csv             outputs/posthoc_support_runs.csv             --output outputs/main_study_analysis_inputs_manifest.json
+          python -m scripts.fingerprint_research_artifacts             outputs/main_study_runs.csv             outputs/posthoc_support_runs.csv             --output outputs/main_study_analysis_inputs_manifest.json
 
       - name: Run frozen provenance-gated analysis
         run: |
-          python scripts/run_verified_main_study_analysis.py             outputs/main_study_analysis_inputs_manifest.json
+          python -m scripts.run_verified_main_study_analysis             outputs/main_study_analysis_inputs_manifest.json
 
       - name: Independently verify analysis receipt
         run: |
-          python scripts/verify_analysis_provenance.py             outputs/main_study_analysis_provenance.json
-          python scripts/verify_main_study_outputs.py
+          python -m scripts.verify_analysis_provenance             outputs/main_study_analysis_provenance.json
+          python -m scripts.verify_main_study_outputs
 
       - name: Upload canonical analysis bundle
         uses: actions/upload-artifact@v4

@@ -48,6 +48,14 @@ def test_workflow_runs_verified_analysis_in_fail_closed_order() -> None:
     assert fingerprint < analysis < provenance < output_check
 
 
+def test_workflow_invokes_package_aware_analysis_modules() -> None:
+    workflow = _workflow()
+    assert "python -m scripts.fingerprint_research_artifacts" in workflow
+    assert "python -m scripts.run_verified_main_study_analysis" in workflow
+    assert "python -m scripts.verify_analysis_provenance" in workflow
+    assert "python -m scripts.verify_main_study_outputs" in workflow
+
+
 def test_workflow_is_offline_after_canonical_artifact_download() -> None:
     workflow = _workflow()
     assert "OPENAI_API_KEY" not in workflow
