@@ -2,7 +2,7 @@
 
 This reviewer-facing verifier checks that a success receipt still describes the
 exact current analysis inputs, implementation, frozen plan, pinned dependency
-environment, interpreter contract, verification implementation, configuration, and
+environment, interpreter contract, verification implementations, configuration, and
 final result artifacts. It makes no network calls and does not regenerate results.
 """
 from __future__ import annotations
@@ -14,6 +14,7 @@ from pathlib import Path
 
 from scripts import analyze_main_study
 from scripts.build_analysis_provenance import (
+    ANALYSIS_OUTPUT_VERIFIER,
     ANALYSIS_PLAN,
     ANALYSIS_PYTHON_VERSION,
     ANALYSIS_REQUIREMENTS,
@@ -103,10 +104,17 @@ def verify_receipt(receipt: dict, *, root: Path = REPO_ROOT) -> None:
         raise ValueError("receipt does not bind the canonical Python version contract")
     _require_hash(python_version, label="analysis Python version", root=root)
 
-    verifier = receipt.get("verification_implementation")
-    if not isinstance(verifier, dict) or verifier.get("path") != ANALYSIS_VERIFIER:
+    verifiers = receipt.get("verification_implementations")
+    if not isinstance(verifiers, dict) or set(verifiers) != {"provenance", "output_consistency"}:
+        raise ValueError("receipt must bind the complete canonical verification chain")
+    provenance_verifier = verifiers["provenance"]
+    if not isinstance(provenance_verifier, dict) or provenance_verifier.get("path") != ANALYSIS_VERIFIER:
         raise ValueError("receipt does not bind the canonical provenance verifier")
-    _require_hash(verifier, label="analysis provenance verifier", root=root)
+    _require_hash(provenance_verifier, label="analysis provenance verifier", root=root)
+    output_verifier = verifiers["output_consistency"]
+    if not isinstance(output_verifier, dict) or output_verifier.get("path") != ANALYSIS_OUTPUT_VERIFIER:
+        raise ValueError("receipt does not bind the canonical output-consistency verifier")
+    _require_hash(output_verifier, label="analysis output-consistency verifier", root=root)
 
     expected_configuration = {
         "variants": list(analyze_main_study.VARIANTS),
