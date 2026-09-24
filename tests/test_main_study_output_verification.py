@@ -45,7 +45,9 @@ def _write_pair(tmp_path: Path, payload: dict) -> tuple[Path, Path]:
     json_path = tmp_path / "result.json"
     md_path = tmp_path / "result.md"
     json_path.write_text(json.dumps(payload), encoding="utf-8")
-    md_path.write_text(analyze_main_study._markdown(payload) + "\n", encoding="utf-8")
+    # Mirror analyze_main_study.main(): the renderer is written byte-for-byte,
+    # without adding a second formatting convention in the test fixture.
+    md_path.write_text(analyze_main_study._markdown(payload), encoding="utf-8")
     return json_path, md_path
 
 
@@ -53,6 +55,14 @@ def test_accepts_exact_deterministic_rendering(tmp_path):
     payload = _payload()
     json_path, md_path = _write_pair(tmp_path, payload)
     verify_outputs(root=tmp_path, json_path=json_path, markdown_path=md_path)
+
+
+def test_rejects_trailing_newline_not_emitted_by_canonical_renderer(tmp_path):
+    payload = _payload()
+    json_path, md_path = _write_pair(tmp_path, payload)
+    md_path.write_text(md_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="does not match canonical JSON"):
+        verify_outputs(root=tmp_path, json_path=json_path, markdown_path=md_path)
 
 
 def test_rejects_hand_edited_manuscript_result(tmp_path):
@@ -76,7 +86,7 @@ def test_rejects_malformed_json(tmp_path):
     json_path = tmp_path / "result.json"
     md_path = tmp_path / "result.md"
     json_path.write_text("{not-json", encoding="utf-8")
-    md_path.write_text("anything\n", encoding="utf-8")
+    md_path.write_text("anything", encoding="utf-8")
     with pytest.raises(ValueError, match="malformed"):
         verify_outputs(root=tmp_path, json_path=json_path, markdown_path=md_path)
 
