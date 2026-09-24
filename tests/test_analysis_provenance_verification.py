@@ -10,6 +10,7 @@ from scripts.build_analysis_provenance import (
     ANALYSIS_PYTHON_VERSION,
     ANALYSIS_REQUIREMENTS,
     ANALYSIS_SCRIPT,
+    ANALYSIS_VERIFIER,
 )
 from scripts.fingerprint_research_artifacts import build_manifest
 from scripts.verify_analysis_provenance import verify_receipt
@@ -25,6 +26,7 @@ def _fixture(tmp_path: Path) -> dict:
         ANALYSIS_PLAN: "# frozen plan\n",
         ANALYSIS_REQUIREMENTS: "numpy==1.26.4\n",
         ANALYSIS_PYTHON_VERSION: "3.11\n",
+        ANALYSIS_VERIFIER: "# frozen verifier\n",
         "outputs/main_study_runs.csv": "variant_id,task_id\nD3,main-01\n",
         "outputs/posthoc_support_runs.csv": "variant_id,task_id\nD3,main-01\n",
         "outputs/main_study_inference.json": "{}\n",
@@ -46,6 +48,10 @@ def _fixture(tmp_path: Path) -> dict:
         "analysis_environment": {
             "requirements": {"path": ANALYSIS_REQUIREMENTS, "sha256": _digest(tmp_path / ANALYSIS_REQUIREMENTS)},
             "python_version": {"path": ANALYSIS_PYTHON_VERSION, "sha256": _digest(tmp_path / ANALYSIS_PYTHON_VERSION)},
+        },
+        "verification_implementation": {
+            "path": ANALYSIS_VERIFIER,
+            "sha256": _digest(tmp_path / ANALYSIS_VERIFIER),
         },
         "frozen_configuration": {
             "variants": list(analyze_main_study.VARIANTS),
@@ -72,6 +78,7 @@ def test_complete_current_receipt_verifies(tmp_path: Path):
     ANALYSIS_PLAN,
     ANALYSIS_REQUIREMENTS,
     ANALYSIS_PYTHON_VERSION,
+    ANALYSIS_VERIFIER,
     "outputs/main_study_inference.json",
     "paper/MAIN_STUDY_INFERENCE.md",
 ])
@@ -114,6 +121,13 @@ def test_receipt_without_python_version_contract_fails_closed(tmp_path: Path):
     receipt = _fixture(tmp_path)
     receipt["analysis_environment"].pop("python_version")
     with pytest.raises(ValueError, match="Python environment"):
+        verify_receipt(receipt, root=tmp_path)
+
+
+def test_receipt_without_verifier_identity_fails_closed(tmp_path: Path):
+    receipt = _fixture(tmp_path)
+    receipt.pop("verification_implementation")
+    with pytest.raises(ValueError, match="canonical provenance verifier"):
         verify_receipt(receipt, root=tmp_path)
 
 
