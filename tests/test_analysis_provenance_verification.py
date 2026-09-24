@@ -6,6 +6,7 @@ import pytest
 
 from scripts import analyze_main_study
 from scripts.build_analysis_provenance import (
+    ANALYSIS_OUTPUT_VERIFIER,
     ANALYSIS_PLAN,
     ANALYSIS_PYTHON_VERSION,
     ANALYSIS_REQUIREMENTS,
@@ -26,7 +27,8 @@ def _fixture(tmp_path: Path) -> dict:
         ANALYSIS_PLAN: "# frozen plan\n",
         ANALYSIS_REQUIREMENTS: "numpy==1.26.4\n",
         ANALYSIS_PYTHON_VERSION: "3.11\n",
-        ANALYSIS_VERIFIER: "# frozen verifier\n",
+        ANALYSIS_VERIFIER: "# frozen provenance verifier\n",
+        ANALYSIS_OUTPUT_VERIFIER: "# frozen output verifier\n",
         "outputs/main_study_runs.csv": "variant_id,task_id\nD3,main-01\n",
         "outputs/posthoc_support_runs.csv": "variant_id,task_id\nD3,main-01\n",
         "outputs/main_study_inference.json": "{}\n",
@@ -49,9 +51,12 @@ def _fixture(tmp_path: Path) -> dict:
             "requirements": {"path": ANALYSIS_REQUIREMENTS, "sha256": _digest(tmp_path / ANALYSIS_REQUIREMENTS)},
             "python_version": {"path": ANALYSIS_PYTHON_VERSION, "sha256": _digest(tmp_path / ANALYSIS_PYTHON_VERSION)},
         },
-        "verification_implementation": {
-            "path": ANALYSIS_VERIFIER,
-            "sha256": _digest(tmp_path / ANALYSIS_VERIFIER),
+        "verification_implementations": {
+            "provenance": {"path": ANALYSIS_VERIFIER, "sha256": _digest(tmp_path / ANALYSIS_VERIFIER)},
+            "output_consistency": {
+                "path": ANALYSIS_OUTPUT_VERIFIER,
+                "sha256": _digest(tmp_path / ANALYSIS_OUTPUT_VERIFIER),
+            },
         },
         "frozen_configuration": {
             "variants": list(analyze_main_study.VARIANTS),
@@ -79,6 +84,7 @@ def test_complete_current_receipt_verifies(tmp_path: Path):
     ANALYSIS_REQUIREMENTS,
     ANALYSIS_PYTHON_VERSION,
     ANALYSIS_VERIFIER,
+    ANALYSIS_OUTPUT_VERIFIER,
     "outputs/main_study_inference.json",
     "paper/MAIN_STUDY_INFERENCE.md",
 ])
@@ -124,10 +130,17 @@ def test_receipt_without_python_version_contract_fails_closed(tmp_path: Path):
         verify_receipt(receipt, root=tmp_path)
 
 
-def test_receipt_without_verifier_identity_fails_closed(tmp_path: Path):
+def test_receipt_without_verification_chain_fails_closed(tmp_path: Path):
     receipt = _fixture(tmp_path)
-    receipt.pop("verification_implementation")
-    with pytest.raises(ValueError, match="canonical provenance verifier"):
+    receipt.pop("verification_implementations")
+    with pytest.raises(ValueError, match="complete canonical verification chain"):
+        verify_receipt(receipt, root=tmp_path)
+
+
+def test_receipt_without_output_verifier_identity_fails_closed(tmp_path: Path):
+    receipt = _fixture(tmp_path)
+    receipt["verification_implementations"].pop("output_consistency")
+    with pytest.raises(ValueError, match="complete canonical verification chain"):
         verify_receipt(receipt, root=tmp_path)
 
 
