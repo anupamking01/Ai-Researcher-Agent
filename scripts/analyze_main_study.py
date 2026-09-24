@@ -280,7 +280,12 @@ def _markdown(payload: dict) -> str:
         )
 
     lines += ["", "## Primary paired contrasts: strict support", ""]
-    for name, result in payload["primary_contrasts"].items():
+    # Render in the preregistered contrast order, not mapping insertion order.
+    # The canonical JSON is written with sort_keys=True, so relying on dict
+    # order here would make a render before serialization differ from a render
+    # after loading the exact same JSON bytes.
+    for _, _, name in PRIMARY_CONTRASTS:
+        result = payload["primary_contrasts"][name]
         lines += [
             f"### {name}",
             "",

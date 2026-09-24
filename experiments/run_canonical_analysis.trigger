@@ -2,5 +2,5 @@ study_id=budget-main-v1
 source_recovery_run_id=34783525480
 source_artifact=budget-main-study-recovered-34783525480
 purpose=run frozen offline provenance-gated canonical analysis
-attempt=3
-fix=align regression test with package-aware module invocation
+attempt=4
+fix=make manuscript renderer invariant to sorted JSON key order
