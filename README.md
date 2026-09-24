@@ -25,9 +25,11 @@ This project is an end-to-end planner/execution web-research system **and** an e
 | Frozen 10-task paired main-study design | ✅ Implemented |
 | Evaluator-only recovery without replacing treatments | ✅ Implemented |
 | Predeclared paired statistical analysis | ✅ Implemented and frozen |
+| Canonical recovered-study inference | ✅ Completed, provenance-verified, and preserved |
 | Deterministic blinded human-evaluation packets | ✅ Implemented |
+| Pre-unblinding human-rating freeze/agreement tooling | ✅ Implemented |
 | Human rubric annotations | ⏳ Pending real annotators |
-| Final paper-level claims | ⏳ Pending canonical analysis + human validation |
+| Final paper-level claims | ⏳ Pending human validation and manuscript synthesis |
 
 A GitHub Actions workflow or recovery job can fail for operational reasons even when some treatment artifacts were produced. Final results must therefore be tied to the exact canonical artifact set and provenance used for analysis rather than inferred from a workflow label alone.
 
@@ -112,6 +114,7 @@ A reviewer should be able to trace the project from question → treatment → e
 | **[paper/RESEARCH_PROTOCOL.md](paper/RESEARCH_PROTOCOL.md)** | Research question, hypotheses, budget principles, threats to validity |
 | **[paper/PILOT_RESULTS.md](paper/PILOT_RESULTS.md)** | Canonical diagnostic pilot and caveats |
 | **[paper/ANALYSIS_PLAN.md](paper/ANALYSIS_PLAN.md)** | Frozen confirmatory main-study inference |
+| **[paper/MAIN_STUDY_INFERENCE.md](paper/MAIN_STUDY_INFERENCE.md)** | Canonical automated main-study results from the verified recovered artifact |
 | **[paper/HUMAN_EVAL_PROTOCOL.md](paper/HUMAN_EVAL_PROTOCOL.md)** | Blinded human-quality evaluation |
 | **[docs/EVALUATION.md](docs/EVALUATION.md)** | End-to-end evaluation methodology |
 | `logic/experiment.py` | Experiment configuration / provenance data structures |
