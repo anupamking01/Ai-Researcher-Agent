@@ -2,8 +2,9 @@
 
 This reviewer-facing verifier checks that a success receipt still describes the
 exact current analysis inputs, implementation, frozen plan, pinned dependency
-environment, interpreter contract, verification implementations, configuration, and
-final result artifacts. It makes no network calls and does not regenerate results.
+environment, interpreter contract, provenance builder, verification implementations,
+configuration, and final result artifacts. It makes no network calls and does not
+regenerate results.
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ from scripts import analyze_main_study
 from scripts.build_analysis_provenance import (
     ANALYSIS_OUTPUT_VERIFIER,
     ANALYSIS_PLAN,
+    ANALYSIS_PROVENANCE_BUILDER,
     ANALYSIS_PYTHON_VERSION,
     ANALYSIS_REQUIREMENTS,
     ANALYSIS_SCRIPT,
@@ -104,6 +106,11 @@ def verify_receipt(receipt: dict, *, root: Path = REPO_ROOT) -> None:
         raise ValueError("receipt does not bind the canonical Python version contract")
     _require_hash(python_version, label="analysis Python version", root=root)
 
+    builder = receipt.get("provenance_builder")
+    if not isinstance(builder, dict) or builder.get("path") != ANALYSIS_PROVENANCE_BUILDER:
+        raise ValueError("receipt does not bind the canonical provenance builder")
+    _require_hash(builder, label="analysis provenance builder", root=root)
+
     verifiers = receipt.get("verification_implementations")
     if not isinstance(verifiers, dict) or set(verifiers) != {"provenance", "output_consistency"}:
         raise ValueError("receipt must bind the complete canonical verification chain")
@@ -130,16 +137,10 @@ def verify_receipt(receipt: dict, *, root: Path = REPO_ROOT) -> None:
     if not isinstance(outputs, dict) or set(outputs) != {"canonical_inference", "manuscript_rendering"}:
         raise ValueError("receipt must bind exactly both verified main-study outputs")
     _require_canonical_hash(
-        outputs["canonical_inference"],
-        label="canonical inference",
-        expected_path=DEFAULT_JSON,
-        root=root,
+        outputs["canonical_inference"], label="canonical inference", expected_path=DEFAULT_JSON, root=root
     )
     _require_canonical_hash(
-        outputs["manuscript_rendering"],
-        label="manuscript rendering",
-        expected_path=DEFAULT_MARKDOWN,
-        root=root,
+        outputs["manuscript_rendering"], label="manuscript rendering", expected_path=DEFAULT_MARKDOWN, root=root
     )
 
 
