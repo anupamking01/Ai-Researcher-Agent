@@ -1,0 +1,86 @@
+{
+  "analysis_environment": {
+    "python_version": {
+      "path": ".python-version",
+      "sha256": "49a506dd32096b010d75205acf3430c9ae6c40351888129499e5a5e487126c93"
+    },
+    "requirements": {
+      "path": "requirements.txt",
+      "sha256": "c396d94e1d038a234d4bbeefbd3b88c94eb2ec5bc649203a69715d49ff626d88"
+    }
+  },
+  "analysis_implementation": {
+    "path": "scripts/analyze_main_study.py",
+    "sha256": "82be40ed97cad1f8a02e5062ee62df83d7bc4f48375be876aa1f4a223df3975c"
+  },
+  "analysis_plan": {
+    "path": "paper/ANALYSIS_PLAN.md",
+    "sha256": "9620b0732a72509f10313a06dd88878ae0f2601608c8942c52ce44901bf969be"
+  },
+  "frozen_configuration": {
+    "bootstrap_draws": 20000,
+    "bootstrap_seed": 20260914,
+    "expected_tasks": 10,
+    "primary_contrasts": [
+      [
+        "D3",
+        "D6",
+        "D6_minus_D3_retrieval_depth"
+      ],
+      [
+        "D6",
+        "P6",
+        "P6_minus_D6_planning"
+      ],
+      [
+        "P6",
+        "P6V",
+        "P6V_minus_P6_verification"
+      ]
+    ],
+    "variants": [
+      "D3",
+      "D6",
+      "P6",
+      "P6V"
+    ]
+  },
+  "input_manifest_aggregate_sha256": "4e94308472e87cc14b85e5911c40b5f72c63225862a347e624fc0725afd632aa",
+  "provenance_builder": {
+    "path": "scripts/build_analysis_provenance.py",
+    "sha256": "19e012858767073dad0e9e2ae36f6dc659bcd85983d1e31f14f8099df224b28f"
+  },
+  "schema_version": 1,
+  "verification_implementations": {
+    "output_consistency": {
+      "path": "scripts/verify_main_study_outputs.py",
+      "sha256": "126a86eeb88a99d22f6e6689eeff387d75a4027534acd01fb75332aca1b77d87"
+    },
+    "provenance": {
+      "path": "scripts/verify_analysis_provenance.py",
+      "sha256": "100383c008923e4a4a4f9d433cfb556198b9bb4d6d381793283b84c8bcc6be4e"
+    }
+  },
+  "verified_inputs": [
+    {
+      "bytes": 5440,
+      "path": "outputs/main_study_runs.csv",
+      "sha256": "966ea80519af5ea7b832c86d7868525a4ef75874f396f242291e3be949382a0e"
+    },
+    {
+      "bytes": 3652,
+      "path": "outputs/posthoc_support_runs.csv",
+      "sha256": "5acd80d6115f269c7fab40180dec0d778a45eaafd7d5c23cb79c43fd7837773c"
+    }
+  ],
+  "verified_outputs": {
+    "canonical_inference": {
+      "path": "outputs/main_study_inference.json",
+      "sha256": "bbf439aabf0db38afd5430a885aff107014c6b924c05c62d6d724d16e00f450f"
+    },
+    "manuscript_rendering": {
+      "path": "paper/MAIN_STUDY_INFERENCE.md",
+      "sha256": "9356cbad9711012850baef349c7d16a104d63987e1d7be2e53184456a8cb2f1c"
+    }
+  }
+}
