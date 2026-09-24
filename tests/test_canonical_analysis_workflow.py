@@ -31,6 +31,13 @@ def test_workflow_pins_canonical_recovery_artifact() -> None:
     assert "run-id: ${{ env.CANONICAL_RECOVERY_RUN_ID }}" in workflow
 
 
+def test_workflow_has_explicit_scientific_trigger_only() -> None:
+    workflow = _workflow()
+    assert "workflow_dispatch:" in workflow
+    assert "experiments/run_canonical_analysis.trigger" in workflow
+    assert "research-paper-eval-2027" in workflow
+
+
 def test_workflow_runs_verified_analysis_in_fail_closed_order() -> None:
     workflow = _workflow()
     fingerprint = workflow.index("scripts/fingerprint_research_artifacts.py")
