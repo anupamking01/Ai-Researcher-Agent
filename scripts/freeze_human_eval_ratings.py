@@ -4,6 +4,7 @@ This module never reads the coordinator-only blinding key. It validates real
 annotator CSVs against the blinded packet, enforces the frozen rubric contract,
 writes an immutable blinded snapshot, fingerprints the inputs/outputs/protocol,
 and reports pre-unblinding inter-annotator agreement.
+See docs/HUMAN_EVAL_INPUT_PROVENANCE.md for snapshot and retention limits.
 
 No ratings are generated, imputed, adjudicated, or joined to treatment labels.
 """
@@ -12,6 +13,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import io
 import json
 from itertools import combinations
 from pathlib import Path
@@ -57,13 +59,15 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _packet_blind_ids(packet_path: Path) -> list[str]:
-    if not packet_path.is_file():
-        raise ValueError(f"blinded packet is missing: {packet_path}")
+def _packet_blind_ids(packet_path: Path, *, content: bytes | None = None) -> list[str]:
+    if content is None:
+        if not packet_path.is_file():
+            raise ValueError(f"blinded packet is missing: {packet_path}")
+        content = packet_path.read_bytes()
 
     ids: list[str] = []
     seen: set[str] = set()
-    for line_number, raw in enumerate(packet_path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, raw in enumerate(content.decode("utf-8").splitlines(), start=1):
         if not raw.strip():
             continue
         try:
@@ -117,16 +121,19 @@ def _load_ratings(rating_paths: list[Path], *, allowed_blind_ids: set[str]) -> t
     for source_index, path in enumerate(rating_paths, start=1):
         if not path.is_file():
             raise ValueError(f"ratings file is missing: {path}")
+        # Parse and fingerprint the same captured bytes. Reopening a live CSV
+        # after hashing can bind one revision's digest to another's scores.
+        content = path.read_bytes()
         sources.append(
             {
                 "input_index": source_index,
                 "name": path.name,
-                "bytes": path.stat().st_size,
-                "sha256": sha256_file(path),
+                "bytes": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
             }
         )
 
-        with path.open("r", encoding="utf-8", newline="") as handle:
+        with io.StringIO(content.decode("utf-8"), newline="") as handle:
             reader = csv.DictReader(handle)
             fieldnames = reader.fieldnames or []
             # A set-only schema check loses duplicate headers; DictReader would
@@ -376,7 +383,14 @@ def freeze_ratings(
             + ", ".join(path.name for path in existing)
         )
 
-    blind_ids = _packet_blind_ids(packet_path)
+    # Capture packet and protocol identity before processing any ratings.
+    # These are per-file snapshots, not a lock on the caller's working files.
+    if not packet_path.is_file():
+        raise ValueError(f"blinded packet is missing: {packet_path}")
+    packet_content = packet_path.read_bytes()
+    protocol_sha256 = sha256_file(protocol_path)
+    assignment_plan_sha256 = sha256_file(assignment_plan_path)
+    blind_ids = _packet_blind_ids(packet_path, content=packet_content)
     rows, sources = _load_ratings(
         [Path(path) for path in rating_paths],
         allowed_blind_ids=set(blind_ids),
@@ -410,17 +424,17 @@ def freeze_ratings(
         "blinding_key_used": False,
         "packet": {
             "name": packet_path.name,
-            "bytes": packet_path.stat().st_size,
-            "sha256": sha256_file(packet_path),
+            "bytes": len(packet_content),
+            "sha256": hashlib.sha256(packet_content).hexdigest(),
             "n_blind_ids": len(blind_ids),
         },
         "protocol": {
             "path": "paper/HUMAN_EVAL_PROTOCOL.md",
-            "sha256": sha256_file(protocol_path),
+            "sha256": protocol_sha256,
         },
         "assignment_plan": {
             "path": "paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md",
-            "sha256": sha256_file(assignment_plan_path),
+            "sha256": assignment_plan_sha256,
         },
         "assignment_coverage": assignment_coverage,
         "rating_inputs": sources,
