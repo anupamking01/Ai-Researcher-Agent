@@ -84,6 +84,10 @@ def test_freeze_writes_blinded_snapshot_and_two_rater_agreement(tmp_path: Path):
     assert manifest["frozen_ratings"]["n_rows"] == 4
     assert manifest["frozen_ratings"]["n_annotators"] == 2
     assert manifest["frozen_ratings"]["n_unique_blind_ids_rated"] == 2
+    assert manifest["assignment_plan"]["path"] == "paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md"
+    assert manifest["assignment_coverage"]["required_min_raters_per_item"] == 2
+    assert manifest["assignment_coverage"]["min_observed_raters_per_item"] == 2
+    assert manifest["assignment_coverage"]["items_by_rater_count"] == {"2": 2}
 
     agreement = json.loads((output / "agreement.json").read_text(encoding="utf-8"))
     assert agreement["n_annotators"] == 2
@@ -223,3 +227,26 @@ def test_existing_snapshot_is_never_overwritten(tmp_path: Path):
 
 def test_quadratic_weighted_kappa_is_undefined_for_single_constant_category():
     assert quadratic_weighted_kappa([(3, 3), (3, 3)]) is None
+
+
+def test_freeze_fails_closed_until_every_packet_item_is_double_rated(tmp_path: Path):
+    packet = _packet(tmp_path)
+    protocol = _protocol(tmp_path)
+    first = _ratings(
+        tmp_path,
+        "annotator-a.csv",
+        [_row("ann-a", "H001"), _row("ann-a", "H002")],
+    )
+    second = _ratings(
+        tmp_path,
+        "annotator-b.csv",
+        [_row("ann-b", "H001")],
+    )
+
+    with pytest.raises(ValueError, match="assignment incomplete"):
+        freeze_ratings(
+            [first, second],
+            packet_path=packet,
+            protocol_path=protocol,
+            output_root=tmp_path / "freeze",
+        )

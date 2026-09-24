@@ -20,7 +20,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PACKET = REPO_ROOT / "outputs" / "human_eval" / "packet.jsonl"
 DEFAULT_PROTOCOL = REPO_ROOT / "paper" / "HUMAN_EVAL_PROTOCOL.md"
+DEFAULT_ASSIGNMENT_PLAN = REPO_ROOT / "paper" / "HUMAN_EVAL_ASSIGNMENT_PLAN.md"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "outputs" / "human_eval" / "frozen-v1"
+MIN_RATERS_PER_ITEM = 2
 
 SCORE_FIELDS = (
     "correctness_1_5",
@@ -194,6 +196,35 @@ def _load_ratings(rating_paths: list[Path], *, allowed_blind_ids: set[str]) -> t
     return rows, sources
 
 
+def _validate_assignment_coverage(rows: list[dict], blind_ids: list[str]) -> dict:
+    """Require two distinct independent raters for every blinded report."""
+    raters_by_item = {blind_id: set() for blind_id in blind_ids}
+    for row in rows:
+        raters_by_item[row["blind_id"]].add(row["annotator_id"])
+
+    counts = {blind_id: len(raters) for blind_id, raters in raters_by_item.items()}
+    incomplete = sorted(blind_id for blind_id, count in counts.items() if count < MIN_RATERS_PER_ITEM)
+    if incomplete:
+        preview = ", ".join(f"{blind_id}={counts[blind_id]}" for blind_id in incomplete[:10])
+        raise ValueError(
+            "human-evaluation assignment incomplete: every blinded report must have "
+            f"at least {MIN_RATERS_PER_ITEM} distinct annotators before unblinding; "
+            f"below requirement: {preview}"
+        )
+
+    histogram: dict[str, int] = {}
+    for count in counts.values():
+        key = str(count)
+        histogram[key] = histogram.get(key, 0) + 1
+    return {
+        "required_min_raters_per_item": MIN_RATERS_PER_ITEM,
+        "n_items": len(counts),
+        "min_observed_raters_per_item": min(counts.values()),
+        "max_observed_raters_per_item": max(counts.values()),
+        "items_by_rater_count": dict(sorted(histogram.items(), key=lambda item: int(item[0]))),
+    }
+
+
 def _score(row: dict, field: str) -> int | None:
     value = str(row.get(field) or "").strip()
     return int(value) if value else None
@@ -308,15 +339,19 @@ def freeze_ratings(
     *,
     packet_path: Path = DEFAULT_PACKET,
     protocol_path: Path = DEFAULT_PROTOCOL,
+    assignment_plan_path: Path = DEFAULT_ASSIGNMENT_PLAN,
     output_root: Path = DEFAULT_OUTPUT_ROOT,
 ) -> dict:
     """Validate ratings and persist a blinded, fingerprinted, immutable snapshot."""
     packet_path = Path(packet_path)
     protocol_path = Path(protocol_path)
+    assignment_plan_path = Path(assignment_plan_path)
     output_root = Path(output_root)
 
     if not protocol_path.is_file():
         raise ValueError(f"frozen human-evaluation protocol is missing: {protocol_path}")
+    if not assignment_plan_path.is_file():
+        raise ValueError(f"frozen human-evaluation assignment plan is missing: {assignment_plan_path}")
 
     existing = [output_root / name for name in OUTPUT_FILES if (output_root / name).exists()]
     if existing:
@@ -330,6 +365,7 @@ def freeze_ratings(
         [Path(path) for path in rating_paths],
         allowed_blind_ids=set(blind_ids),
     )
+    assignment_coverage = _validate_assignment_coverage(rows, blind_ids)
     agreement = build_agreement(rows)
 
     dimension_counts = {}
@@ -366,6 +402,11 @@ def freeze_ratings(
             "path": "paper/HUMAN_EVAL_PROTOCOL.md",
             "sha256": sha256_file(protocol_path),
         },
+        "assignment_plan": {
+            "path": "paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md",
+            "sha256": sha256_file(assignment_plan_path),
+        },
+        "assignment_coverage": assignment_coverage,
         "rating_inputs": sources,
         "frozen_ratings": {
             "path": "frozen_ratings.csv",
@@ -399,6 +440,7 @@ def main() -> int:
     parser.add_argument("ratings", nargs="+", type=Path, help="completed blinded annotator CSV files")
     parser.add_argument("--packet", type=Path, default=DEFAULT_PACKET)
     parser.add_argument("--protocol", type=Path, default=DEFAULT_PROTOCOL)
+    parser.add_argument("--assignment-plan", type=Path, default=DEFAULT_ASSIGNMENT_PLAN)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     args = parser.parse_args()
 
@@ -407,6 +449,7 @@ def main() -> int:
             args.ratings,
             packet_path=args.packet,
             protocol_path=args.protocol,
+            assignment_plan_path=args.assignment_plan,
             output_root=args.output_root,
         )
     except (OSError, ValueError) as exc:
