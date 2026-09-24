@@ -40,10 +40,10 @@ def test_workflow_has_explicit_scientific_trigger_only() -> None:
 
 def test_workflow_runs_verified_analysis_in_fail_closed_order() -> None:
     workflow = _workflow()
-    fingerprint = workflow.index("scripts/fingerprint_research_artifacts.py")
-    analysis = workflow.index("scripts/run_verified_main_study_analysis.py")
-    provenance = workflow.index("scripts/verify_analysis_provenance.py")
-    output_check = workflow.index("scripts/verify_main_study_outputs.py")
+    fingerprint = workflow.index("python -m scripts.fingerprint_research_artifacts")
+    analysis = workflow.index("python -m scripts.run_verified_main_study_analysis")
+    provenance = workflow.index("python -m scripts.verify_analysis_provenance")
+    output_check = workflow.index("python -m scripts.verify_main_study_outputs")
 
     assert fingerprint < analysis < provenance < output_check
 
