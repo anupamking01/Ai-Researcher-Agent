@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       actions: read
-      contents: read
+      contents: write
     env:
       PYTHONUNBUFFERED: "1"
       CANONICAL_RECOVERY_RUN_ID: "34783525480"
@@ -100,3 +100,52 @@ jobs:
             paper/MAIN_STUDY_INFERENCE.md
           if-no-files-found: error
           retention-days: 90
+
+      - name: Publish verified canonical analysis snapshot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -f \
+            outputs/canonical_analysis_source.json \
+            outputs/main_study_analysis_inputs_manifest.json \
+            outputs/main_study_analysis_provenance.json \
+            outputs/main_study_inference.json \
+            outputs/main_study_runs.csv \
+            outputs/posthoc_support_runs.csv \
+            paper/MAIN_STUDY_INFERENCE.md
+
+          python - <<'PY'
+          import subprocess
+
+          expected = {
+              "outputs/canonical_analysis_source.json",
+              "outputs/main_study_analysis_inputs_manifest.json",
+              "outputs/main_study_analysis_provenance.json",
+              "outputs/main_study_inference.json",
+              "outputs/main_study_runs.csv",
+              "outputs/posthoc_support_runs.csv",
+              "paper/MAIN_STUDY_INFERENCE.md",
+          }
+          staged = set(
+              subprocess.check_output(
+                  ["git", "diff", "--cached", "--name-only"],
+                  text=True,
+              ).splitlines()
+          )
+          unexpected = staged - expected
+          if unexpected:
+              raise SystemExit(f"Refusing to publish unexpected staged paths: {sorted(unexpected)}")
+          missing = expected - staged
+          if missing:
+              print(f"Already tracked and unchanged or missing from staged diff: {sorted(missing)}")
+          PY
+
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "Canonical analysis snapshot already matches the branch."
+            exit 0
+          fi
+
+          git commit -m "research: preserve verified canonical main-study results"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

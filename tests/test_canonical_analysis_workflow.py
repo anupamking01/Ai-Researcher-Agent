@@ -78,3 +78,22 @@ def test_workflow_preserves_self_contained_analysis_bundle() -> None:
     for path in required:
         assert path in workflow
     assert "if-no-files-found: error" in workflow
+
+
+def test_workflow_publishes_only_after_independent_verification() -> None:
+    workflow = _workflow()
+    assert "contents: write" in workflow
+    verification = workflow.index("Independently verify analysis receipt")
+    publish = workflow.index("Publish verified canonical analysis snapshot")
+    assert verification < publish
+    for path in (
+        "outputs/canonical_analysis_source.json",
+        "outputs/main_study_analysis_inputs_manifest.json",
+        "outputs/main_study_analysis_provenance.json",
+        "outputs/main_study_inference.json",
+        "outputs/main_study_runs.csv",
+        "outputs/posthoc_support_runs.csv",
+        "paper/MAIN_STUDY_INFERENCE.md",
+    ):
+        assert path in workflow
+    assert "Refusing to publish unexpected staged paths" in workflow
