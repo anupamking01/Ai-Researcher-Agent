@@ -1,0 +1,97 @@
+name: canonical-main-study-analysis
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: canonical-main-study-analysis-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    env:
+      PYTHONUNBUFFERED: "1"
+      CANONICAL_RECOVERY_RUN_ID: "34783525480"
+      CANONICAL_RECOVERY_ARTIFACT: "budget-main-study-recovered-34783525480"
+
+    steps:
+      - name: Checkout research branch
+        uses: actions/checkout@v4
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+          cache: pip
+
+      - name: Install analysis dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run offline analysis guardrail tests
+        run: |
+          python -m pytest -q             tests/test_main_study_analysis.py             tests/test_main_study_input_preflight.py             tests/test_verified_main_study_analysis.py             tests/test_main_study_output_verification.py             tests/test_analysis_provenance.py             tests/test_analysis_provenance_verification.py
+
+      - name: Download canonical recovered study artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.CANONICAL_RECOVERY_ARTIFACT }}
+          path: outputs
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: anupamking01/Ai-Researcher-Agent
+          run-id: ${{ env.CANONICAL_RECOVERY_RUN_ID }}
+
+      - name: Record immutable source selection
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          source = {
+              "schema_version": 1,
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "analysis_commit": os.environ["GITHUB_SHA"],
+              "recovery_run_id": int(os.environ["CANONICAL_RECOVERY_RUN_ID"]),
+              "recovery_artifact": os.environ["CANONICAL_RECOVERY_ARTIFACT"],
+          }
+          Path("outputs/canonical_analysis_source.json").write_text(
+              json.dumps(source, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Fingerprint exact canonical analysis inputs
+        run: |
+          python scripts/fingerprint_research_artifacts.py             outputs/main_study_runs.csv             outputs/posthoc_support_runs.csv             --output outputs/main_study_analysis_inputs_manifest.json
+
+      - name: Run frozen provenance-gated analysis
+        run: |
+          python scripts/run_verified_main_study_analysis.py             outputs/main_study_analysis_inputs_manifest.json
+
+      - name: Independently verify analysis receipt
+        run: |
+          python scripts/verify_analysis_provenance.py             outputs/main_study_analysis_provenance.json
+          python scripts/verify_main_study_outputs.py
+
+      - name: Upload canonical analysis bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: canonical-main-study-analysis-${{ github.run_id }}
+          path: |
+            outputs/canonical_analysis_source.json
+            outputs/main_study_analysis_inputs_manifest.json
+            outputs/main_study_analysis_provenance.json
+            outputs/main_study_inference.json
+            outputs/main_study_runs.csv
+            outputs/posthoc_support_runs.csv
+            paper/MAIN_STUDY_INFERENCE.md
+          if-no-files-found: error
+          retention-days: 90
