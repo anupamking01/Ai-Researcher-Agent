@@ -97,3 +97,5 @@ def test_workflow_publishes_only_after_independent_verification() -> None:
     ):
         assert path in workflow
     assert "Refusing to publish unexpected staged paths" in workflow
+    assert "Do not normalize those verified bytes" in workflow
+    assert "git diff --cached --check --" in workflow

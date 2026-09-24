@@ -141,7 +141,17 @@ jobs:
               print(f"Already tracked and unchanged or missing from staged diff: {sorted(missing)}")
           PY
 
-          git diff --cached --check
+          # The canonical CSVs are byte-fingerprinted with CRLF line endings
+          # from Python's csv writer. Do not normalize those verified bytes just
+          # to satisfy Git's trailing-whitespace heuristic. Check only the
+          # non-CSV manuscript/provenance artifacts for whitespace errors.
+          git diff --cached --check -- \
+            outputs/canonical_analysis_source.json \
+            outputs/main_study_analysis_inputs_manifest.json \
+            outputs/main_study_analysis_provenance.json \
+            outputs/main_study_inference.json \
+            paper/MAIN_STUDY_INFERENCE.md
+
           if git diff --cached --quiet; then
             echo "Canonical analysis snapshot already matches the branch."
             exit 0
