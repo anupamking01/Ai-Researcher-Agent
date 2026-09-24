@@ -2,8 +2,8 @@
 
 This reviewer-facing verifier checks that a success receipt still describes the
 exact current analysis inputs, implementation, frozen plan, pinned dependency
-environment, interpreter contract, configuration, and final result artifacts. It
-makes no network calls and does not regenerate results.
+environment, interpreter contract, verification implementation, configuration, and
+final result artifacts. It makes no network calls and does not regenerate results.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from scripts.build_analysis_provenance import (
     ANALYSIS_PYTHON_VERSION,
     ANALYSIS_REQUIREMENTS,
     ANALYSIS_SCRIPT,
+    ANALYSIS_VERIFIER,
 )
 from scripts.verify_main_study_outputs import DEFAULT_JSON, DEFAULT_MARKDOWN
 from scripts.verify_research_artifact_manifest import REPO_ROOT, verify_manifest
@@ -101,6 +102,11 @@ def verify_receipt(receipt: dict, *, root: Path = REPO_ROOT) -> None:
     if not isinstance(python_version, dict) or python_version.get("path") != ANALYSIS_PYTHON_VERSION:
         raise ValueError("receipt does not bind the canonical Python version contract")
     _require_hash(python_version, label="analysis Python version", root=root)
+
+    verifier = receipt.get("verification_implementation")
+    if not isinstance(verifier, dict) or verifier.get("path") != ANALYSIS_VERIFIER:
+        raise ValueError("receipt does not bind the canonical provenance verifier")
+    _require_hash(verifier, label="analysis provenance verifier", root=root)
 
     expected_configuration = {
         "variants": list(analyze_main_study.VARIANTS),
