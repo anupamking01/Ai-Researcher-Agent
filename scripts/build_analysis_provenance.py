@@ -1,8 +1,8 @@
 """Build a deterministic provenance receipt for manuscript-facing inference.
 
 The receipt binds exact input bytes to the frozen analysis implementation,
-analysis plan, pinned dependency environment, interpreter contract, and independent
-verification implementation. It contains no experimental conclusions and makes no
+analysis plan, pinned dependency environment, interpreter contract, and both
+verification implementations. It contains no experimental conclusions and makes no
 network calls. A changed dataset, analysis script, preregistered plan, dependency
 specification, Python version contract, or verifier necessarily changes the receipt.
 """
@@ -21,6 +21,7 @@ ANALYSIS_PLAN = "paper/ANALYSIS_PLAN.md"
 ANALYSIS_REQUIREMENTS = "requirements.txt"
 ANALYSIS_PYTHON_VERSION = ".python-version"
 ANALYSIS_VERIFIER = "scripts/verify_analysis_provenance.py"
+ANALYSIS_OUTPUT_VERIFIER = "scripts/verify_main_study_outputs.py"
 
 
 def _sha256(path: Path) -> str:
@@ -60,9 +61,15 @@ def build_receipt(manifest: dict, *, root: Path = REPO_ROOT) -> dict:
                 "sha256": _sha256(root / ANALYSIS_PYTHON_VERSION),
             },
         },
-        "verification_implementation": {
-            "path": ANALYSIS_VERIFIER,
-            "sha256": _sha256(root / ANALYSIS_VERIFIER),
+        "verification_implementations": {
+            "provenance": {
+                "path": ANALYSIS_VERIFIER,
+                "sha256": _sha256(root / ANALYSIS_VERIFIER),
+            },
+            "output_consistency": {
+                "path": ANALYSIS_OUTPUT_VERIFIER,
+                "sha256": _sha256(root / ANALYSIS_OUTPUT_VERIFIER),
+            },
         },
         "frozen_configuration": {
             "variants": list(analyze_main_study.VARIANTS),
