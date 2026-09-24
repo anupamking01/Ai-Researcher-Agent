@@ -139,10 +139,28 @@ Before joining ratings with `blinding_key.csv`, the coordinator should create an
 - blind IDs;
 - all five rubric scores;
 - notes;
-- timestamp/version of the scoring file;
-- protocol version/commit SHA.
+- the exact input-file fingerprints;
+- the blinded packet fingerprint;
+- the frozen protocol fingerprint.
 
-Only after that freeze should treatment identities be merged for statistical analysis.
+Use the offline freeze utility on the completed annotator files:
+
+```bash
+python scripts/freeze_human_eval_ratings.py \
+  outputs/human_eval/annotator-a.csv \
+  outputs/human_eval/annotator-b.csv \
+  --output-root outputs/human_eval/frozen-v1
+```
+
+The utility deliberately never reads `blinding_key.csv`. Before writing a snapshot it fails closed on unknown blind IDs, duplicate annotator/item rows, treatment-identity columns, non-integer/out-of-range scores, missing reasons for unscored dimensions, or missing notes for endpoint scores (1 or 5). It then writes:
+
+- `frozen_ratings.csv` — normalized human-entered ratings, still blinded;
+- `agreement.json` — pre-unblinding exact agreement, mean absolute difference, and quadratic-weighted Cohen's kappa for each annotator pair and rubric dimension;
+- `freeze_manifest.json` — SHA-256 fingerprints of the packet, protocol, input rating files, frozen ratings, and agreement output.
+
+An existing frozen snapshot is never overwritten; use a new versioned output directory for any later freeze. With exactly two annotators, the single pair provides the protocol's two-rater agreement statistics. If more than two annotators score the same items, the pairwise values are diagnostics only and a predeclared ordinal multi-rater reliability statistic is still required before treatment-level analysis.
+
+This operational tooling does not change the frozen rubric or the planned human-evaluation estimands. Only after a valid blinded freeze should treatment identities be merged for statistical analysis.
 
 ## 8. Human-evaluation analysis
 
