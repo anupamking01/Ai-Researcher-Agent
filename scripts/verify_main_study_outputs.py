@@ -25,7 +25,7 @@ def verify_outputs(
     json_path: Path = DEFAULT_JSON,
     markdown_path: Path = DEFAULT_MARKDOWN,
 ) -> None:
-    """Require the Markdown result to be an exact rendering of canonical JSON."""
+    """Require the Markdown result to be the exact canonical renderer output."""
     json_file = json_path if json_path.is_absolute() else root / json_path
     markdown_file = markdown_path if markdown_path.is_absolute() else root / markdown_path
 
@@ -47,9 +47,9 @@ def verify_outputs(
         raise ValueError(f"canonical inference JSON does not satisfy the renderer schema: {exc}") from exc
 
     actual = markdown_file.read_text(encoding="utf-8")
-    # analyze_main_study writes exactly one trailing newline after _markdown().
-    expected_file = expected + "\n"
-    if actual != expected_file:
+    # Keep this byte-for-byte aligned with analyze_main_study.main(), which writes
+    # _markdown(payload) directly without appending or stripping whitespace.
+    if actual != expected:
         raise ValueError(
             "manuscript inference Markdown does not match canonical JSON; "
             "regenerate it with scripts/analyze_main_study.py rather than editing results by hand"
