@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import random
 from pathlib import Path
@@ -19,6 +20,7 @@ from urllib.parse import unquote
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TRACE_ROOT = REPO_ROOT / "outputs" / "experiment_traces"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "outputs" / "human_eval"
+DEFAULT_TASK_MANIFEST = REPO_ROOT / "experiments" / "main_budget_tasks.json"
 EXPECTED_VARIANTS = ("D3", "D6", "P6", "P6V")
 DEFAULT_SEED = 20260915
 
@@ -60,7 +62,46 @@ def _resolve_report_markdown(trace_root: Path, report_path: str) -> Path:
     return candidate
 
 
-def _load_records(trace_root: Path) -> list[dict]:
+def _load_task_manifest(task_manifest_path: Path) -> dict:
+    """Load and validate the frozen task set used by the human-eval packet."""
+    task_manifest_path = Path(task_manifest_path)
+    if not task_manifest_path.is_file():
+        raise FileNotFoundError(f"Frozen task manifest does not exist: {task_manifest_path}")
+    content = task_manifest_path.read_bytes()
+    try:
+        payload = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Frozen task manifest is not valid UTF-8 JSON: {task_manifest_path}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Frozen task manifest must contain a JSON object")
+    if payload.get("frozen_before_execution") is not True:
+        raise ValueError("Human evaluation requires a task manifest frozen before execution")
+    task_set_id = str(payload.get("task_set_id") or "").strip()
+    task_rows = payload.get("tasks")
+    if not task_set_id:
+        raise ValueError("Frozen task manifest is missing task_set_id")
+    if not isinstance(task_rows, list) or not task_rows:
+        raise ValueError("Frozen task manifest contains no tasks")
+    tasks: dict[str, str] = {}
+    for index, row in enumerate(task_rows, start=1):
+        if not isinstance(row, dict):
+            raise ValueError(f"Frozen task manifest task {index} must be an object")
+        task_id = str(row.get("id") or "").strip()
+        question = str(row.get("question") or "").strip()
+        if not task_id or not question:
+            raise ValueError(f"Frozen task manifest task {index} is missing id/question")
+        if task_id in tasks:
+            raise ValueError(f"Duplicate task ID in frozen task manifest: {task_id}")
+        tasks[task_id] = question
+    return {
+        "bytes": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+        "task_set_id": task_set_id,
+        "tasks": tasks,
+    }
+
+
+def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
     if not trace_root.is_dir():
         raise FileNotFoundError(f"Trace root does not exist: {trace_root}")
 
@@ -76,6 +117,7 @@ def _load_records(trace_root: Path) -> list[dict]:
         task_id = str(trace.get("task_id") or experiment.get("task_id") or "").strip()
         run_id = str(trace.get("run_id") or trace_path.stem).strip()
         question = str(trace.get("question") or "").strip()
+        trace_task_set_id = str(experiment.get("task_set_id") or "").strip()
 
         if not variant_id or not task_id:
             raise ValueError(f"Trace missing variant/task identity: {trace_path}")
@@ -85,6 +127,18 @@ def _load_records(trace_root: Path) -> list[dict]:
             raise ValueError(f"Incomplete run cannot enter human evaluation: {variant_id}/{task_id}")
         if not question:
             raise ValueError(f"Trace missing research question: {variant_id}/{task_id}")
+        if trace_task_set_id != task_manifest["task_set_id"]:
+            raise ValueError(
+                f"Trace task_set_id mismatch for {variant_id}/{task_id}: "
+                f"{trace_task_set_id!r} != {task_manifest['task_set_id']!r}"
+            )
+        expected_question = task_manifest["tasks"].get(task_id)
+        if expected_question is None:
+            raise ValueError(f"Unexpected task {task_id!r}; not present in frozen task manifest")
+        if question != expected_question:
+            raise ValueError(
+                f"Trace question does not match frozen task manifest for {variant_id}/{task_id}"
+            )
 
         cell = (variant_id, task_id)
         if cell in seen_cells:
@@ -112,6 +166,16 @@ def _load_records(trace_root: Path) -> list[dict]:
     if not records:
         raise ValueError(f"No experiment traces found under {trace_root}")
 
+    observed_task_ids = {record["task_id"] for record in records}
+    expected_task_ids = set(task_manifest["tasks"])
+    if observed_task_ids != expected_task_ids:
+        missing = sorted(expected_task_ids - observed_task_ids)
+        unexpected = sorted(observed_task_ids - expected_task_ids)
+        raise ValueError(
+            "Human-evaluation task coverage must exactly match the frozen task manifest; "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+
     task_variants: dict[str, set[str]] = {}
     for record in records:
         task_variants.setdefault(record["task_id"], set()).add(record["variant_id"])
@@ -138,11 +202,14 @@ def build_packet(
     output_root: Path,
     *,
     seed: int = DEFAULT_SEED,
+    task_manifest_path: Path = DEFAULT_TASK_MANIFEST,
 ) -> dict:
     """Build deterministic blinded evaluation artifacts from completed traces."""
     trace_root = Path(trace_root)
     output_root = Path(output_root)
-    records = _load_records(trace_root)
+    task_manifest_path = Path(task_manifest_path)
+    task_manifest = _load_task_manifest(task_manifest_path)
+    records = _load_records(trace_root, task_manifest=task_manifest)
 
     # Sort first so filesystem traversal order can never affect randomization.
     shuffled = sorted(records, key=lambda row: (row["task_id"], row["variant_id"], row["run_id"]))
@@ -203,6 +270,13 @@ def build_packet(
     manifest = {
         "schema_version": 1,
         "study_id": "budget-main-v1",
+        "task_set_id": task_manifest["task_set_id"],
+        "task_manifest": {
+            "name": task_manifest_path.name,
+            "bytes": task_manifest["bytes"],
+            "sha256": task_manifest["sha256"],
+            "n_tasks": len(task_manifest["tasks"]),
+        },
         "blind_seed": int(seed),
         "n_reports": len(packet_rows),
         "n_tasks": len({row["task_id"] for row in packet_rows}),
@@ -226,10 +300,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--trace-root", type=Path, default=DEFAULT_TRACE_ROOT)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--task-manifest", type=Path, default=DEFAULT_TASK_MANIFEST)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     args = parser.parse_args()
 
-    manifest = build_packet(args.trace_root, args.output_root, seed=args.seed)
+    manifest = build_packet(
+        args.trace_root,
+        args.output_root,
+        seed=args.seed,
+        task_manifest_path=args.task_manifest,
+    )
     print(json.dumps(manifest, indent=2, sort_keys=True))
     return 0
 
