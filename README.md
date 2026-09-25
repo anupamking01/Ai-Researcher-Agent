@@ -9,6 +9,8 @@ This repository implements an agentic research workflow that decomposes a user q
 
 > **Research status:** active experimental project. The repository does **not** claim benchmark improvements or factuality gains that have not yet been measured.
 
+> **Latest research — draft branch:** A [40-run study across 10 tasks and four variants](https://github.com/anupamking01/Ai-Researcher-Agent/blob/d5d9fcd4762092c4a79f2e830d1f688dfe1f9cc8/README.md) compares retrieval depth, planning, and verification, with source provenance, cost accounting, and a common evidence-support evaluator. The [frozen automated analysis](https://github.com/anupamking01/Ai-Researcher-Agent/blob/d5d9fcd4762092c4a79f2e830d1f688dfe1f9cc8/paper/MAIN_STUDY_INFERENCE.md) is available; blinded human evaluation remains pending. These study changes are on [draft PR #1](https://github.com/anupamking01/Ai-Researcher-Agent/pull/1) and have not been merged into `main`. The capabilities and roadmap below describe `main`.
+
 ## Why this project matters
 
 Web-research agents combine several hard problems: planning, retrieval, source selection, asynchronous tool execution, evidence synthesis, failure recovery, and cost control. A system can produce fluent reports while still failing because it searched poorly, browsed inaccessible pages, used weak evidence, or generated unsupported claims.
