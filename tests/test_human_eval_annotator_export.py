@@ -98,13 +98,15 @@ def test_export_contains_only_annotator_safe_artifacts(packet_case):
         "ratings_template.csv",
         "annotator_manifest.json",
     }
-    manifest_text = (packet_case["export_root"] / "annotator_manifest.json").read_text(
-        encoding="utf-8"
+    manifest = json.loads(
+        (packet_case["export_root"] / "annotator_manifest.json").read_text(
+            encoding="utf-8"
+        )
     )
-    assert "blind_seed" not in manifest_text
-    assert "blinding_key.csv" not in manifest_text
-    assert "variant_id" not in manifest_text
-    assert "run_id" not in manifest_text
+    assert "blind_seed" not in manifest
+    assert "blinding_key" not in manifest
+    assert "variant_id" not in manifest
+    assert "run_id" not in manifest
 
 
 def test_exported_bytes_come_from_same_snapshot_that_was_verified(packet_case, monkeypatch):
