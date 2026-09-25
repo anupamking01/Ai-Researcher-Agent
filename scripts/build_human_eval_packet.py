@@ -3,7 +3,8 @@
 This module is intentionally offline. It reads completed experiment traces and
 the Markdown reports already produced by those runs, then emits annotator-facing
 artifacts that do not reveal experimental variant labels. The coordinator-only
-blinding key is written separately.
+blinding key is written separately. Published packet artifacts are create-only:
+an existing packet/key/template/manifest is never overwritten in place.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ DEFAULT_OUTPUT_ROOT = REPO_ROOT / "outputs" / "human_eval"
 DEFAULT_TASK_MANIFEST = REPO_ROOT / "experiments" / "main_budget_tasks.json"
 EXPECTED_VARIANTS = ("D3", "D6", "P6", "P6V")
 DEFAULT_SEED = 20260915
+PACKET_ARTIFACTS = ("packet.jsonl", "blinding_key.csv", "ratings_template.csv", "manifest.json")
 
 RATING_FIELDS = (
     "annotator_id",
@@ -190,11 +192,29 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
     return records
 
 
+def _refuse_overwrite(path: Path) -> ValueError:
+    return ValueError(
+        "refusing to overwrite existing human-evaluation packet artifact: "
+        f"{path}; preserve the published bundle or choose a new output root"
+    )
+
+
+def _write_text_exclusive(path: Path, content: str) -> None:
+    try:
+        with path.open("x", encoding="utf-8", newline="") as handle:
+            handle.write(content)
+    except FileExistsError as exc:
+        raise _refuse_overwrite(path) from exc
+
+
 def _write_csv(path: Path, fieldnames: tuple[str, ...] | list[str], rows: list[dict]) -> None:
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
+    try:
+        with path.open("x", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+    except FileExistsError as exc:
+        raise _refuse_overwrite(path) from exc
 
 
 def _artifact_fingerprint(path: Path) -> dict:
@@ -261,14 +281,30 @@ def build_packet(
             }
         )
 
+    if output_root.is_symlink():
+        raise ValueError(f"human-evaluation output root must not be a symbolic link: {output_root}")
     output_root.mkdir(parents=True, exist_ok=True)
+    existing = [
+        output_root / name
+        for name in PACKET_ARTIFACTS
+        if (output_root / name).exists() or (output_root / name).is_symlink()
+    ]
+    if existing:
+        raise ValueError(
+            "refusing to overwrite existing human-evaluation packet artifacts: "
+            + ", ".join(path.name for path in existing)
+            + "; preserve the published bundle or choose a new output root"
+        )
+
     packet_path = output_root / "packet.jsonl"
     key_path = output_root / "blinding_key.csv"
     ratings_template_path = output_root / "ratings_template.csv"
-    packet_path.write_text(
+    # packet.jsonl is the reservation point. Exclusive creation is the decisive
+    # guard against two builders passing the preflight check concurrently.
+    _write_text_exclusive(
+        packet_path,
         "\n".join(json.dumps(row, ensure_ascii=False, sort_keys=True) for row in packet_rows)
         + "\n",
-        encoding="utf-8",
     )
 
     _write_csv(
@@ -305,9 +341,9 @@ def build_packet(
             "blinding_key.csv is coordinator-only until scoring is frozen."
         ),
     }
-    (output_root / "manifest.json").write_text(
+    _write_text_exclusive(
+        output_root / "manifest.json",
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
     )
     return manifest
 
@@ -320,12 +356,15 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     args = parser.parse_args()
 
-    manifest = build_packet(
-        args.trace_root,
-        args.output_root,
-        seed=args.seed,
-        task_manifest_path=args.task_manifest,
-    )
+    try:
+        manifest = build_packet(
+            args.trace_root,
+            args.output_root,
+            seed=args.seed,
+            task_manifest_path=args.task_manifest,
+        )
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"HUMAN EVAL PACKET BUILD: FAIL: {exc}") from exc
     print(json.dumps(manifest, indent=2, sort_keys=True))
     return 0
 

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import build_human_eval_packet as packet_builder
 from scripts.build_human_eval_packet import build_packet
 
 
@@ -234,3 +235,107 @@ def test_build_packet_rejects_unfrozen_task_manifest(tmp_path):
             tmp_path / "human-eval",
             task_manifest_path=task_manifest,
         )
+
+
+def _packet_output_snapshot(output_root: Path) -> dict[str, bytes]:
+    return {
+        name: (output_root / name).read_bytes()
+        for name in packet_builder.PACKET_ARTIFACTS
+        if (output_root / name).is_file()
+    }
+
+
+def test_build_packet_refuses_to_reblind_or_overwrite_published_bundle(tmp_path):
+    trace_root = _write_complete_matrix(tmp_path)
+    output_root = tmp_path / "human-eval"
+    _build_packet(trace_root, output_root, tmp_path, seed=20260915)
+    before = _packet_output_snapshot(output_root)
+
+    with pytest.raises(ValueError, match="refusing to overwrite"):
+        _build_packet(trace_root, output_root, tmp_path, seed=7)
+
+    assert _packet_output_snapshot(output_root) == before
+
+
+@pytest.mark.parametrize("artifact_name", packet_builder.PACKET_ARTIFACTS)
+def test_build_packet_rejects_any_existing_packet_artifact_before_writes(
+    tmp_path, artifact_name
+):
+    trace_root = _write_complete_matrix(tmp_path)
+    output_root = tmp_path / "human-eval"
+    output_root.mkdir()
+    existing = output_root / artifact_name
+    existing.write_text("unrelated existing content\n", encoding="utf-8")
+    before = existing.read_bytes()
+
+    with pytest.raises(ValueError, match="refusing to overwrite"):
+        _build_packet(trace_root, output_root, tmp_path)
+
+    assert existing.read_bytes() == before
+    for name in packet_builder.PACKET_ARTIFACTS:
+        if name != artifact_name:
+            assert not (output_root / name).exists()
+
+
+def test_competing_packet_creation_after_preflight_cannot_be_overwritten(
+    tmp_path, monkeypatch
+):
+    trace_root = _write_complete_matrix(tmp_path)
+    output_root = tmp_path / "human-eval"
+    original = packet_builder._write_text_exclusive
+    raced = []
+
+    def create_competing_packet(path, content):
+        if path.name == "packet.jsonl" and not raced:
+            path.write_text("competing packet\n", encoding="utf-8")
+            raced.append(True)
+        return original(path, content)
+
+    monkeypatch.setattr(packet_builder, "_write_text_exclusive", create_competing_packet)
+    with pytest.raises(ValueError, match="refusing to overwrite"):
+        _build_packet(trace_root, output_root, tmp_path)
+
+    assert raced == [True]
+    assert (output_root / "packet.jsonl").read_text(encoding="utf-8") == "competing packet\n"
+    assert not (output_root / "blinding_key.csv").exists()
+    assert not (output_root / "ratings_template.csv").exists()
+    assert not (output_root / "manifest.json").exists()
+
+
+def test_interrupted_packet_build_is_preserved_and_never_reused(tmp_path, monkeypatch):
+    trace_root = _write_complete_matrix(tmp_path)
+    output_root = tmp_path / "human-eval"
+
+    with monkeypatch.context() as context:
+        def fail_csv(*args, **kwargs):
+            raise OSError("synthetic packet write failure")
+
+        context.setattr(packet_builder, "_write_csv", fail_csv)
+        with pytest.raises(OSError, match="synthetic packet write failure"):
+            _build_packet(trace_root, output_root, tmp_path)
+
+    packet_before = (output_root / "packet.jsonl").read_bytes()
+    assert packet_before
+    assert not (output_root / "manifest.json").exists()
+
+    with pytest.raises(ValueError, match="refusing to overwrite"):
+        _build_packet(trace_root, output_root, tmp_path)
+    assert (output_root / "packet.jsonl").read_bytes() == packet_before
+    assert not (output_root / "manifest.json").exists()
+
+
+def test_nonpacket_children_do_not_block_first_packet_publication(tmp_path):
+    trace_root = _write_complete_matrix(tmp_path)
+    output_root = tmp_path / "human-eval"
+    (output_root / "frozen-v0").mkdir(parents=True)
+    (output_root / "frozen-v0" / "README.txt").write_text(
+        "unrelated child directory\n", encoding="utf-8"
+    )
+
+    manifest = _build_packet(trace_root, output_root, tmp_path)
+
+    assert manifest["n_reports"] == 8
+    assert (output_root / "manifest.json").is_file()
+    assert (output_root / "frozen-v0" / "README.txt").read_text(encoding="utf-8") == (
+        "unrelated child directory\n"
+    )
