@@ -197,6 +197,15 @@ def _write_csv(path: Path, fieldnames: tuple[str, ...] | list[str], rows: list[d
         writer.writerows(rows)
 
 
+def _artifact_fingerprint(path: Path) -> dict:
+    content = path.read_bytes()
+    return {
+        "path": path.name,
+        "bytes": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
 def build_packet(
     trace_root: Path,
     output_root: Path,
@@ -254,6 +263,8 @@ def build_packet(
 
     output_root.mkdir(parents=True, exist_ok=True)
     packet_path = output_root / "packet.jsonl"
+    key_path = output_root / "blinding_key.csv"
+    ratings_template_path = output_root / "ratings_template.csv"
     packet_path.write_text(
         "\n".join(json.dumps(row, ensure_ascii=False, sort_keys=True) for row in packet_rows)
         + "\n",
@@ -261,11 +272,11 @@ def build_packet(
     )
 
     _write_csv(
-        output_root / "blinding_key.csv",
+        key_path,
         ["blind_id", "variant_id", "task_id", "run_id", "trace_path", "report_path"],
         key_rows,
     )
-    _write_csv(output_root / "ratings_template.csv", list(RATING_FIELDS), ratings_rows)
+    _write_csv(ratings_template_path, list(RATING_FIELDS), ratings_rows)
 
     manifest = {
         "schema_version": 1,
@@ -281,6 +292,11 @@ def build_packet(
         "n_reports": len(packet_rows),
         "n_tasks": len({row["task_id"] for row in packet_rows}),
         "variants": list(EXPECTED_VARIANTS),
+        "artifacts": {
+            "packet": _artifact_fingerprint(packet_path),
+            "ratings_template": _artifact_fingerprint(ratings_template_path),
+            "blinding_key": _artifact_fingerprint(key_path),
+        },
         "packet": "packet.jsonl",
         "ratings_template": "ratings_template.csv",
         "blinding_key": "blinding_key.csv",
