@@ -1,7 +1,6 @@
 """Core offline analysis for frozen human ratings."""
-import hashlib, json, statistics
+import hashlib, json, math, random, statistics
 from pathlib import Path
-from scripts import analyze_main_study as stats
 from scripts import build_human_eval_packet as packet
 from scripts import freeze_human_eval_ratings as freeze
 from scripts import verify_human_eval_freeze as blind_verify
@@ -13,6 +12,7 @@ PLAN=ROOT/"paper"/"HUMAN_EVAL_ANALYSIS_PLAN.md"; TASKS=packet.DEFAULT_TASK_MANIF
 DIMS=freeze.SCORE_FIELDS; VARIANTS=packet.EXPECTED_VARIANTS
 CONTRASTS=(("D3","D6","D6_minus_D3_retrieval_depth"),("D6","P6","P6_minus_D6_planning"),("P6","P6V","P6V_minus_P6_verification"))
 SEED=20260925
+BOOTSTRAP_DRAWS=20_000
 
 
 def fingerprint(path):
@@ -23,6 +23,49 @@ def fingerprint(path):
 
 def score(row,field):
     value=str(row.get(field) or "").strip(); return int(value) if value else None
+
+
+def _percentile(sorted_values, q):
+    if not sorted_values:
+        raise ValueError("percentile requires values")
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    pos=(len(sorted_values)-1)*q
+    lo=math.floor(pos); hi=math.ceil(pos)
+    if lo == hi:
+        return sorted_values[lo]
+    weight=pos-lo
+    return sorted_values[lo]*(1.0-weight)+sorted_values[hi]*weight
+
+
+def _bootstrap_mean_ci(diffs, *, seed):
+    rng=random.Random(seed); n=len(diffs)
+    draws=[
+        statistics.mean([diffs[rng.randrange(n)] for _ in range(n)])
+        for _ in range(BOOTSTRAP_DRAWS)
+    ]
+    draws.sort()
+    return [_percentile(draws,0.025),_percentile(draws,0.975)]
+
+
+def _paired_summary(left, right, *, seed):
+    if len(left) != len(right) or not left:
+        raise ValueError("paired vectors must be non-empty and equal length")
+    diffs=[b-a for a,b in zip(left,right)]
+    sd=statistics.stdev(diffs) if len(diffs)>1 else 0.0
+    return {
+        "n_pairs":len(diffs),
+        "left_mean":statistics.mean(left),
+        "right_mean":statistics.mean(right),
+        "mean_difference":statistics.mean(diffs),
+        "median_difference":statistics.median(diffs),
+        "bootstrap_95pct_ci_mean_difference":_bootstrap_mean_ci(diffs,seed=seed),
+        "paired_dz":(statistics.mean(diffs)/sd) if sd>0 else None,
+        "positive_tasks":sum(d>0 for d in diffs),
+        "negative_tasks":sum(d<0 for d in diffs),
+        "tied_tasks":sum(d==0 for d in diffs),
+        "task_differences":diffs,
+    }
 
 
 def report_scores(rows):
@@ -81,8 +124,8 @@ def analyze(rating_paths,*,freeze_root=FREEZE_ROOT,packet_root=PACKET_ROOT,packe
         for di,field in enumerate(DIMS):
             complete=[t for t in tasks if scores[(cells[(left,t)],field)] is not None and scores[(cells[(right,t)],field)] is not None]
             if complete:
-                result=stats._paired_summary([scores[(cells[(left,t)],field)] for t in complete],
-                    [scores[(cells[(right,t)],field)] for t in complete],seed=SEED+ci*100+di,exact_p=False)
+                result=_paired_summary([scores[(cells[(left,t)],field)] for t in complete],
+                    [scores[(cells[(right,t)],field)] for t in complete],seed=SEED+ci*100+di)
                 result["task_differences"]=dict(zip(complete,result["task_differences"]))
             else: result=_empty_pair()
             result["task_ids_included"]=complete; result["missing_pair_tasks"]=[t for t in tasks if t not in complete]; contrasts[name][field]=result
@@ -95,6 +138,6 @@ def analyze(rating_paths,*,freeze_root=FREEZE_ROOT,packet_root=PACKET_ROOT,packe
         "analysis_scope":"complementary_not_main_confirmatory","human_ratings_generated":False,"treatment_outputs_rerun":False,
         "n_tasks":len(tasks),"task_ids":tasks,"variants":list(VARIANTS),"dimensions":list(DIMS),
         "report_score_aggregation":"mean_observed_rater_scores_per_report_dimension","bootstrap_seed":SEED,
-        "bootstrap_draws":stats.BOOTSTRAP_DRAWS,"hypothesis_tests":"none_predeclared_for_human_validation",
+        "bootstrap_draws":BOOTSTRAP_DRAWS,"hypothesis_tests":"none_predeclared_for_human_validation",
         "verification":{"blinded_freeze":blinded,"packet_and_mapping":mapped},"provenance":prov,
         "pre_unblinding_agreement":agreement,"variant_summary":summaries,"paired_contrasts":contrasts}
