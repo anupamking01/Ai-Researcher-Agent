@@ -5,6 +5,7 @@ annotator CSVs against the blinded packet, enforces the frozen rubric contract,
 writes an immutable blinded snapshot, fingerprints the inputs/outputs/protocol,
 and reports pre-unblinding inter-annotator agreement.
 See docs/HUMAN_EVAL_INPUT_PROVENANCE.md for snapshot and retention limits.
+See docs/HUMAN_EVAL_OUTPUT_SAFETY.md for create-only destination rules.
 
 No ratings are generated, imputed, adjudicated, or joined to treatment labels.
 """
@@ -376,12 +377,12 @@ def freeze_ratings(
     if not assignment_plan_path.is_file():
         raise ValueError(f"frozen human-evaluation assignment plan is missing: {assignment_plan_path}")
 
-    existing = [output_root / name for name in OUTPUT_FILES if (output_root / name).exists()]
-    if existing:
-        raise ValueError(
-            "refusing to overwrite an existing frozen human-evaluation snapshot: "
-            + ", ".join(path.name for path in existing)
-        )
+    destination_error = (
+        "refusing to overwrite an existing human-evaluation output path: "
+        f"{output_root}; choose a new, nonexistent --output-root"
+    )
+    if output_root.exists() or output_root.is_symlink():
+        raise ValueError(destination_error)
 
     # Capture packet and protocol identity before processing any ratings.
     # These are per-file snapshots, not a lock on the caller's working files.
@@ -406,7 +407,13 @@ def freeze_ratings(
             "missing": len(rows) - rated,
         }
 
-    output_root.mkdir(parents=True, exist_ok=True)
+    # Reserve the destination only after validation, but before any output write.
+    # The earlier existence check is not a lock: another attempt may have won
+    # during validation. Never adopt its directory, even if it is still empty.
+    try:
+        output_root.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise ValueError(destination_error) from exc
     frozen_path = output_root / "frozen_ratings.csv"
     agreement_path = output_root / "agreement.json"
     manifest_path = output_root / "freeze_manifest.json"
