@@ -66,3 +66,33 @@ A valid distribution bundle also does not imply that ratings have been
 collected, that inter-annotator agreement is adequate, or that any
 human-validation conclusion exists. Real blinded annotations remain pending
 until they are actually collected and frozen under the existing protocol.
+
+
+## Coordinator source-bound verification
+
+The ordinary `--verify-only` mode checks that a distribution directory is
+internally well formed and that its local fingerprints match its current
+contents. That is useful for annotator-side transfer checks, but local
+consistency cannot by itself prove origin: someone could change
+`packet.jsonl` and recompute `annotator_manifest.json` to match.
+
+Before distribution, the coordinator should therefore also run:
+
+    python scripts/export_human_eval_annotator_bundle.py \
+      --packet-root outputs/human_eval \
+      --output-root outputs/human_eval/annotator-bundle-v1 \
+      --verify-against-source
+
+This stronger mode captures the coordinator packet and annotator bundle once,
+verifies the captured coordinator packet with the existing provenance gate,
+verifies the captured annotator bundle locally, and then requires byte-for-byte
+identity for `packet.jsonl` and `ratings_template.csv`. The returned
+coordinator-only receipt records that source binding and the SHA-256 of the
+verified coordinator manifest; those details are not added to the annotator
+bundle.
+
+Both sides are snapshotted before verification, so a later change to either
+live directory cannot change the bytes that were compared. This is a
+coordinator-side provenance check, not a claim that files cannot be replaced
+after the check; retain the verified bundle bytes or distribute them
+immediately through the controlled annotation workflow.

@@ -58,6 +58,15 @@ def _snapshot_coordinator_bundle(packet_root: Path, snapshot_root: Path) -> dict
     return captured
 
 
+def _snapshot_annotator_bundle(output_root: Path, snapshot_root: Path) -> dict[str, bytes]:
+    captured = {}
+    for name in ANNOTATOR_ARTIFACTS:
+        content = _regular_bytes(output_root / name, label=f"annotator {name}")
+        captured[name] = content
+        (snapshot_root / name).write_bytes(content)
+    return captured
+
+
 def _read_jsonl_packet(content: bytes) -> list[dict]:
     try:
         lines = content.decode("utf-8").splitlines()
@@ -195,6 +204,50 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
     }
 
 
+def verify_annotator_bundle_against_source(
+    *,
+    packet_root: Path = DEFAULT_PACKET_ROOT,
+    output_root: Path = DEFAULT_OUTPUT_ROOT,
+    task_manifest_path: Path = DEFAULT_TASK_MANIFEST,
+    repo_root: Path = REPO_ROOT,
+) -> dict:
+    """Verify a distribution bundle against one verified coordinator snapshot."""
+    packet_root = Path(packet_root)
+    output_root = Path(output_root)
+    task_manifest_path = Path(task_manifest_path)
+    repo_root = Path(repo_root)
+    if packet_root.is_symlink() or not packet_root.is_dir():
+        raise ValueError(f"coordinator packet root must be a regular directory: {packet_root}")
+    if output_root.is_symlink() or not output_root.is_dir():
+        raise ValueError(f"annotator bundle root must be a regular directory: {output_root}")
+    with tempfile.TemporaryDirectory(prefix="vera-annotator-source-verify-") as tmp_name:
+        tmp_root = Path(tmp_name)
+        coordinator_snapshot = tmp_root / "coordinator"
+        annotator_snapshot = tmp_root / "annotator"
+        coordinator_snapshot.mkdir()
+        annotator_snapshot.mkdir()
+        coordinator_bytes = _snapshot_coordinator_bundle(packet_root, coordinator_snapshot)
+        annotator_bytes = _snapshot_annotator_bundle(output_root, annotator_snapshot)
+        verify_packet(
+            output_root=coordinator_snapshot,
+            task_manifest_path=task_manifest_path,
+            repo_root=repo_root,
+        )
+        receipt = verify_annotator_bundle(annotator_snapshot)
+        for name in ("packet.jsonl", "ratings_template.csv"):
+            if annotator_bytes[name] != coordinator_bytes[name]:
+                raise ValueError(
+                    f"annotator {name} does not match the verified coordinator source"
+                )
+        return {
+            **receipt,
+            "source_bound_to_verified_coordinator": True,
+            "coordinator_manifest_sha256": _fingerprint(
+                coordinator_bytes["manifest.json"]
+            )["sha256"],
+        }
+
+
 def export_annotator_bundle(
     *,
     packet_root: Path = DEFAULT_PACKET_ROOT,
@@ -274,10 +327,19 @@ def main() -> int:
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--task-manifest", type=Path, default=DEFAULT_TASK_MANIFEST)
     parser.add_argument("--repo-root", type=Path, default=REPO_ROOT)
-    parser.add_argument("--verify-only", action="store_true")
+    verification = parser.add_mutually_exclusive_group()
+    verification.add_argument("--verify-only", action="store_true")
+    verification.add_argument("--verify-against-source", action="store_true")
     args = parser.parse_args()
     try:
-        if args.verify_only:
+        if args.verify_against_source:
+            receipt = verify_annotator_bundle_against_source(
+                packet_root=args.packet_root,
+                output_root=args.output_root,
+                task_manifest_path=args.task_manifest,
+                repo_root=args.repo_root,
+            )
+        elif args.verify_only:
             receipt = verify_annotator_bundle(args.output_root)
         else:
             receipt = export_annotator_bundle(

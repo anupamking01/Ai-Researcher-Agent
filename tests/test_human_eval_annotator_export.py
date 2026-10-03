@@ -191,3 +191,138 @@ def test_verify_only_cli_reports_no_coordinator_artifacts(packet_case):
     assert "HUMAN EVAL ANNOTATOR EXPORT: PASS" in result.stdout
     assert '"coordinator_artifacts_included": false' in result.stdout.lower()
     assert result.stderr == ""
+
+
+def test_source_bound_verifier_accepts_untampered_export(packet_case):
+    _export(packet_case)
+
+    receipt = exporter.verify_annotator_bundle_against_source(
+        packet_root=packet_case["packet_root"],
+        output_root=packet_case["export_root"],
+        task_manifest_path=packet_case["task_manifest"],
+        repo_root=packet_case["repo_root"],
+    )
+
+    assert receipt["status"] == "human_eval_annotator_distribution_verified"
+    assert receipt["source_bound_to_verified_coordinator"] is True
+    assert len(receipt["coordinator_manifest_sha256"]) == 64
+
+
+def test_source_bound_verifier_rejects_self_consistently_rehashed_tamper(packet_case):
+    _export(packet_case)
+    packet_path = packet_case["export_root"] / "packet.jsonl"
+    rows = [
+        json.loads(line)
+        for line in packet_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    rows[0]["report_markdown"] += "\n\nSynthetic post-export tamper."
+    packet_bytes = (
+        "\n".join(
+            json.dumps(row, ensure_ascii=False, sort_keys=True)
+            for row in rows
+        )
+        + "\n"
+    ).encode("utf-8")
+    packet_path.write_bytes(packet_bytes)
+
+    manifest_path = packet_case["export_root"] / "annotator_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"]["packet"] = {
+        "path": "packet.jsonl",
+        **exporter._fingerprint(packet_bytes),
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    # Local consistency alone is intentionally insufficient against a bundle
+    # whose content and local checksum were both changed together.
+    exporter.verify_annotator_bundle(packet_case["export_root"])
+
+    with pytest.raises(ValueError, match="does not match the verified coordinator source"):
+        exporter.verify_annotator_bundle_against_source(
+            packet_root=packet_case["packet_root"],
+            output_root=packet_case["export_root"],
+            task_manifest_path=packet_case["task_manifest"],
+            repo_root=packet_case["repo_root"],
+        )
+
+
+def test_source_bound_verifier_rejects_different_valid_coordinator_packet(packet_case):
+    _export(packet_case)
+    alternate_root = packet_case["repo_root"] / "outputs" / "human_eval_alternate"
+    build.build_packet(
+        packet_case["repo_root"] / "outputs" / "experiment_traces",
+        alternate_root,
+        seed=20260926,
+        task_manifest_path=packet_case["task_manifest"],
+    )
+
+    assert (
+        alternate_root / "packet.jsonl"
+    ).read_bytes() != (
+        packet_case["packet_root"] / "packet.jsonl"
+    ).read_bytes()
+
+    with pytest.raises(ValueError, match="does not match the verified coordinator source"):
+        exporter.verify_annotator_bundle_against_source(
+            packet_root=alternate_root,
+            output_root=packet_case["export_root"],
+            task_manifest_path=packet_case["task_manifest"],
+            repo_root=packet_case["repo_root"],
+        )
+
+
+def test_source_bound_verifier_uses_captured_coordinator_snapshot(packet_case, monkeypatch):
+    _export(packet_case)
+    live_packet = packet_case["packet_root"] / "packet.jsonl"
+    original = live_packet.read_bytes()
+    real_verify = exporter.verify_packet
+
+    def verify_snapshot(**kwargs):
+        receipt = real_verify(**kwargs)
+        live_packet.write_text("post-capture coordinator drift\n", encoding="utf-8")
+        return receipt
+
+    monkeypatch.setattr(exporter, "verify_packet", verify_snapshot)
+    receipt = exporter.verify_annotator_bundle_against_source(
+        packet_root=packet_case["packet_root"],
+        output_root=packet_case["export_root"],
+        task_manifest_path=packet_case["task_manifest"],
+        repo_root=packet_case["repo_root"],
+    )
+
+    assert receipt["source_bound_to_verified_coordinator"] is True
+    assert live_packet.read_bytes() != original
+
+
+def test_verify_against_source_cli(packet_case):
+    _export(packet_case)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.export_human_eval_annotator_bundle",
+            "--packet-root",
+            str(packet_case["packet_root"]),
+            "--output-root",
+            str(packet_case["export_root"]),
+            "--task-manifest",
+            str(packet_case["task_manifest"]),
+            "--repo-root",
+            str(packet_case["repo_root"]),
+            "--verify-against-source",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 0
+    assert "HUMAN EVAL ANNOTATOR EXPORT: PASS" in result.stdout
+    assert '"source_bound_to_verified_coordinator": true' in result.stdout.lower()
+    assert result.stderr == ""
