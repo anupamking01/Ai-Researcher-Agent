@@ -424,15 +424,6 @@ def freeze_ratings(
         output_root.mkdir(parents=True, exist_ok=False)
     except FileExistsError as exc:
         raise ValueError(destination_error) from exc
-    raw_root = output_root / "raw_rating_inputs"
-    raw_root.mkdir(exist_ok=False)
-    for index, (source, content) in enumerate(zip(sources, captured_inputs), start=1):
-        archive_name = f"{index:04d}.csv"
-        archive_path = raw_root / archive_name
-        with archive_path.open("xb") as handle:
-            handle.write(content)
-        source["archive_path"] = f"raw_rating_inputs/{archive_name}"
-
     frozen_path = output_root / "frozen_ratings.csv"
     agreement_path = output_root / "agreement.json"
     manifest_path = output_root / "freeze_manifest.json"
@@ -442,6 +433,15 @@ def freeze_ratings(
         json.dumps(agreement, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+    raw_root = output_root / "raw_rating_inputs"
+    raw_root.mkdir(exist_ok=False)
+    for index, (source, content) in enumerate(zip(sources, captured_inputs), start=1):
+        archive_name = f"{index:04d}.csv"
+        archive_path = raw_root / archive_name
+        with archive_path.open("xb") as handle:
+            handle.write(content)
+        source["archive_path"] = f"raw_rating_inputs/{archive_name}"
 
     manifest = {
         "schema_version": 1,
