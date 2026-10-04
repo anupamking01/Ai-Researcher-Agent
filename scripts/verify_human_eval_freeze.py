@@ -53,7 +53,7 @@ def _require_equal(actual, expected, *, label: str) -> None:
 
 
 def verify_frozen_snapshot(
-    rating_paths: list[Path],
+    rating_paths: list[Path] | None = None,
     *,
     freeze_root: Path = DEFAULT_FREEZE_ROOT,
     packet_path: Path = DEFAULT_PACKET,
@@ -65,12 +65,10 @@ def verify_frozen_snapshot(
     packet_path = Path(packet_path)
     protocol_path = Path(protocol_path)
     assignment_plan_path = Path(assignment_plan_path)
-    rating_paths = [Path(path) for path in rating_paths]
+    rating_paths = [Path(path) for path in (rating_paths or [])]
 
     if freeze_root.is_symlink() or not freeze_root.is_dir():
         raise ValueError(f"freeze root must be a regular directory: {freeze_root}")
-    if not rating_paths:
-        raise ValueError("archived raw rating CSVs are required for freeze verification")
 
     manifest_path = freeze_root / "freeze_manifest.json"
     manifest_content = _require_regular_file(manifest_path, label="freeze manifest")
@@ -132,11 +130,95 @@ def verify_frozen_snapshot(
         label="assignment-plan fingerprint",
     )
 
-    raw_rows, raw_sources = freeze._load_ratings(
-        rating_paths,
-        allowed_blind_ids=set(blind_ids),
-    )
-    _require_equal(manifest.get("rating_inputs"), raw_sources, label="raw rating inputs")
+    rating_entries = manifest.get("rating_inputs")
+    if (
+        not isinstance(rating_entries, list)
+        or not rating_entries
+        or any(not isinstance(entry, dict) for entry in rating_entries)
+    ):
+        raise ValueError("freeze manifest rating_inputs must be a non-empty list of objects")
+
+    archive_flags = ["archive_path" in entry for entry in rating_entries]
+    if any(archive_flags) and not all(archive_flags):
+        raise ValueError("freeze manifest raw rating archive paths are incomplete")
+
+    if all(archive_flags):
+        archive_root = freeze_root / "raw_rating_inputs"
+        if archive_root.is_symlink() or not archive_root.is_dir():
+            raise ValueError(f"raw rating archive must be a regular directory: {archive_root}")
+
+        archive_paths = []
+        expected_names = []
+        for index, entry in enumerate(rating_entries, start=1):
+            expected_name = f"{index:04d}.csv"
+            expected_rel = f"raw_rating_inputs/{expected_name}"
+            _require_equal(
+                entry.get("archive_path"),
+                expected_rel,
+                label=f"raw rating archive path {index}",
+            )
+            expected_names.append(expected_name)
+            archive_paths.append(freeze_root / expected_rel)
+
+        actual_names = []
+        for child in archive_root.iterdir():
+            if child.is_symlink() or not child.is_file():
+                raise ValueError(f"raw rating archive contains a non-regular file: {child}")
+            actual_names.append(child.name)
+        _require_equal(
+            sorted(actual_names),
+            sorted(expected_names),
+            label="raw rating archive contents",
+        )
+
+        raw_rows, archived_sources = freeze._load_ratings(
+            archive_paths,
+            allowed_blind_ids=set(blind_ids),
+        )
+        for index, (entry, source) in enumerate(
+            zip(rating_entries, archived_sources),
+            start=1,
+        ):
+            _require_equal(
+                {"bytes": source.get("bytes"), "sha256": source.get("sha256")},
+                {"bytes": entry.get("bytes"), "sha256": entry.get("sha256")},
+                label=f"archived raw rating input {index} fingerprint",
+            )
+
+        if rating_paths:
+            external_rows, external_sources = freeze._load_ratings(
+                rating_paths,
+                allowed_blind_ids=set(blind_ids),
+            )
+            expected_external = [
+                {
+                    "input_index": index,
+                    "name": entry.get("name"),
+                    "bytes": entry.get("bytes"),
+                    "sha256": entry.get("sha256"),
+                }
+                for index, entry in enumerate(rating_entries, start=1)
+            ]
+            _require_equal(
+                external_sources,
+                expected_external,
+                label="raw rating inputs",
+            )
+            _require_equal(
+                external_rows,
+                raw_rows,
+                label="external raw ratings versus in-bundle archive",
+            )
+    else:
+        if not rating_paths:
+            raise ValueError(
+                "archived raw rating CSVs are required for legacy freeze verification"
+            )
+        raw_rows, raw_sources = freeze._load_ratings(
+            rating_paths,
+            allowed_blind_ids=set(blind_ids),
+        )
+        _require_equal(rating_entries, raw_sources, label="raw rating inputs")
 
     frozen_entry = manifest.get("frozen_ratings")
     if not isinstance(frozen_entry, dict):
@@ -212,7 +294,7 @@ def verify_frozen_snapshot(
         "study_id": "budget-main-v1",
         "status": "blinded_human_ratings_verified",
         "blinding_key_used": False,
-        "n_raw_rating_inputs": len(rating_paths),
+        "n_raw_rating_inputs": len(rating_entries),
         "n_rows": len(frozen_rows),
         "n_annotators": len({row["annotator_id"] for row in frozen_rows}),
         "n_blind_ids": len(blind_ids),
@@ -226,9 +308,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "ratings",
-        nargs="+",
+        nargs="*",
         type=Path,
-        help="archived completed annotator CSV files used for the freeze, in original order",
+        help=(
+            "optional external copies of the completed annotator CSV files, in original "
+            "order; new freezes verify from their in-bundle raw archive"
+        ),
     )
     parser.add_argument("--freeze-root", type=Path, default=DEFAULT_FREEZE_ROOT)
     parser.add_argument("--packet", type=Path, default=DEFAULT_PACKET)

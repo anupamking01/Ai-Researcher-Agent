@@ -11,19 +11,19 @@ outputs, but a later accidental edit, file replacement, partial copy, or manual
 manifest change could otherwise go unnoticed before treatment identities are
 opened.
 
-Run the verifier while ratings are still blinded and while the exact archived
-annotator CSVs, packet, protocol, and assignment plan used for the freeze are
-still available:
+Run the verifier while ratings are still blinded. New freezes retain the exact
+raw annotator CSV bytes inside the freeze bundle, so the canonical check is
+self-contained:
 
 ```bash
 python scripts/verify_human_eval_freeze.py \
-  outputs/human_eval/annotator-a.csv \
-  outputs/human_eval/annotator-b.csv \
   --freeze-root outputs/human_eval/frozen-v1
 ```
 
-The raw rating files must be supplied in the same order used by the freeze
-because the manifest records an ordered input list.
+You may additionally pass the original annotator CSVs before the options. When
+provided, they are checked in the original freeze order against the in-bundle
+archive and manifest. Legacy freezes created before raw-input archival still
+require those external files.
 
 ## Checks performed
 
@@ -33,8 +33,10 @@ following agree:
 - freeze manifest schema, study ID, status, and `blinding_key_used=false`;
 - SHA-256 and byte counts for the blinded packet and frozen output files;
 - protocol and assignment-plan fingerprints;
-- ordered raw-rating input names, byte counts, and SHA-256 fingerprints;
-- frozen normalized ratings versus normalization of the archived raw inputs;
+- deterministic in-bundle raw-rating archive paths, byte counts, and SHA-256
+  fingerprints, with no undeclared archive files;
+- frozen normalized ratings versus normalization of the retained raw inputs;
+- optional external raw-rating copies versus the retained archive when supplied;
 - complete independent-rater coverage for every blinded packet item;
 - manifest row, annotator, blind-ID, and per-dimension counts;
 - stored agreement JSON versus agreement independently recomputed from the

@@ -111,12 +111,18 @@ def _parse_score(value: str, *, field: str, annotator_id: str, blind_id: str) ->
     return score
 
 
-def _load_ratings(rating_paths: list[Path], *, allowed_blind_ids: set[str]) -> tuple[list[dict], list[dict]]:
+def _load_ratings(
+    rating_paths: list[Path],
+    *,
+    allowed_blind_ids: set[str],
+    return_captured: bool = False,
+):
     if not rating_paths:
         raise ValueError("at least one completed annotator ratings CSV is required")
 
     rows: list[dict] = []
     sources: list[dict] = []
+    captured_inputs: list[bytes] = []
     seen: set[tuple[str, str]] = set()
 
     for source_index, path in enumerate(rating_paths, start=1):
@@ -125,6 +131,7 @@ def _load_ratings(rating_paths: list[Path], *, allowed_blind_ids: set[str]) -> t
         # Parse and fingerprint the same captured bytes. Reopening a live CSV
         # after hashing can bind one revision's digest to another's scores.
         content = path.read_bytes()
+        captured_inputs.append(content)
         sources.append(
             {
                 "input_index": source_index,
@@ -217,6 +224,8 @@ def _load_ratings(rating_paths: list[Path], *, allowed_blind_ids: set[str]) -> t
         raise ValueError("ratings files contain no annotation rows")
 
     rows.sort(key=lambda row: (row["annotator_id"], row["blind_id"]))
+    if return_captured:
+        return rows, sources, captured_inputs
     return rows, sources
 
 
@@ -392,9 +401,10 @@ def freeze_ratings(
     protocol_sha256 = sha256_file(protocol_path)
     assignment_plan_sha256 = sha256_file(assignment_plan_path)
     blind_ids = _packet_blind_ids(packet_path, content=packet_content)
-    rows, sources = _load_ratings(
+    rows, sources, captured_inputs = _load_ratings(
         [Path(path) for path in rating_paths],
         allowed_blind_ids=set(blind_ids),
+        return_captured=True,
     )
     assignment_coverage = _validate_assignment_coverage(rows, blind_ids)
     agreement = build_agreement(rows)
@@ -414,6 +424,15 @@ def freeze_ratings(
         output_root.mkdir(parents=True, exist_ok=False)
     except FileExistsError as exc:
         raise ValueError(destination_error) from exc
+    raw_root = output_root / "raw_rating_inputs"
+    raw_root.mkdir(exist_ok=False)
+    for index, (source, content) in enumerate(zip(sources, captured_inputs), start=1):
+        archive_name = f"{index:04d}.csv"
+        archive_path = raw_root / archive_name
+        with archive_path.open("xb") as handle:
+            handle.write(content)
+        source["archive_path"] = f"raw_rating_inputs/{archive_name}"
+
     frozen_path = output_root / "frozen_ratings.csv"
     agreement_path = output_root / "agreement.json"
     manifest_path = output_root / "freeze_manifest.json"
@@ -460,9 +479,10 @@ def freeze_ratings(
             "sha256": sha256_file(agreement_path),
         },
         "integrity_note": (
-            "This snapshot is blinded and pre-unblinding. It validates and freezes "
-            "human-entered ratings only; it does not generate, impute, adjudicate, "
-            "or join ratings to treatment identities."
+            "This snapshot is blinded and pre-unblinding. It retains the exact raw "
+            "rating bytes that were parsed, validates and freezes human-entered ratings "
+            "only, and does not generate, impute, adjudicate, or join ratings to "
+            "treatment identities."
         ),
     }
     manifest_path.write_text(

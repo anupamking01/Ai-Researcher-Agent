@@ -208,6 +208,16 @@ def analyze(
                 blind_freeze / filename,
                 label=f"blinded freeze {filename}",
             )
+        raw_archive = freeze_root / "raw_rating_inputs"
+        if raw_archive.exists() or raw_archive.is_symlink():
+            if raw_archive.is_symlink() or not raw_archive.is_dir():
+                raise ValueError(f"raw rating archive must be a regular directory: {raw_archive}")
+            for child in sorted(raw_archive.iterdir(), key=lambda path: path.name):
+                _snapshot_file(
+                    child,
+                    blind_freeze / "raw_rating_inputs" / child.name,
+                    label=f"blinded raw rating archive {child.name}",
+                )
         blind_rating_paths = _snapshot_raw_ratings(rating_paths, blind_root / "raw_ratings")
 
         blinded = blind_verify.verify_frozen_snapshot(

@@ -17,22 +17,27 @@ plan fingerprints are captured before processing ratings, not after agreement
 has been calculated. Output fingerprints still describe the generated files.
 
 Raw input hashes are not hashes of normalized CSV text: UTF-8 bytes and line
-endings are retained for fingerprinting. Existing CSV structure, score, note,
-and independent-rater coverage checks still apply. No treatment key is read.
+endings are retained for fingerprinting. The exact captured bytes that were
+parsed are also written create-only inside the freeze as
+`raw_rating_inputs/0001.csv`, `0002.csv`, and so on. The manifest binds each
+ordered input to its deterministic archive path, byte count, and SHA-256.
+Existing CSV structure, score, note, and independent-rater coverage checks still
+apply. No treatment key is read.
 
 ## Coordinator responsibilities and limits
 
-Archive the exact original packet, protocols, and submitted ratings as versioned
-files before freezing. Stop editing that archived set. Keep it with the resulting
-freeze manifest and outputs; hashes alone cannot restore an overwritten source.
+Keep the original submitted files under controlled, versioned storage when
+practical, but the freeze no longer depends on those external paths for later
+verification: it retains the exact rating bytes that were actually parsed.
 Use a fresh output directory for a later freeze rather than replacing a snapshot.
 
 These are **per-file snapshots**, not an atomic transaction across all inputs,
 a filesystem lock, or proof that a submitted score came from an independent
-human. The tool does not prevent another process from editing source files and
-does not archive raw input copies automatically. If source files are edited
-later, compare their hashes with the manifest to identify the revision used.
-The manifest attests to captured input bytes, not the latest contents of a path.
+human. The tool does not prevent another process from editing source files after
+capture. Later edits do not change the retained archive; supplying the external
+files to the verifier is an optional additional cross-check against that
+in-bundle source. The manifest attests to captured input bytes, not the latest
+contents of a path.
 
 ## Offline regression coverage
 

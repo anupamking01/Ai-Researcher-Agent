@@ -236,3 +236,104 @@ def test_cli_failure_has_no_success_receipt_or_traceback(frozen_case):
     assert "HUMAN EVAL VERIFY: FAIL" in result.stderr
     assert "Traceback" not in result.stderr
     assert "HUMAN EVAL VERIFY: PASS" not in result.stdout
+
+
+def test_freeze_retains_exact_raw_rating_bytes(frozen_case):
+    manifest = json.loads(
+        (frozen_case["freeze_root"] / "freeze_manifest.json").read_text(encoding="utf-8")
+    )
+    for index, source in enumerate(frozen_case["ratings"], start=1):
+        entry = manifest["rating_inputs"][index - 1]
+        assert entry["archive_path"] == f"raw_rating_inputs/{index:04d}.csv"
+        assert (
+            frozen_case["freeze_root"] / entry["archive_path"]
+        ).read_bytes() == source.read_bytes()
+
+
+def test_self_contained_freeze_verifies_after_external_ratings_are_removed(frozen_case):
+    for path in frozen_case["ratings"]:
+        path.unlink()
+
+    receipt = verify_frozen_snapshot(
+        [],
+        freeze_root=frozen_case["freeze_root"],
+        packet_path=frozen_case["packet_path"],
+        protocol_path=frozen_case["protocol_path"],
+        assignment_plan_path=frozen_case["assignment_plan_path"],
+    )
+
+    assert receipt["status"] == "blinded_human_ratings_verified"
+    assert receipt["n_raw_rating_inputs"] == 2
+
+
+def test_tampered_in_bundle_raw_rating_is_rejected(frozen_case):
+    archived = frozen_case["freeze_root"] / "raw_rating_inputs" / "0001.csv"
+    archived.write_bytes(archived.read_bytes() + b"\n")
+
+    with pytest.raises(ValueError, match="archived raw rating input 1 fingerprint"):
+        verify_frozen_snapshot(
+            [],
+            freeze_root=frozen_case["freeze_root"],
+            packet_path=frozen_case["packet_path"],
+            protocol_path=frozen_case["protocol_path"],
+            assignment_plan_path=frozen_case["assignment_plan_path"],
+        )
+
+
+def test_manifest_cannot_redirect_raw_archive_path(frozen_case):
+    _rewrite_manifest(
+        frozen_case,
+        lambda manifest: manifest["rating_inputs"][0].__setitem__(
+            "archive_path", "../annotator-a.csv"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="raw rating archive path 1 mismatch"):
+        verify_frozen_snapshot(
+            [],
+            freeze_root=frozen_case["freeze_root"],
+            packet_path=frozen_case["packet_path"],
+            protocol_path=frozen_case["protocol_path"],
+            assignment_plan_path=frozen_case["assignment_plan_path"],
+        )
+
+
+def test_raw_archive_rejects_undeclared_extra_file(frozen_case):
+    extra = frozen_case["freeze_root"] / "raw_rating_inputs" / "extra.csv"
+    extra.write_text("unexpected\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="raw rating archive contents mismatch"):
+        verify_frozen_snapshot(
+            [],
+            freeze_root=frozen_case["freeze_root"],
+            packet_path=frozen_case["packet_path"],
+            protocol_path=frozen_case["protocol_path"],
+            assignment_plan_path=frozen_case["assignment_plan_path"],
+        )
+
+
+def test_cli_can_verify_from_freeze_bundle_without_external_ratings(frozen_case):
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.verify_human_eval_freeze",
+            "--freeze-root",
+            str(frozen_case["freeze_root"]),
+            "--packet",
+            str(frozen_case["packet_path"]),
+            "--protocol",
+            str(frozen_case["protocol_path"]),
+            "--assignment-plan",
+            str(frozen_case["assignment_plan_path"]),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 0
+    assert "HUMAN EVAL VERIFY: PASS (ratings remain blinded)" in result.stdout
+    assert result.stderr == ""

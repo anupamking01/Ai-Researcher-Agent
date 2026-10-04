@@ -154,9 +154,10 @@ python scripts/freeze_human_eval_ratings.py \
 
 The utility deliberately never reads `blinding_key.csv`. Before writing a snapshot it fails closed on unknown blind IDs, duplicate annotator/item rows, treatment-identity columns, non-integer/out-of-range scores, missing reasons for unscored dimensions, or missing notes for endpoint scores (1 or 5). It then writes:
 
+- `raw_rating_inputs/0001.csv`, `0002.csv`, ... — exact captured bytes of the completed annotator files that were actually parsed, retained inside the create-only freeze;
 - `frozen_ratings.csv` — normalized human-entered ratings, still blinded;
 - `agreement.json` — pre-unblinding exact agreement, mean absolute difference, and quadratic-weighted Cohen's kappa for each annotator pair and rubric dimension;
-- `freeze_manifest.json` — SHA-256 fingerprints of the packet, protocol, input rating files, frozen ratings, and agreement output.
+- `freeze_manifest.json` — SHA-256 fingerprints of the packet, protocol, retained raw rating inputs, frozen ratings, and agreement output.
 
 An existing frozen snapshot is never overwritten; use a new versioned output directory for any later freeze. With exactly two annotators, the single pair provides the protocol's two-rater agreement statistics. If more than two annotators score the same items, the pairwise values are diagnostics only and a predeclared ordinal multi-rater reliability statistic is still required before treatment-level analysis.
 
