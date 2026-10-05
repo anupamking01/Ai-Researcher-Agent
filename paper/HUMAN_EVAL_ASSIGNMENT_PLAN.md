@@ -22,6 +22,14 @@ Eligibility must be decided **before an annotator sees any study report or ratin
 
 Prior familiarity with the project, repository, or research question is not by itself an exclusion if treatment identity remains concealed. Any material conflict or role that could reasonably reveal treatment identity must be recorded before assignment and resolved before ratings are accepted.
 
+## Submission provenance and correction rule
+
+Each annotator must submit ratings under a single stable `annotator_id`, and each submitted CSV must represent exactly one annotator. The coordinator must preserve every submitted file unchanged rather than combining rows from different annotators into a convenience file before the blinded freeze.
+
+If an annotator discovers a clerical mistake **before** seeing another annotator's ratings, treatment identity, or treatment-level human summaries, a corrected submission may replace that annotator's prior submission only if the superseded file is retained and the replacement is documented while still blinded. Do not cherry-pick favorable rows across versions: replacement is whole-submission, not row-by-row. Once an annotator has seen another annotator's ratings or any treatment identity, their prior scores must not be revised for the frozen human-validation analysis.
+
+This rule is about human-rating provenance, not statistical direction. It must be applied without inspecting whether a correction helps or hurts any treatment.
+
 ## Pre-unblinding exclusion rule
 
 Annotator or row exclusions are permitted only for **objective protocol-validity failures documented while treatment identity is still blinded**. Examples include confirmed treatment-identity exposure before scoring, non-independent/copied ratings, automated or non-human score generation, duplicate submissions, or ratings that fail the frozen input-validity rules.
