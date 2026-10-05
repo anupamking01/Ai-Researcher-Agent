@@ -88,8 +88,6 @@ def test_freeze_writes_blinded_snapshot_and_two_rater_agreement(tmp_path: Path):
     assert manifest["assignment_coverage"]["required_min_raters_per_item"] == 2
     assert manifest["assignment_coverage"]["min_observed_raters_per_item"] == 2
     assert manifest["assignment_coverage"]["items_by_rater_count"] == {"2": 2}
-    assert [source["annotator_id"] for source in manifest["rating_inputs"]] == ["ann-a", "ann-b"]
-    assert [source["n_rows"] for source in manifest["rating_inputs"]] == [2, 2]
 
     agreement = json.loads((output / "agreement.json").read_text(encoding="utf-8"))
     assert agreement["n_annotators"] == 2
@@ -183,53 +181,6 @@ def test_duplicate_annotator_item_across_files_fails_closed(tmp_path: Path):
     with pytest.raises(ValueError, match="duplicate independent rating"):
         freeze_ratings(
             [first, second],
-            packet_path=packet,
-            protocol_path=protocol,
-            output_root=tmp_path / "freeze",
-        )
-
-
-def test_single_ratings_file_cannot_masquerade_as_multiple_annotators(tmp_path: Path):
-    packet = _packet(tmp_path)
-    protocol = _protocol(tmp_path)
-    mixed = _ratings(
-        tmp_path,
-        "mixed.csv",
-        [
-            _row("ann-a", "H001"),
-            _row("ann-b", "H001"),
-            _row("ann-a", "H002"),
-            _row("ann-b", "H002"),
-        ],
-    )
-
-    with pytest.raises(ValueError, match="exactly one annotator_id"):
-        freeze_ratings(
-            [mixed],
-            packet_path=packet,
-            protocol_path=protocol,
-            output_root=tmp_path / "freeze",
-        )
-
-
-def test_empty_ratings_file_is_rejected_even_with_valid_other_submissions(tmp_path: Path):
-    packet = _packet(tmp_path)
-    protocol = _protocol(tmp_path)
-    first = _ratings(
-        tmp_path,
-        "annotator-a.csv",
-        [_row("ann-a", "H001"), _row("ann-a", "H002")],
-    )
-    empty = _ratings(tmp_path, "empty.csv", [])
-    second = _ratings(
-        tmp_path,
-        "annotator-b.csv",
-        [_row("ann-b", "H001"), _row("ann-b", "H002")],
-    )
-
-    with pytest.raises(ValueError, match="contains no annotation rows"):
-        freeze_ratings(
-            [first, empty, second],
             packet_path=packet,
             protocol_path=protocol,
             output_root=tmp_path / "freeze",

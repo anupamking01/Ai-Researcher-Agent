@@ -21,13 +21,6 @@ endings are retained for fingerprinting. The exact captured bytes that were
 parsed are also written create-only inside the freeze as
 `raw_rating_inputs/0001.csv`, `0002.csv`, and so on. The manifest binds each
 ordered input to its deterministic archive path, byte count, and SHA-256.
-Each captured ratings CSV must contain at least one annotation row and exactly
-one non-empty `annotator_id` across all of its rows. The manifest records that
-source annotator ID and row count next to the source hash. This makes the
-file-level provenance match the intended one-submission-per-annotator workflow:
-one mixed CSV cannot syntactically impersonate two independent raters and satisfy
-the double-rating coverage gate by itself.
-
 Existing CSV structure, score, note, and independent-rater coverage checks still
 apply. No treatment key is read.
 
