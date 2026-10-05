@@ -111,11 +111,11 @@ If an annotator cannot fairly score a dimension because a report is malformed or
 
 ## 5. Assignment and reliability
 
-At minimum, a predeclared subset must be scored independently by **two human annotators**. If practical, double-score the full packet because the study contains a small paired task set.
+The frozen assignment plan in `paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md` requires the **entire 40-report packet** to be scored independently by at least two distinct eligible human annotators before ratings are frozen or treatment identities are opened. A smaller convenience or agreement subset is not permitted for the planned human-validation analysis.
 
-Before unblinding, report agreement separately for each rubric dimension. For two annotators, use a weighted agreement statistic appropriate for ordered 1–5 ratings (for example, quadratic-weighted Cohen's kappa) together with raw absolute agreement. If more than two annotators score the same items, use an appropriate ordinal/multi-rater reliability statistic and document it before analysis.
+Before unblinding, report agreement separately for each rubric dimension. With exactly two annotators, use the frozen raw exact agreement, mean absolute difference, and quadratic-weighted Cohen's kappa. If more than two annotators contribute, pairwise values are diagnostic only: treatment-level analysis must stop until an ordinal multi-rater reliability statistic is predeclared while treatment identities remain unopened.
 
-Agreement must be computed on the original independent ratings, before adjudication.
+Agreement must be computed on the original independent ratings, before adjudication. Low agreement is a result to report, not a reason to remove inconvenient raters or selectively add/remove reports after inspecting scores.
 
 ## 6. Disagreements and adjudication
 
@@ -128,6 +128,8 @@ If adjudication is required:
 3. allow annotators to discuss the rubric and report text while still blinded;
 4. record any adjudicated value in a separate field/file rather than overwriting raw ratings;
 5. freeze adjudicated ratings before opening the blinding key.
+
+Adjudicated values are **not inputs to the frozen treatment-level human analysis**. The predeclared analysis in `paper/HUMAN_EVAL_ANALYSIS_PLAN.md` uses the original independent ratings and their report-level mean aggregation. Adjudication may be reported as a process diagnostic or analyzed separately as explicitly exploratory, but it must never replace original scores, alter pre-unblinding agreement, rescue a missing pair, or determine which annotator/report is retained.
 
 Rubric definitions must not be rewritten in response to which treatment appears to benefit.
 
