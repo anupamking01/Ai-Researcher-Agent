@@ -140,6 +140,8 @@ def _load_ratings(
                 "sha256": hashlib.sha256(content).hexdigest(),
             }
         )
+        source_annotator_ids: set[str] = set()
+        source_row_count = 0
 
         with io.StringIO(content.decode("utf-8"), newline="") as handle:
             reader = csv.DictReader(handle)
@@ -192,6 +194,8 @@ def _load_ratings(
                         f"{annotator_id}/{blind_id}"
                     )
                 seen.add(key)
+                source_annotator_ids.add(annotator_id)
+                source_row_count += 1
 
                 scores = {
                     field: _parse_score(
@@ -219,6 +223,16 @@ def _load_ratings(
                         "notes": notes,
                     }
                 )
+
+        if source_row_count == 0:
+            raise ValueError(f"{path.name}: ratings file contains no annotation rows")
+        if len(source_annotator_ids) != 1:
+            raise ValueError(
+                f"{path.name}: each ratings CSV must contain exactly one annotator_id; "
+                f"found {sorted(source_annotator_ids)}"
+            )
+        sources[-1]["annotator_id"] = next(iter(source_annotator_ids))
+        sources[-1]["n_rows"] = source_row_count
 
     if not rows:
         raise ValueError("ratings files contain no annotation rows")
