@@ -380,6 +380,7 @@ def freeze_ratings(
     protocol_path = Path(protocol_path)
     assignment_plan_path = Path(assignment_plan_path)
     output_root = Path(output_root)
+    producer_content = Path(__file__).resolve().read_bytes()
 
     if not protocol_path.is_file():
         raise ValueError(f"frozen human-evaluation protocol is missing: {protocol_path}")
@@ -443,6 +444,13 @@ def freeze_ratings(
             handle.write(content)
         source["archive_path"] = f"raw_rating_inputs/{archive_name}"
 
+    provenance_root = output_root / "provenance"
+    provenance_root.mkdir(exist_ok=False)
+    producer_rel = "provenance/freeze_human_eval_ratings.py"
+    producer_archive = output_root / producer_rel
+    with producer_archive.open("xb") as handle:
+        handle.write(producer_content)
+
     manifest = {
         "schema_version": 1,
         "study_id": "budget-main-v1",
@@ -463,6 +471,11 @@ def freeze_ratings(
             "sha256": assignment_plan_sha256,
         },
         "assignment_coverage": assignment_coverage,
+        "producer": {
+            "path": producer_rel,
+            "bytes": len(producer_content),
+            "sha256": hashlib.sha256(producer_content).hexdigest(),
+        },
         "rating_inputs": sources,
         "frozen_ratings": {
             "path": "frozen_ratings.csv",

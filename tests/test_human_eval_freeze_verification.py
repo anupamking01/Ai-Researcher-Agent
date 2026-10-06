@@ -250,6 +250,42 @@ def test_freeze_retains_exact_raw_rating_bytes(frozen_case):
         ).read_bytes() == source.read_bytes()
 
 
+def test_freeze_retains_exact_producer_source(frozen_case):
+    manifest = json.loads(
+        (frozen_case["freeze_root"] / "freeze_manifest.json").read_text(encoding="utf-8")
+    )
+    producer = manifest["producer"]
+    archived = frozen_case["freeze_root"] / producer["path"]
+    expected = Path(freeze.__file__).resolve().read_bytes()
+
+    assert producer["path"] == "provenance/freeze_human_eval_ratings.py"
+    assert archived.read_bytes() == expected
+    assert producer["bytes"] == len(expected)
+    assert producer["sha256"] == hashlib.sha256(expected).hexdigest()
+
+
+def test_tampered_archived_freeze_producer_is_rejected(frozen_case):
+    archived = (
+        frozen_case["freeze_root"]
+        / "provenance"
+        / "freeze_human_eval_ratings.py"
+    )
+    archived.write_bytes(archived.read_bytes() + b"\n# tampered\n")
+
+    with pytest.raises(ValueError, match="archived freeze producer fingerprint"):
+        _verify(frozen_case)
+
+
+def test_manifest_cannot_redirect_freeze_producer(frozen_case):
+    _rewrite_manifest(
+        frozen_case,
+        lambda manifest: manifest["producer"].__setitem__("path", "../freeze.py"),
+    )
+
+    with pytest.raises(ValueError, match="freeze producer manifest path mismatch"):
+        _verify(frozen_case)
+
+
 def test_self_contained_freeze_verifies_after_external_ratings_are_removed(frozen_case):
     for path in frozen_case["ratings"]:
         path.unlink()

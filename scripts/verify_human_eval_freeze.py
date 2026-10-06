@@ -130,6 +130,22 @@ def verify_frozen_snapshot(
         label="assignment-plan fingerprint",
     )
 
+    producer_entry = manifest.get("producer")
+    if not isinstance(producer_entry, dict):
+        raise ValueError("freeze manifest producer entry must be an object")
+    _require_equal(
+        producer_entry.get("path"),
+        "provenance/freeze_human_eval_ratings.py",
+        label="freeze producer manifest path",
+    )
+    producer_path = freeze_root / "provenance" / "freeze_human_eval_ratings.py"
+    producer_content = _require_regular_file(producer_path, label="archived freeze producer")
+    _require_equal(
+        {"bytes": producer_entry.get("bytes"), "sha256": producer_entry.get("sha256")},
+        _fingerprint(producer_content),
+        label="archived freeze producer fingerprint",
+    )
+
     rating_entries = manifest.get("rating_inputs")
     if (
         not isinstance(rating_entries, list)
