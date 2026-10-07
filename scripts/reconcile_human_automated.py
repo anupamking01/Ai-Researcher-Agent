@@ -265,32 +265,37 @@ def _write_exclusive(path: Path, content: bytes) -> None:
 def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict:
     """Publish and independently verify a create-only reconciliation bundle."""
     output_root = Path(output_root)
-    try:
-        output_root.mkdir(parents=True, exist_ok=False)
-    except FileExistsError as exc:
-        raise ValueError(
-            f"refusing to overwrite reconciliation output: {output_root}"
-        ) from exc
+    destination_error = f"refusing to overwrite reconciliation output: {output_root}"
+    if output_root.exists() or output_root.is_symlink():
+        raise ValueError(destination_error)
 
+    # Complete all deterministic validation and provenance capture before
+    # reserving the publication path. A bad payload or unavailable Git/source
+    # provenance must not leave a partial create-only bundle that blocks a
+    # corrected publication attempt at the same versioned destination.
     json_bytes = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
     markdown_bytes = render_markdown(payload).encode("utf-8")
-
-    json_path = output_root / RECONCILIATION_JSON
-    markdown_path = output_root / RECONCILIATION_MARKDOWN
-    manifest_path = output_root / RECONCILIATION_MANIFEST
-
-    _write_exclusive(json_path, json_bytes)
-    _write_exclusive(markdown_path, markdown_bytes)
 
     verified_inputs = payload.get("verified_input_fingerprints")
     if not isinstance(verified_inputs, dict) or not verified_inputs:
         raise ValueError("reconciliation payload lacks verified input fingerprints")
 
+    producer_git_commit = _producer_commit(Path(root))
+    implementation = {
+        "reconciler": _implementation_fingerprint(
+            Path(__file__),
+            logical_path="scripts/reconcile_human_automated.py",
+        ),
+        "readiness_gate": _implementation_fingerprint(
+            Path(readiness.__file__),
+            logical_path="scripts/verify_human_reconciliation_readiness.py",
+        ),
+    }
     manifest = {
         "schema_version": 1,
         "study_id": payload.get("study_id"),
         "status": "automated_human_reconciliation_bundle",
-        "producer_git_commit": _producer_commit(Path(root)),
+        "producer_git_commit": producer_git_commit,
         "verified_input_fingerprints": verified_inputs,
         "artifacts": {
             "canonical_reconciliation": {
@@ -302,16 +307,7 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
                 **_fingerprint_bytes(markdown_bytes),
             },
         },
-        "implementation": {
-            "reconciler": _implementation_fingerprint(
-                Path(__file__),
-                logical_path="scripts/reconcile_human_automated.py",
-            ),
-            "readiness_gate": _implementation_fingerprint(
-                Path(readiness.__file__),
-                logical_path="scripts/verify_human_reconciliation_readiness.py",
-            ),
-        },
+        "implementation": implementation,
         "integrity_note": (
             "Canonical JSON is the source of truth. The deterministic Markdown, "
             "upstream verified-input fingerprints, producing Git commit, and exact "
@@ -320,6 +316,19 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
         ),
     }
     manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+    # The existence check above is not a lock. Reserve only after preflight and
+    # still use exclusive creation so a concurrent publisher cannot be adopted.
+    try:
+        output_root.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise ValueError(destination_error) from exc
+
+    json_path = output_root / RECONCILIATION_JSON
+    markdown_path = output_root / RECONCILIATION_MARKDOWN
+    manifest_path = output_root / RECONCILIATION_MANIFEST
+    _write_exclusive(json_path, json_bytes)
+    _write_exclusive(markdown_path, markdown_bytes)
     _write_exclusive(manifest_path, manifest_bytes)
 
     from scripts.verify_human_reconciliation_outputs import verify_bundle

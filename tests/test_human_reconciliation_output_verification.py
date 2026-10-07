@@ -112,6 +112,33 @@ def test_write_bundle_is_create_only_and_independently_verified(tmp_path, monkey
         reconcile.write_bundle(payload, output, root=tmp_path)
 
 
+def test_invalid_payload_does_not_reserve_publication_path(tmp_path):
+    payload = _payload()
+    payload.pop("verified_input_fingerprints")
+    output = tmp_path / "reconciliation"
+
+    with pytest.raises(ValueError, match="lacks verified input fingerprints"):
+        reconcile.write_bundle(payload, output, root=tmp_path)
+
+    assert not output.exists()
+
+
+def test_provenance_preflight_failure_does_not_reserve_publication_path(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    output = tmp_path / "reconciliation"
+
+    def fail_git_provenance(root):
+        raise ValueError("synthetic git provenance failure")
+
+    monkeypatch.setattr(reconcile, "_producer_commit", fail_git_provenance)
+    with pytest.raises(ValueError, match="synthetic git provenance failure"):
+        reconcile.write_bundle(payload, output, root=tmp_path)
+
+    assert not output.exists()
+
+
 def test_rejects_hand_edited_markdown(tmp_path, monkeypatch):
     payload = _payload()
     _patch_recomputation(monkeypatch, payload)
