@@ -218,6 +218,22 @@ def analyze(
                     blind_freeze / "raw_rating_inputs" / child.name,
                     label=f"blinded raw rating archive {child.name}",
                 )
+        # Preserve the exact archived freeze implementation inside the same
+        # blinded snapshot. The independent verifier requires these bytes,
+        # not the current producer implementation or a later source revision.
+        producer_dir = freeze_root / "provenance"
+        if producer_dir.exists() or producer_dir.is_symlink():
+            if producer_dir.is_symlink() or not producer_dir.is_dir():
+                raise ValueError(
+                    f"blinded freeze provenance must be a regular directory: {producer_dir}"
+                )
+            _snapshot_file(
+                producer_dir / "freeze_human_eval_ratings.py",
+                blind_freeze / "provenance" / "freeze_human_eval_ratings.py",
+                label="blinded freeze producer",
+            )
+        # Legacy/malformed freezes without a producer are rejected by the
+        # independent verifier, not backfilled with today's source code.
         blind_rating_paths = _snapshot_raw_ratings(rating_paths, blind_root / "raw_ratings")
 
         blinded = blind_verify.verify_frozen_snapshot(
