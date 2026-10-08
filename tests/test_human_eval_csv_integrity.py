@@ -49,6 +49,15 @@ def _write(path, header, rows, *, lineterminator="\r\n"):
     return path
 
 
+def _write_submissions(path, header, rows, *, lineterminator="\r\n"):
+    """Keep each synthetic annotator in its own raw CSV, including reordered headers."""
+    return [
+        _write(path.with_name(f"{path.stem}-{index}{path.suffix}"), header, [row],
+               lineterminator=lineterminator)
+        for index, row in enumerate(rows, start=1)
+    ]
+
+
 def _rejects_without_writes(ratings, inputs, match):
     before = ratings.read_bytes()
     with pytest.raises(ValueError, match=match):
@@ -109,11 +118,15 @@ def test_accepts_valid_quoted_multiline_unicode_notes(tmp_path, inputs, lineterm
     header = list(reversed(RATING_FIELDS)) if reordered else list(RATING_FIELDS)
     records = [dict(zip(RATING_FIELDS, row)) for row in _rows(notes)]
     rows = [[record[field] for field in header] for record in records]
-    ratings = _write(tmp_path / "valid.csv", header, rows, lineterminator=lineterminator)
-    original = ratings.read_bytes()
-    manifest = freeze_ratings([ratings], **inputs)
-    assert ratings.read_bytes() == original
-    assert manifest["rating_inputs"][0]["sha256"] == hashlib.sha256(original).hexdigest()
+    ratings = _write_submissions(tmp_path / "valid.csv", header, rows,
+                                 lineterminator=lineterminator)
+    originals = [path.read_bytes() for path in ratings]
+    manifest = freeze_ratings(ratings, **inputs)
+    assert [path.read_bytes() for path in ratings] == originals
+    assert len(manifest["rating_inputs"]) == len(originals)
+    for source, original in zip(manifest["rating_inputs"], originals):
+        assert source["sha256"] == hashlib.sha256(original).hexdigest()
+        assert source["bytes"] == len(original)
     assert manifest["frozen_ratings"]["n_rows"] == 2
     with (inputs["output_root"] / "frozen_ratings.csv").open(encoding="utf-8", newline="") as handle:
         frozen = list(csv.DictReader(handle))
@@ -125,14 +138,14 @@ def test_accepts_explicit_blank_score_with_documented_reason(tmp_path, inputs):
     rows = _rows("Clarity cannot be assessed for this synthetic fixture.")
     for row in rows:
         row[RATING_FIELDS.index("clarity_1_5")] = ""
-    ratings = _write(tmp_path / "blank_score.csv", RATING_FIELDS, rows)
-    manifest = freeze_ratings([ratings], **inputs)
+    ratings = _write_submissions(tmp_path / "blank_score.csv", RATING_FIELDS, rows)
+    manifest = freeze_ratings(ratings, **inputs)
     assert manifest["frozen_ratings"]["dimension_counts"]["clarity_1_5"] == {"rated": 0, "missing": 2}
 
 
 def test_accepts_explicit_empty_notes_cell(tmp_path, inputs):
-    ratings = _write(tmp_path / "empty_notes.csv", RATING_FIELDS, _rows())
-    manifest = freeze_ratings([ratings], **inputs)
+    ratings = _write_submissions(tmp_path / "empty_notes.csv", RATING_FIELDS, _rows())
+    manifest = freeze_ratings(ratings, **inputs)
     assert manifest["frozen_ratings"]["n_rows"] == 2
 
 
