@@ -43,6 +43,12 @@ missingness rules, agreement calculation, and full-packet coverage rule are
 unchanged. Historical nonconforming bundles fail this current gate; retain their
 original bytes and document the protocol deviation rather than rewriting them.
 
+The importer and verifier also reject non-overlapping fragments of one
+annotator's ratings spread across multiple raw CSVs, including IDs that differ
+only in surrounding whitespace. This enforces the frozen whole-submission
+correction rule; it does not bar the one intentionally combined normalized
+`frozen_ratings.csv`.
+
 This is a file-level provenance check, not proof of distinct eligible humans.
 Coordinator eligibility, independence, and correction responsibilities remain
 those in `paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md`.

@@ -126,6 +126,7 @@ def _load_ratings(
     sources: list[dict] = []
     captured_inputs: list[bytes] = []
     seen: set[tuple[str, str]] = set()
+    annotator_source_indices: dict[str, int] = {}
 
     for source_index, path in enumerate(rating_paths, start=1):
         source_annotators: set[str] = set()
@@ -231,6 +232,16 @@ def _load_ratings(
 
         if not source_annotators:
             raise ValueError(f"{path.name}: ratings CSV contains no annotation rows")
+        if require_single_annotator:
+            annotator_id = next(iter(source_annotators))
+            previous_source = annotator_source_indices.get(annotator_id)
+            if previous_source is not None:
+                raise ValueError(
+                    f"annotator_id {annotator_id!r} appears in multiple submitted ratings CSV "
+                    f"files (inputs {previous_source} and {source_index}); "
+                    "one complete submission per annotator is required"
+                )
+            annotator_source_indices[annotator_id] = source_index
 
     if not rows:
         raise ValueError("ratings files contain no annotation rows")

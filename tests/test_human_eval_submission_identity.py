@@ -149,3 +149,56 @@ def test_verifier_applies_identity_gate_to_optional_external_copy(submission_inp
     paths[0].write_bytes(_csv_bytes(["synthetic-a", "synthetic-b"]))
     with pytest.raises(ValueError, match="exactly one annotator_id"):
         verify.verify_frozen_snapshot([paths[0]], **_verify_options(options))
+
+
+def _csv_for_cells(annotator, blind_ids):
+    stream = io.StringIO(newline="")
+    writer = csv.writer(stream)
+    writer.writerow(freeze.RATING_FIELDS)
+    for blind_id in blind_ids:
+        writer.writerow([annotator, blind_id, "2", "3", "4", "3", "2", ""])
+    return stream.getvalue().encode("utf-8")
+
+
+@pytest.mark.parametrize("spelling", ["synthetic-a", " synthetic-a "])
+def test_split_raw_submissions_from_same_annotator_are_rejected_before_freeze(
+    submission_inputs, spelling
+):
+    paths, options = submission_inputs
+    first = paths[0].parent / "a-part-1.csv"
+    second = paths[0].parent / "a-part-2.csv"
+    first.write_bytes(_csv_for_cells("synthetic-a", ["H001"]))
+    second.write_bytes(_csv_for_cells(spelling, ["H002"]))
+    originals = [source.read_bytes() for source in (first, second, paths[1])]
+    with pytest.raises(ValueError, match="multiple submitted ratings CSV"):
+        freeze.freeze_ratings([first, second, paths[1]], **options)
+    assert not options["output_root"].exists()
+    assert originals == [source.read_bytes() for source in (first, second, paths[1])]
+
+
+def test_verifier_rejects_rehashed_split_of_one_raw_annotator(submission_inputs):
+    paths, options = submission_inputs
+    manifest = freeze.freeze_ratings(paths, **options)
+    root = options["output_root"]
+    first, second = manifest["rating_inputs"]
+    a_first = _csv_for_cells("synthetic-a", ["H001"])
+    a_second = _csv_for_cells("synthetic-a", ["H002"])
+    b_original = (root / second["archive_path"]).read_bytes()
+    (root / "raw_rating_inputs" / "0001.csv").write_bytes(a_first)
+    (root / "raw_rating_inputs" / "0002.csv").write_bytes(a_second)
+    (root / "raw_rating_inputs" / "0003.csv").write_bytes(b_original)
+    first.update(bytes=len(a_first), sha256=hashlib.sha256(a_first).hexdigest())
+    manifest["rating_inputs"] = [
+        first,
+        {
+            "input_index": 2,
+            "name": "a-part-2.csv",
+            "bytes": len(a_second),
+            "sha256": hashlib.sha256(a_second).hexdigest(),
+            "archive_path": "raw_rating_inputs/0002.csv",
+        },
+        {**second, "input_index": 3, "archive_path": "raw_rating_inputs/0003.csv"},
+    ]
+    (root / "freeze_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="multiple submitted ratings CSV"):
+        verify.verify_frozen_snapshot(**_verify_options(options))
