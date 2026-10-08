@@ -24,6 +24,29 @@ ordered input to its deterministic archive path, byte count, and SHA-256.
 Existing CSV structure, score, note, and independent-rater coverage checks still
 apply. No treatment key is read.
 
+## Raw submission identity gate
+
+The importer enforces the already-frozen assignment rule: every raw submitted
+CSV must contain annotation rows for exactly one non-empty, stable
+`annotator_id` (using the existing whitespace normalization). A file that mixes
+annotators, or a header-only file alongside otherwise complete submissions, is
+rejected before any output directory is reserved. Keep separate original
+submissions; do not split a combined file after the fact and claim that doing so
+establishes independent human provenance.
+
+`verify_human_eval_freeze.py` applies the same checks to archived raw inputs and
+optional external copies. Only its explicit read of the normalized
+`frozen_ratings.csv` permits multiple annotators, and those rows must still match
+the validated raw submissions exactly. Naming a raw input `frozen_ratings.csv`
+does not bypass the guard. The manifest schema, retained raw bytes, scores,
+missingness rules, agreement calculation, and full-packet coverage rule are
+unchanged. Historical nonconforming bundles fail this current gate; retain their
+original bytes and document the protocol deviation rather than rewriting them.
+
+This is a file-level provenance check, not proof of distinct eligible humans.
+Coordinator eligibility, independence, and correction responsibilities remain
+those in `paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md`.
+
 ## Coordinator responsibilities and limits
 
 Keep the original submitted files under controlled, versioned storage when
@@ -47,3 +70,9 @@ and hashes stay consistent, including after packet replacement or deletion.
 Compatibility cases cover LF/CRLF, quoted multiline Unicode notes, and rejection
 of invalid UTF-8 before outputs are written. All ratings in these tests are
 synthetic fixtures, not collected human annotations or research results.
+
+`tests/test_human_eval_submission_identity.py` covers combined raw submissions,
+header-only inputs, an output-like raw filename, a rehashed combined archive,
+valid multi-annotator normalized output, optional external verification, and
+CLI rejection before publication. The snapshot fixtures keep each synthetic
+annotator in a separate raw file without weakening their byte-capture checks.

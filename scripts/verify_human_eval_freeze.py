@@ -190,6 +190,7 @@ def verify_frozen_snapshot(
         raw_rows, archived_sources = freeze._load_ratings(
             archive_paths,
             allowed_blind_ids=set(blind_ids),
+            require_single_annotator=True,
         )
         for index, (entry, source) in enumerate(
             zip(rating_entries, archived_sources),
@@ -205,6 +206,7 @@ def verify_frozen_snapshot(
             external_rows, external_sources = freeze._load_ratings(
                 rating_paths,
                 allowed_blind_ids=set(blind_ids),
+                require_single_annotator=True,
             )
             expected_external = [
                 {
@@ -233,6 +235,7 @@ def verify_frozen_snapshot(
         raw_rows, raw_sources = freeze._load_ratings(
             rating_paths,
             allowed_blind_ids=set(blind_ids),
+            require_single_annotator=True,
         )
         _require_equal(rating_entries, raw_sources, label="raw rating inputs")
 
@@ -252,9 +255,12 @@ def verify_frozen_snapshot(
         label="frozen-ratings fingerprint",
     )
 
+    # Only this normalized artifact combines raters. Raw archived/external
+    # submissions above still enforce one annotator per file, regardless of name.
     frozen_rows, _ = freeze._load_ratings(
         [frozen_path],
         allowed_blind_ids=set(blind_ids),
+        require_single_annotator=False,
     )
     _require_equal(frozen_rows, raw_rows, label="frozen ratings versus normalized raw inputs")
 

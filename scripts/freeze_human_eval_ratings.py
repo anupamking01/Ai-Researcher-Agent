@@ -116,7 +116,9 @@ def _load_ratings(
     *,
     allowed_blind_ids: set[str],
     return_captured: bool = False,
+    require_single_annotator: bool = False,
 ):
+    """Parse ratings; raw ingestion enables the per-file annotator identity gate."""
     if not rating_paths:
         raise ValueError("at least one completed annotator ratings CSV is required")
 
@@ -126,6 +128,7 @@ def _load_ratings(
     seen: set[tuple[str, str]] = set()
 
     for source_index, path in enumerate(rating_paths, start=1):
+        source_annotators: set[str] = set()
         if not path.is_file():
             raise ValueError(f"ratings file is missing: {path}")
         # Parse and fingerprint the same captured bytes. Reopening a live CSV
@@ -180,6 +183,12 @@ def _load_ratings(
 
                 if not annotator_id:
                     raise ValueError(f"{path.name}:{line_number} is missing annotator_id")
+                source_annotators.add(annotator_id)
+                if require_single_annotator and len(source_annotators) > 1:
+                    raise ValueError(
+                        f"{path.name}:{line_number}: each submitted ratings CSV must "
+                        "contain exactly one annotator_id"
+                    )
                 if blind_id not in allowed_blind_ids:
                     raise ValueError(
                         f"{path.name}:{line_number} references unknown blind_id {blind_id!r}"
@@ -219,6 +228,9 @@ def _load_ratings(
                         "notes": notes,
                     }
                 )
+
+        if not source_annotators:
+            raise ValueError(f"{path.name}: ratings CSV contains no annotation rows")
 
     if not rows:
         raise ValueError("ratings files contain no annotation rows")
@@ -406,6 +418,7 @@ def freeze_ratings(
         [Path(path) for path in rating_paths],
         allowed_blind_ids=set(blind_ids),
         return_captured=True,
+        require_single_annotator=True,
     )
     assignment_coverage = _validate_assignment_coverage(rows, blind_ids)
     agreement = build_agreement(rows)

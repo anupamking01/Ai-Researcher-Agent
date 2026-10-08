@@ -15,12 +15,11 @@ import pytest
 from scripts import freeze_human_eval_ratings as freeze
 
 
-def _csv_bytes(*, score="2", notes="", newline="\r\n"):
+def _csv_bytes(*, annotator="synthetic-a", score="2", notes="", newline="\r\n"):
     with io.StringIO(newline="") as stream:
         writer = csv.writer(stream, lineterminator=newline)
         writer.writerow(freeze.RATING_FIELDS)
-        for annotator in ("synthetic-a", "synthetic-b"):
-            writer.writerow([annotator, "H001", score, "3", "4", "4", "3", notes])
+        writer.writerow([annotator, "H001", score, "3", "4", "4", "3", notes])
         return stream.getvalue().encode("utf-8")
 
 
@@ -35,9 +34,10 @@ def inputs(tmp_path):
     protocol.write_bytes(b"# Synthetic protocol fixture\n")
     assignment = tmp_path / "assignment.md"
     assignment.write_bytes(b"# Synthetic assignment fixture\n")
-    ratings = tmp_path / "ratings.csv"
-    ratings.write_bytes(_csv_bytes())
-    return ratings, {
+    rating_paths = [tmp_path / "ratings-a.csv", tmp_path / "ratings-b.csv"]
+    for path, annotator in zip(rating_paths, ("synthetic-a", "synthetic-b")):
+        path.write_bytes(_csv_bytes(annotator=annotator))
+    return rating_paths, {
         "packet_path": packet,
         "protocol_path": protocol,
         "assignment_plan_path": assignment,
@@ -52,7 +52,8 @@ def _frozen_rows(options):
 
 @pytest.mark.parametrize("replacement_notes", ["", "An editor saved a longer version."])
 def test_rating_digest_and_scores_use_the_same_snapshot(inputs, monkeypatch, replacement_notes):
-    ratings, options = inputs
+    rating_paths, options = inputs
+    ratings = rating_paths[0]
     original = ratings.read_bytes()
     replacement = _csv_bytes(score="4", notes=replacement_notes)
     reader = csv.DictReader
@@ -68,7 +69,7 @@ def test_rating_digest_and_scores_use_the_same_snapshot(inputs, monkeypatch, rep
 
     with monkeypatch.context() as context:
         context.setattr(freeze.csv, "DictReader", save_before_parsing)
-        manifest = freeze.freeze_ratings([ratings], **options)
+        manifest = freeze.freeze_ratings(rating_paths, **options)
 
     assert saves == [True]
     assert ratings.read_bytes() == replacement
@@ -80,7 +81,8 @@ def test_rating_digest_and_scores_use_the_same_snapshot(inputs, monkeypatch, rep
 
 @pytest.mark.parametrize("remove_after_validation", [False, True])
 def test_packet_manifest_uses_validated_bytes_not_a_later_version(inputs, monkeypatch, remove_after_validation):
-    ratings, options = inputs
+    rating_paths, options = inputs
+    ratings = rating_paths[0]
     packet = options["packet_path"]
     original = packet.read_bytes()
     agreement = freeze.build_agreement
@@ -93,7 +95,7 @@ def test_packet_manifest_uses_validated_bytes_not_a_later_version(inputs, monkey
         return agreement(rows)
 
     monkeypatch.setattr(freeze, "build_agreement", edit_after_validation)
-    manifest = freeze.freeze_ratings([ratings], **options)
+    manifest = freeze.freeze_ratings(rating_paths, **options)
     assert manifest["packet"]["sha256"] == hashlib.sha256(original).hexdigest()
     assert manifest["packet"]["bytes"] == len(original)
     assert manifest["packet"]["n_blind_ids"] == 1
@@ -105,7 +107,8 @@ def test_packet_manifest_uses_validated_bytes_not_a_later_version(inputs, monkey
     ("assignment_plan_path", "assignment_plan"),
 ])
 def test_plan_provenance_is_captured_before_processing_ratings(inputs, monkeypatch, option, entry):
-    ratings, options = inputs
+    rating_paths, options = inputs
+    ratings = rating_paths[0]
     path = options[option]
     original = path.read_bytes()
     agreement = freeze.build_agreement
@@ -115,14 +118,15 @@ def test_plan_provenance_is_captured_before_processing_ratings(inputs, monkeypat
         return agreement(rows)
 
     monkeypatch.setattr(freeze, "build_agreement", edit_after_validation)
-    manifest = freeze.freeze_ratings([ratings], **options)
+    manifest = freeze.freeze_ratings(rating_paths, **options)
     assert manifest[entry]["sha256"] == hashlib.sha256(original).hexdigest()
     assert path.read_bytes() != original
 
 
 @pytest.mark.parametrize("option", ["ratings", "packet_path"])
 def test_data_input_is_opened_for_reading_once(inputs, monkeypatch, option):
-    ratings, options = inputs
+    rating_paths, options = inputs
+    ratings = rating_paths[0]
     watched = ratings if option == "ratings" else options[option]
     opened = []
     path_open = Path.open
@@ -133,18 +137,20 @@ def test_data_input_is_opened_for_reading_once(inputs, monkeypatch, option):
         return path_open(self, mode, *args, **kwargs)
 
     monkeypatch.setattr(Path, "open", count_reads)
-    freeze.freeze_ratings([ratings], **options)
+    freeze.freeze_ratings(rating_paths, **options)
     assert len(opened) == 1, opened
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])
 @pytest.mark.parametrize("notes", ["", 'Synthetic note, with "quotes"\r\nSecond line: caf\u00e9 / \u03bb.'])
 def test_snapshot_preserves_raw_fingerprints_and_valid_csv_content(inputs, newline, notes):
-    ratings, options = inputs
+    rating_paths, options = inputs
+    ratings = rating_paths[0]
     original = _csv_bytes(notes=notes, newline=newline)
     ratings.write_bytes(original)
+    rating_paths[1].write_bytes(_csv_bytes(annotator="synthetic-b", notes=notes, newline=newline))
     packet = options["packet_path"].read_bytes()
-    manifest = freeze.freeze_ratings([ratings], **options)
+    manifest = freeze.freeze_ratings(rating_paths, **options)
     assert ratings.read_bytes() == original
     assert manifest["rating_inputs"][0]["bytes"] == len(original)
     assert manifest["rating_inputs"][0]["sha256"] == hashlib.sha256(original).hexdigest()
@@ -155,9 +161,10 @@ def test_snapshot_preserves_raw_fingerprints_and_valid_csv_content(inputs, newli
 
 @pytest.mark.parametrize("option", ["ratings", "packet_path"])
 def test_invalid_utf8_snapshot_cannot_publish_results(inputs, option):
-    ratings, options = inputs
+    rating_paths, options = inputs
+    ratings = rating_paths[0]
     path = ratings if option == "ratings" else options[option]
     path.write_bytes(b"\xff\xfeinvalid UTF-8")
     with pytest.raises(UnicodeDecodeError):
-        freeze.freeze_ratings([ratings], **options)
+        freeze.freeze_ratings(rating_paths, **options)
     assert not options["output_root"].exists()
