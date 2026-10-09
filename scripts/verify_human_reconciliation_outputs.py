@@ -31,6 +31,12 @@ def _load_json(content: bytes, *, label: str) -> dict:
         raise ValueError(f"{label} is not valid UTF-8 JSON") from exc
     if not isinstance(payload, dict):
         raise ValueError(f"{label} must contain a JSON object")
+    # Re-encoding in strict mode also catches exponent-overflow JSON numbers
+    # (e.g. 1e400), which permissive json.loads converts to infinity.
+    try:
+        json.dumps(payload, allow_nan=False)
+    except ValueError as exc:
+        raise ValueError(f"{label} contains non-finite JSON numbers") from exc
     return payload
 
 

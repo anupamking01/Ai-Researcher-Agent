@@ -216,3 +216,67 @@ def test_rejects_reconciler_implementation_drift(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="reconciler implementation fingerprint"):
         verify.verify_bundle(output, root=tmp_path)
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
+def test_rejects_nonfinite_reconciliation_before_publication(tmp_path, invalid):
+    payload = _payload()
+    payload["results"][readiness.CONTRASTS[0]][readiness.DIMS[0]]["taskwise"][0][
+        "human_difference"
+    ] = invalid
+    output = tmp_path / "reconciliation"
+
+    with pytest.raises(ValueError, match="non-finite reconciliation"):
+        reconcile.write_bundle(payload, output, root=tmp_path)
+
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b'{"nested": {"value": NaN}}',
+        b'{"nested": [Infinity]}',
+        b'{"nested": [-Infinity]}',
+        b'{"nested": {"value": 1e400}}',
+    ],
+)
+def test_verifier_rejects_nonfinite_json_values_including_overflow(raw):
+    with pytest.raises(ValueError, match="non-finite JSON numbers"):
+        verify._load_json(raw, label="synthetic reconciliation artifact")
+
+
+def test_verifier_preserves_valid_json_null():
+    assert verify._load_json(b'{"missing": null}', label="synthetic artifact") == {
+        "missing": None
+    }
+
+
+def test_rejects_nonfinite_tampering_even_after_hash_update(tmp_path, monkeypatch):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+
+    canonical_path = output / reconcile.RECONCILIATION_JSON
+    tampered = json.loads(canonical_path.read_text(encoding="utf-8"))
+    tampered["results"][readiness.CONTRASTS[0]][readiness.DIMS[0]]["taskwise"][
+        0
+    ]["human_difference"] = float("nan")
+    canonical_bytes = (
+        json.dumps(tampered, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    canonical_path.write_bytes(canonical_bytes)
+
+    manifest_path = output / reconcile.RECONCILIATION_MANIFEST
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"]["canonical_reconciliation"].update(
+        reconcile._fingerprint_bytes(canonical_bytes)
+    )
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="non-finite JSON numbers"):
+        verify.verify_bundle(output, root=tmp_path)

@@ -273,7 +273,12 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
     # reserving the publication path. A bad payload or unavailable Git/source
     # provenance must not leave a partial create-only bundle that blocks a
     # corrected publication attempt at the same versioned destination.
-    json_bytes = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    try:
+        json_bytes = (
+            json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
+        ).encode("utf-8")
+    except ValueError as exc:
+        raise ValueError("non-finite reconciliation values are invalid JSON") from exc
     markdown_bytes = render_markdown(payload).encode("utf-8")
 
     verified_inputs = payload.get("verified_input_fingerprints")

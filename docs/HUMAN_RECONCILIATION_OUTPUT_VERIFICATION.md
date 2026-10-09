@@ -12,7 +12,7 @@ This note defines the publication-integrity boundary for the frozen descriptive 
 - `reconciliation.md` — a deterministic manuscript-facing rendering derived from the canonical JSON;
 - `reconciliation_manifest.json` — provenance binding for the published bundle.
 
-Publication preflights the canonical payload, readiness-verified input fingerprints, producer Git commit SHA, and implementation fingerprints before reserving the output destination. The destination is then created exclusively; an existing published bundle is never overwritten.
+Publication preflights the canonical payload, readiness-verified input fingerprints, producer Git commit SHA, and implementation fingerprints before reserving the output destination. The canonical payload is serialized as strict JSON: non-finite numeric values (NaN, Infinity, or negative Infinity) are rejected before publication, while genuine missing measurements remain JSON null. The destination is then created exclusively; an existing published bundle is never overwritten.
 
 The manifest binds, by exact path, SHA-256, and byte count:
 
@@ -29,7 +29,7 @@ This makes the published result auditable without treating manuscript text as a 
 
 `scripts/verify_human_reconciliation_outputs.py` performs a read-only, offline verification of a saved bundle. It:
 
-1. requires the expected canonical JSON, Markdown, and manifest to be regular files;
+1. requires the expected canonical JSON, Markdown, and manifest to be regular files, and rejects non-finite numbers (including overflowed JSON exponents such as 1e400) when loading either JSON artifact;
 2. validates the frozen study identity, outcome, contrasts, dimensions, missingness rule, direction categories, and descriptive-only inference contract;
 3. verifies artifact byte counts and SHA-256 fingerprints;
 4. deterministically regenerates the manuscript Markdown from the canonical JSON and requires byte-for-byte equality;
