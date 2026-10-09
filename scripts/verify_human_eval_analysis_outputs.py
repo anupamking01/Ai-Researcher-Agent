@@ -10,12 +10,25 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 
 from scripts import analyze_human_eval
 from scripts import human_eval_analysis_core as core
 
 DEFAULT_OUTPUT_ROOT = analyze_human_eval.OUTPUT_ROOT
+
+
+def _require_finite_json(value, *, label: str, path: str = "$") -> None:
+    """Reject non-finite JSON numbers, including exponent overflow, at any depth."""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{label} has a non-finite numeric value at {path}")
+    if isinstance(value, dict):
+        for key, child in value.items():
+            _require_finite_json(child, label=label, path=f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _require_finite_json(child, label=label, path=f"{path}[{index}]")
 
 
 def _regular_bytes(path: Path, *, label: str) -> bytes:
@@ -32,6 +45,7 @@ def _load_json(content: bytes, *, label: str) -> dict:
         raise ValueError(f"{label} is not valid UTF-8 JSON") from exc
     if not isinstance(payload, dict):
         raise ValueError(f"{label} must contain a JSON object")
+    _require_finite_json(payload, label=label)
     return payload
 
 

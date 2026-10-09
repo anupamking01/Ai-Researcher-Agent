@@ -79,15 +79,24 @@ def _write_exclusive(path, content):
 def write_bundle(payload, output_root):
     """Publish and verify a create-only human-analysis result bundle."""
     output_root = Path(output_root)
+    # Validate the complete canonical JSON before reserving the immutable
+    # destination. A missing rubric score must be null, never NaN/Infinity.
+    try:
+        json_bytes = (
+            json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
+        ).encode("utf-8")
+    except ValueError as exc:
+        raise ValueError(
+            "non-finite human-analysis values are invalid; use null for missing scores"
+        ) from exc
+    markdown_bytes = render_markdown(payload).encode("utf-8")
+
     try:
         output_root.mkdir(parents=True, exist_ok=False)
     except FileExistsError as exc:
         raise ValueError(
             f"refusing to overwrite human-analysis output: {output_root}"
         ) from exc
-
-    json_bytes = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    markdown_bytes = render_markdown(payload).encode("utf-8")
 
     json_path = output_root / ANALYSIS_JSON
     markdown_path = output_root / ANALYSIS_MARKDOWN
