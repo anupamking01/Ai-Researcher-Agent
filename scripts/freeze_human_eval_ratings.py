@@ -26,6 +26,11 @@ DEFAULT_PROTOCOL = REPO_ROOT / "paper" / "HUMAN_EVAL_PROTOCOL.md"
 DEFAULT_ASSIGNMENT_PLAN = REPO_ROOT / "paper" / "HUMAN_EVAL_ASSIGNMENT_PLAN.md"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "outputs" / "human_eval" / "frozen-v1"
 MIN_RATERS_PER_ITEM = 2
+GOVERNING_INPUT_PATHS = {
+    "packet": "governing_inputs/packet.jsonl",
+    "protocol": "governing_inputs/HUMAN_EVAL_PROTOCOL.md",
+    "assignment_plan": "governing_inputs/HUMAN_EVAL_ASSIGNMENT_PLAN.md",
+}
 
 SCORE_FIELDS = (
     "correctness_1_5",
@@ -422,8 +427,10 @@ def freeze_ratings(
     if not packet_path.is_file():
         raise ValueError(f"blinded packet is missing: {packet_path}")
     packet_content = packet_path.read_bytes()
-    protocol_sha256 = sha256_file(protocol_path)
-    assignment_plan_sha256 = sha256_file(assignment_plan_path)
+    protocol_content = protocol_path.read_bytes()
+    assignment_content = assignment_plan_path.read_bytes()
+    protocol_sha256 = hashlib.sha256(protocol_content).hexdigest()
+    assignment_plan_sha256 = hashlib.sha256(assignment_content).hexdigest()
     blind_ids = _packet_blind_ids(packet_path, content=packet_content)
     rows, sources, captured_inputs = _load_ratings(
         [Path(path) for path in rating_paths],
@@ -475,22 +482,38 @@ def freeze_ratings(
     with producer_archive.open("xb") as handle:
         handle.write(producer_content)
 
+    # Retain the same governing bytes captured before ratings processing. Do
+    # not reopen working files here: they may have changed or disappeared.
+    (output_root / "governing_inputs").mkdir(exist_ok=False)
+    for role, content in {
+        "packet": packet_content,
+        "protocol": protocol_content,
+        "assignment_plan": assignment_content,
+    }.items():
+        with (output_root / GOVERNING_INPUT_PATHS[role]).open("xb") as handle:
+            handle.write(content)
+
     manifest = {
         "schema_version": 1,
         "study_id": "budget-main-v1",
         "status": "blinded_human_ratings_frozen",
         "blinding_key_used": False,
         "packet": {
+            "archive_path": GOVERNING_INPUT_PATHS["packet"],
             "name": packet_path.name,
             "bytes": len(packet_content),
             "sha256": hashlib.sha256(packet_content).hexdigest(),
             "n_blind_ids": len(blind_ids),
         },
         "protocol": {
+            "archive_path": GOVERNING_INPUT_PATHS["protocol"],
+            "bytes": len(protocol_content),
             "path": "paper/HUMAN_EVAL_PROTOCOL.md",
             "sha256": protocol_sha256,
         },
         "assignment_plan": {
+            "archive_path": GOVERNING_INPUT_PATHS["assignment_plan"],
+            "bytes": len(assignment_content),
             "path": "paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md",
             "sha256": assignment_plan_sha256,
         },

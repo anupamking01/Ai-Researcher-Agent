@@ -52,6 +52,43 @@ def _require_equal(actual, expected, *, label: str) -> None:
         raise ValueError(f"{label} mismatch: expected {expected!r}, got {actual!r}")
 
 
+def _verify_governing_archive(freeze_root: Path, manifest: dict, *, required: bool):
+    """Verify fixed, in-bundle governing inputs; never follow manifest paths."""
+    entries = {role: manifest.get(role) for role in freeze.GOVERNING_INPUT_PATHS}
+    if any(not isinstance(entry, dict) for entry in entries.values()):
+        raise ValueError("governing input manifest entries must be objects")
+    flags = ["archive_path" in entry for entry in entries.values()]
+    archive_root = freeze_root / "governing_inputs"
+    if not any(flags):
+        if required:
+            raise ValueError("retained governing inputs are required for --retained-inputs")
+        if archive_root.exists() or archive_root.is_symlink():
+            raise ValueError("undeclared governing input archive")
+        return None  # Legacy freezes still require external governing files.
+    if not all(flags):
+        raise ValueError("retained governing input archive paths are incomplete")
+    if archive_root.is_symlink() or not archive_root.is_dir():
+        raise ValueError(f"governing input archive must be a regular directory: {archive_root}")
+
+    expected_names = {Path(path).name for path in freeze.GOVERNING_INPUT_PATHS.values()}
+    _require_equal(
+        {child.name for child in archive_root.iterdir()}, expected_names,
+        label="governing input archive contents",
+    )
+    captured = {}
+    for role, relative in freeze.GOVERNING_INPUT_PATHS.items():
+        entry = entries[role]
+        _require_equal(entry.get("archive_path"), relative,
+                       label=f"retained {role} archive path")
+        content = _require_regular_file(freeze_root / relative, label=f"retained {role}")
+        _require_equal(
+            {"bytes": entry.get("bytes"), "sha256": entry.get("sha256")},
+            _fingerprint(content), label=f"retained {role} fingerprint",
+        )
+        captured[role] = content
+    return captured
+
+
 def verify_frozen_snapshot(
     rating_paths: list[Path] | None = None,
     *,
@@ -59,6 +96,7 @@ def verify_frozen_snapshot(
     packet_path: Path = DEFAULT_PACKET,
     protocol_path: Path = DEFAULT_PROTOCOL,
     assignment_plan_path: Path = DEFAULT_ASSIGNMENT_PLAN,
+    use_retained_inputs: bool = False,
 ) -> dict:
     """Verify a frozen blinded snapshot and its retained pre-unblinding inputs."""
     freeze_root = Path(freeze_root)
@@ -66,6 +104,12 @@ def verify_frozen_snapshot(
     protocol_path = Path(protocol_path)
     assignment_plan_path = Path(assignment_plan_path)
     rating_paths = [Path(path) for path in (rating_paths or [])]
+    if use_retained_inputs and (
+        packet_path != DEFAULT_PACKET
+        or protocol_path != DEFAULT_PROTOCOL
+        or assignment_plan_path != DEFAULT_ASSIGNMENT_PLAN
+    ):
+        raise ValueError("cannot combine retained-input mode with external governing inputs")
 
     if freeze_root.is_symlink() or not freeze_root.is_dir():
         raise ValueError(f"freeze root must be a regular directory: {freeze_root}")
@@ -83,12 +127,25 @@ def verify_frozen_snapshot(
     )
     _require_equal(manifest.get("blinding_key_used"), False, label="blinding_key_used")
 
-    packet_content = _require_regular_file(packet_path, label="blinded packet")
-    protocol_content = _require_regular_file(protocol_path, label="human-evaluation protocol")
-    assignment_content = _require_regular_file(
-        assignment_plan_path,
-        label="human-evaluation assignment plan",
-    )
+    retained = _verify_governing_archive(freeze_root, manifest, required=use_retained_inputs)
+    if use_retained_inputs:
+        # The name is descriptive only: file reads use fixed archive paths above.
+        name = manifest["packet"].get("name")
+        if not isinstance(name, str) or not name or Path(name).name != name:
+            raise ValueError("retained packet name must be a nonempty filename")
+        packet_path = Path(name)
+        packet_content = retained["packet"]
+        protocol_content = retained["protocol"]
+        assignment_content = retained["assignment_plan"]
+    else:
+        # Preserve the existing external-file cross-check. A valid archive must
+        # never silently hide drift in working files explicitly being checked.
+        packet_content = _require_regular_file(packet_path, label="blinded packet")
+        protocol_content = _require_regular_file(protocol_path, label="human-evaluation protocol")
+        assignment_content = _require_regular_file(
+            assignment_plan_path,
+            label="human-evaluation assignment plan",
+        )
     blind_ids = freeze._packet_blind_ids(packet_path, content=packet_content)
 
     packet_entry = manifest.get("packet")
@@ -338,18 +395,25 @@ def main() -> int:
         ),
     )
     parser.add_argument("--freeze-root", type=Path, default=DEFAULT_FREEZE_ROOT)
-    parser.add_argument("--packet", type=Path, default=DEFAULT_PACKET)
-    parser.add_argument("--protocol", type=Path, default=DEFAULT_PROTOCOL)
-    parser.add_argument("--assignment-plan", type=Path, default=DEFAULT_ASSIGNMENT_PLAN)
+    parser.add_argument("--packet", type=Path)
+    parser.add_argument("--protocol", type=Path)
+    parser.add_argument("--assignment-plan", type=Path)
+    parser.add_argument(
+        "--retained-inputs", action="store_true",
+        help="verify using the retained packet/protocol/assignment, without external governing files",
+    )
     args = parser.parse_args()
+    if args.retained_inputs and any((args.packet, args.protocol, args.assignment_plan)):
+        parser.error("cannot combine --retained-inputs with --packet/--protocol/--assignment-plan")
 
     try:
         receipt = verify_frozen_snapshot(
             args.ratings,
             freeze_root=args.freeze_root,
-            packet_path=args.packet,
-            protocol_path=args.protocol,
-            assignment_plan_path=args.assignment_plan,
+            packet_path=args.packet or DEFAULT_PACKET,
+            protocol_path=args.protocol or DEFAULT_PROTOCOL,
+            assignment_plan_path=args.assignment_plan or DEFAULT_ASSIGNMENT_PLAN,
+            use_retained_inputs=args.retained_inputs,
         )
     except (OSError, ValueError) as exc:
         raise SystemExit(f"HUMAN EVAL VERIFY: FAIL: {exc}") from exc

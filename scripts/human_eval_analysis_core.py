@@ -234,6 +234,18 @@ def analyze(
             )
         # Legacy/malformed freezes without a producer are rejected by the
         # independent verifier, not backfilled with today's source code.
+        # Carry retained governing inputs through the same blinded snapshot;
+        # the verifier checks their declared paths and hashes before mapping.
+        governing_dir = freeze_root / "governing_inputs"
+        if governing_dir.exists() or governing_dir.is_symlink():
+            if governing_dir.is_symlink() or not governing_dir.is_dir():
+                raise ValueError(f"governing input archive must be a regular directory: {governing_dir}")
+            for child in sorted(governing_dir.iterdir(), key=lambda path: path.name):
+                _snapshot_file(
+                    child,
+                    blind_freeze / "governing_inputs" / child.name,
+                    label=f"blinded governing input {child.name}",
+                )
         blind_rating_paths = _snapshot_raw_ratings(rating_paths, blind_root / "raw_ratings")
 
         blinded = blind_verify.verify_frozen_snapshot(

@@ -12,18 +12,52 @@ manifest change could otherwise go unnoticed before treatment identities are
 opened.
 
 Run the verifier while ratings are still blinded. New freezes retain the exact
-raw annotator CSV bytes inside the freeze bundle, so the canonical check is
-self-contained:
+raw annotator CSVs, producer source, blinded packet, protocol, and assignment
+plan. To audit a relocated bundle without external governing files, run:
 
 ```bash
-python scripts/verify_human_eval_freeze.py \
-  --freeze-root outputs/human_eval/frozen-v1
+python -m scripts.verify_human_eval_freeze \
+  --freeze-root outputs/human_eval/frozen-v1 \
+  --retained-inputs
 ```
 
-You may additionally pass the original annotator CSVs before the options. When
-provided, they are checked in the original freeze order against the in-bundle
-archive and manifest. Legacy freezes created before raw-input archival still
-require those external files.
+Without `--retained-inputs`, the existing external packet/protocol/assignment
+checks remain in force, using their default paths or explicit `--packet`,
+`--protocol`, and `--assignment-plan` options. Any declared retained archive is
+also verified in that mode: valid external files cannot hide archive damage.
+Do not combine these external governing-file options with `--retained-inputs`;
+the command rejects that ambiguity rather than silently ignoring supplied files.
+
+You may additionally pass original annotator CSVs before the options in either
+mode. They are checked in original freeze order against the in-bundle raw archive
+and manifest. Legacy freezes without raw-input archival still require those
+external CSVs.
+
+## Retained governing inputs
+
+The producer captures governing bytes before processing ratings and writes those
+same bytes exclusively under these fixed paths before publishing the manifest:
+
+- `governing_inputs/packet.jsonl`;
+- `governing_inputs/HUMAN_EVAL_PROTOCOL.md`;
+- `governing_inputs/HUMAN_EVAL_ASSIGNMENT_PLAN.md`.
+
+Each corresponding manifest entry binds its archive path, byte count, and
+SHA-256. Original packet names and existing protocol identifiers are retained as
+metadata, not used to choose archive paths. Line endings and Unicode bytes are
+preserved. A later save or deletion of a working file cannot replace the retained
+version. An archive write failure leaves an incomplete reserved destination with
+no published success manifest; retry requires a new destination.
+
+The verifier rejects partial declarations, path redirection, missing or extra
+archive entries, symlinked files/directories, and fingerprint drift. The human
+analysis pipeline carries the archive into its temporary blinded snapshot, so
+these checks still precede any treatment-mapping access.
+
+Older freezes without governing-input archives remain verifiable with the
+external files matching their original fingerprints. They cannot use
+`--retained-inputs`. Never backfill a historical freeze using today's working
+copies or rewrite an archived bundle to make it pass.
 
 ## Checks performed
 
@@ -33,6 +67,7 @@ following agree:
 - freeze manifest schema, study ID, status, and `blinding_key_used=false`;
 - SHA-256 and byte counts for the blinded packet and frozen output files;
 - protocol and assignment-plan fingerprints;
+- declared retained governing-input paths, bytes, and fingerprints;
 - deterministic in-bundle raw-rating archive paths, byte counts, and SHA-256
   fingerprints, with no undeclared archive files;
 - frozen normalized ratings versus normalization of the retained raw inputs;
@@ -51,9 +86,15 @@ research result or treatment-level artifact.
 This gate is designed to catch accidental provenance drift and inconsistent
 freeze artifacts before unblinding. It does not prove that annotators were
 independent humans, authenticate filesystem history, or protect against an actor
-who can rewrite every archived input and its external history. Keep the original
+who can rewrite every archived input and its external history. Keep original
 files under controlled, versioned storage and retain Git history or another
 external provenance anchor.
+
+Retention is a per-file snapshot, not a transaction or lock across working files.
+Archive-only verification removes external governing-file dependencies for the
+blinded freeze check; it does not archive a Python environment or make the full
+treatment-level analysis standalone. That later analysis still needs the frozen
+analysis plan, verified treatment mapping, task manifest, and canonical reports.
 
 If more than two annotators rated items, the verifier preserves the freeze
 tool's `requires_predeclared_multi_rater_statistic` flag. Verification does not
