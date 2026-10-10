@@ -421,3 +421,26 @@ def test_build_packet_rejects_truthy_non_boolean_completion(tmp_path, invalid_co
     with pytest.raises(ValueError, match="Incomplete run"):
         _build_packet(trace_root, destination, tmp_path)
     assert not destination.exists()
+
+def test_build_packet_rejects_symlinked_trace_file_before_publication(tmp_path):
+    """Trace provenance must be a direct file, not a link to a copied record."""
+    trace_root = _write_complete_matrix(tmp_path)
+    trace_path = trace_root / "D3" / "d3-main-01.json"
+    backing = trace_path.with_suffix(".backing")
+    trace_path.rename(backing)
+    trace_path.symlink_to(backing.name)
+    destination = tmp_path / "packet-linked-source"
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        _build_packet(trace_root, destination, tmp_path)
+    assert not destination.exists()
+
+
+def test_build_packet_rejects_symlinked_trace_root(tmp_path):
+    trace_root = _write_complete_matrix(tmp_path)
+    shortcut = tmp_path / "linked-traces"
+    shortcut.symlink_to(trace_root, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        _build_packet(shortcut, tmp_path / "packet-linked-root", tmp_path)
+    assert not (tmp_path / "packet-linked-root").exists()

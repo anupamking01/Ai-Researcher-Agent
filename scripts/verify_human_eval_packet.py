@@ -138,6 +138,12 @@ def _repo_file(repo_root: Path, relative_path: str, *, label: str) -> Path:
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError(f"{label} must be a repository-relative path: {relative_path!r}")
     root = repo_root.resolve()
+    # Resolve only after rejecting links in every path segment. Checking
+    # is_symlink() on the resolved path would silently accept linked traces.
+    for depth in range(1, len(relative.parts) + 1):
+        segment = root.joinpath(*relative.parts[:depth])
+        if segment.is_symlink():
+            raise ValueError(f"{label} must not traverse a symbolic link: {segment}")
     candidate = (root / relative).resolve()
     if not candidate.is_relative_to(root):
         raise ValueError(f"{label} escapes repository root: {relative_path!r}")

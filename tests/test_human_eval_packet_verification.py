@@ -355,3 +355,30 @@ def test_packet_verifier_rejects_truthy_non_boolean_completion(packet_case, inva
 
     with pytest.raises(ValueError, match="trace completed.*JSON boolean true"):
         _verify(packet_case)
+
+def test_packet_verifier_rejects_symlinked_trace_after_packet_freeze(packet_case):
+    """Even identical trace bytes must not make a linked source valid."""
+    trace_path = (
+        packet_case["repo_root"]
+        / "outputs"
+        / "experiment_traces"
+        / "D3"
+        / "d3-main-01.json"
+    )
+    backing = trace_path.with_suffix(".backing")
+    trace_path.rename(backing)
+    trace_path.symlink_to(backing.name)
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        _verify(packet_case)
+
+
+def test_packet_verifier_rejects_symlinked_variant_directory(packet_case):
+    """Path.resolve must not conceal a linked treatment directory."""
+    trace_dir = packet_case["repo_root"] / "outputs" / "experiment_traces" / "D3"
+    backing = packet_case["repo_root"] / "archived-D3-traces"
+    trace_dir.rename(backing)
+    trace_dir.symlink_to(backing, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        _verify(packet_case)

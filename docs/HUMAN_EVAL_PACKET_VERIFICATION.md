@@ -96,3 +96,17 @@ truthiness is not a completion guarantee: strings such as `"false"` and
 other trace and packet provenance checks pass. Existing valid Boolean completion
 traces are unaffected. This is a source-validity check only; no completed
 experiment is rerun and no rating or treatment result is inferred.
+
+## Trace symlink provenance guard
+
+The packet builder rejects a symbolic-link trace root, trace file, or
+treatment-directory component before emitting any blinded artifacts. The
+independent coordinator verifier checks every segment of each recorded
+repository-relative trace path **before** resolving it. This matters because
+`Path.resolve()` follows symlinks: checking only the resolved file would
+silently accept a replaced trace that points to another on-disk copy, even
+with identical bytes and an unchanged coordinator manifest.
+
+The check is about source identity and reproducibility, not human-evaluation
+results. It neither regenerates reports nor changes the frozen assignment,
+analysis, or treatment claims.

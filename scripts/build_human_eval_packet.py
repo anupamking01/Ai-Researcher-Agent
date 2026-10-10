@@ -123,6 +123,8 @@ def _load_task_manifest(task_manifest_path: Path) -> dict:
 
 
 def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
+    if trace_root.is_symlink():
+        raise ValueError(f"Experiment trace root must not be a symbolic link: {trace_root}")
     if not trace_root.is_dir():
         raise FileNotFoundError(f"Trace root does not exist: {trace_root}")
 
@@ -130,6 +132,10 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
     seen_cells: set[tuple[str, str]] = set()
 
     for trace_path in sorted(trace_root.glob("*/*.json")):
+        if trace_path.is_symlink() or trace_path.parent.is_symlink():
+            raise ValueError(
+                f"Experiment trace source must not traverse a symbolic link: {trace_path}"
+            )
         payload = json.loads(trace_path.read_text(encoding="utf-8"))
         experiment = payload.get("experiment", {})
         trace = payload.get("trace", {})
