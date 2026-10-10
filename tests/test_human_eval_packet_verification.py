@@ -298,3 +298,42 @@ def test_packet_verifier_rejects_rehashed_cross_run_report_swap(packet_case):
 
     with pytest.raises(ValueError, match="report source mapping"):
         _verify(packet_case)
+
+
+@pytest.mark.parametrize(
+    ("field", "conflicting_value"),
+    [("variant_id", "P6V"), ("task_id", "main-02")],
+)
+def test_packet_verifier_rejects_conflicting_persisted_trace_identity(
+    packet_case, field: str, conflicting_value: str
+):
+    """Even an unchanged packet/hash must not validate contradictory source identities."""
+    trace_path = (
+        packet_case["repo_root"]
+        / "outputs"
+        / "experiment_traces"
+        / "D3"
+        / "d3-main-01.json"
+    )
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    payload["experiment"][field] = conflicting_value
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=f"Conflicting {field}"):
+        _verify(packet_case)
+
+
+def test_packet_verifier_accepts_experiment_only_identity_for_legacy_traces(packet_case):
+    trace_path = (
+        packet_case["repo_root"]
+        / "outputs"
+        / "experiment_traces"
+        / "D3"
+        / "d3-main-01.json"
+    )
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    payload["trace"].pop("variant_id")
+    payload["trace"].pop("task_id")
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert _verify(packet_case)["status"] == "human_eval_packet_verified"

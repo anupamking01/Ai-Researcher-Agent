@@ -15,6 +15,8 @@ Before any annotator-facing file is written, the builder requires all of the
 following:
 
 - every trace belongs to the task manifest's exact `task_set_id`;
+- trace and experiment sections agree on treatment variant and task identity
+  whenever both declare those fields (legacy one-sided metadata remains valid);
 - every trace task ID exists in the frozen task manifest;
 - every trace's research question exactly matches the frozen question for that
   task after surrounding whitespace normalization;
@@ -40,3 +42,14 @@ failure before packet publication.
 This safeguard validates identity and coverage only. It does not generate human
 ratings, alter treatment outputs, rerun the automated evaluator, or change any
 pilot, confirmatory, exploratory, or human-validation claim.
+
+## Cross-section identity consistency
+
+Persisted experiment traces can carry `variant_id` and `task_id` in both the
+`experiment` metadata and the `trace` body. Packet construction and independent
+packet verification must reject conflicting non-empty values rather than
+implicitly trusting one copy. Otherwise a report could be assigned to the
+wrong treatment or task even though its path, source text, and packet hashes
+are consistent. Legacy traces with an identity in only one section remain
+supported. This is a source-integrity guard, not a change to experimental
+results or the frozen human-evaluation analysis.

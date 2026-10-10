@@ -65,6 +65,24 @@ def _resolve_report_markdown(trace_root: Path, report_path: str, *, run_id: str)
     return candidate
 
 
+def _consistent_trace_identity(
+    experiment: dict, trace: dict, field: str, *, trace_path: Path
+) -> str:
+    """Reject conflicting treatment/task identities in the same persisted trace.
+
+    Older traces can omit an identity in one section; retain the original
+    fallback in that case, but never silently prefer one conflicting value.
+    """
+    trace_value = str(trace.get(field) or "").strip()
+    experiment_value = str(experiment.get(field) or "").strip()
+    if trace_value and experiment_value and trace_value != experiment_value:
+        raise ValueError(
+            f"Conflicting {field} between trace and experiment in {trace_path}: "
+            f"{trace_value!r} != {experiment_value!r}"
+        )
+    return trace_value or experiment_value
+
+
 def _load_task_manifest(task_manifest_path: Path) -> dict:
     """Load and validate the frozen task set used by the human-eval packet."""
     task_manifest_path = Path(task_manifest_path)
@@ -116,8 +134,12 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
         experiment = payload.get("experiment", {})
         trace = payload.get("trace", {})
 
-        variant_id = str(trace.get("variant_id") or experiment.get("variant_id") or "").strip()
-        task_id = str(trace.get("task_id") or experiment.get("task_id") or "").strip()
+        variant_id = _consistent_trace_identity(
+            experiment, trace, "variant_id", trace_path=trace_path
+        )
+        task_id = _consistent_trace_identity(
+            experiment, trace, "task_id", trace_path=trace_path
+        )
         run_id = str(trace.get("run_id") or trace_path.stem).strip()
         if trace_path.parent.name != variant_id or trace_path.stem != run_id or trace_path.is_symlink():
             raise ValueError(f"Trace file identity does not match variant/run: {trace_path}")

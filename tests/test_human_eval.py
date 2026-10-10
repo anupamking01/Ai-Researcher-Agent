@@ -374,3 +374,35 @@ def test_build_packet_rejects_trace_filename_identity_mismatch(tmp_path):
     trace_path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="Trace file identity"):
         _build_packet(trace_root, tmp_path / "packet-run-mismatch", tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("field", "conflicting_value"),
+    [("variant_id", "P6V"), ("task_id", "main-02")],
+)
+def test_build_packet_rejects_conflicting_trace_and_experiment_identity(
+    tmp_path: Path, field: str, conflicting_value: str
+):
+    """A treatment/task cannot be inferred from one of two disagreeing identities."""
+    trace_root = _write_complete_matrix(tmp_path)
+    trace_path = trace_root / "D3" / "d3-main-01.json"
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    payload["experiment"][field] = conflicting_value
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+    output_root = tmp_path / "packet-conflicting-identity"
+
+    with pytest.raises(ValueError, match=f"Conflicting {field}"):
+        _build_packet(trace_root, output_root, tmp_path)
+    assert not output_root.exists()
+
+
+def test_build_packet_accepts_experiment_only_identity_for_legacy_traces(tmp_path: Path):
+    trace_root = _write_complete_matrix(tmp_path)
+    trace_path = trace_root / "D3" / "d3-main-01.json"
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    payload["trace"].pop("variant_id")
+    payload["trace"].pop("task_id")
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    manifest = _build_packet(trace_root, tmp_path / "packet-legacy-identity", tmp_path)
+    assert manifest["n_reports"] == 8

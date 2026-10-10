@@ -244,8 +244,12 @@ def verify_packet(
         )
         experiment = trace_payload.get("experiment", {})
         trace = trace_payload.get("trace", {})
-        observed_variant = str(trace.get("variant_id") or experiment.get("variant_id") or "").strip()
-        observed_task = str(trace.get("task_id") or experiment.get("task_id") or "").strip()
+        observed_variant = build._consistent_trace_identity(
+            experiment, trace, "variant_id", trace_path=trace_path
+        )
+        observed_task = build._consistent_trace_identity(
+            experiment, trace, "task_id", trace_path=trace_path
+        )
         observed_run = str(trace.get("run_id") or trace_path.stem).strip()
         _require_equal(observed_variant, variant_id, label=f"trace variant for {blind_id}")
         _require_equal(observed_task, task_id, label=f"trace task for {blind_id}")
