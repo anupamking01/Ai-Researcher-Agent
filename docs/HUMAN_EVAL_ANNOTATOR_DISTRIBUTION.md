@@ -55,6 +55,15 @@ annotator artifacts, fingerprints them, and verifies the resulting directory.
 The verifier rejects extra files, including a coordinator blinding key copied
 into the distribution directory after export.
 
+Independent distribution verification also enforces a plain-text packet contract:
+all four packet fields must be nonempty strings, not nested JSON objects,
+numbers, or arrays that could conceal coordinator metadata. The manifest's
+`n_reports` must be an integer exactly matching the number of packet items,
+and the ratings-template blind IDs must appear once each in precisely the
+packet's order. A bundle with correctly recomputed local SHA-256 fingerprints
+is rejected when any of those semantic checks fail. These checks preserve the
+already-frozen protocol; they neither generate ratings nor open treatment IDs.
+
 ## Limits
 
 This safeguard prevents accidental file-level leakage; it is not a substitute
