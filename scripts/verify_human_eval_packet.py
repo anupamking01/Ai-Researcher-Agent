@@ -232,6 +232,11 @@ def verify_packet(
         seen_cells.add(cell)
         variants_by_task.setdefault(task_id, set()).add(variant_id)
 
+        expected_trace = (
+            Path("outputs") / "experiment_traces" / variant_id / f"{run_id}.json"
+        )
+        if Path(row["trace_path"]) != expected_trace:
+            raise ValueError(f"trace source mapping does not match variant/run for {blind_id}")
         trace_path = _repo_file(repo_root, row["trace_path"], label=f"trace for {blind_id}")
         trace_payload = _load_json_object(
             _require_regular_file(trace_path, label=f"trace for {blind_id}"),
@@ -257,7 +262,18 @@ def verify_packet(
             label=f"trace question for {blind_id}",
         )
 
+        try:
+            expected_report = build._resolve_report_markdown(
+                repo_root / "outputs" / "experiment_traces",
+                str(trace.get("report_path") or ""),
+                run_id=run_id,
+            )
+        except FileNotFoundError as exc:
+            raise ValueError(f"report for {blind_id} must resolve to a regular file") from exc
         report_path = _repo_file(repo_root, row["report_path"], label=f"report for {blind_id}")
+        _require_equal(
+            report_path, expected_report.resolve(), label=f"report source mapping for {blind_id}"
+        )
         try:
             report_text = _require_regular_file(report_path, label=f"report for {blind_id}").decode(
                 "utf-8"

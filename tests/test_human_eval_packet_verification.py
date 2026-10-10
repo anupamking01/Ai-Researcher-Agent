@@ -143,7 +143,7 @@ def test_tampered_key_is_rejected_even_when_manifest_fingerprint_is_refreshed(pa
         writer.writeheader()
         writer.writerows(rows)
     _refresh_artifact(packet_case, "blinding_key")
-    with pytest.raises(ValueError, match="trace variant|duplicate treatment/task"):
+    with pytest.raises(ValueError, match="trace variant|duplicate treatment/task|trace source mapping"):
         _verify(packet_case)
 
 
@@ -251,3 +251,50 @@ def test_cli_failure_has_no_success_receipt_or_traceback(packet_case):
     assert "HUMAN EVAL PACKET VERIFY: FAIL" in result.stderr
     assert "Traceback" not in result.stderr
     assert "HUMAN EVAL PACKET VERIFY: PASS" not in result.stdout
+
+
+def test_packet_verifier_rejects_trace_cross_run_report_reference(packet_case):
+    """Changing a persisted trace's report pointer must fail independently of hashes."""
+    with (packet_case["output_root"] / "blinding_key.csv").open(
+        encoding="utf-8", newline=""
+    ) as handle:
+        key_rows = list(csv.DictReader(handle))
+    row = key_rows[0]
+    other = next(item for item in key_rows if item["run_id"] != row["run_id"])
+    trace_path = packet_case["repo_root"] / row["trace_path"]
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    payload["trace"]["report_path"] = "./" + other["report_path"].replace(".md", ".pdf")
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="Report source is not bound to trace run_id"):
+        _verify(packet_case)
+
+
+def test_packet_verifier_rejects_rehashed_cross_run_report_swap(packet_case):
+    """Recomputing manifest hashes cannot legitimise another run's report."""
+    key_path = packet_case["output_root"] / "blinding_key.csv"
+    with key_path.open(encoding="utf-8", newline="") as handle:
+        key_rows = list(csv.DictReader(handle))
+    row = key_rows[0]
+    other = next(item for item in key_rows if item["run_id"] != row["run_id"])
+    row["report_path"] = other["report_path"]
+    with key_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=KEY_FIELDS)
+        writer.writeheader()
+        writer.writerows(key_rows)
+    _refresh_artifact(packet_case, "blinding_key")
+
+    packet_path = packet_case["output_root"] / "packet.jsonl"
+    packet_rows = [json.loads(line) for line in packet_path.read_text(encoding="utf-8").splitlines()]
+    target = next(item for item in packet_rows if item["blind_id"] == row["blind_id"])
+    target["report_markdown"] = (
+        packet_case["repo_root"] / other["report_path"]
+    ).read_text(encoding="utf-8").strip()
+    packet_path.write_text(
+        "\n".join(json.dumps(item, ensure_ascii=False, sort_keys=True) for item in packet_rows)
+        + "\n",
+        encoding="utf-8",
+    )
+    _refresh_artifact(packet_case, "packet")
+
+    with pytest.raises(ValueError, match="report source mapping"):
+        _verify(packet_case)

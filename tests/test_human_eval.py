@@ -339,3 +339,38 @@ def test_nonpacket_children_do_not_block_first_packet_publication(tmp_path):
     assert (output_root / "frozen-v0" / "README.txt").read_text(encoding="utf-8") == (
         "unrelated child directory\n"
     )
+
+
+def test_build_packet_rejects_cross_run_report_substitution(tmp_path):
+    """Completed traces may not borrow another treatment's report."""
+    trace_root = _write_complete_matrix(tmp_path)
+    trace_path = trace_root / "D3" / "d3-main-01.json"
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    payload["trace"]["report_path"] = "./outputs/d6-main-01/research_report.pdf"
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+    output_root = tmp_path / "packet-cross-run"
+    with pytest.raises(ValueError, match="Report source is not bound to trace run_id"):
+        _build_packet(trace_root, output_root, tmp_path)
+    assert not output_root.exists()
+
+
+def test_build_packet_rejects_encoded_report_directory_traversal(tmp_path):
+    trace_root = _write_complete_matrix(tmp_path)
+    trace_path = trace_root / "D3" / "d3-main-01.json"
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    payload["trace"]["report_path"] = (
+        "./outputs/d3-main-01/%2e%2e/d6-main-01/research_report.pdf"
+    )
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="Report source is not bound to trace run_id"):
+        _build_packet(trace_root, tmp_path / "packet-traversal", tmp_path)
+
+
+def test_build_packet_rejects_trace_filename_identity_mismatch(tmp_path):
+    trace_root = _write_complete_matrix(tmp_path)
+    trace_path = trace_root / "D3" / "d3-main-01.json"
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    payload["trace"]["run_id"] = "d6-main-01"
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="Trace file identity"):
+        _build_packet(trace_root, tmp_path / "packet-run-mismatch", tmp_path)
