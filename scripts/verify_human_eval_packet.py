@@ -262,11 +262,14 @@ def verify_packet(
             label=f"trace question for {blind_id}",
         )
 
-        expected_report = build._resolve_report_markdown(
-            repo_root / "outputs" / "experiment_traces",
-            str(trace.get("report_path") or ""),
-            run_id=run_id,
-        )
+        try:
+            expected_report = build._resolve_report_markdown(
+                repo_root / "outputs" / "experiment_traces",
+                str(trace.get("report_path") or ""),
+                run_id=run_id,
+            )
+        except FileNotFoundError as exc:
+            raise ValueError(f"report for {blind_id} must resolve to a regular file") from exc
         report_path = _repo_file(repo_root, row["report_path"], label=f"report for {blind_id}")
         _require_equal(
             report_path, expected_report.resolve(), label=f"report source mapping for {blind_id}"

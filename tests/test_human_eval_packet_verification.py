@@ -143,7 +143,7 @@ def test_tampered_key_is_rejected_even_when_manifest_fingerprint_is_refreshed(pa
         writer.writeheader()
         writer.writerows(rows)
     _refresh_artifact(packet_case, "blinding_key")
-    with pytest.raises(ValueError, match="trace variant|duplicate treatment/task"):
+    with pytest.raises(ValueError, match="trace variant|duplicate treatment/task|trace source mapping"):
         _verify(packet_case)
 
 
