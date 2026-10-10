@@ -382,3 +382,108 @@ def test_packet_verifier_rejects_symlinked_variant_directory(packet_case):
 
     with pytest.raises(ValueError, match="symbolic link"):
         _verify(packet_case)
+
+
+def _write_seed_test_key(case, rows):
+    path = case["output_root"] / "blinding_key.csv"
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=KEY_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    _refresh_artifact(case, "blinding_key")
+
+
+def _write_seed_test_template(case, rows):
+    path = case["output_root"] / "ratings_template.csv"
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(build.RATING_FIELDS))
+        writer.writeheader()
+        writer.writerows(rows)
+    _refresh_artifact(case, "ratings_template")
+
+
+def _write_seed_test_packet(case, rows):
+    path = case["output_root"] / "packet.jsonl"
+    path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False, sort_keys=True) for row in rows)
+        + "\n",
+        encoding="utf-8",
+    )
+    _refresh_artifact(case, "packet")
+
+
+def test_packet_verifier_checks_manifest_seed_against_blinding_mapping(packet_case):
+    """A rehashed unchanged packet cannot attest to a different shuffle seed."""
+    manifest_path = packet_case["output_root"] / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["blind_seed"] = int(manifest["blind_seed"]) + 1
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="seed-derived blinding"):
+        _verify(packet_case)
+
+
+@pytest.mark.parametrize("invalid_seed", [True, False])
+def test_packet_verifier_rejects_boolean_seed_as_non_integer(packet_case, invalid_seed):
+    manifest_path = packet_case["output_root"] / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["blind_seed"] = invalid_seed
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="blind_seed must be an integer"):
+        _verify(packet_case)
+
+
+def test_packet_verifier_checks_key_row_order_even_after_rehash(packet_case):
+    """Blind-ID mapping order is part of the deterministic packet contract."""
+    path = packet_case["output_root"] / "blinding_key.csv"
+    with path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    rows[0], rows[1] = rows[1], rows[0]
+    _write_seed_test_key(packet_case, rows)
+    with pytest.raises(ValueError, match="key blind-ID sequence"):
+        _verify(packet_case)
+
+
+def test_packet_verifier_checks_packet_row_order_even_after_rehash(packet_case):
+    packet_path = packet_case["output_root"] / "packet.jsonl"
+    rows = [json.loads(line) for line in packet_path.read_text(encoding="utf-8").splitlines()]
+    rows[0], rows[1] = rows[1], rows[0]
+    _write_seed_test_packet(packet_case, rows)
+    with pytest.raises(ValueError, match="packet blind-ID order"):
+        _verify(packet_case)
+
+
+def test_packet_verifier_checks_template_row_order_even_after_rehash(packet_case):
+    template = packet_case["output_root"] / "ratings_template.csv"
+    with template.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    rows[0], rows[1] = rows[1], rows[0]
+    _write_seed_test_template(packet_case, rows)
+    with pytest.raises(ValueError, match="ratings-template blind-ID order"):
+        _verify(packet_case)
+
+
+def test_packet_verifier_rejects_consistent_blind_id_swap_even_after_rehash(packet_case):
+    """All three artifacts can be self-consistent while contradicting the seed."""
+    swap = {"H001": "H002", "H002": "H001"}
+    key_path = packet_case["output_root"] / "blinding_key.csv"
+    with key_path.open(encoding="utf-8", newline="") as handle:
+        keys = list(csv.DictReader(handle))
+    for row in keys:
+        row["blind_id"] = swap.get(row["blind_id"], row["blind_id"])
+    _write_seed_test_key(packet_case, keys)
+
+    packet_path = packet_case["output_root"] / "packet.jsonl"
+    packet = [json.loads(line) for line in packet_path.read_text(encoding="utf-8").splitlines()]
+    for row in packet:
+        row["blind_id"] = swap.get(row["blind_id"], row["blind_id"])
+    _write_seed_test_packet(packet_case, packet)
+
+    template_path = packet_case["output_root"] / "ratings_template.csv"
+    with template_path.open(encoding="utf-8", newline="") as handle:
+        template = list(csv.DictReader(handle))
+    for row in template:
+        row["blind_id"] = swap.get(row["blind_id"], row["blind_id"])
+    _write_seed_test_template(packet_case, template)
+
+    with pytest.raises(ValueError, match="key blind-ID sequence"):
+        _verify(packet_case)
