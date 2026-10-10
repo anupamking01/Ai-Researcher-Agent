@@ -259,7 +259,10 @@ def verify_packet(
             task_manifest["task_set_id"],
             label=f"trace task_set_id for {blind_id}",
         )
-        _require_equal(bool(trace.get("completed")), True, label=f"trace completed for {blind_id}")
+        # Only JSON boolean true proves completion. Strings such as "false"
+        # and numeric 1 are truthy in Python but are not completion records.
+        if trace.get("completed") is not True:
+            raise ValueError(f"trace completed for {blind_id} must be JSON boolean true")
         _require_equal(
             str(trace.get("question") or "").strip(),
             packet_by_blind[blind_id]["question"],

@@ -150,7 +150,7 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
             raise ValueError(f"Trace missing variant/task identity: {trace_path}")
         if variant_id not in EXPECTED_VARIANTS:
             raise ValueError(f"Unexpected variant {variant_id!r} in {trace_path}")
-        if not bool(trace.get("completed")):
+        if trace.get("completed") is not True:
             raise ValueError(f"Incomplete run cannot enter human evaluation: {variant_id}/{task_id}")
         if not question:
             raise ValueError(f"Trace missing research question: {variant_id}/{task_id}")

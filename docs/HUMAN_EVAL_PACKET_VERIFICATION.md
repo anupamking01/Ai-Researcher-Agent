@@ -86,3 +86,13 @@ recorded report source in addition to comparing the report text and hashes.
 
 This is a source-provenance guard, not evidence of human agreement or a
 change to treatment outcomes. It does not regenerate published packets.
+
+## Strict completion-state typing
+
+Both packet construction and independent coordinator verification require the
+persisted trace's `completed` field to be **JSON boolean `true`**. Python
+truthiness is not a completion guarantee: strings such as `"false"` and
+`"true"`, numeric `1`, and nonempty objects must all fail closed even when
+other trace and packet provenance checks pass. Existing valid Boolean completion
+traces are unaffected. This is a source-validity check only; no completed
+experiment is rerun and no rating or treatment result is inferred.

@@ -406,3 +406,18 @@ def test_build_packet_accepts_experiment_only_identity_for_legacy_traces(tmp_pat
 
     manifest = _build_packet(trace_root, tmp_path / "packet-legacy-identity", tmp_path)
     assert manifest["n_reports"] == 8
+
+
+@pytest.mark.parametrize("invalid_completed", ["false", "true", 1, {"done": True}])
+def test_build_packet_rejects_truthy_non_boolean_completion(tmp_path, invalid_completed):
+    """Malformed completion values must not authorize blinded packet publication."""
+    trace_root = _write_complete_matrix(tmp_path)
+    trace_path = trace_root / "D3" / "d3-main-01.json"
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    payload["trace"]["completed"] = invalid_completed
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+    destination = tmp_path / "packet-invalid-completion"
+
+    with pytest.raises(ValueError, match="Incomplete run"):
+        _build_packet(trace_root, destination, tmp_path)
+    assert not destination.exists()

@@ -337,3 +337,21 @@ def test_packet_verifier_accepts_experiment_only_identity_for_legacy_traces(pack
     trace_path.write_text(json.dumps(payload), encoding="utf-8")
 
     assert _verify(packet_case)["status"] == "human_eval_packet_verified"
+
+
+@pytest.mark.parametrize("invalid_completed", ["false", "true", 1, {"done": True}])
+def test_packet_verifier_rejects_truthy_non_boolean_completion(packet_case, invalid_completed):
+    """A published packet cannot verify against malformed source completion state."""
+    trace_path = (
+        packet_case["repo_root"]
+        / "outputs"
+        / "experiment_traces"
+        / "D3"
+        / "d3-main-01.json"
+    )
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    payload["trace"]["completed"] = invalid_completed
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="trace completed.*JSON boolean true"):
+        _verify(packet_case)
