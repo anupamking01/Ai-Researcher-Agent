@@ -39,8 +39,20 @@ def _regular_bytes(path: Path, *, label: str) -> bytes:
 
 
 def _load_json(content: bytes, *, label: str) -> dict:
+    # A valid fingerprint cannot resolve ambiguous duplicate JSON members.
+    # Decode escape-equivalent keys before checking, at every object depth.
+    def unique_object_pairs(pairs):
+        obj = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError(f"{label} contains duplicate JSON key {key!r}")
+            obj[key] = value
+        return obj
+
     try:
-        payload = json.loads(content.decode("utf-8"))
+        payload = json.loads(
+            content.decode("utf-8"), object_pairs_hook=unique_object_pairs
+        )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"{label} is not valid UTF-8 JSON") from exc
     if not isinstance(payload, dict):

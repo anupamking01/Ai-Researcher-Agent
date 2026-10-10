@@ -36,6 +36,8 @@ python -m scripts.verify_human_eval_analysis_outputs \
 Verification fails closed when:
 
 - canonical JSON or Markdown is missing, malformed, or a symbolic link;
+- canonical JSON or the provenance manifest contains duplicate object member names
+  (including escape-equivalent keys), even when its recorded hash is consistent;
 - Markdown is not byte-for-byte the deterministic rendering of canonical JSON;
 - either output no longer matches its recorded byte count or SHA-256;
 - the current analysis core or renderer source bytes do not match the generating
