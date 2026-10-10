@@ -38,8 +38,10 @@ RATING_FIELDS = (
 )
 
 
-def _resolve_report_markdown(trace_root: Path, report_path: str) -> Path:
-    """Resolve a persisted report path to its sibling Markdown file."""
+def _resolve_report_markdown(trace_root: Path, report_path: str, *, run_id: str) -> Path:
+    """Require the report to belong to the same run as its experiment trace."""
+    if not run_id or run_id in (".", "..") or "/" in run_id or "\\" in run_id:
+        raise ValueError(f"Invalid experiment trace run_id: {run_id!r}")
     if not report_path:
         raise FileNotFoundError("Missing Markdown report: trace has no report_path")
 
@@ -47,18 +49,17 @@ def _resolve_report_markdown(trace_root: Path, report_path: str) -> Path:
     if decoded.suffix.lower() == ".pdf":
         decoded = decoded.with_suffix(".md")
 
-    # Experiment traces live under <repo>/outputs/experiment_traces. Report
-    # paths are persisted relative to the repository, typically
-    # ./outputs/<run_id>/research_report.pdf.
+    # Recorded reports are ./outputs/<run_id>/research_report.pdf; human
+    # annotation consumes the sibling Markdown report of that exact run.
     repo_root = trace_root.parent.parent
-    if decoded.is_absolute():
-        candidate = decoded
-    else:
-        parts = decoded.parts
-        if parts and parts[0] == ".":
-            decoded = Path(*parts[1:])
-        candidate = repo_root / decoded
-
+    expected = repo_root / "outputs" / run_id / "research_report.md"
+    candidate = decoded if decoded.is_absolute() else repo_root / decoded
+    if candidate != expected:
+        raise ValueError(
+            f"Report source is not bound to trace run_id {run_id!r}: {report_path!r}"
+        )
+    if candidate.is_symlink() or candidate.parent.is_symlink() or (repo_root / "outputs").is_symlink():
+        raise ValueError(f"Report source must not be a symbolic link: {candidate}")
     if not candidate.is_file():
         raise FileNotFoundError(f"Missing Markdown report: {candidate}")
     return candidate
@@ -118,6 +119,8 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
         variant_id = str(trace.get("variant_id") or experiment.get("variant_id") or "").strip()
         task_id = str(trace.get("task_id") or experiment.get("task_id") or "").strip()
         run_id = str(trace.get("run_id") or trace_path.stem).strip()
+        if trace_path.parent.name != variant_id or trace_path.stem != run_id or trace_path.is_symlink():
+            raise ValueError(f"Trace file identity does not match variant/run: {trace_path}")
         question = str(trace.get("question") or "").strip()
         trace_task_set_id = str(experiment.get("task_set_id") or "").strip()
 
@@ -147,7 +150,9 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
             raise ValueError(f"Duplicate variant/task cell: {variant_id}/{task_id}")
         seen_cells.add(cell)
 
-        report_md = _resolve_report_markdown(trace_root, str(trace.get("report_path") or ""))
+        report_md = _resolve_report_markdown(
+            trace_root, str(trace.get("report_path") or ""), run_id=run_id
+        )
         report_text = report_md.read_text(encoding="utf-8").strip()
         if not report_text:
             raise ValueError(f"Empty Markdown report: {report_md}")

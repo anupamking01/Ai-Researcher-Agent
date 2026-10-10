@@ -72,3 +72,17 @@ Passing packet verification also does not substitute for the separate blinded
 rating freeze, agreement checks, or a preregistered human-evaluation analysis
 plan. No human-quality claim should be made until real ratings have been
 collected and the relevant post-freeze gates have passed.
+
+## Report-to-run binding
+
+Before distributing a newly generated packet, the builder and independent
+coordinator verifier require each Markdown report to resolve to
+`outputs/<run_id>/research_report.md` for the originating trace, with that
+trace stored as `outputs/experiment_traces/<variant>/<run_id>.json`.
+The trace's recorded PDF path may resolve to the sibling Markdown report,
+but it must not point to a different completed run, a symlink, or a
+traversal path. The verifier checks the blinding key against the trace's
+recorded report source in addition to comparing the report text and hashes.
+
+This is a source-provenance guard, not evidence of human agreement or a
+change to treatment outcomes. It does not regenerate published packets.
