@@ -12,6 +12,7 @@ import csv
 import hashlib
 import io
 import json
+import random
 from pathlib import Path
 
 from scripts import build_human_eval_packet as build
@@ -152,6 +153,26 @@ def _repo_file(repo_root: Path, relative_path: str, *, label: str) -> Path:
     return candidate
 
 
+def _verify_seeded_blinding_order(seed, packet_rows, key_rows, template_blind_ids):
+    """Validate the exact seed-derived blinding assignment, independent of hashes."""
+    expected_ids = [f"H{n:03d}" for n in range(1, len(key_rows) + 1)]
+    _require_equal([row["blind_id"].strip() for row in key_rows], expected_ids,
+                   label="key blind-ID sequence")
+    _require_equal([row["blind_id"] for row in packet_rows], expected_ids,
+                   label="packet blind-ID order")
+    _require_equal(template_blind_ids, expected_ids,
+                   label="ratings-template blind-ID order")
+
+    def identity(row):
+        return (row["task_id"].strip(), row["variant_id"].strip(), row["run_id"].strip())
+
+    expected_order = sorted(key_rows, key=identity)
+    random.Random(seed).shuffle(expected_order)
+    _require_equal([identity(row) for row in key_rows],
+                   [identity(row) for row in expected_order],
+                   label="seed-derived blinding mapping")
+
+
 def verify_packet(
     *,
     output_root: Path = DEFAULT_OUTPUT_ROOT,
@@ -174,7 +195,7 @@ def verify_packet(
     _require_equal(manifest.get("study_id"), "budget-main-v1", label="packet manifest study_id")
     _require_equal(manifest.get("task_set_id"), task_manifest["task_set_id"], label="task_set_id")
     _require_equal(manifest.get("variants"), list(build.EXPECTED_VARIANTS), label="variant contract")
-    if not isinstance(manifest.get("blind_seed"), int):
+    if type(manifest.get("blind_seed")) is not int:
         raise ValueError("packet manifest blind_seed must be an integer")
 
     expected_task_entry = {
@@ -330,6 +351,8 @@ def verify_packet(
     if len(set(template_blind_ids)) != len(template_blind_ids):
         raise ValueError("ratings_template.csv contains duplicate blind IDs")
     _require_equal(set(template_blind_ids), packet_blind_ids, label="template/packet blind-id coverage")
+
+    _verify_seeded_blinding_order(manifest["blind_seed"], packet_rows, key_rows, template_blind_ids)
 
     _require_equal(manifest.get("n_reports"), len(packet_rows), label="packet report count")
     _require_equal(

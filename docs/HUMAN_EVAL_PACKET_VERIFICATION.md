@@ -110,3 +110,20 @@ with identical bytes and an unchanged coordinator manifest.
 The check is about source identity and reproducibility, not human-evaluation
 results. It neither regenerates reports nor changes the frozen assignment,
 analysis, or treatment claims.
+
+## Seed-bound blinding provenance
+
+The coordinator verifier independently reconstructs the exact blind-ID assignment
+from the manifest's integer `blind_seed`. It sorts the validated treatment,
+task, and run identities in the same order as the packet builder, replays the
+seeded shuffle, then compares that order with the coordinator blinding key.
+Boolean seeds are rejected even though Python treats them as integers.
+
+It also requires all three artifacts—the coordinator key, blinded packet, and
+blank ratings template—to preserve the builder's sequential `H001`, `H002`,
+... row ordering. Changed seeds, manually rearranged rows, and consistent blind-ID
+renamings are rejected even if file fingerprints have been updated.
+
+This is deterministic provenance checking, not a new measurement, an annotation,
+or a signature against someone who can forge every archived input. Preserve
+independent Git history and the frozen research-artifact fingerprints.
