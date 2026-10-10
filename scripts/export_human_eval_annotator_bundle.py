@@ -85,6 +85,14 @@ def _read_jsonl_packet(content: bytes) -> list[dict]:
             raise ValueError(
                 f"annotator packet line {line_number} schema must be exactly {sorted(expected)}"
             )
+        # A hash-matching JSON object can still contain nested coordinator
+        # metadata in a supposedly text-only field. Never stringify such
+        # values into annotator-facing packet content.
+        for field in expected:
+            if not isinstance(row[field], str) or not row[field].strip():
+                raise ValueError(
+                    f"annotator packet line {line_number} {field} must be non-empty text"
+                )
         rows.append(row)
     if not rows:
         raise ValueError("annotator packet contains no reports")
@@ -186,12 +194,18 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
     if artifacts != expected_artifacts:
         raise ValueError("annotator manifest artifact fingerprint mismatch")
 
-    packet_ids = [str(row["blind_id"]).strip() for row in packet_rows]
+    packet_ids = [row["blind_id"].strip() for row in packet_rows]
     template_ids = [str(row["blind_id"]).strip() for row in template_rows]
     if not all(packet_ids) or len(set(packet_ids)) != len(packet_ids):
         raise ValueError("annotator packet blind IDs must be unique and non-empty")
     if set(packet_ids) != set(template_ids) or len(template_ids) != len(set(template_ids)):
         raise ValueError("annotator packet/template blind-ID coverage mismatch")
+    if packet_ids != template_ids:
+        raise ValueError("annotator packet/template blind-ID order mismatch")
+
+    declared_count = manifest.get("n_reports")
+    if type(declared_count) is not int or declared_count != len(packet_rows):
+        raise ValueError("annotator manifest n_reports must equal the packet count as an integer")
 
     return {
         "schema_version": 1,
