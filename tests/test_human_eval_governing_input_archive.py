@@ -237,6 +237,11 @@ def test_analysis_carries_governing_archive_through_real_blinded_gate(inputs, mo
         (root / ARCHIVES["protocol"]).write_bytes(b"tampered synthetic rubric")
     plan = root.parent / "analysis-plan.md"
     plan.write_text("Synthetic analysis-plan fixture\n", encoding="utf-8")
+    monkeypatch.setattr(
+        core,
+        "FROZEN_ANALYSIS_PLAN_SHA256",
+        hashlib.sha256(plan.read_bytes()).hexdigest(),
+    )
     real_verify = verify.verify_frozen_snapshot
     read_bytes = Path.read_bytes
 

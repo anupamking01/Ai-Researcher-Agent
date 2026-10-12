@@ -10,6 +10,13 @@ temporary scratch space. The pre-unblinding freeze verifier runs against those
 snapshots. If that gate passes and the frozen two-rater requirement is satisfied,
 the analyzer then reads the coordinator-only mapping artifacts.
 
+The captured human-analysis plan must also match the literal SHA-256 anchor in
+the analysis implementation before any coordinator mapping is read. Merely
+fingerprinting an arbitrary supplied plan in the eventual result is not enough:
+plan drift or substitution now stops the analysis while ratings remain blinded.
+Updating the frozen plan therefore requires an explicit reviewed source change,
+not only a different `--analysis-plan` file.
+
 The packet manifest, blinding key, ratings template, and frozen task manifest are
 captured only after the blinded gate. The packet verifier runs against that
 second snapshot, using the already captured blinded packet. All report-level

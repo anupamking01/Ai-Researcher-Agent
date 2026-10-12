@@ -130,6 +130,12 @@ def analysis_case(tmp_path: Path, monkeypatch):
     assignment.write_text("# Synthetic assignment\n", encoding="utf-8")
     plan = tmp_path / "analysis_plan.md"
     plan.write_text("# Synthetic human-analysis plan\n", encoding="utf-8")
+    monkeypatch.setattr(
+        core,
+        "FROZEN_ANALYSIS_PLAN_SHA256",
+        _sha(plan.read_bytes()),
+        raising=False,
+    )
     raw_a = tmp_path / "raw-a.csv"
     raw_b = tmp_path / "raw-b.csv"
     raw_a.write_text("synthetic\n", encoding="utf-8")
@@ -178,6 +184,29 @@ def _analyze(case):
         task_manifest_path=case["task_manifest"],
         repo_root=case["repo_root"],
     )
+
+
+def test_modified_analysis_plan_is_rejected_before_unblinding(analysis_case, monkeypatch):
+    case = analysis_case
+    case["plan"].write_text(
+        "# Modified after ratings were frozen\n\nUse a different analysis.\n",
+        encoding="utf-8",
+    )
+    snapshot_file = core._snapshot_file
+
+    def forbid_mapping_snapshot(source, destination, *, label):
+        if label in {"human-evaluation packet manifest", "coordinator blinding key"}:
+            raise AssertionError("treatment mapping opened before plan verification")
+        return snapshot_file(source, destination, label=label)
+
+    monkeypatch.setattr(core, "_snapshot_file", forbid_mapping_snapshot)
+
+    with pytest.raises(ValueError, match="frozen analysis plan fingerprint"):
+        _analyze(case)
+
+
+def test_repository_analysis_plan_matches_production_anchor():
+    assert _sha(core.PLAN.read_bytes()) == core.FROZEN_ANALYSIS_PLAN_SHA256
 
 
 def test_analysis_uses_key_bytes_captured_before_mapping_verification(analysis_case, monkeypatch):

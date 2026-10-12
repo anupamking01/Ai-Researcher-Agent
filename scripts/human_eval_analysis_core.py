@@ -32,6 +32,9 @@ CONTRASTS = (
 )
 SEED = 20260925
 BOOTSTRAP_DRAWS = 20_000
+FROZEN_ANALYSIS_PLAN_SHA256 = (
+    "df347ab0602169c469fb38e14201b66ac250b693e51c1dd8b5ef70a3a11e78c6"
+)
 
 
 def fingerprint(path):
@@ -202,6 +205,12 @@ def analyze(
             blind_root / "analysis_plan" / analysis_plan_path.name,
             label="human-evaluation analysis plan",
         )
+        analysis_plan_sha256 = hashlib.sha256(blind_analysis_plan.read_bytes()).hexdigest()
+        if analysis_plan_sha256 != FROZEN_ANALYSIS_PLAN_SHA256:
+            raise ValueError(
+                "frozen analysis plan fingerprint mismatch: "
+                f"expected {FROZEN_ANALYSIS_PLAN_SHA256}, got {analysis_plan_sha256}"
+            )
         for filename in ("freeze_manifest.json", "frozen_ratings.csv", "agreement.json"):
             _snapshot_file(
                 freeze_root / filename,

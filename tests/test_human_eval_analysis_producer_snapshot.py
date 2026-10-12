@@ -4,6 +4,7 @@ No real human annotations, treatment mapping, or experimental results are
 created. The tests stop at the blinded gate before any unblinding step.
 """
 import csv
+import hashlib
 import json
 
 import pytest
@@ -17,7 +18,7 @@ class EndOfBlindedGate(Exception):
 
 
 @pytest.fixture
-def case(tmp_path):
+def case(tmp_path, monkeypatch):
     packet_root = tmp_path / "human_eval"
     packet_root.mkdir()
     packet = packet_root / "packet.jsonl"
@@ -36,6 +37,11 @@ def case(tmp_path):
     assignment.write_text("# Synthetic assignment\n", encoding="utf-8")
     analysis_plan = tmp_path / "analysis_plan.md"
     analysis_plan.write_text("# Synthetic analysis plan\n", encoding="utf-8")
+    monkeypatch.setattr(
+        analysis,
+        "FROZEN_ANALYSIS_PLAN_SHA256",
+        hashlib.sha256(analysis_plan.read_bytes()).hexdigest(),
+    )
     rating_paths = []
     for annotator in ("synthetic-a", "synthetic-b"):
         ratings = tmp_path / f"{annotator}.csv"
