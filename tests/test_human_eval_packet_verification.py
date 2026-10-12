@@ -108,6 +108,13 @@ def _refresh_artifact(case, key: str):
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _insert_duplicate_json_member(path: Path, needle: str, duplicate: str) -> None:
+    """Insert a conflicting member before the one the default decoder would retain."""
+    text = path.read_text(encoding="utf-8")
+    assert needle in text
+    path.write_text(text.replace(needle, f"{duplicate}, {needle}", 1), encoding="utf-8")
+
+
 def test_packet_verifier_checks_source_mapping_and_artifact_fingerprints(packet_case):
     receipt = _verify(packet_case)
     assert receipt == {
@@ -486,4 +493,111 @@ def test_packet_verifier_rejects_consistent_blind_id_swap_even_after_rehash(pack
     _write_seed_test_template(packet_case, template)
 
     with pytest.raises(ValueError, match="key blind-ID sequence"):
+        _verify(packet_case)
+
+
+@pytest.mark.parametrize(
+    ("duplicate_name", "duplicate_value"),
+    [
+        ('"frozen_before_execution"', "false"),
+        ('"\\u0066rozen_before_execution"', "false"),
+    ],
+)
+def test_packet_builder_rejects_duplicate_task_manifest_keys(
+    packet_case, duplicate_name: str, duplicate_value: str
+):
+    path = packet_case["task_manifest_path"]
+    _insert_duplicate_json_member(
+        path,
+        '"frozen_before_execution": true',
+        f"{duplicate_name}: {duplicate_value}",
+    )
+
+    with pytest.raises(ValueError, match="duplicate JSON key 'frozen_before_execution'"):
+        build._load_task_manifest(path)
+
+
+@pytest.mark.parametrize(
+    ("duplicate_name", "duplicate_value"),
+    [
+        ('"completed"', "false"),
+        ('"\\u0063ompleted"', "false"),
+    ],
+)
+def test_packet_builder_rejects_duplicate_trace_keys(
+    packet_case, duplicate_name: str, duplicate_value: str
+):
+    trace_path = (
+        packet_case["repo_root"]
+        / "outputs"
+        / "experiment_traces"
+        / "D3"
+        / "d3-main-01.json"
+    )
+    _insert_duplicate_json_member(
+        trace_path,
+        '"completed": true',
+        f"{duplicate_name}: {duplicate_value}",
+    )
+
+    with pytest.raises(ValueError, match="duplicate JSON key 'completed'"):
+        build.build_packet(
+            packet_case["repo_root"] / "outputs" / "experiment_traces",
+            packet_case["repo_root"] / "outputs" / "human_eval_duplicate_trace",
+            task_manifest_path=packet_case["task_manifest_path"],
+        )
+
+
+@pytest.mark.parametrize(
+    "duplicate_name",
+    ['"study_id"', '"\\u0073tudy_id"'],
+)
+def test_packet_verifier_rejects_duplicate_manifest_keys(packet_case, duplicate_name: str):
+    path = packet_case["output_root"] / "manifest.json"
+    _insert_duplicate_json_member(
+        path,
+        '"study_id": "budget-main-v1"',
+        f'{duplicate_name}: "wrong-study"',
+    )
+
+    with pytest.raises(ValueError, match="duplicate JSON key 'study_id'"):
+        _verify(packet_case)
+
+
+@pytest.mark.parametrize(
+    "duplicate_name",
+    ['"blind_id"', '"\\u0062lind_id"'],
+)
+def test_packet_verifier_rejects_duplicate_packet_record_keys(packet_case, duplicate_name: str):
+    path = packet_case["output_root"] / "packet.jsonl"
+    _insert_duplicate_json_member(
+        path,
+        '"blind_id": "H001"',
+        f'{duplicate_name}: "forged-blind-id"',
+    )
+    _refresh_artifact(packet_case, "packet")
+
+    with pytest.raises(ValueError, match="duplicate JSON key 'blind_id'"):
+        _verify(packet_case)
+
+
+@pytest.mark.parametrize(
+    "duplicate_name",
+    ['"completed"', '"\\u0063ompleted"'],
+)
+def test_packet_verifier_rejects_duplicate_source_trace_keys(packet_case, duplicate_name: str):
+    trace_path = (
+        packet_case["repo_root"]
+        / "outputs"
+        / "experiment_traces"
+        / "D3"
+        / "d3-main-01.json"
+    )
+    _insert_duplicate_json_member(
+        trace_path,
+        '"completed": true',
+        f"{duplicate_name}: false",
+    )
+
+    with pytest.raises(ValueError, match="duplicate JSON key 'completed'"):
         _verify(packet_case)

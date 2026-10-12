@@ -38,13 +38,7 @@ def _require_regular_file(path: Path, *, label: str) -> bytes:
 
 
 def _load_json_object(content: bytes, *, label: str) -> dict:
-    try:
-        value = json.loads(content.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"{label} is not valid UTF-8 JSON") from exc
-    if not isinstance(value, dict):
-        raise ValueError(f"{label} must contain a JSON object")
-    return value
+    return build._load_json_object(content, label=label)
 
 
 def _fingerprint(content: bytes, *, path: str) -> dict:
@@ -99,10 +93,9 @@ def _read_packet(content: bytes, *, task_manifest: dict) -> list[dict]:
     for line_number, raw in enumerate(lines, start=1):
         if not raw.strip():
             continue
-        try:
-            row = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"packet.jsonl line {line_number} is not valid JSON") from exc
+        row = _load_json_object(
+            raw.encode("utf-8"), label=f"packet.jsonl line {line_number}"
+        )
         if not isinstance(row, dict) or set(row) != required:
             raise ValueError(
                 f"packet.jsonl line {line_number} schema must be exactly {sorted(required)}"

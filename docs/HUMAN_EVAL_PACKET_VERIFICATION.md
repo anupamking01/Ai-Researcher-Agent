@@ -127,3 +127,17 @@ renamings are rejected even if file fingerprints have been updated.
 This is deterministic provenance checking, not a new measurement, an annotation,
 or a signature against someone who can forge every archived input. Preserve
 independent Git history and the frozen research-artifact fingerprints.
+
+## Unambiguous JSON provenance
+
+Packet construction and coordinator verification reject duplicate JSON object
+keys at every nesting level in the frozen task manifest, experiment traces,
+packet manifest, and blinded packet records. JSON escape-equivalent names are
+decoded before comparison, so keys such as `"completed"` and
+`"\\u0063ompleted"` are treated as duplicates.
+
+This fail-closed rule prevents Python's default last-value-wins decoding from
+silently accepting contradictory provenance such as both `"completed": false`
+and `"completed": true`. Reusing the same member name in separate objects is
+still valid. This check changes neither treatment outputs nor human ratings; it
+only rejects ambiguous source and packet artifacts.

@@ -38,6 +38,27 @@ RATING_FIELDS = (
 )
 
 
+def _load_json_object(content: bytes, *, label: str) -> dict:
+    """Decode one UTF-8 JSON object while rejecting ambiguous duplicate keys."""
+    def unique_object_pairs(pairs):
+        value = {}
+        for key, child in pairs:
+            if key in value:
+                raise ValueError(f"{label} contains duplicate JSON key {key!r}")
+            value[key] = child
+        return value
+
+    try:
+        payload = json.loads(
+            content.decode("utf-8"), object_pairs_hook=unique_object_pairs
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} is not valid UTF-8 JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label} must contain a JSON object")
+    return payload
+
+
 def _resolve_report_markdown(trace_root: Path, report_path: str, *, run_id: str) -> Path:
     """Require the report to belong to the same run as its experiment trace."""
     if not run_id or run_id in (".", "..") or "/" in run_id or "\\" in run_id:
@@ -89,12 +110,7 @@ def _load_task_manifest(task_manifest_path: Path) -> dict:
     if not task_manifest_path.is_file():
         raise FileNotFoundError(f"Frozen task manifest does not exist: {task_manifest_path}")
     content = task_manifest_path.read_bytes()
-    try:
-        payload = json.loads(content.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"Frozen task manifest is not valid UTF-8 JSON: {task_manifest_path}") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("Frozen task manifest must contain a JSON object")
+    payload = _load_json_object(content, label=f"Frozen task manifest {task_manifest_path}")
     if payload.get("frozen_before_execution") is not True:
         raise ValueError("Human evaluation requires a task manifest frozen before execution")
     task_set_id = str(payload.get("task_set_id") or "").strip()
@@ -136,7 +152,9 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
             raise ValueError(
                 f"Experiment trace source must not traverse a symbolic link: {trace_path}"
             )
-        payload = json.loads(trace_path.read_text(encoding="utf-8"))
+        payload = _load_json_object(
+            trace_path.read_bytes(), label=f"Experiment trace {trace_path}"
+        )
         experiment = payload.get("experiment", {})
         trace = payload.get("trace", {})
 
