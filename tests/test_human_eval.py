@@ -147,6 +147,21 @@ def test_build_packet_is_deterministic_and_blinds_variant_labels(tmp_path):
     }
 
 
+@pytest.mark.parametrize(
+    "invalid_seed",
+    [True, False, 1.5, "20260915"],
+    ids=["true", "false", "float", "numeric-string"],
+)
+def test_build_packet_rejects_non_integer_blinding_seed(tmp_path, invalid_seed):
+    trace_root = _write_complete_matrix(tmp_path)
+    output_root = tmp_path / "human-eval"
+
+    with pytest.raises(TypeError, match="seed must be an integer"):
+        _build_packet(trace_root, output_root, tmp_path, seed=invalid_seed)
+
+    assert not output_root.exists()
+
+
 def test_build_packet_rejects_duplicate_variant_task_cells(tmp_path):
     trace_root = _write_complete_matrix(tmp_path)
     _write_trace(

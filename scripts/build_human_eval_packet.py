@@ -290,6 +290,9 @@ def build_packet(
     task_manifest_path: Path = DEFAULT_TASK_MANIFEST,
 ) -> dict:
     """Build deterministic blinded evaluation artifacts from completed traces."""
+    if type(seed) is not int:
+        raise TypeError("seed must be an integer")
+
     trace_root = Path(trace_root)
     output_root = Path(output_root)
     task_manifest_path = Path(task_manifest_path)
@@ -388,7 +391,7 @@ def build_packet(
             "sha256": task_manifest["sha256"],
             "n_tasks": len(task_manifest["tasks"]),
         },
-        "blind_seed": int(seed),
+        "blind_seed": seed,
         "n_reports": len(packet_rows),
         "n_tasks": len({row["task_id"] for row in packet_rows}),
         "variants": list(EXPECTED_VARIANTS),

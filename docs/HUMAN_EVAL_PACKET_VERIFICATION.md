@@ -116,8 +116,10 @@ analysis, or treatment claims.
 The coordinator verifier independently reconstructs the exact blind-ID assignment
 from the manifest's integer `blind_seed`. It sorts the validated treatment,
 task, and run identities in the same order as the packet builder, replays the
-seeded shuffle, then compares that order with the coordinator blinding key.
-Boolean seeds are rejected even though Python treats them as integers.
+seeded shuffle, then compares that order with the coordinator blinding key. The
+packet builder and verifier both require a true integer seed; booleans, floats,
+and numeric strings are rejected rather than coerced into misleading manifest
+provenance.
 
 It also requires all three artifacts—the coordinator key, blinded packet, and
 blank ratings template—to preserve the builder's sequential `H001`, `H002`,
