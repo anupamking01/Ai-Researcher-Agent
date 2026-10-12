@@ -179,6 +179,7 @@ def verify_packet(
     manifest = _load_json_object(manifest_content, label="packet manifest")
     task_manifest = build._load_task_manifest(task_manifest_path)
 
+    _require_equal(set(manifest), build.MANIFEST_FIELDS, label="packet manifest schema")
     _require_equal(manifest.get("schema_version"), 1, label="packet manifest schema_version")
     _require_equal(manifest.get("study_id"), "budget-main-v1", label="packet manifest study_id")
     _require_equal(manifest.get("task_set_id"), task_manifest["task_set_id"], label="task_set_id")
@@ -200,6 +201,7 @@ def verify_packet(
             "packet manifest lacks artifact fingerprints; rebuild the deterministic packet "
             "before distributing it for human annotation"
         )
+    _require_equal(set(artifacts), build.ARTIFACT_KEYS, label="artifact table schema")
 
     filenames = {
         "packet": "packet.jsonl",
@@ -216,6 +218,10 @@ def verify_packet(
             _fingerprint(artifact_content, path=filename),
             label=f"{key} fingerprint",
         )
+
+    _require_equal(
+        manifest.get("blinding_note"), build.BLINDING_NOTE, label="blinding notice"
+    )
 
     packet_rows = _read_packet(contents["packet"], task_manifest=task_manifest)
     packet_by_blind = {row["blind_id"]: row for row in packet_rows}

@@ -25,6 +25,29 @@ DEFAULT_TASK_MANIFEST = REPO_ROOT / "experiments" / "main_budget_tasks.json"
 EXPECTED_VARIANTS = ("D3", "D6", "P6", "P6V")
 DEFAULT_SEED = 20260915
 PACKET_ARTIFACTS = ("packet.jsonl", "blinding_key.csv", "ratings_template.csv", "manifest.json")
+MANIFEST_FIELDS = frozenset(
+    {
+        "schema_version",
+        "study_id",
+        "task_set_id",
+        "task_manifest",
+        "blind_seed",
+        "n_reports",
+        "n_tasks",
+        "variants",
+        "artifacts",
+        "source_artifacts",
+        "packet",
+        "ratings_template",
+        "blinding_key",
+        "blinding_note",
+    }
+)
+ARTIFACT_KEYS = frozenset({"packet", "ratings_template", "blinding_key"})
+BLINDING_NOTE = (
+    "Annotators receive packet.jsonl and ratings_template.csv only. "
+    "blinding_key.csv is coordinator-only until scoring is frozen."
+)
 
 RATING_FIELDS = (
     "annotator_id",
@@ -404,10 +427,7 @@ def build_packet(
         "packet": "packet.jsonl",
         "ratings_template": "ratings_template.csv",
         "blinding_key": "blinding_key.csv",
-        "blinding_note": (
-            "Annotators receive packet.jsonl and ratings_template.csv only. "
-            "blinding_key.csv is coordinator-only until scoring is frozen."
-        ),
+        "blinding_note": BLINDING_NOTE,
     }
     _write_text_exclusive(
         output_root / "manifest.json",

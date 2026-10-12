@@ -140,6 +140,46 @@ def test_packet_verifier_checks_source_mapping_and_artifact_fingerprints(packet_
         }
 
 
+def test_packet_verifier_rejects_unknown_manifest_field(packet_case):
+    manifest_path = packet_case["output_root"] / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["unverified_metadata"] = {"claim": "not part of the frozen schema"}
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="packet manifest schema"):
+        _verify(packet_case)
+
+
+def test_packet_verifier_rejects_unknown_artifact_entry(packet_case):
+    manifest_path = packet_case["output_root"] / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"]["unverified"] = {
+        "path": "unverified.json",
+        "bytes": 0,
+        "sha256": hashlib.sha256(b"").hexdigest(),
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="artifact table schema"):
+        _verify(packet_case)
+
+
+def test_packet_verifier_rejects_changed_blinding_notice(packet_case):
+    manifest_path = packet_case["output_root"] / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["blinding_note"] = "The coordinator key may be shared before scoring."
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="blinding notice"):
+        _verify(packet_case)
+
+
 def test_tampered_key_is_rejected_even_when_manifest_fingerprint_is_refreshed(packet_case):
     key_path = packet_case["output_root"] / "blinding_key.csv"
     with key_path.open(encoding="utf-8", newline="") as handle:

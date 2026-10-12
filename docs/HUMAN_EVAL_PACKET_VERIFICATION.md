@@ -138,6 +138,11 @@ packet manifest, and blinded packet records. JSON escape-equivalent names are
 decoded before comparison, so keys such as `"completed"` and
 `"\\u0063ompleted"` are treated as duplicates.
 
+The packet manifest is also a closed schema. The verifier rejects unknown
+top-level fields, unknown artifact-table entries, and any change to the
+coordinator-only blinding notice. This prevents injected or misleading metadata
+from receiving a verification pass merely because all known fields still agree.
+
 This fail-closed rule prevents Python's default last-value-wins decoding from
 silently accepting contradictory provenance such as both `"completed": false`
 and `"completed": true`. Reusing the same member name in separate objects is
