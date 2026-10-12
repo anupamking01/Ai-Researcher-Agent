@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import io
 import json
 import random
@@ -42,11 +41,7 @@ def _load_json_object(content: bytes, *, label: str) -> dict:
 
 
 def _fingerprint(content: bytes, *, path: str) -> dict:
-    return {
-        "path": path,
-        "bytes": len(content),
-        "sha256": hashlib.sha256(content).hexdigest(),
-    }
+    return {"path": path, **build._byte_fingerprint(content)}
 
 
 def _require_equal(actual, expected, *, label: str) -> None:
@@ -232,6 +227,21 @@ def verify_packet(
         raise ValueError("blinding_key.csv must contain one unique non-empty blind_id per row")
     _require_equal(set(key_blind_ids), packet_blind_ids, label="key/packet blind-id coverage")
 
+    source_artifacts = manifest.get("source_artifacts")
+    if not isinstance(source_artifacts, list):
+        raise ValueError(
+            "packet manifest source_artifacts must be a list; rebuild the deterministic "
+            "packet before distributing it for human annotation"
+        )
+    if any(not isinstance(entry, dict) for entry in source_artifacts):
+        raise ValueError("packet manifest source_artifacts entries must be objects")
+    _require_equal(
+        [entry.get("blind_id") for entry in source_artifacts],
+        key_blind_ids,
+        label="source_artifacts/key blind-ID sequence",
+    )
+    source_by_blind = {entry["blind_id"]: entry for entry in source_artifacts}
+
     seen_cells = set()
     variants_by_task = {task_id: set() for task_id in task_manifest["tasks"]}
     for row in key_rows:
@@ -258,10 +268,13 @@ def verify_packet(
         if Path(row["trace_path"]) != expected_trace:
             raise ValueError(f"trace source mapping does not match variant/run for {blind_id}")
         trace_path = _repo_file(repo_root, row["trace_path"], label=f"trace for {blind_id}")
-        trace_payload = _load_json_object(
-            _require_regular_file(trace_path, label=f"trace for {blind_id}"),
-            label=f"trace for {blind_id}",
+        trace_content = _require_regular_file(trace_path, label=f"trace for {blind_id}")
+        source_entry = source_by_blind[blind_id]
+        _require_equal(
+            set(source_entry), {"blind_id", "trace", "report"},
+            label=f"source_artifacts schema for {blind_id}",
         )
+        trace_payload = _load_json_object(trace_content, label=f"trace for {blind_id}")
         experiment = trace_payload.get("experiment", {})
         trace = trace_payload.get("trace", {})
         observed_variant = build._consistent_trace_identity(
@@ -297,20 +310,29 @@ def verify_packet(
             )
         except FileNotFoundError as exc:
             raise ValueError(f"report for {blind_id} must resolve to a regular file") from exc
+        _require_equal(
+            source_entry["trace"],
+            build._byte_fingerprint(trace_content),
+            label=f"source trace fingerprint for {blind_id}",
+        )
         report_path = _repo_file(repo_root, row["report_path"], label=f"report for {blind_id}")
         _require_equal(
             report_path, expected_report.resolve(), label=f"report source mapping for {blind_id}"
         )
+        report_content = _require_regular_file(report_path, label=f"report for {blind_id}")
         try:
-            report_text = _require_regular_file(report_path, label=f"report for {blind_id}").decode(
-                "utf-8"
-            ).strip()
+            report_text = report_content.decode("utf-8").strip()
         except UnicodeDecodeError as exc:
             raise ValueError(f"report for {blind_id} is not valid UTF-8") from exc
         _require_equal(
             report_text,
             packet_by_blind[blind_id]["report_markdown"],
             label=f"report content for {blind_id}",
+        )
+        _require_equal(
+            source_entry["report"],
+            build._byte_fingerprint(report_content),
+            label=f"source report fingerprint for {blind_id}",
         )
 
     expected_variants = set(build.EXPECTED_VARIANTS)

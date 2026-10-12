@@ -343,6 +343,29 @@ def test_packet_verifier_accepts_experiment_only_identity_for_legacy_traces(pack
     payload["trace"].pop("task_id")
     trace_path.write_text(json.dumps(payload), encoding="utf-8")
 
+    manifest_path = packet_case["output_root"] / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    with (packet_case["output_root"] / "blinding_key.csv").open(
+        encoding="utf-8", newline=""
+    ) as handle:
+        key_rows = list(csv.DictReader(handle))
+    blind_id = next(
+        row["blind_id"]
+        for row in key_rows
+        if packet_case["repo_root"] / row["trace_path"] == trace_path
+    )
+    source_entry = next(
+        entry for entry in manifest["source_artifacts"] if entry["blind_id"] == blind_id
+    )
+    content = trace_path.read_bytes()
+    source_entry["trace"] = {
+        "bytes": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
     assert _verify(packet_case)["status"] == "human_eval_packet_verified"
 
 
@@ -600,4 +623,61 @@ def test_packet_verifier_rejects_duplicate_source_trace_keys(packet_case, duplic
     )
 
     with pytest.raises(ValueError, match="duplicate JSON key 'completed'"):
+        _verify(packet_case)
+
+
+def test_packet_manifest_binds_exact_source_trace_and_report_bytes(packet_case):
+    manifest = json.loads(
+        (packet_case["output_root"] / "manifest.json").read_text(encoding="utf-8")
+    )
+    with (packet_case["output_root"] / "blinding_key.csv").open(
+        encoding="utf-8", newline=""
+    ) as handle:
+        key_rows = list(csv.DictReader(handle))
+
+    assert [entry["blind_id"] for entry in manifest["source_artifacts"]] == [
+        row["blind_id"] for row in key_rows
+    ]
+    for entry, row in zip(manifest["source_artifacts"], key_rows, strict=True):
+        for kind, path_field in (("trace", "trace_path"), ("report", "report_path")):
+            content = (packet_case["repo_root"] / row[path_field]).read_bytes()
+            assert entry[kind] == {
+                "bytes": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+
+
+def test_packet_verifier_rejects_semantically_unchanged_trace_byte_drift(packet_case):
+    trace_path = (
+        packet_case["repo_root"]
+        / "outputs"
+        / "experiment_traces"
+        / "D3"
+        / "d3-main-01.json"
+    )
+    trace_path.write_bytes(trace_path.read_bytes() + b"\n")
+
+    with pytest.raises(ValueError, match="source trace fingerprint"):
+        _verify(packet_case)
+
+
+def test_packet_verifier_rejects_semantically_unchanged_report_byte_drift(packet_case):
+    report_path = (
+        packet_case["repo_root"] / "outputs" / "d3-main-01" / "research_report.md"
+    )
+    report_path.write_bytes(report_path.read_bytes() + b"\n")
+
+    with pytest.raises(ValueError, match="source report fingerprint"):
+        _verify(packet_case)
+
+
+def test_packet_verifier_requires_source_fingerprint_manifest(packet_case):
+    manifest_path = packet_case["output_root"] / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("source_artifacts", None)
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="source_artifacts"):
         _verify(packet_case)

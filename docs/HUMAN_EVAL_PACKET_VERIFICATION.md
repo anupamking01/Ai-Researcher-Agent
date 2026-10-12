@@ -141,3 +141,18 @@ silently accepting contradictory provenance such as both `"completed": false`
 and `"completed": true`. Reusing the same member name in separate objects is
 still valid. This check changes neither treatment outputs nor human ratings; it
 only rejects ambiguous source and packet artifacts.
+
+## Exact source-byte binding
+
+The packet manifest records byte counts and SHA-256 fingerprints for every
+originating experiment trace and Markdown report, indexed by sequential blind
+ID without embedding treatment labels in the fingerprint table. The
+coordinator verifier derives each source path from the separate blinding key
+and requires the current bytes to match the packet-generation snapshot.
+
+This catches provenance drift that semantic checks intentionally normalize,
+including whitespace-only trace edits and trailing-newline changes to reports.
+Packets created before source fingerprints were recorded do not satisfy this
+gate. Because real annotation remains pending, rebuild them from the preserved
+canonical sources before distribution rather than editing a published manifest.
+This adds no treatment run, evaluator output, rating, or research conclusion.

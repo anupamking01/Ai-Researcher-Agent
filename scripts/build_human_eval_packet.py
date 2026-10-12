@@ -59,6 +59,13 @@ def _load_json_object(content: bytes, *, label: str) -> dict:
     return payload
 
 
+def _byte_fingerprint(content: bytes) -> dict:
+    return {
+        "bytes": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
 def _resolve_report_markdown(trace_root: Path, report_path: str, *, run_id: str) -> Path:
     """Require the report to belong to the same run as its experiment trace."""
     if not run_id or run_id in (".", "..") or "/" in run_id or "\\" in run_id:
@@ -152,9 +159,8 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
             raise ValueError(
                 f"Experiment trace source must not traverse a symbolic link: {trace_path}"
             )
-        payload = _load_json_object(
-            trace_path.read_bytes(), label=f"Experiment trace {trace_path}"
-        )
+        trace_content = trace_path.read_bytes()
+        payload = _load_json_object(trace_content, label=f"Experiment trace {trace_path}")
         experiment = payload.get("experiment", {})
         trace = payload.get("trace", {})
 
@@ -199,7 +205,8 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
         report_md = _resolve_report_markdown(
             trace_root, str(trace.get("report_path") or ""), run_id=run_id
         )
-        report_text = report_md.read_text(encoding="utf-8").strip()
+        report_content = report_md.read_bytes()
+        report_text = report_content.decode("utf-8").strip()
         if not report_text:
             raise ValueError(f"Empty Markdown report: {report_md}")
 
@@ -213,6 +220,8 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
                 "report_markdown": report_text,
                 "trace_path": trace_path.relative_to(repo_root).as_posix(),
                 "report_path": report_md.relative_to(repo_root).as_posix(),
+                "trace_fingerprint": _byte_fingerprint(trace_content),
+                "report_fingerprint": _byte_fingerprint(report_content),
             }
         )
 
@@ -270,11 +279,7 @@ def _write_csv(path: Path, fieldnames: tuple[str, ...] | list[str], rows: list[d
 
 def _artifact_fingerprint(path: Path) -> dict:
     content = path.read_bytes()
-    return {
-        "path": path.name,
-        "bytes": len(content),
-        "sha256": hashlib.sha256(content).hexdigest(),
-    }
+    return {"path": path.name, **_byte_fingerprint(content)}
 
 
 def build_packet(
@@ -298,6 +303,7 @@ def build_packet(
     packet_rows: list[dict] = []
     key_rows: list[dict] = []
     ratings_rows: list[dict] = []
+    source_artifacts: list[dict] = []
 
     for index, record in enumerate(shuffled, start=1):
         blind_id = f"H{index:03d}"
@@ -329,6 +335,13 @@ def build_packet(
                 "synthesis_reasoning_1_5": "",
                 "clarity_1_5": "",
                 "notes": "",
+            }
+        )
+        source_artifacts.append(
+            {
+                "blind_id": blind_id,
+                "trace": record["trace_fingerprint"],
+                "report": record["report_fingerprint"],
             }
         )
 
@@ -384,6 +397,7 @@ def build_packet(
             "ratings_template": _artifact_fingerprint(ratings_template_path),
             "blinding_key": _artifact_fingerprint(key_path),
         },
+        "source_artifacts": source_artifacts,
         "packet": "packet.jsonl",
         "ratings_template": "ratings_template.csv",
         "blinding_key": "blinding_key.csv",
