@@ -91,6 +91,42 @@ def _rewrite_manifest(case, mutate):
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+@pytest.mark.parametrize("duplicate_key", ["status", r"st\u0061tus"])
+def test_duplicate_freeze_manifest_key_is_rejected(frozen_case, duplicate_key):
+    path = frozen_case["freeze_root"] / "freeze_manifest.json"
+    original = path.read_text(encoding="utf-8")
+    path.write_text(
+        '{"' + duplicate_key + '":"ambiguous",' + original[1:],
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate JSON key.*status.*freeze manifest"):
+        _verify(frozen_case)
+
+
+@pytest.mark.parametrize(
+    "duplicate_key", ["raw_exact_agreement", r"raw_exact_agre\u0065ment"]
+)
+def test_duplicate_nested_agreement_key_is_rejected_even_if_rehashed(
+    frozen_case, duplicate_key
+):
+    agreement_path = frozen_case["freeze_root"] / "agreement.json"
+    original = agreement_path.read_text(encoding="utf-8")
+    needle = '"raw_exact_agreement": 1.0'
+    assert needle in original
+    replacement = f'"{duplicate_key}": 0.0, "raw_exact_agreement": 1.0'
+    agreement_path.write_text(original.replace(needle, replacement, 1), encoding="utf-8")
+    content = agreement_path.read_bytes()
+
+    def mutate(manifest):
+        manifest["agreement"]["bytes"] = len(content)
+        manifest["agreement"]["sha256"] = hashlib.sha256(content).hexdigest()
+
+    _rewrite_manifest(frozen_case, mutate)
+    with pytest.raises(ValueError, match="duplicate JSON key.*raw_exact_agreement.*agreement output"):
+        _verify(frozen_case)
+
+
 def test_verified_snapshot_recomputes_blinded_invariants(frozen_case):
     receipt = _verify(frozen_case)
     assert receipt == {

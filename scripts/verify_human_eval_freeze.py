@@ -31,8 +31,16 @@ def _require_regular_file(path: Path, *, label: str) -> bytes:
 
 
 def _load_json_bytes(content: bytes, *, label: str) -> dict:
+    def unique_object(pairs):
+        value = {}
+        for key, child in pairs:
+            if key in value:
+                raise ValueError(f"duplicate JSON key {key!r} in {label}")
+            value[key] = child
+        return value
+
     try:
-        value = json.loads(content.decode("utf-8"))
+        value = json.loads(content.decode("utf-8"), object_pairs_hook=unique_object)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"{label} is not valid UTF-8 JSON") from exc
     if not isinstance(value, dict):
