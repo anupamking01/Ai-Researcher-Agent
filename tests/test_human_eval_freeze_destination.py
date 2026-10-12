@@ -18,7 +18,12 @@ from scripts import freeze_human_eval_ratings as freeze
 @pytest.fixture
 def inputs(tmp_path):
     packet = tmp_path / "packet.jsonl"
-    packet.write_text(json.dumps({"blind_id": "H001"}) + "\n", encoding="utf-8")
+    packet.write_text(
+        json.dumps({"blind_id": "H001", "task_id": "main-01",
+                    "question": "Synthetic question", "report_markdown": "Synthetic report"})
+        + "\n",
+        encoding="utf-8",
+    )
     protocol = tmp_path / "protocol.md"
     protocol.write_text("# Synthetic protocol\n", encoding="utf-8")
     assignment = tmp_path / "assignment.md"

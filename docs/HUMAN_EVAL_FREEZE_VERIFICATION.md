@@ -65,6 +65,9 @@ The verifier never reads `blinding_key.csv`. It fails closed unless all of the
 following agree:
 
 - freeze manifest schema, study ID, status, and `blinding_key_used=false`;
+- exact annotator-packet row schema (`blind_id`, `task_id`, `question`, and
+  `report_markdown` only), with every field containing non-empty text and no
+  duplicate JSON members (including escape-equivalent names);
 - SHA-256 and byte counts for the blinded packet and frozen output files;
 - protocol and assignment-plan fingerprints;
 - declared retained governing-input paths, bytes, and fingerprints;

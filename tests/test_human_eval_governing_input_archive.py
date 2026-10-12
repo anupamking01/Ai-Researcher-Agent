@@ -28,7 +28,10 @@ OPTIONS = {"packet": "packet_path", "protocol": "protocol_path",
 @pytest.fixture
 def inputs(tmp_path):
     packet = tmp_path / "original-packet.jsonl"
-    packet.write_bytes(b'{"blind_id":"H001"}\r\n{"blind_id":"H002"}\r\n')
+    packet.write_bytes(
+        b'{"blind_id":"H001","task_id":"main-01","question":"Q1","report_markdown":"R1"}\r\n'
+        b'{"blind_id":"H002","task_id":"main-02","question":"Q2","report_markdown":"R2"}\r\n'
+    )
     protocol = tmp_path / "original-protocol.md"
     protocol.write_bytes("# Synthetic rubric — λ\r\n".encode("utf-8"))
     assignment = tmp_path / "original-assignment.md"

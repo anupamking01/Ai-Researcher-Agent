@@ -18,7 +18,8 @@ from scripts.freeze_human_eval_ratings import RATING_FIELDS, freeze_ratings
 def inputs(tmp_path):
     packet = tmp_path / "packet.jsonl"
     packet.write_text(
-        json.dumps({"blind_id": "H001", "question": "Synthetic fixture", "report_markdown": "Test"})
+        json.dumps({"blind_id": "H001", "task_id": "main-01",
+                    "question": "Synthetic fixture", "report_markdown": "Test"})
         + "\n",
         encoding="utf-8",
     )

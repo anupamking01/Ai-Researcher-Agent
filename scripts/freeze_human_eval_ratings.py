@@ -26,6 +26,7 @@ DEFAULT_PROTOCOL = REPO_ROOT / "paper" / "HUMAN_EVAL_PROTOCOL.md"
 DEFAULT_ASSIGNMENT_PLAN = REPO_ROOT / "paper" / "HUMAN_EVAL_ASSIGNMENT_PLAN.md"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "outputs" / "human_eval" / "frozen-v1"
 MIN_RATERS_PER_ITEM = 2
+PACKET_FIELDS = ("blind_id", "task_id", "question", "report_markdown")
 GOVERNING_INPUT_PATHS = {
     "packet": "governing_inputs/packet.jsonl",
     "protocol": "governing_inputs/HUMAN_EVAL_PROTOCOL.md",
@@ -65,6 +66,16 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _unique_json_object(pairs):
+    """Build a JSON object while rejecting ambiguous duplicate members."""
+    value = {}
+    for key, child in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key {key!r} in annotator packet")
+        value[key] = child
+    return value
+
+
 def _packet_blind_ids(packet_path: Path, *, content: bytes | None = None) -> list[str]:
     if content is None:
         if not packet_path.is_file():
@@ -77,16 +88,19 @@ def _packet_blind_ids(packet_path: Path, *, content: bytes | None = None) -> lis
         if not raw.strip():
             continue
         try:
-            row = json.loads(raw)
+            row = json.loads(raw, object_pairs_hook=_unique_json_object)
         except json.JSONDecodeError as exc:
             raise ValueError(f"malformed packet JSON on line {line_number}") from exc
-        if not isinstance(row, dict):
-            raise ValueError(f"packet line {line_number} must contain an object")
-        if "variant_id" in row or "run_id" in row:
-            raise ValueError("annotator packet leaks treatment/run identity")
-        blind_id = str(row.get("blind_id") or "").strip()
-        if not blind_id:
-            raise ValueError(f"packet line {line_number} is missing blind_id")
+        if not isinstance(row, dict) or set(row) != set(PACKET_FIELDS):
+            raise ValueError(
+                f"packet line {line_number} schema must be exactly {sorted(PACKET_FIELDS)}"
+            )
+        for field in PACKET_FIELDS:
+            if not isinstance(row[field], str) or not row[field].strip():
+                raise ValueError(
+                    f"packet line {line_number} {field} must be non-empty text"
+                )
+        blind_id = row["blind_id"].strip()
         if blind_id in seen:
             raise ValueError(f"duplicate blind_id in packet: {blind_id}")
         seen.add(blind_id)

@@ -29,9 +29,10 @@ def _csv_bytes(annotators):
 def submission_inputs(tmp_path):
     packet = tmp_path / "packet.jsonl"
     packet.write_text("".join(
-        json.dumps({"blind_id": blind_id, "question": "Synthetic question",
+        json.dumps({"blind_id": blind_id, "task_id": f"main-{index:02d}",
+                    "question": "Synthetic question",
                     "report_markdown": "Synthetic report"}) + "\n"
-        for blind_id in ("H001", "H002")
+        for index, blind_id in enumerate(("H001", "H002"), start=1)
     ), encoding="utf-8")
     protocol = tmp_path / "protocol.md"
     protocol.write_text("Synthetic protocol fixture\n", encoding="utf-8")

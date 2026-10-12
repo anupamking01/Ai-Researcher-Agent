@@ -27,7 +27,8 @@ def _csv_bytes(*, annotator="synthetic-a", score="2", notes="", newline="\r\n"):
 def inputs(tmp_path):
     packet = tmp_path / "packet.jsonl"
     packet.write_bytes(
-        (json.dumps({"blind_id": "H001", "question": "Synthetic Q", "report_markdown": "Fixture"}) + "\n")
+        (json.dumps({"blind_id": "H001", "task_id": "main-01",
+                     "question": "Synthetic Q", "report_markdown": "Fixture"}) + "\n")
         .encode("utf-8")
     )
     protocol = tmp_path / "protocol.md"

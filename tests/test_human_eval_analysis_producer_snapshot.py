@@ -24,6 +24,7 @@ def case(tmp_path):
     packet.write_text(
         json.dumps({
             "blind_id": "H001",
+            "task_id": "main-01",
             "question": "Synthetic question",
             "report_markdown": "Synthetic report",
         }) + "\n",

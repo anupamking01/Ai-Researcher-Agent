@@ -172,6 +172,83 @@ def test_unknown_blind_id_fails_closed(tmp_path: Path):
         )
 
 
+@pytest.mark.parametrize(
+    ("row", "error"),
+    [
+        (
+            {
+                "blind_id": "H001",
+                "task_id": "main-01",
+                "question": "Q1",
+                "report_markdown": "R1",
+                "metadata": {"variant_id": "D3"},
+            },
+            "schema must be exactly",
+        ),
+        (
+            {
+                "blind_id": "H001",
+                "task_id": "main-01",
+                "question": "Q1",
+            },
+            "schema must be exactly",
+        ),
+        (
+            {
+                "blind_id": "H001",
+                "task_id": "main-01",
+                "question": {"text": "Q1", "run_id": "run-1"},
+                "report_markdown": "R1",
+            },
+            "question must be non-empty text",
+        ),
+    ],
+)
+def test_freeze_rejects_packet_outside_exact_annotator_schema(
+    tmp_path: Path, row: dict, error: str
+):
+    packet = tmp_path / "packet.jsonl"
+    packet.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    protocol = _protocol(tmp_path)
+    ratings = _ratings(tmp_path, "ratings.csv", [_row("ann-a", "H001")])
+
+    with pytest.raises(ValueError, match=error):
+        freeze_ratings(
+            [ratings],
+            packet_path=packet,
+            protocol_path=protocol,
+            output_root=tmp_path / "freeze",
+        )
+
+
+@pytest.mark.parametrize(
+    "packet_row",
+    [
+        (
+            '{"blind_id":{"variant_id":"D3"},"blind_id":"H001",'
+            '"task_id":"main-01","question":"Q1","report_markdown":"R1"}'
+        ),
+        (
+            '{"bl\\u0069nd_id":{"run_id":"run-1"},"blind_id":"H001",'
+            '"task_id":"main-01","question":"Q1","report_markdown":"R1"}'
+        ),
+    ],
+)
+def test_freeze_rejects_duplicate_packet_keys(tmp_path: Path, packet_row: str):
+    packet = tmp_path / "packet.jsonl"
+    packet.write_text(packet_row + "\n", encoding="utf-8")
+    protocol = _protocol(tmp_path)
+    ratings = _ratings(tmp_path, "ratings.csv", [_row("ann-a", "H001")])
+
+    with pytest.raises(ValueError, match="duplicate JSON key.*blind_id"):
+        freeze_ratings(
+            [ratings],
+            packet_path=packet,
+            protocol_path=protocol,
+            output_root=tmp_path / "freeze",
+        )
+
+
 def test_duplicate_annotator_item_across_files_fails_closed(tmp_path: Path):
     packet = _packet(tmp_path)
     protocol = _protocol(tmp_path)

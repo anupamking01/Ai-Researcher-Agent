@@ -115,7 +115,15 @@ def test_changed_raw_rating_is_rejected(frozen_case):
 
 def test_changed_packet_is_rejected(frozen_case):
     frozen_case["packet_path"].write_text(
-        json.dumps({"blind_id": "H999", "question": "Replacement"}) + "\n",
+        json.dumps(
+            {
+                "blind_id": "H999",
+                "task_id": "main-01",
+                "question": "Replacement",
+                "report_markdown": "Replacement report",
+            }
+        )
+        + "\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="packet fingerprint|unknown blind_id"):
