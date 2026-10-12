@@ -54,6 +54,11 @@ archive entries, symlinked files/directories, and fingerprint drift. The human
 analysis pipeline carries the archive into its temporary blinded snapshot, so
 these checks still precede any treatment-mapping access.
 
+It also requires the retained or external protocol and assignment plan to match
+the literal preregistration anchors in `freeze_human_eval_ratings.py`, before
+opening any raw or normalized ratings. Rehashing a replacement document in the
+manifest cannot make that bundle valid.
+
 Older freezes without governing-input archives remain verifiable with the
 external files matching their original fingerprints. They cannot use
 `--retained-inputs`. Never backfill a historical freeze using today's working
@@ -69,7 +74,8 @@ following agree:
   `report_markdown` only), with every field containing non-empty text and no
   duplicate JSON members (including escape-equivalent names);
 - SHA-256 and byte counts for the blinded packet and frozen output files;
-- protocol and assignment-plan fingerprints;
+- protocol and assignment-plan fingerprints plus their literal preregistration
+  anchors;
 - declared retained governing-input paths, bytes, and fingerprints;
 - deterministic in-bundle raw-rating archive paths, byte counts, and SHA-256
   fingerprints, with no undeclared archive files;

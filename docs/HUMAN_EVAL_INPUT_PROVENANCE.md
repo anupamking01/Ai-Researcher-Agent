@@ -16,6 +16,14 @@ count, and SHA-256 all describe the same captured content. Protocol and assignme
 plan fingerprints are captured before processing ratings, not after agreement
 has been calculated. Output fingerprints still describe the generated files.
 
+The captured protocol and assignment-plan bytes must also match literal
+SHA-256 anchors in the freeze implementation. This prevents a substituted or
+post-hoc governing document from becoming self-consistent merely because a new
+manifest fingerprints it. Both anchors are checked before any human-rating CSV
+is opened. Changing either frozen document therefore requires an explicit,
+reviewed source change to its production anchor; passing a different path is
+not sufficient.
+
 Raw input hashes are not hashes of normalized CSV text: UTF-8 bytes and line
 endings are retained for fingerprinting. The exact captured bytes that were
 parsed are also written create-only inside the freeze as

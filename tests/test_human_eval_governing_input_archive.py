@@ -33,9 +33,9 @@ def inputs(tmp_path):
         b'{"blind_id":"H002","task_id":"main-02","question":"Q2","report_markdown":"R2"}\r\n'
     )
     protocol = tmp_path / "original-protocol.md"
-    protocol.write_bytes("# Synthetic rubric — λ\r\n".encode("utf-8"))
+    protocol.write_bytes(freeze.DEFAULT_PROTOCOL.read_bytes())
     assignment = tmp_path / "original-assignment.md"
-    assignment.write_bytes(b"# Synthetic independent assignment\n")
+    assignment.write_bytes(freeze.DEFAULT_ASSIGNMENT_PLAN.read_bytes())
     paths = [tmp_path / "a.csv", tmp_path / "b.csv"]
     for index, path in enumerate(paths):
         with path.open("w", encoding="utf-8", newline="") as handle:
@@ -106,6 +106,31 @@ def test_default_verifier_rejects_declared_governing_archive_drift(inputs, role)
     (options["output_root"] / ARCHIVES[role]).write_bytes(b"changed retained input\n")
     with pytest.raises(ValueError, match="retained.*fingerprint"):
         verify.verify_frozen_snapshot(**_verify_options(options))
+
+
+@pytest.mark.parametrize(
+    ("role", "label"),
+    [("protocol", "protocol"), ("assignment_plan", "assignment plan")],
+)
+def test_verifier_rejects_rehashed_governing_document_before_ratings(
+    inputs, monkeypatch, role, label
+):
+    paths, options = inputs
+    manifest = freeze.freeze_ratings(paths, **options)
+    root = options["output_root"]
+    replacement = b"# Replaced after preregistration\n"
+    (root / ARCHIVES[role]).write_bytes(replacement)
+    manifest[role].update(
+        bytes=len(replacement), sha256=hashlib.sha256(replacement).hexdigest()
+    )
+    _save_manifest(root, manifest)
+
+    def forbid_rating_read(*args, **kwargs):
+        raise AssertionError("ratings opened before governing-document verification")
+
+    monkeypatch.setattr(freeze, "_load_ratings", forbid_rating_read)
+    with pytest.raises(ValueError, match=f"frozen human-evaluation {label} fingerprint"):
+        verify.verify_frozen_snapshot(freeze_root=root, use_retained_inputs=True)
 
 
 def test_relocated_freeze_verifies_without_any_external_inputs(inputs, tmp_path):

@@ -51,9 +51,9 @@ def frozen_case(tmp_path: Path):
         encoding="utf-8",
     )
     protocol = tmp_path / "protocol.md"
-    protocol.write_text("# Synthetic frozen protocol\n", encoding="utf-8")
+    protocol.write_bytes(freeze.DEFAULT_PROTOCOL.read_bytes())
     assignment = tmp_path / "assignment.md"
-    assignment.write_text("# Synthetic frozen assignment\n", encoding="utf-8")
+    assignment.write_bytes(freeze.DEFAULT_ASSIGNMENT_PLAN.read_bytes())
     first = _write_ratings(tmp_path / "annotator-a.csv", "synthetic-a")
     second = _write_ratings(tmp_path / "annotator-b.csv", "synthetic-b")
     output = tmp_path / "frozen-v1"

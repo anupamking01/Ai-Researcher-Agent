@@ -25,6 +25,12 @@ DEFAULT_PACKET = REPO_ROOT / "outputs" / "human_eval" / "packet.jsonl"
 DEFAULT_PROTOCOL = REPO_ROOT / "paper" / "HUMAN_EVAL_PROTOCOL.md"
 DEFAULT_ASSIGNMENT_PLAN = REPO_ROOT / "paper" / "HUMAN_EVAL_ASSIGNMENT_PLAN.md"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "outputs" / "human_eval" / "frozen-v1"
+FROZEN_PROTOCOL_SHA256 = (
+    "7d7e79c5063ae1e5bd7789679cadf6dece26f0510a45cef5c64b526a665d4774"
+)
+FROZEN_ASSIGNMENT_PLAN_SHA256 = (
+    "ad66f5fc97e13d93365341fd650d00951e4923c2919676922e5a97ef500def71"
+)
 MIN_RATERS_PER_ITEM = 2
 PACKET_FIELDS = ("blind_id", "task_id", "question", "report_markdown")
 GOVERNING_INPUT_PATHS = {
@@ -64,6 +70,25 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _verify_frozen_governing_documents(
+    protocol_content: bytes, assignment_content: bytes
+) -> tuple[str, str]:
+    """Require the preregistered rubric and assignment plan byte-for-byte."""
+    protocol_sha256 = hashlib.sha256(protocol_content).hexdigest()
+    assignment_plan_sha256 = hashlib.sha256(assignment_content).hexdigest()
+    if protocol_sha256 != FROZEN_PROTOCOL_SHA256:
+        raise ValueError(
+            "frozen human-evaluation protocol fingerprint mismatch: "
+            f"expected {FROZEN_PROTOCOL_SHA256}, got {protocol_sha256}"
+        )
+    if assignment_plan_sha256 != FROZEN_ASSIGNMENT_PLAN_SHA256:
+        raise ValueError(
+            "frozen human-evaluation assignment plan fingerprint mismatch: "
+            f"expected {FROZEN_ASSIGNMENT_PLAN_SHA256}, got {assignment_plan_sha256}"
+        )
+    return protocol_sha256, assignment_plan_sha256
 
 
 def _unique_json_object(pairs):
@@ -443,8 +468,9 @@ def freeze_ratings(
     packet_content = packet_path.read_bytes()
     protocol_content = protocol_path.read_bytes()
     assignment_content = assignment_plan_path.read_bytes()
-    protocol_sha256 = hashlib.sha256(protocol_content).hexdigest()
-    assignment_plan_sha256 = hashlib.sha256(assignment_content).hexdigest()
+    protocol_sha256, assignment_plan_sha256 = _verify_frozen_governing_documents(
+        protocol_content, assignment_content
+    )
     blind_ids = _packet_blind_ids(packet_path, content=packet_content)
     rows, sources, captured_inputs = _load_ratings(
         [Path(path) for path in rating_paths],

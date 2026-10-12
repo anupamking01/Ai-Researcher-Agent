@@ -25,9 +25,9 @@ def inputs(tmp_path):
         encoding="utf-8",
     )
     protocol = tmp_path / "protocol.md"
-    protocol.write_text("# Synthetic protocol\n", encoding="utf-8")
+    protocol.write_bytes(freeze.DEFAULT_PROTOCOL.read_bytes())
     assignment = tmp_path / "assignment.md"
-    assignment.write_text("# Synthetic assignment\n", encoding="utf-8")
+    assignment.write_bytes(freeze.DEFAULT_ASSIGNMENT_PLAN.read_bytes())
     ratings = _ratings(tmp_path / "ratings.csv", "2")
     return ratings, {
         "packet_path": packet,

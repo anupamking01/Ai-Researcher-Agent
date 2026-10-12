@@ -200,6 +200,9 @@ def analyze(
             blind_root / "assignment" / assignment_plan_path.name,
             label="human-evaluation assignment plan",
         )
+        freeze._verify_frozen_governing_documents(
+            blind_protocol.read_bytes(), blind_assignment.read_bytes()
+        )
         blind_analysis_plan = _snapshot_file(
             analysis_plan_path,
             blind_root / "analysis_plan" / analysis_plan_path.name,

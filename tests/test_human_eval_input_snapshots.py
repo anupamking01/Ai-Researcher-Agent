@@ -32,9 +32,9 @@ def inputs(tmp_path):
         .encode("utf-8")
     )
     protocol = tmp_path / "protocol.md"
-    protocol.write_bytes(b"# Synthetic protocol fixture\n")
+    protocol.write_bytes(freeze.DEFAULT_PROTOCOL.read_bytes())
     assignment = tmp_path / "assignment.md"
-    assignment.write_bytes(b"# Synthetic assignment fixture\n")
+    assignment.write_bytes(freeze.DEFAULT_ASSIGNMENT_PLAN.read_bytes())
     rating_paths = [tmp_path / "ratings-a.csv", tmp_path / "ratings-b.csv"]
     for path, annotator in zip(rating_paths, ("synthetic-a", "synthetic-b")):
         path.write_bytes(_csv_bytes(annotator=annotator))
@@ -49,6 +49,36 @@ def inputs(tmp_path):
 def _frozen_rows(options):
     with (options["output_root"] / "frozen_ratings.csv").open(encoding="utf-8", newline="") as handle:
         return list(csv.DictReader(handle))
+
+
+@pytest.mark.parametrize(
+    ("option", "label"),
+    [
+        ("protocol_path", "protocol"),
+        ("assignment_plan_path", "assignment plan"),
+    ],
+)
+def test_governing_document_drift_is_rejected_before_ratings_are_read(
+    inputs, monkeypatch, option, label
+):
+    rating_paths, options = inputs
+    options[option].write_text("# Changed after preregistration\n", encoding="utf-8")
+
+    def forbid_rating_read(*args, **kwargs):
+        raise AssertionError("ratings opened before governing-document verification")
+
+    monkeypatch.setattr(freeze, "_load_ratings", forbid_rating_read)
+    with pytest.raises(ValueError, match=f"frozen human-evaluation {label} fingerprint"):
+        freeze.freeze_ratings(rating_paths, **options)
+
+
+def test_repository_governing_documents_match_production_anchors():
+    assert hashlib.sha256(freeze.DEFAULT_PROTOCOL.read_bytes()).hexdigest() == (
+        freeze.FROZEN_PROTOCOL_SHA256
+    )
+    assert hashlib.sha256(freeze.DEFAULT_ASSIGNMENT_PLAN.read_bytes()).hexdigest() == (
+        freeze.FROZEN_ASSIGNMENT_PLAN_SHA256
+    )
 
 
 @pytest.mark.parametrize("replacement_notes", ["", "An editor saved a longer version."])

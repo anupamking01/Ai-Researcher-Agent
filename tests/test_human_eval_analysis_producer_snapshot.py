@@ -32,9 +32,9 @@ def case(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     protocol = tmp_path / "protocol.md"
-    protocol.write_text("# Synthetic protocol\n", encoding="utf-8")
+    protocol.write_bytes(freeze.DEFAULT_PROTOCOL.read_bytes())
     assignment = tmp_path / "assignment.md"
-    assignment.write_text("# Synthetic assignment\n", encoding="utf-8")
+    assignment.write_bytes(freeze.DEFAULT_ASSIGNMENT_PLAN.read_bytes())
     analysis_plan = tmp_path / "analysis_plan.md"
     analysis_plan.write_text("# Synthetic analysis plan\n", encoding="utf-8")
     monkeypatch.setattr(

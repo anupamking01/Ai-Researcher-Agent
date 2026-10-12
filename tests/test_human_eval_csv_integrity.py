@@ -11,7 +11,12 @@ from pathlib import Path
 
 import pytest
 
-from scripts.freeze_human_eval_ratings import RATING_FIELDS, freeze_ratings
+from scripts.freeze_human_eval_ratings import (
+    DEFAULT_ASSIGNMENT_PLAN,
+    DEFAULT_PROTOCOL,
+    RATING_FIELDS,
+    freeze_ratings,
+)
 
 
 @pytest.fixture
@@ -24,9 +29,9 @@ def inputs(tmp_path):
         encoding="utf-8",
     )
     protocol = tmp_path / "protocol.md"
-    protocol.write_text("# Synthetic protocol fixture\n", encoding="utf-8")
+    protocol.write_bytes(DEFAULT_PROTOCOL.read_bytes())
     assignment = tmp_path / "assignment.md"
-    assignment.write_text("# Synthetic assignment fixture\n", encoding="utf-8")
+    assignment.write_bytes(DEFAULT_ASSIGNMENT_PLAN.read_bytes())
     return {
         "packet_path": packet,
         "protocol_path": protocol,

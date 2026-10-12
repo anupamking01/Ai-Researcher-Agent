@@ -146,6 +146,7 @@ def verify_frozen_snapshot(
             assignment_plan_path,
             label="human-evaluation assignment plan",
         )
+    freeze._verify_frozen_governing_documents(protocol_content, assignment_content)
     blind_ids = freeze._packet_blind_ids(packet_path, content=packet_content)
 
     packet_entry = manifest.get("packet")

@@ -125,9 +125,9 @@ def analysis_case(tmp_path: Path, monkeypatch):
     freeze_manifest.write_text('{"synthetic":"freeze manifest"}\n', encoding="utf-8")
 
     protocol = tmp_path / "protocol.md"
-    protocol.write_text("# Synthetic protocol\n", encoding="utf-8")
+    protocol.write_bytes(freeze.DEFAULT_PROTOCOL.read_bytes())
     assignment = tmp_path / "assignment.md"
-    assignment.write_text("# Synthetic assignment\n", encoding="utf-8")
+    assignment.write_bytes(freeze.DEFAULT_ASSIGNMENT_PLAN.read_bytes())
     plan = tmp_path / "analysis_plan.md"
     plan.write_text("# Synthetic human-analysis plan\n", encoding="utf-8")
     monkeypatch.setattr(
@@ -207,6 +207,27 @@ def test_modified_analysis_plan_is_rejected_before_unblinding(analysis_case, mon
 
 def test_repository_analysis_plan_matches_production_anchor():
     assert _sha(core.PLAN.read_bytes()) == core.FROZEN_ANALYSIS_PLAN_SHA256
+
+
+@pytest.mark.parametrize(
+    ("case_key", "label"),
+    [("protocol", "protocol"), ("assignment", "assignment plan")],
+)
+def test_analysis_rejects_governing_document_drift_before_rating_snapshots(
+    analysis_case, monkeypatch, case_key, label
+):
+    case = analysis_case
+    case[case_key].write_text("# Replaced after preregistration\n", encoding="utf-8")
+    snapshot_file = core._snapshot_file
+
+    def forbid_rating_snapshot(source, destination, *, label):
+        if "rating" in label or label.startswith("blinded freeze"):
+            raise AssertionError("rating artifact opened before governing-document verification")
+        return snapshot_file(source, destination, label=label)
+
+    monkeypatch.setattr(core, "_snapshot_file", forbid_rating_snapshot)
+    with pytest.raises(ValueError, match=f"frozen human-evaluation {label} fingerprint"):
+        _analyze(case)
 
 
 def test_analysis_uses_key_bytes_captured_before_mapping_verification(analysis_case, monkeypatch):

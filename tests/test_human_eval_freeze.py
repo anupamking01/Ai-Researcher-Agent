@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from scripts.freeze_human_eval_ratings import (
+    DEFAULT_PROTOCOL,
     RATING_FIELDS,
     SCORE_FIELDS,
     freeze_ratings,
@@ -27,7 +28,7 @@ def _packet(tmp_path: Path) -> Path:
 
 def _protocol(tmp_path: Path) -> Path:
     protocol = tmp_path / "HUMAN_EVAL_PROTOCOL.md"
-    protocol.write_text("# Frozen protocol\n", encoding="utf-8")
+    protocol.write_bytes(DEFAULT_PROTOCOL.read_bytes())
     return protocol
 
 

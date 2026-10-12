@@ -35,9 +35,9 @@ def submission_inputs(tmp_path):
         for index, blind_id in enumerate(("H001", "H002"), start=1)
     ), encoding="utf-8")
     protocol = tmp_path / "protocol.md"
-    protocol.write_text("Synthetic protocol fixture\n", encoding="utf-8")
+    protocol.write_bytes(freeze.DEFAULT_PROTOCOL.read_bytes())
     assignment = tmp_path / "assignment.md"
-    assignment.write_text("Synthetic assignment fixture\n", encoding="utf-8")
+    assignment.write_bytes(freeze.DEFAULT_ASSIGNMENT_PLAN.read_bytes())
     paths = [tmp_path / "a.csv", tmp_path / "b.csv"]
     for path, annotator in zip(paths, ("synthetic-a", "synthetic-b")):
         path.write_bytes(_csv_bytes([annotator]))
