@@ -16,10 +16,67 @@ def _payload():
     plan_bytes = core.PLAN.read_bytes()
     summary = {
         variant: {
-            field: {"mean_report_score": 3.0}
+            field: {
+                "n_reports_total": 2,
+                "n_reports_scored": 2,
+                "n_raw_scores": 4,
+                "mean_report_score": 3.0,
+                "median_report_score": 3.0,
+                "raw_score_distribution": {
+                    "1": 0,
+                    "2": 0,
+                    "3": 4,
+                    "4": 0,
+                    "5": 0,
+                },
+            }
             for field in core.DIMS
         }
         for variant in core.VARIANTS
+    }
+    contrasts = {
+        name: {
+            field: {
+                "n_pairs": 2,
+                "left_mean": 2.5,
+                "right_mean": 3.0,
+                "mean_difference": 0.5,
+                "median_difference": 0.5,
+                "bootstrap_95pct_ci_mean_difference": [0.0, 1.0],
+                "paired_dz": 0.707,
+                "positive_tasks": 1,
+                "negative_tasks": 0,
+                "tied_tasks": 1,
+                "task_differences": {"task-a": 1.0, "task-b": 0.0},
+                "task_ids_included": ["task-a", "task-b"],
+                "missing_pair_tasks": [],
+            }
+            for field in core.DIMS
+        }
+        for _, _, name in core.CONTRASTS
+    }
+    agreement = {
+        "schema_version": 1,
+        "status": "pre-unblinding_pairwise_agreement",
+        "n_annotators": 2,
+        "annotators": ["annotator-a", "annotator-b"],
+        "pairwise": [
+            {
+                "annotator_a": "annotator-a",
+                "annotator_b": "annotator-b",
+                "n_shared_items": 8,
+                "dimensions": {
+                    field: {
+                        "n_double_rated": 8,
+                        "raw_exact_agreement": 0.75,
+                        "mean_absolute_difference": 0.25,
+                        "quadratic_weighted_cohen_kappa": 0.8,
+                    }
+                    for field in core.DIMS
+                },
+            }
+        ],
+        "requires_predeclared_multi_rater_statistic": False,
     }
     return {
         "schema_version": 1,
@@ -34,6 +91,8 @@ def _payload():
         "report_score_aggregation": "mean_observed_rater_scores_per_report_dimension",
         "bootstrap_seed": core.SEED,
         "bootstrap_draws": core.BOOTSTRAP_DRAWS,
+        "n_tasks": 2,
+        "task_ids": ["task-a", "task-b"],
         "verification": {"analysis_inputs_snapshot_bound": True},
         "provenance": {
             "analysis_plan": {
@@ -42,8 +101,77 @@ def _payload():
                 "sha256": hashlib.sha256(plan_bytes).hexdigest(),
             }
         },
+        "pre_unblinding_agreement": agreement,
         "variant_summary": summary,
+        "paired_contrasts": contrasts,
     }
+
+
+def test_markdown_reports_every_predeclared_descriptive_layer():
+    markdown = analyze_human_eval.render_markdown(_payload())
+
+    assert "## Variant summaries" in markdown
+    assert "D3 | correctness_1_5 | 2/2 | 4 | 3.000 | 3.000 | 1:0; 2:0; 3:4; 4:0; 5:0" in markdown
+    assert "## Paired contrasts" in markdown
+    assert "D6_minus_D3_retrieval_depth | correctness_1_5 | task-a, task-b | — | 2.500 | 3.000 | 0.500 | 0.500 | 0.707 | [0.000, 1.000] | 1/0/1 | task-a:1.000; task-b:0.000" in markdown
+    assert "## Pre-unblinding agreement" in markdown
+    assert "annotator-a / annotator-b | correctness_1_5 | 8 | 0.750 | 0.250 | 0.800" in markdown
+    assert "No human-validation null-hypothesis p-values are computed" in markdown
+
+
+def test_markdown_keeps_missingness_and_undefined_statistics_visible():
+    payload = _payload()
+    field = core.DIMS[0]
+    summary = payload["variant_summary"]["D3"][field]
+    summary.update(
+        n_reports_scored=0,
+        n_raw_scores=0,
+        mean_report_score=None,
+        median_report_score=None,
+        raw_score_distribution={str(score): 0 for score in range(1, 6)},
+    )
+    contrast = payload["paired_contrasts"][core.CONTRASTS[0][2]][field]
+    contrast.update(
+        n_pairs=0,
+        left_mean=None,
+        right_mean=None,
+        mean_difference=None,
+        median_difference=None,
+        bootstrap_95pct_ci_mean_difference=None,
+        paired_dz=None,
+        positive_tasks=0,
+        negative_tasks=0,
+        tied_tasks=0,
+        task_differences={},
+        task_ids_included=[],
+        missing_pair_tasks=["task-a", "task-b"],
+    )
+    payload["pre_unblinding_agreement"]["pairwise"][0]["dimensions"][field][
+        "quadratic_weighted_cohen_kappa"
+    ] = None
+
+    markdown = analyze_human_eval.render_markdown(payload)
+
+    assert "D3 | correctness_1_5 | 0/2 | 0 | NA | NA | 1:0; 2:0; 3:0; 4:0; 5:0" in markdown
+    assert "correctness_1_5 | — | task-a, task-b | NA | NA | NA | NA | NA | NA | 0/0/0 | —" in markdown
+    assert "annotator-a / annotator-b | correctness_1_5 | 8 | 0.750 | 0.250 | NA" in markdown
+
+
+def test_markdown_escapes_data_derived_table_labels():
+    payload = _payload()
+    field = core.DIMS[0]
+    contrast = payload["paired_contrasts"][core.CONTRASTS[0][2]][field]
+    unsafe_task = "task|a\\b\ncontinuation"
+    contrast["task_ids_included"] = [unsafe_task]
+    contrast["task_differences"] = {unsafe_task: 1.0}
+    pair = payload["pre_unblinding_agreement"]["pairwise"][0]
+    pair["annotator_a"] = "reviewer|a\\b\ncontinuation"
+
+    markdown = analyze_human_eval.render_markdown(payload)
+
+    assert "task\\|a\\\\b continuation" in markdown
+    assert "reviewer\\|a\\\\b continuation / annotator-b" in markdown
+    assert "\ncontinuation" not in markdown
 
 
 def _rewrite_and_rehash(output, payload):

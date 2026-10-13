@@ -12,6 +12,35 @@ from scripts import verify_human_eval_analysis_outputs as verify
 
 def _synthetic_payload():
     plan_bytes = core.PLAN.read_bytes()
+    summary_block = {
+        "n_reports_total": 1,
+        "n_reports_scored": 1,
+        "n_raw_scores": 2,
+        "mean_report_score": 3.0,
+        "median_report_score": 3.0,
+        "raw_score_distribution": {"1": 0, "2": 0, "3": 2, "4": 0, "5": 0},
+    }
+    pair_block = {
+        "n_pairs": 1,
+        "left_mean": 3.0,
+        "right_mean": 3.0,
+        "mean_difference": 0.0,
+        "median_difference": 0.0,
+        "bootstrap_95pct_ci_mean_difference": [0.0, 0.0],
+        "paired_dz": None,
+        "positive_tasks": 0,
+        "negative_tasks": 0,
+        "tied_tasks": 1,
+        "task_differences": {"task-a": 0.0},
+        "task_ids_included": ["task-a"],
+        "missing_pair_tasks": [],
+    }
+    agreement_dimension = {
+        "n_double_rated": 1,
+        "raw_exact_agreement": 1.0,
+        "mean_absolute_difference": 0.0,
+        "quadratic_weighted_cohen_kappa": None,
+    }
     return {
         "schema_version": 1,
         "study_id": "budget-main-v1",
@@ -25,6 +54,8 @@ def _synthetic_payload():
         "report_score_aggregation": "mean_observed_rater_scores_per_report_dimension",
         "bootstrap_seed": core.SEED,
         "bootstrap_draws": core.BOOTSTRAP_DRAWS,
+        "n_tasks": 1,
+        "task_ids": ["task-a"],
         "verification": {"analysis_inputs_snapshot_bound": True},
         "provenance": {
             "analysis_plan": {
@@ -33,9 +64,24 @@ def _synthetic_payload():
                 "sha256": hashlib.sha256(plan_bytes).hexdigest(),
             }
         },
+        "pre_unblinding_agreement": {
+            "status": "pre-unblinding_pairwise_agreement",
+            "n_annotators": 2,
+            "pairwise": [{
+                "annotator_a": "annotator-a",
+                "annotator_b": "annotator-b",
+                "dimensions": {
+                    field: dict(agreement_dimension) for field in core.DIMS
+                },
+            }],
+        },
         "variant_summary": {
-            variant: {dim: {"mean_report_score": 3.0} for dim in core.DIMS}
+            variant: {dim: dict(summary_block) for dim in core.DIMS}
             for variant in core.VARIANTS
+        },
+        "paired_contrasts": {
+            name: {dim: dict(pair_block) for dim in core.DIMS}
+            for _, _, name in core.CONTRASTS
         },
     }
 

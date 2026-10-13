@@ -22,23 +22,102 @@ def render_markdown(payload):
     def fmt(value):
         return "NA" if value is None else f"{value:.3f}"
 
+    def cell(value):
+        return (
+            str(value)
+            .replace("\\", "\\\\")
+            .replace("|", "\\|")
+            .replace("\r\n", " ")
+            .replace("\r", " ")
+            .replace("\n", " ")
+        )
+
+    def joined(values):
+        return ", ".join(cell(value) for value in values) if values else "—"
+
     lines = [
         "# Human-evaluation analysis",
         "",
         "Complementary validation; not part of the automated confirmatory p-value family.",
         "",
-        "| Dimension | D3 | D6 | P6 | P6V |",
-        "|---|---:|---:|---:|---:|",
+        "## Variant summaries",
+        "",
+        "| Variant | Dimension | Reports scored/total | Raw scores | Mean | Median | Raw counts (1–5) |",
+        "|---|---|---:|---:|---:|---:|---|",
     ]
-    for field in core.DIMS:
-        means = [
-            fmt(payload["variant_summary"][variant][field]["mean_report_score"])
-            for variant in core.VARIANTS
-        ]
-        lines.append(f"| {field} | " + " | ".join(means) + " |")
+    for variant in core.VARIANTS:
+        for field in core.DIMS:
+            block = payload["variant_summary"][variant][field]
+            distribution = block["raw_score_distribution"]
+            counts = "; ".join(
+                f"{score}:{distribution[str(score)]}" for score in range(1, 6)
+            )
+            lines.append(
+                f"| {variant} | {field} | "
+                f"{block['n_reports_scored']}/{block['n_reports_total']} | "
+                f"{block['n_raw_scores']} | {fmt(block['mean_report_score'])} | "
+                f"{fmt(block['median_report_score'])} | {counts} |"
+            )
+
     lines += [
         "",
-        "Missing scores are not imputed. "
+        "## Paired contrasts",
+        "",
+        "Differences are right minus left. Confidence intervals use the frozen "
+        f"paired bootstrap ({payload['bootstrap_draws']:,} draws; base seed "
+        f"{payload['bootstrap_seed']}).",
+        "",
+        "| Contrast | Dimension | Included tasks | Missing tasks | Left mean | Right mean | Mean difference | Median difference | Paired dz | 95% bootstrap CI | +/−/tie | Task differences |",
+        "|---|---|---|---|---:|---:|---:|---:|---:|---|---:|---|",
+    ]
+    for _, _, contrast in core.CONTRASTS:
+        for field in core.DIMS:
+            block = payload["paired_contrasts"][contrast][field]
+            interval = block["bootstrap_95pct_ci_mean_difference"]
+            interval_text = (
+                "NA" if interval is None else f"[{fmt(interval[0])}, {fmt(interval[1])}]"
+            )
+            differences = "; ".join(
+                f"{cell(task_id)}:{fmt(block['task_differences'][task_id])}"
+                for task_id in block["task_ids_included"]
+            ) or "—"
+            lines.append(
+                f"| {contrast} | {field} | {joined(block['task_ids_included'])} | "
+                f"{joined(block['missing_pair_tasks'])} | {fmt(block['left_mean'])} | "
+                f"{fmt(block['right_mean'])} | {fmt(block['mean_difference'])} | "
+                f"{fmt(block['median_difference'])} | {fmt(block['paired_dz'])} | "
+                f"{interval_text} | "
+                f"{block['positive_tasks']}/{block['negative_tasks']}/{block['tied_tasks']} | "
+                f"{differences} |"
+            )
+
+    agreement = payload["pre_unblinding_agreement"]
+    lines += [
+        "",
+        "## Pre-unblinding agreement",
+        "",
+        f"Frozen agreement artifact status: `{cell(agreement['status'])}`; "
+        f"annotators: {agreement['n_annotators']}.",
+        "",
+        "| Annotator pair | Dimension | Double-rated | Exact agreement | Mean absolute difference | Quadratic-weighted kappa |",
+        "|---|---|---:|---:|---:|---:|",
+    ]
+    for pair in agreement["pairwise"]:
+        pair_label = f"{cell(pair['annotator_a'])} / {cell(pair['annotator_b'])}"
+        for field in core.DIMS:
+            block = pair["dimensions"][field]
+            lines.append(
+                f"| {pair_label} | {field} | {block['n_double_rated']} | "
+                f"{fmt(block['raw_exact_agreement'])} | "
+                f"{fmt(block['mean_absolute_difference'])} | "
+                f"{fmt(block['quadratic_weighted_cohen_kappa'])} |"
+            )
+
+    lines += [
+        "",
+        "Missing scores and incomplete task pairs are retained explicitly and are not "
+        "imputed. Raw distributions and task-level differences remain visible so "
+        "ordinal scores and cross-task consistency are not reduced to means alone. "
         "No human-validation null-hypothesis p-values are computed.",
         "",
     ]
