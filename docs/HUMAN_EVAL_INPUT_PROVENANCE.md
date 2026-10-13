@@ -82,8 +82,11 @@ contents of a path.
 parsing and agreement boundaries. It checks that scores, allowed IDs, sizes,
 and hashes stay consistent, including after packet replacement or deletion.
 Compatibility cases cover LF/CRLF, quoted multiline Unicode notes, and rejection
-of invalid UTF-8 before outputs are written. All ratings in these tests are
-synthetic fixtures, not collected human annotations or research results.
+of invalid UTF-8 or malformed quoted CSV cells before outputs are written. CSV
+quoting remains lossless but is parsed strictly: unterminated quoted fields and
+non-delimiter text after a closing quote are rejected rather than normalized.
+All ratings in these tests are synthetic fixtures, not collected human
+annotations or research results.
 
 `tests/test_human_eval_submission_identity.py` covers combined raw submissions,
 header-only inputs, an output-like raw filename, a rehashed combined archive,

@@ -107,6 +107,47 @@ def test_error_reports_physical_line_after_multiline_note(tmp_path, inputs):
     _rejects_without_writes(ratings, inputs, r"multiline\.csv:4:.*extra.*field")
 
 
+@pytest.mark.parametrize(
+    "malformed_row",
+    [
+        'synthetic-a,H001,2,3,4,4,3,"unterminated\r\n',
+        'synthetic-a,H001,2,3,4,4,3,"closed"junk\r\n',
+        'synthetic-a,H001,2,3,4,4,3,"unicode\u2028note"junk\r\n',
+    ],
+)
+def test_malformed_quoted_cell_is_rejected_without_publication(
+    tmp_path, inputs, malformed_row
+):
+    header = ",".join(RATING_FIELDS) + "\r\n"
+    malformed = tmp_path / "malformed.csv"
+    malformed.write_bytes((header + malformed_row).encode("utf-8"))
+    valid = _write(tmp_path / "valid.csv", RATING_FIELDS, [_rows()[1]])
+    originals = {path: path.read_bytes() for path in (malformed, valid)}
+
+    with pytest.raises(ValueError, match=r"malformed\.csv:2: malformed ratings CSV"):
+        freeze_ratings([malformed, valid], **inputs)
+
+    assert all(path.read_bytes() == content for path, content in originals.items())
+    assert not inputs["output_root"].exists()
+
+
+def test_malformed_quoted_header_is_rejected_without_publication(tmp_path, inputs):
+    ratings = tmp_path / "malformed-header.csv"
+    ratings.write_bytes(
+        (",".join(RATING_FIELDS) + ',"unterminated\r\n').encode("utf-8")
+    )
+    before = ratings.read_bytes()
+
+    with pytest.raises(
+        ValueError,
+        match=r"malformed-header\.csv:1: malformed ratings CSV",
+    ):
+        freeze_ratings([ratings], **inputs)
+
+    assert ratings.read_bytes() == before
+    assert not inputs["output_root"].exists()
+
+
 def test_later_bad_file_does_not_publish_partial_snapshot(tmp_path, inputs):
     first = _write(tmp_path / "a.csv", RATING_FIELDS, _rows()[:1])
     second = _write(tmp_path / "b.csv", RATING_FIELDS, [_rows()[1] + ["extra"]])
@@ -172,4 +213,42 @@ def test_cli_rejects_extra_cell_without_success_receipt(tmp_path, inputs):
     assert "HUMAN EVAL FREEZE: FAIL" in result.stderr
     assert "extra" in result.stderr
     assert "Traceback" not in result.stderr
+    assert not inputs["output_root"].exists()
+
+
+def test_cli_rejects_malformed_quoted_cell_without_success_receipt(tmp_path, inputs):
+    header = ",".join(RATING_FIELDS) + "\r\n"
+    malformed = tmp_path / "malformed.csv"
+    malformed.write_bytes(
+        (header + 'synthetic-a,H001,2,3,4,4,3,"unterminated\r\n').encode("utf-8")
+    )
+    valid = _write(tmp_path / "valid.csv", RATING_FIELDS, [_rows()[1]])
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.freeze_human_eval_ratings",
+            str(malformed),
+            str(valid),
+            "--packet",
+            str(inputs["packet_path"]),
+            "--protocol",
+            str(inputs["protocol_path"]),
+            "--assignment-plan",
+            str(inputs["assignment_plan_path"]),
+            "--output-root",
+            str(inputs["output_root"]),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "HUMAN EVAL FREEZE: FAIL" in result.stderr
+    assert "malformed.csv:2: malformed ratings CSV" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert "HUMAN EVAL FREEZE: PASS" not in result.stdout
     assert not inputs["output_root"].exists()

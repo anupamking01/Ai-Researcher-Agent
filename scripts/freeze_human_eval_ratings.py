@@ -155,6 +155,27 @@ def _parse_score(value: str, *, field: str, annotator_id: str, blind_id: str) ->
     return score
 
 
+def _physical_line_number(handle: io.StringIO) -> int:
+    """Return the last physical input line consumed by the CSV parser."""
+    consumed = handle.getvalue()[: handle.tell()]
+    normalized = consumed.replace("\r\n", "\n").replace("\r", "\n")
+    return max(1, normalized.count("\n") + int(not normalized.endswith("\n")))
+
+
+def _strict_csv_rows(reader: csv.DictReader, *, path: Path, handle: io.StringIO):
+    """Yield rows while translating strict CSV syntax failures into input errors."""
+    while True:
+        try:
+            yield next(reader)
+        except StopIteration:
+            return
+        except csv.Error as exc:
+            raise ValueError(
+                f"{path.name}:{_physical_line_number(handle)}: "
+                f"malformed ratings CSV: {exc}"
+            ) from exc
+
+
 def _load_ratings(
     rating_paths: list[Path],
     *,
@@ -190,8 +211,14 @@ def _load_ratings(
         )
 
         with io.StringIO(content.decode("utf-8"), newline="") as handle:
-            reader = csv.DictReader(handle)
-            fieldnames = reader.fieldnames or []
+            reader = csv.DictReader(handle, strict=True)
+            try:
+                fieldnames = reader.fieldnames or []
+            except csv.Error as exc:
+                raise ValueError(
+                    f"{path.name}:{_physical_line_number(handle)}: "
+                    f"malformed ratings CSV: {exc}"
+                ) from exc
             # A set-only schema check loses duplicate headers; DictReader would
             # then silently replace an earlier score with the last same-name cell.
             duplicates = sorted({name for name in fieldnames if fieldnames.count(name) > 1})
@@ -210,7 +237,7 @@ def _load_ratings(
                     f"missing={sorted(missing)}, unexpected={sorted(unexpected)}"
                 )
 
-            for raw in reader:
+            for raw in _strict_csv_rows(reader, path=path, handle=handle):
                 line_number = reader.line_num
                 # Surplus cells are stored under None, and absent cells have
                 # value None. Neither is the explicit empty string allowed by
