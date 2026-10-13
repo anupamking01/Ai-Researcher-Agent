@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -31,6 +32,7 @@ EVAL_ROOT = REPO_ROOT / "outputs" / "posthoc_evaluations"
 PRICING_FILE = REPO_ROOT / "experiments" / "openai_pricing_2026-09-08.json"
 VARIANTS = ("D3", "D6", "P6", "P6V")
 MAX_CLAIMS = 12
+STUDY_ID = "budget-main-v1"
 NO_EVIDENCE_SENTINEL = (
     "[NO RETRIEVED EVIDENCE WAS AVAILABLE FOR THIS TREATMENT RUN. "
     "The run recorded zero successful retrieved sources. Do not use outside knowledge.]"
@@ -47,8 +49,32 @@ def _normalize_evaluator_output(raw_result: str) -> dict:
     return normalize_verifier_output(raw_result, max_claims=MAX_CLAIMS)
 
 
-def _load_cached_evaluation(path: Path) -> dict:
+def _load_cached_evaluation(
+    path: Path,
+    *,
+    expected_variant: str,
+    expected_task_id: str,
+    expected_run_id: str,
+) -> dict:
     payload = _load_json(path)
+    schema_version = payload.get("schema_version")
+    if type(schema_version) is not int or schema_version != 1:
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} schema_version must equal 1"
+        )
+    expected_identity = {
+        "study_id": STUDY_ID,
+        "variant_id": expected_variant,
+        "task_id": expected_task_id,
+        "run_id": expected_run_id,
+    }
+    for field, expected_value in expected_identity.items():
+        if payload.get(field) != expected_value:
+            raise SystemExit(
+                f"Cached post-hoc evaluation {path} {field} must equal "
+                f"{expected_value}"
+            )
+
     declared_cap = payload.get("max_claims")
     if (
         isinstance(declared_cap, bool)
@@ -65,7 +91,66 @@ def _load_cached_evaluation(path: Path) -> dict:
         raise SystemExit(
             f"Cached post-hoc evaluation {path} is invalid: {exc}"
         ) from exc
+
+    claims_checked = payload["claims_checked"]
+    if claims_checked <= 0:
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} claims_checked must be positive"
+        )
+    expected_rate = payload["supported"] / claims_checked
+    stored_rate = payload.get("strict_support_rate")
+    if (
+        isinstance(stored_rate, bool)
+        or not isinstance(stored_rate, (int, float))
+        or not math.isfinite(stored_rate)
+        or float(stored_rate) != expected_rate
+    ):
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} strict_support_rate must equal "
+            "supported / claims_checked"
+        )
     return payload
+
+
+def _validated_completed_trace(
+    path: Path,
+    payload: dict,
+    *,
+    expected_variant: str,
+) -> tuple[dict, str, str]:
+    experiment = payload.get("experiment")
+    trace = payload.get("trace")
+    if not isinstance(experiment, dict) or not isinstance(trace, dict):
+        raise SystemExit(f"Completed trace must contain object metadata: {path}")
+    if trace.get("completed") is not True:
+        raise SystemExit(f"Trace is not completed: {path}")
+
+    identities: dict[str, str] = {}
+    for field in ("variant_id", "task_id"):
+        experiment_value = experiment.get(field)
+        trace_value = trace.get(field)
+        if not isinstance(experiment_value, str) or not experiment_value.strip():
+            raise SystemExit(f"Completed trace missing {field} in experiment: {path}")
+        if not isinstance(trace_value, str) or not trace_value.strip():
+            raise SystemExit(f"Completed trace missing {field} in trace: {path}")
+        if experiment_value != experiment_value.strip() or trace_value != trace_value.strip():
+            raise SystemExit(f"Completed trace invalid {field} whitespace: {path}")
+        if experiment_value != trace_value:
+            raise SystemExit(f"Completed trace {field} mismatch: {path}")
+        identities[field] = trace_value
+
+    if identities["variant_id"] != expected_variant or path.parent.name != expected_variant:
+        raise SystemExit(f"Completed trace variant_id mismatch: {path}")
+
+    run_id = trace.get("run_id")
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise SystemExit(f"Completed trace missing run_id: {path}")
+    if run_id != run_id.strip():
+        raise SystemExit(f"Completed trace invalid run_id whitespace: {path}")
+    if path.stem != run_id:
+        raise SystemExit(f"Completed trace filename does not match run_id: {path}")
+
+    return trace, identities["task_id"], run_id
 
 
 def _cost_usage(usage_by_model: dict, pricing: dict) -> float:
@@ -138,20 +223,32 @@ def main() -> int:
     for variant in VARIANTS:
         for trace_path in sorted((TRACE_ROOT / variant).glob("*.json")):
             payload = _load_json(trace_path)
-            trace = payload.get("trace", {})
-            if trace.get("completed") is not True:
+            raw_trace = payload.get("trace")
+            if not isinstance(raw_trace, dict):
+                raise SystemExit(f"Trace metadata must be an object: {trace_path}")
+            if raw_trace.get("completed") is not True:
                 continue
-            expected.append((variant, trace_path, trace))
+            trace, task_id, run_id = _validated_completed_trace(
+                trace_path,
+                payload,
+                expected_variant=variant,
+            )
+            expected.append((variant, trace_path, trace, task_id, run_id))
 
     if not expected:
         raise SystemExit("No completed main-study traces found")
 
-    for variant, trace_path, trace in expected:
-        task_id = str(trace.get("task_id", ""))
-        run_id = str(trace.get("run_id", trace_path.stem))
+    for variant, trace_path, trace, task_id, run_id in expected:
         out_path = EVAL_ROOT / variant / f"{task_id}.json"
         if out_path.is_file():
-            rows.append(_load_cached_evaluation(out_path))
+            rows.append(
+                _load_cached_evaluation(
+                    out_path,
+                    expected_variant=variant,
+                    expected_task_id=task_id,
+                    expected_run_id=run_id,
+                )
+            )
             continue
 
         spent = _existing_evaluator_cost(pricing)
@@ -184,7 +281,7 @@ def main() -> int:
         cost = _cost_usage(usage.get("by_model", {}), pricing)
         record = {
             "schema_version": 1,
-            "study_id": "budget-main-v1",
+            "study_id": STUDY_ID,
             "variant_id": variant,
             "task_id": task_id,
             "run_id": run_id,
@@ -217,7 +314,7 @@ def main() -> int:
     rows = sorted(rows, key=lambda r: (r["task_id"], VARIANTS.index(r["variant_id"])))
     summary = {
         "schema_version": 1,
-        "study_id": "budget-main-v1",
+        "study_id": STUDY_ID,
         "n_evaluations": len(rows),
         "expected_evaluations": len(expected),
         "max_claims_per_report": MAX_CLAIMS,
