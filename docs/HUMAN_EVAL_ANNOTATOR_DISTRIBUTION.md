@@ -51,9 +51,12 @@ change to the live coordinator packet after verification cannot silently change
 the bytes copied to the annotator bundle.
 
 The destination must not already exist. Publication writes only the expected
-annotator artifacts, fingerprints them, and verifies the resulting directory.
-The verifier rejects extra files, including a coordinator blinding key copied
-into the distribution directory after export.
+annotator artifacts, snapshots the completed directory, verifies that captured
+revision, and requires its packet and template bytes to equal the already
+verified coordinator snapshot. The success receipt records this source binding
+and the verified coordinator-manifest SHA-256. The verifier rejects extra files,
+including a coordinator blinding key copied into the distribution directory
+after export.
 
 Independent distribution verification also enforces a plain-text packet contract:
 all four packet fields must be nonempty strings, not nested JSON objects,
@@ -93,6 +96,11 @@ contents. That is useful for annotator-side transfer checks, but local
 consistency cannot by itself prove origin: someone could change
 `packet.jsonl` and recompute `annotator_manifest.json` to match.
 
+The default export command now performs source-bound verification before it
+reports success, using the same captured coordinator revision that supplied the
+published bytes. The command fails if a coherently replaced packet or template
+is present when the completed output is snapshotted.
+
 Before distribution, the coordinator should therefore also run:
 
     python scripts/export_human_eval_annotator_bundle.py \
@@ -109,7 +117,8 @@ verified coordinator manifest; those details are not added to the annotator
 bundle.
 
 Both sides are snapshotted before verification, so a later change to either
-live directory cannot change the bytes that were compared. This is a
-coordinator-side provenance check, not a claim that files cannot be replaced
-after the check; retain the verified bundle bytes or distribute them
+live directory cannot change the bytes that were compared. These snapshot
+checks are coordinator-side provenance checks, not filesystem locks: they do
+not detect a transient change restored before capture or prevent replacement
+after the check. Retain the verified bundle bytes or distribute them
 immediately through the controlled annotation workflow.

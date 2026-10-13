@@ -93,6 +93,8 @@ def test_export_contains_only_annotator_safe_artifacts(packet_case):
 
     assert receipt["status"] == "human_eval_annotator_distribution_verified"
     assert receipt["coordinator_artifacts_included"] is False
+    assert receipt["source_bound_to_verified_coordinator"] is True
+    assert len(receipt["coordinator_manifest_sha256"]) == 64
     assert {path.name for path in packet_case["export_root"].iterdir()} == {
         "packet.jsonl",
         "ratings_template.csv",
@@ -128,6 +130,67 @@ def test_exported_bytes_come_from_same_snapshot_that_was_verified(packet_case, m
     assert saw_snapshot == [True]
     assert (packet_case["export_root"] / "packet.jsonl").read_bytes() == original
     assert live_packet.read_bytes() != original
+
+
+def test_export_rejects_coherently_rehashed_output_replacement(packet_case, monkeypatch):
+    real_write = exporter._write_exclusive
+
+    def replace_after_publication(path, content):
+        real_write(path, content)
+        if Path(path).name != "annotator_manifest.json":
+            return
+        packet_path = packet_case["export_root"] / "packet.jsonl"
+        rows = [
+            json.loads(line)
+            for line in packet_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        rows[0]["report_markdown"] += "\n\nSynthetic concurrent replacement."
+        packet_bytes = (
+            "\n".join(
+                json.dumps(row, ensure_ascii=False, sort_keys=True) for row in rows
+            )
+            + "\n"
+        ).encode("utf-8")
+        packet_path.write_bytes(packet_bytes)
+        manifest_path = packet_case["export_root"] / "annotator_manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["artifacts"]["packet"] = {
+            "path": "packet.jsonl",
+            **exporter._fingerprint(packet_bytes),
+        }
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(exporter, "_write_exclusive", replace_after_publication)
+
+    with pytest.raises(
+        ValueError,
+        match="annotator packet.jsonl does not match the verified coordinator source",
+    ):
+        _export(packet_case)
+
+
+def test_export_rejects_coordinator_artifact_inserted_before_capture(
+    packet_case, monkeypatch
+):
+    real_write = exporter._write_exclusive
+
+    def add_blinding_key_after_publication(path, content):
+        real_write(path, content)
+        if Path(path).name == "annotator_manifest.json":
+            source = packet_case["packet_root"] / "blinding_key.csv"
+            destination = packet_case["export_root"] / "blinding_key.csv"
+            destination.write_bytes(source.read_bytes())
+
+    monkeypatch.setattr(
+        exporter, "_write_exclusive", add_blinding_key_after_publication
+    )
+
+    with pytest.raises(ValueError, match="artifact set mismatch.*blinding_key.csv"):
+        _export(packet_case)
 
 
 def test_tampered_coordinator_packet_is_rejected_before_export(packet_case):

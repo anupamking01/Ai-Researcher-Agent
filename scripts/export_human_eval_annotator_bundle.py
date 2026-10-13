@@ -75,13 +75,50 @@ def _snapshot_coordinator_bundle(packet_root: Path, snapshot_root: Path) -> dict
     return captured
 
 
+def _require_annotator_artifact_set(output_root: Path) -> None:
+    children = {path.name for path in Path(output_root).iterdir()}
+    expected = set(ANNOTATOR_ARTIFACTS)
+    if children != expected:
+        extra = sorted(children - expected)
+        missing = sorted(expected - children)
+        raise ValueError(
+            "annotator bundle artifact set mismatch; "
+            f"missing={missing}, extra={extra}"
+        )
+
+
 def _snapshot_annotator_bundle(output_root: Path, snapshot_root: Path) -> dict[str, bytes]:
+    # Enforce the live inventory before whitelisting files into the snapshot;
+    # otherwise an injected coordinator artifact would disappear from the
+    # captured view that receives the success receipt.
+    _require_annotator_artifact_set(output_root)
     captured = {}
     for name in ANNOTATOR_ARTIFACTS:
         content = _regular_bytes(output_root / name, label=f"annotator {name}")
         captured[name] = content
         (snapshot_root / name).write_bytes(content)
     return captured
+
+
+def _source_bound_receipt(
+    *,
+    receipt: dict,
+    coordinator_bytes: dict[str, bytes],
+    annotator_bytes: dict[str, bytes],
+) -> dict:
+    """Bind a locally verified distribution snapshot to its coordinator source."""
+    for name in ("packet.jsonl", "ratings_template.csv"):
+        if annotator_bytes[name] != coordinator_bytes[name]:
+            raise ValueError(
+                f"annotator {name} does not match the verified coordinator source"
+            )
+    return {
+        **receipt,
+        "source_bound_to_verified_coordinator": True,
+        "coordinator_manifest_sha256": _fingerprint(
+            coordinator_bytes["manifest.json"]
+        )["sha256"],
+    }
 
 
 def _read_jsonl_packet(content: bytes) -> list[dict]:
@@ -153,14 +190,7 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
     if output_root.is_symlink() or not output_root.is_dir():
         raise ValueError(f"annotator bundle root must be a regular directory: {output_root}")
 
-    children = {path.name for path in output_root.iterdir()}
-    if children != set(ANNOTATOR_ARTIFACTS):
-        extra = sorted(children - set(ANNOTATOR_ARTIFACTS))
-        missing = sorted(set(ANNOTATOR_ARTIFACTS) - children)
-        raise ValueError(
-            "annotator bundle artifact set mismatch; "
-            f"missing={missing}, extra={extra}"
-        )
+    _require_annotator_artifact_set(output_root)
 
     packet_bytes = _regular_bytes(output_root / "packet.jsonl", label="annotator packet")
     template_bytes = _regular_bytes(
@@ -292,18 +322,11 @@ def verify_annotator_bundle_against_source(
             repo_root=repo_root,
         )
         receipt = verify_annotator_bundle(annotator_snapshot)
-        for name in ("packet.jsonl", "ratings_template.csv"):
-            if annotator_bytes[name] != coordinator_bytes[name]:
-                raise ValueError(
-                    f"annotator {name} does not match the verified coordinator source"
-                )
-        return {
-            **receipt,
-            "source_bound_to_verified_coordinator": True,
-            "coordinator_manifest_sha256": _fingerprint(
-                coordinator_bytes["manifest.json"]
-            )["sha256"],
-        }
+        return _source_bound_receipt(
+            receipt=receipt,
+            coordinator_bytes=coordinator_bytes,
+            annotator_bytes=annotator_bytes,
+        )
 
 
 def export_annotator_bundle(
@@ -371,8 +394,21 @@ def export_annotator_bundle(
             output_root / "annotator_manifest.json",
             (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),
         )
-
-    return verify_annotator_bundle(output_root)
+        # Verify one captured publication revision and prove that its two
+        # annotator-facing byte streams still equal the coordinator snapshot
+        # verified above. Local manifest consistency alone cannot establish
+        # source identity after a coherent packet+manifest replacement.
+        annotator_snapshot = Path(tmp_name) / "annotator"
+        annotator_snapshot.mkdir()
+        annotator_bytes = _snapshot_annotator_bundle(
+            output_root, annotator_snapshot
+        )
+        receipt = verify_annotator_bundle(annotator_snapshot)
+        return _source_bound_receipt(
+            receipt=receipt,
+            coordinator_bytes=captured,
+            annotator_bytes=annotator_bytes,
+        )
 
 
 def main() -> int:
