@@ -8,7 +8,7 @@ benchmark results; it only defines metrics and aggregation utilities.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from math import floor, sqrt
+from math import floor, isfinite, sqrt
 from random import Random
 from typing import Callable, Iterable, Sequence
 
@@ -126,6 +126,21 @@ def population_stddev(values: Iterable[float]) -> float:
     return sqrt(safe_mean((value - mean) ** 2 for value in values))
 
 
+def _finite_float(value: float, *, label: str) -> float:
+    """Normalize one numeric value and reject invalid statistical inputs."""
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be finite") from exc
+    if not isfinite(normalized):
+        raise ValueError(f"{label} must be finite")
+    return normalized
+
+
+def _finite_values(values: Iterable[float], *, label: str) -> list[float]:
+    return [_finite_float(value, label=label) for value in values]
+
+
 def _linear_quantile(ordered: Sequence[float], probability: float) -> float:
     """Return the linearly interpolated quantile of a sorted sample."""
     position = probability * (len(ordered) - 1)
@@ -133,8 +148,8 @@ def _linear_quantile(ordered: Sequence[float], probability: float) -> float:
     upper_index = min(lower_index + 1, len(ordered) - 1)
     fraction = position - lower_index
     return float(
-        ordered[lower_index]
-        + fraction * (ordered[upper_index] - ordered[lower_index])
+        (1.0 - fraction) * ordered[lower_index]
+        + fraction * ordered[upper_index]
     )
 
 
@@ -156,7 +171,7 @@ def bootstrap_confidence_interval(
     if n_resamples <= 0:
         raise ValueError("n_resamples must be positive")
 
-    sample = [float(value) for value in values]
+    sample = _finite_values(values, label="bootstrap sample")
     if not sample:
         return {
             "estimate": 0.0,
@@ -168,13 +183,24 @@ def bootstrap_confidence_interval(
 
     rng = Random(seed)
     estimates = sorted(
-        statistic(rng.choices(sample, k=len(sample))) for _ in range(n_resamples)
+        _finite_float(
+            statistic(rng.choices(sample, k=len(sample))),
+            label="bootstrap statistic",
+        )
+        for _ in range(n_resamples)
     )
+    estimate = _finite_float(statistic(sample), label="bootstrap statistic")
     alpha = (1.0 - confidence) / 2.0
+    lower = _finite_float(
+        _linear_quantile(estimates, alpha), label="bootstrap interval"
+    )
+    upper = _finite_float(
+        _linear_quantile(estimates, 1.0 - alpha), label="bootstrap interval"
+    )
     return {
-        "estimate": float(statistic(sample)),
-        "lower": _linear_quantile(estimates, alpha),
-        "upper": _linear_quantile(estimates, 1.0 - alpha),
+        "estimate": estimate,
+        "lower": lower,
+        "upper": upper,
         "confidence": confidence,
         "n_resamples": n_resamples,
     }
@@ -194,12 +220,24 @@ def paired_metric_comparison(
     if len(baseline) != len(candidate):
         raise ValueError("paired comparisons require equal-length sequences")
 
-    deltas = [float(new) - float(old) for old, new in zip(baseline, candidate)]
+    baseline_values = _finite_values(baseline, label="baseline values")
+    candidate_values = _finite_values(candidate, label="candidate values")
+    deltas = [
+        _finite_float(new - old, label="paired deltas")
+        for old, new in zip(baseline_values, candidate_values)
+    ]
+    try:
+        mean_delta = safe_mean(deltas)
+        median_delta = safe_median(deltas)
+        delta_stddev = population_stddev(deltas)
+    except OverflowError as exc:
+        raise ValueError("paired summary must be finite") from exc
+
     return {
         "n_pairs": len(deltas),
-        "mean_delta": safe_mean(deltas),
-        "median_delta": safe_median(deltas),
-        "delta_stddev": population_stddev(deltas),
+        "mean_delta": _finite_float(mean_delta, label="paired summary"),
+        "median_delta": _finite_float(median_delta, label="paired summary"),
+        "delta_stddev": _finite_float(delta_stddev, label="paired summary"),
         "wins": sum(delta > 0 for delta in deltas),
         "ties": sum(delta == 0 for delta in deltas),
         "losses": sum(delta < 0 for delta in deltas),
