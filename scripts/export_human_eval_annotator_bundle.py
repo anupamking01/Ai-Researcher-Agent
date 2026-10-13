@@ -28,6 +28,11 @@ DEFAULT_OUTPUT_ROOT = DEFAULT_PACKET_ROOT / "annotator-bundle-v1"
 DEFAULT_TASK_MANIFEST = build.DEFAULT_TASK_MANIFEST
 COORDINATOR_ARTIFACTS = ("packet.jsonl", "ratings_template.csv", "blinding_key.csv", "manifest.json")
 ANNOTATOR_ARTIFACTS = ("packet.jsonl", "ratings_template.csv", "annotator_manifest.json")
+DISTRIBUTION_NOTE = (
+    "This directory is safe for annotator distribution only after this "
+    "manifest verifies. It intentionally excludes blinding_key.csv and "
+    "the coordinator packet manifest."
+)
 
 
 def _regular_bytes(path: Path, *, label: str) -> bytes:
@@ -39,6 +44,18 @@ def _regular_bytes(path: Path, *, label: str) -> bytes:
 
 def _fingerprint(content: bytes) -> dict:
     return {"bytes": len(content), "sha256": hashlib.sha256(content).hexdigest()}
+
+
+def _unique_json_object(label: str):
+    def unique_object(pairs):
+        value = {}
+        for key, child in pairs:
+            if key in value:
+                raise ValueError(f"duplicate JSON key {key!r} in {label}")
+            value[key] = child
+        return value
+
+    return unique_object
 
 
 def _write_exclusive(path: Path, content: bytes) -> None:
@@ -78,7 +95,12 @@ def _read_jsonl_packet(content: bytes) -> list[dict]:
         if not raw.strip():
             continue
         try:
-            row = json.loads(raw)
+            row = json.loads(
+                raw,
+                object_pairs_hook=_unique_json_object(
+                    f"annotator packet line {line_number}"
+                ),
+            )
         except json.JSONDecodeError as exc:
             raise ValueError(f"annotator packet line {line_number} is not valid JSON") from exc
         if not isinstance(row, dict) or set(row) != expected:
@@ -151,11 +173,33 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
     template_rows = _read_ratings_template(template_bytes)
 
     try:
-        manifest = json.loads(manifest_bytes.decode("utf-8"))
+        manifest = json.loads(
+            manifest_bytes.decode("utf-8"),
+            object_pairs_hook=_unique_json_object("annotator manifest"),
+        )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("annotator manifest is not valid UTF-8 JSON") from exc
     if not isinstance(manifest, dict):
         raise ValueError("annotator manifest must contain a JSON object")
+
+    required_manifest_keys = {
+        "schema_version",
+        "study_id",
+        "status",
+        "coordinator_artifacts_included",
+        "n_reports",
+        "artifacts",
+    }
+    allowed_manifest_keys = required_manifest_keys | {"distribution_note"}
+    if not required_manifest_keys.issubset(manifest) or not set(manifest).issubset(
+        allowed_manifest_keys
+    ):
+        raise ValueError("annotator manifest schema contains missing or undeclared fields")
+    if (
+        "distribution_note" in manifest
+        and manifest["distribution_note"] != DISTRIBUTION_NOTE
+    ):
+        raise ValueError("annotator manifest distribution_note mismatch")
 
     expected_identity = {
         "schema_version": 1,
@@ -321,11 +365,7 @@ def export_annotator_bundle(
                     **_fingerprint(template_bytes),
                 },
             },
-            "distribution_note": (
-                "This directory is safe for annotator distribution only after this "
-                "manifest verifies. It intentionally excludes blinding_key.csv and "
-                "the coordinator packet manifest."
-            ),
+            "distribution_note": DISTRIBUTION_NOTE,
         }
         _write_exclusive(
             output_root / "annotator_manifest.json",

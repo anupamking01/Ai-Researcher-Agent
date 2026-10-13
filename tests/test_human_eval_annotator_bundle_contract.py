@@ -55,11 +55,83 @@ def _rows():
     ]
 
 
+def _rehash_packet(root: Path, packet_bytes: bytes) -> None:
+    (root / "packet.jsonl").write_bytes(packet_bytes)
+    manifest_path = root / "annotator_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"]["packet"] = {
+        "path": "packet.jsonl",
+        **exporter._fingerprint(packet_bytes),
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def test_standalone_bundle_accepts_valid_synthetic_packet(tmp_path):
     root = _write_bundle(tmp_path / "bundle", _rows())
     receipt = exporter.verify_annotator_bundle(root)
     assert receipt["n_reports"] == 2
     assert receipt["coordinator_artifacts_included"] is False
+
+
+@pytest.mark.parametrize("duplicate_key", ["blind_id", r"bl\u0069nd_id"])
+def test_standalone_bundle_rejects_duplicate_packet_keys_even_if_rehashed(
+    tmp_path, duplicate_key
+):
+    root = _write_bundle(tmp_path / "bundle", _rows())
+    packet_path = root / "packet.jsonl"
+    lines = packet_path.read_text(encoding="utf-8").splitlines()
+    lines[0] = '{"' + duplicate_key + '":"H999",' + lines[0][1:]
+    _rehash_packet(root, ("\n".join(lines) + "\n").encode("utf-8"))
+
+    with pytest.raises(ValueError, match="duplicate JSON key.*blind_id.*packet line 1"):
+        exporter.verify_annotator_bundle(root)
+
+
+@pytest.mark.parametrize("duplicate_key", ["status", r"st\u0061tus"])
+def test_standalone_bundle_rejects_duplicate_manifest_keys(
+    tmp_path, duplicate_key
+):
+    root = _write_bundle(tmp_path / "bundle", _rows())
+    manifest_path = root / "annotator_manifest.json"
+    original = manifest_path.read_text(encoding="utf-8")
+    manifest_path.write_text(
+        '{"' + duplicate_key + '":"ambiguous",' + original[1:],
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate JSON key.*status.*annotator manifest"):
+        exporter.verify_annotator_bundle(root)
+
+
+def test_standalone_bundle_rejects_undeclared_manifest_fields(tmp_path):
+    root = _write_bundle(tmp_path / "bundle", _rows())
+    manifest_path = root / "annotator_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["treatment_assignments"] = {"H001": "P6V"}
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="annotator manifest schema"):
+        exporter.verify_annotator_bundle(root)
+
+
+def test_standalone_bundle_rejects_modified_distribution_note(tmp_path):
+    root = _write_bundle(tmp_path / "bundle", _rows())
+    manifest_path = root / "annotator_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["distribution_note"] = "H001 was produced by treatment P6V."
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="distribution_note"):
+        exporter.verify_annotator_bundle(root)
 
 
 @pytest.mark.parametrize(

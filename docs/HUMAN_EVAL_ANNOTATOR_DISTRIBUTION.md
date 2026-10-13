@@ -64,6 +64,14 @@ packet's order. A bundle with correctly recomputed local SHA-256 fingerprints
 is rejected when any of those semantic checks fail. These checks preserve the
 already-frozen protocol; they neither generate ratings nor open treatment IDs.
 
+The standalone verifier also rejects duplicate JSON members at any depth in
+the packet or manifest, including names made equivalent by Unicode escapes.
+The manifest schema is closed: only the declared distribution fields are
+accepted, and the optional distribution note must exactly match the producer's
+fixed safety notice. This prevents last-value-wins parsing or added manifest
+metadata from concealing treatment information in a bundle declared safe for
+annotators.
+
 ## Limits
 
 This safeguard prevents accidental file-level leakage; it is not a substitute
