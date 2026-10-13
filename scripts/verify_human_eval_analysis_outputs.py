@@ -93,12 +93,47 @@ def _validate_analysis_identity(payload: dict) -> None:
         "human_ratings_generated": False,
         "treatment_outputs_rerun": False,
         "hypothesis_tests": "none_predeclared_for_human_validation",
+        "report_score_aggregation": "mean_observed_rater_scores_per_report_dimension",
+        "bootstrap_seed": core.SEED,
+        "bootstrap_draws": core.BOOTSTRAP_DRAWS,
     }
     for key, expected in required.items():
         _require_equal(payload.get(key), expected, label=f"analysis {key}")
 
     _require_equal(payload.get("variants"), list(core.VARIANTS), label="analysis variants")
     _require_equal(payload.get("dimensions"), list(core.DIMS), label="analysis dimensions")
+
+    verification = payload.get("verification")
+    if not isinstance(verification, dict):
+        raise ValueError("analysis verification must be an object")
+    snapshot_bound = verification.get("analysis_inputs_snapshot_bound")
+    if snapshot_bound is not True:
+        raise ValueError(
+            "analysis input snapshot binding mismatch: "
+            f"expected literal true, got {snapshot_bound!r}"
+        )
+
+    provenance = payload.get("provenance")
+    if not isinstance(provenance, dict):
+        raise ValueError("analysis provenance must be an object")
+    plan_entry = provenance.get("analysis_plan")
+    if not isinstance(plan_entry, dict):
+        raise ValueError("analysis plan provenance must be an object")
+    plan_bytes = _regular_bytes(core.PLAN, label="current frozen human-analysis plan")
+    expected_plan = _fingerprint(plan_bytes)
+    _require_equal(
+        expected_plan["sha256"],
+        core.FROZEN_ANALYSIS_PLAN_SHA256,
+        label="current frozen analysis plan fingerprint",
+    )
+    _require_equal(
+        {
+            "bytes": plan_entry.get("bytes"),
+            "sha256": plan_entry.get("sha256"),
+        },
+        expected_plan,
+        label="analysis plan provenance",
+    )
 
 
 def verify_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:

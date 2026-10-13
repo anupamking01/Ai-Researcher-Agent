@@ -45,6 +45,12 @@ Verification fails closed when:
 - result identity fields attempt to relabel human validation as automated
   confirmatory analysis, claim generated human ratings, claim treatment reruns,
   or add undeclared human-validation hypothesis tests.
+- a self-consistently rehashed canonical result changes the frozen report-score
+  aggregation rule, bootstrap seed, or 20,000-draw bootstrap configuration;
+- the canonical result does not affirm that verification and analysis consumed
+  the same captured input bytes;
+- the recorded analysis-plan byte count or SHA-256 does not match the literal
+  preregistered plan anchored by the generating implementation.
 
 A successful receipt is a publication-integrity check, not a new scientific
 result.

@@ -1,5 +1,6 @@
 """Synthetic JSON-ambiguity regression tests; no collected human ratings."""
 
+import hashlib
 import json
 
 import pytest
@@ -10,6 +11,7 @@ from scripts import verify_human_eval_analysis_outputs as verify
 
 
 def _synthetic_payload():
+    plan_bytes = core.PLAN.read_bytes()
     return {
         "schema_version": 1,
         "study_id": "budget-main-v1",
@@ -20,6 +22,17 @@ def _synthetic_payload():
         "hypothesis_tests": "none_predeclared_for_human_validation",
         "variants": list(core.VARIANTS),
         "dimensions": list(core.DIMS),
+        "report_score_aggregation": "mean_observed_rater_scores_per_report_dimension",
+        "bootstrap_seed": core.SEED,
+        "bootstrap_draws": core.BOOTSTRAP_DRAWS,
+        "verification": {"analysis_inputs_snapshot_bound": True},
+        "provenance": {
+            "analysis_plan": {
+                "path": core.PLAN.name,
+                "bytes": len(plan_bytes),
+                "sha256": hashlib.sha256(plan_bytes).hexdigest(),
+            }
+        },
         "variant_summary": {
             variant: {dim: {"mean_report_score": 3.0} for dim in core.DIMS}
             for variant in core.VARIANTS
