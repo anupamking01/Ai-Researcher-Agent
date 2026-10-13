@@ -327,6 +327,68 @@ def _evidence_for_trace(trace: dict, variant: str, task_id: str, run_id: str) ->
     )
 
 
+def _preflight_evaluator_resume(
+    expected: list[tuple[str, Path, dict, str, str]],
+    *,
+    pricing: dict,
+    evaluator_model: str,
+    evaluator_temperature: float,
+) -> tuple[list[dict], list[dict]]:
+    """Snapshot and validate the entire resume state before any model call."""
+    expected_paths: set[Path] = set()
+    for variant, trace_path, _trace, task_id, run_id in expected:
+        out_path = EVAL_ROOT / variant / f"{task_id}.json"
+        if out_path in expected_paths:
+            raise SystemExit(
+                "Completed traces map to duplicate evaluator destination "
+                f"{out_path}: {variant}/{task_id}/{run_id} ({trace_path})"
+            )
+        expected_paths.add(out_path)
+    existing_paths = set(EVAL_ROOT.glob("*/*.json")) if EVAL_ROOT.exists() else set()
+    unexpected_paths = sorted(existing_paths - expected_paths)
+    if unexpected_paths:
+        raise SystemExit(
+            "Unexpected cached post-hoc evaluation files: "
+            + ", ".join(str(path) for path in unexpected_paths)
+        )
+
+    rows: list[dict] = []
+    pending: list[dict] = []
+    for variant, _trace_path, trace, task_id, run_id in expected:
+        evidence, evidence_status = _evidence_for_trace(
+            trace, variant, task_id, run_id
+        )
+        report = _report_text(run_id)
+        out_path = EVAL_ROOT / variant / f"{task_id}.json"
+        if out_path.is_file():
+            rows.append(
+                _load_cached_evaluation(
+                    out_path,
+                    expected_variant=variant,
+                    expected_task_id=task_id,
+                    expected_run_id=run_id,
+                    expected_evaluator_model=evaluator_model,
+                    expected_temperature=evaluator_temperature,
+                    expected_evidence_status=evidence_status,
+                    pricing=pricing,
+                )
+            )
+            continue
+        pending.append(
+            {
+                "variant": variant,
+                "trace": trace,
+                "task_id": task_id,
+                "run_id": run_id,
+                "out_path": out_path,
+                "evidence": evidence,
+                "evidence_status": evidence_status,
+                "report": report,
+            }
+        )
+    return rows, pending
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-evaluator-cost-usd", type=float, default=1.25)
@@ -345,7 +407,6 @@ def main() -> int:
     evaluator_temperature = float(os.environ["TEMPERATURE"])
     if not math.isfinite(evaluator_temperature):
         raise SystemExit("TEMPERATURE must be finite")
-    rows = []
     expected = []
     for variant in VARIANTS:
         for trace_path in sorted((TRACE_ROOT / variant).glob("*.json")):
@@ -365,40 +426,35 @@ def main() -> int:
     if not expected:
         raise SystemExit("No completed main-study traces found")
 
-    for variant, trace_path, trace, task_id, run_id in expected:
-        out_path = EVAL_ROOT / variant / f"{task_id}.json"
-        if out_path.is_file():
-            _, evidence_status = _evidence_for_trace(
-                trace, variant, task_id, run_id
-            )
-            _report_text(run_id)
-            rows.append(
-                _load_cached_evaluation(
-                    out_path,
-                    expected_variant=variant,
-                    expected_task_id=task_id,
-                    expected_run_id=run_id,
-                    expected_evaluator_model=evaluator_model,
-                    expected_temperature=evaluator_temperature,
-                    expected_evidence_status=evidence_status,
-                    pricing=pricing,
-                )
-            )
-            continue
+    rows, pending = _preflight_evaluator_resume(
+        expected,
+        pricing=pricing,
+        evaluator_model=evaluator_model,
+        evaluator_temperature=evaluator_temperature,
+    )
+    spent = sum(float(row["estimated_cost_usd"]) for row in rows)
 
-        spent = _existing_evaluator_cost(
-            pricing,
-            expected_evaluator_model=evaluator_model,
-            expected_temperature=evaluator_temperature,
-        )
+    for item in pending:
+        variant = item["variant"]
+        trace = item["trace"]
+        task_id = item["task_id"]
+        run_id = item["run_id"]
+        out_path = item["out_path"]
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        if out_path.exists() or out_path.is_symlink():
+            raise SystemExit(
+                "Evaluator resume state changed after preflight: "
+                f"cache now exists for {variant}/{task_id}: {out_path}"
+            )
         if spent >= args.max_evaluator_cost_usd:
             raise SystemExit(
                 f"Evaluator spend guard reached ${spent:.4f} before {variant}/{task_id}; "
                 f"cap=${args.max_evaluator_cost_usd:.2f}"
             )
 
-        evidence, evidence_status = _evidence_for_trace(trace, variant, task_id, run_id)
-        report = _report_text(run_id)
+        evidence = item["evidence"]
+        evidence_status = item["evidence_status"]
+        report = item["report"]
 
         tracker = UsageTracker()
         prompt = generate_verification_prompt(
@@ -440,9 +496,16 @@ def main() -> int:
             "estimated_cost_usd": cost,
             "cost_method": "frozen uncached rates",
         }
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+        try:
+            with out_path.open("x", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, indent=2, sort_keys=True))
+        except FileExistsError as exc:
+            raise SystemExit(
+                "Evaluator cache appeared during model call; refusing to overwrite "
+                f"{variant}/{task_id}: {out_path}"
+            ) from exc
         rows.append(record)
+        spent += cost
         print(
             f"evaluated {variant}/{task_id}: evidence={evidence_status} "
             f"claims={result['claims_checked']} support={record['strict_support_rate']:.3f} "

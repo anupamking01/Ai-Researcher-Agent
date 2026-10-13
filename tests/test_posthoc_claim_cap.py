@@ -332,3 +332,239 @@ def test_existing_evaluator_cost_rejects_invalid_cached_accounting(
             expected_evaluator_model="gpt-5.6-terra",
             expected_temperature=1.0,
         )
+
+
+def _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01", "main-02")):
+    trace_root = tmp_path / "outputs" / "experiment_traces"
+    eval_root = tmp_path / "outputs" / "posthoc_evaluations"
+    pricing_file = tmp_path / "experiments" / "pricing.json"
+    pricing_file.parent.mkdir(parents=True)
+    pricing_file.write_text(json.dumps(PRICING), encoding="utf-8")
+
+    for task_id in task_ids:
+        run_id = f"run-d3-{task_id}"
+        trace_path = trace_root / "D3" / f"{run_id}.json"
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        trace_payload = _completed_trace_payload(
+            task_id=task_id,
+            run_id=run_id,
+            question=f"Question for {task_id}",
+            successful_source_count=0,
+        )
+        trace_payload["experiment"]["task_id"] = task_id
+        trace_path.write_text(
+            json.dumps(trace_payload),
+            encoding="utf-8",
+        )
+        report_path = tmp_path / "outputs" / run_id / "research_report.md"
+        report_path.parent.mkdir(parents=True)
+        report_path.write_text(f"Report for {task_id}\n", encoding="utf-8")
+
+    monkeypatch.setattr(evaluate_posthoc_support, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(evaluate_posthoc_support, "TRACE_ROOT", trace_root)
+    monkeypatch.setattr(evaluate_posthoc_support, "EVAL_ROOT", eval_root)
+    monkeypatch.setattr(evaluate_posthoc_support, "PRICING_FILE", pricing_file)
+    monkeypatch.setattr(evaluate_posthoc_support, "VARIANTS", ("D3",))
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SMART_LLM_MODEL", "gpt-5.6-terra")
+    monkeypatch.setenv("TEMPERATURE", "1")
+    monkeypatch.setattr(
+        evaluate_posthoc_support.sys,
+        "argv",
+        ["evaluate_posthoc_support.py", "--max-evaluator-cost-usd", "1.25"],
+    )
+    return eval_root
+
+
+def test_resume_preflights_later_cached_identity_before_first_model_call(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch)
+    invalid_cache = eval_root / "D3" / "main-02.json"
+    invalid_cache.parent.mkdir(parents=True)
+    invalid_cache.write_text(
+        json.dumps(
+            _cached_evaluation(
+                task_id="main-99",
+                run_id="run-d3-main-02",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    model_calls = []
+
+    def fail_if_called(**kwargs):
+        model_calls.append(kwargs)
+        raise AssertionError("model call occurred before cache preflight completed")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        fail_if_called,
+    )
+
+    with pytest.raises(SystemExit, match="task_id must equal main-02"):
+        evaluate_posthoc_support.main()
+
+    assert model_calls == []
+
+
+def test_resume_preflight_rejects_cached_files_outside_trace_matrix(
+    tmp_path, monkeypatch
+):
+    eval_root = tmp_path / "outputs" / "posthoc_evaluations"
+    unexpected = eval_root / "D6" / "main-99.json"
+    unexpected.parent.mkdir(parents=True)
+    unexpected.write_text(json.dumps(_cached_evaluation()), encoding="utf-8")
+
+    run_id = "run-d3-main-01"
+    report_path = tmp_path / "outputs" / run_id / "research_report.md"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text("Report for main-01\n", encoding="utf-8")
+    expected = [
+        (
+            "D3",
+            tmp_path / "outputs" / "experiment_traces" / "D3" / f"{run_id}.json",
+            {
+                "run_id": run_id,
+                "question": "Question for main-01",
+                "successful_source_count": 0,
+            },
+            "main-01",
+            run_id,
+        )
+    ]
+
+    monkeypatch.setattr(evaluate_posthoc_support, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(evaluate_posthoc_support, "EVAL_ROOT", eval_root)
+
+    with pytest.raises(SystemExit, match="Unexpected cached post-hoc evaluation"):
+        evaluate_posthoc_support._preflight_evaluator_resume(
+            expected,
+            pricing=PRICING,
+            evaluator_model="gpt-5.6-terra",
+            evaluator_temperature=1.0,
+        )
+
+
+def test_resume_preflight_rejects_duplicate_evaluator_destination(
+    tmp_path, monkeypatch
+):
+    eval_root = tmp_path / "outputs" / "posthoc_evaluations"
+    expected = []
+    for suffix in ("a", "b"):
+        run_id = f"run-d3-main-01-{suffix}"
+        report_path = tmp_path / "outputs" / run_id / "research_report.md"
+        report_path.parent.mkdir(parents=True)
+        report_path.write_text(f"Report {suffix}\n", encoding="utf-8")
+        expected.append(
+            (
+                "D3",
+                tmp_path / "outputs" / "experiment_traces" / "D3" / f"{run_id}.json",
+                {
+                    "run_id": run_id,
+                    "question": "Question for main-01",
+                    "successful_source_count": 0,
+                },
+                "main-01",
+                run_id,
+            )
+        )
+
+    monkeypatch.setattr(evaluate_posthoc_support, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(evaluate_posthoc_support, "EVAL_ROOT", eval_root)
+
+    with pytest.raises(SystemExit, match="duplicate evaluator destination"):
+        evaluate_posthoc_support._preflight_evaluator_resume(
+            expected,
+            pricing=PRICING,
+            evaluator_model="gpt-5.6-terra",
+            evaluator_temperature=1.0,
+        )
+
+
+def _record_evaluator_usage(kwargs):
+    kwargs["usage_tracker"].record_response(
+        "gpt-5.6-terra",
+        {
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+            }
+        },
+    )
+
+
+def _evaluator_result(supported=7):
+    return json.dumps(
+        {
+            "claims_checked": 12,
+            "supported": supported,
+            "partially_supported": 12 - supported,
+            "unsupported": 0,
+            "contradicted": 0,
+            "examples": [],
+        }
+    )
+
+
+def test_resume_fails_closed_if_later_cache_appears_after_preflight(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch)
+    later_cache = eval_root / "D3" / "main-02.json"
+    model_calls = []
+
+    def publish_later_cache(**kwargs):
+        model_calls.append(kwargs)
+        _record_evaluator_usage(kwargs)
+        if len(model_calls) == 1:
+            later_cache.parent.mkdir(parents=True, exist_ok=True)
+            later_cache.write_text(
+                json.dumps(
+                    _cached_evaluation(
+                        task_id="main-02",
+                        run_id="run-d3-main-02",
+                    )
+                ),
+                encoding="utf-8",
+            )
+        return _evaluator_result()
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        publish_later_cache,
+    )
+
+    with pytest.raises(SystemExit, match="resume state changed after preflight"):
+        evaluate_posthoc_support.main()
+
+    assert len(model_calls) == 1
+    assert json.loads(later_cache.read_text(encoding="utf-8"))["supported"] == 8
+
+
+def test_resume_never_overwrites_cache_published_during_model_call(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    concurrent_cache = eval_root / "D3" / "main-01.json"
+
+    def publish_current_cache(**kwargs):
+        _record_evaluator_usage(kwargs)
+        concurrent_cache.parent.mkdir(parents=True, exist_ok=True)
+        concurrent_cache.write_text(
+            json.dumps(_cached_evaluation()),
+            encoding="utf-8",
+        )
+        return _evaluator_result()
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        publish_current_cache,
+    )
+
+    with pytest.raises(SystemExit, match="cache appeared during model call"):
+        evaluate_posthoc_support.main()
+
+    assert json.loads(concurrent_cache.read_text(encoding="utf-8"))["supported"] == 8
