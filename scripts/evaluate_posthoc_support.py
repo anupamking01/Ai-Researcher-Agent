@@ -55,6 +55,10 @@ def _load_cached_evaluation(
     expected_variant: str,
     expected_task_id: str,
     expected_run_id: str,
+    expected_evaluator_model: str,
+    expected_temperature: float,
+    expected_evidence_status: str,
+    pricing: dict,
 ) -> dict:
     payload = _load_json(path)
     schema_version = payload.get("schema_version")
@@ -74,6 +78,16 @@ def _load_cached_evaluation(
                 f"Cached post-hoc evaluation {path} {field} must equal "
                 f"{expected_value}"
             )
+
+    recorded_evidence_status = payload.get("evidence_status")
+    if recorded_evidence_status not in (None, expected_evidence_status):
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} evidence_status must equal "
+            f"{expected_evidence_status}"
+        )
+    if recorded_evidence_status is None:
+        payload = dict(payload)
+        payload["evidence_status"] = expected_evidence_status
 
     declared_cap = payload.get("max_claims")
     if (
@@ -109,6 +123,13 @@ def _load_cached_evaluation(
             f"Cached post-hoc evaluation {path} strict_support_rate must equal "
             "supported / claims_checked"
         )
+    _validated_cache_accounting(
+        payload,
+        path=path,
+        pricing=pricing,
+        expected_evaluator_model=expected_evaluator_model,
+        expected_temperature=expected_temperature,
+    )
     return payload
 
 
@@ -162,6 +183,97 @@ def _cost_usage(usage_by_model: dict, pricing: dict) -> float:
     return float(cost)
 
 
+def _validated_cache_accounting(
+    payload: dict,
+    *,
+    path: Path,
+    pricing: dict,
+    expected_evaluator_model: str,
+    expected_temperature: float,
+) -> float:
+    if payload.get("evaluator_model") != expected_evaluator_model:
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} evaluator_model must equal "
+            f"{expected_evaluator_model}"
+        )
+
+    temperature = payload.get("temperature")
+    if (
+        isinstance(temperature, bool)
+        or not isinstance(temperature, (int, float))
+        or not math.isfinite(temperature)
+        or float(temperature) != expected_temperature
+    ):
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} temperature must equal "
+            f"{expected_temperature}"
+        )
+    if payload.get("cost_method") != "frozen uncached rates":
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} cost_method must equal "
+            "frozen uncached rates"
+        )
+
+    usage_by_model = payload.get("provider_usage_by_model")
+    valid_usage = (
+        isinstance(usage_by_model, dict)
+        and set(usage_by_model) == {expected_evaluator_model}
+        and isinstance(usage_by_model.get(expected_evaluator_model), dict)
+    )
+    if valid_usage:
+        usage = usage_by_model[expected_evaluator_model]
+        required_fields = (
+            "model_calls",
+            "unavailable_calls",
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+        )
+        valid_usage = all(
+            type(usage.get(field)) is int and usage[field] >= 0
+            for field in required_fields
+        )
+        if valid_usage:
+            prompt_tokens = usage["prompt_tokens"]
+            completion_tokens = usage["completion_tokens"]
+            expected_total = prompt_tokens + completion_tokens
+            valid_usage = (
+                usage["model_calls"] == 1
+                and usage["unavailable_calls"] == 0
+                and expected_total > 0
+                and usage["total_tokens"] == expected_total
+            )
+    if not valid_usage:
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} provider_usage_by_model is invalid"
+        )
+
+    total_tokens = payload.get("total_tokens")
+    if type(total_tokens) is not int or total_tokens != expected_total:
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} total_tokens must equal provider usage"
+        )
+
+    try:
+        recomputed_cost = _cost_usage(usage_by_model, pricing)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} cost cannot be recomputed: {exc}"
+        ) from exc
+    stored_cost = payload.get("estimated_cost_usd")
+    if (
+        isinstance(stored_cost, bool)
+        or not isinstance(stored_cost, (int, float))
+        or not math.isfinite(stored_cost)
+        or float(stored_cost) != recomputed_cost
+    ):
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} estimated_cost_usd must equal "
+            "recomputed cost"
+        )
+    return recomputed_cost
+
+
 def _research_context(run_id: str) -> str:
     run_dir = REPO_ROOT / "outputs" / run_id
     parts = []
@@ -179,13 +291,24 @@ def _report_text(run_id: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _existing_evaluator_cost(pricing: dict) -> float:
+def _existing_evaluator_cost(
+    pricing: dict,
+    *,
+    expected_evaluator_model: str,
+    expected_temperature: float,
+) -> float:
     total = 0.0
     if not EVAL_ROOT.exists():
         return total
     for path in EVAL_ROOT.glob("*/*.json"):
         payload = _load_json(path)
-        total += float(payload.get("estimated_cost_usd", 0.0) or 0.0)
+        total += _validated_cache_accounting(
+            payload,
+            path=path,
+            pricing=pricing,
+            expected_evaluator_model=expected_evaluator_model,
+            expected_temperature=expected_temperature,
+        )
     return total
 
 
@@ -218,6 +341,10 @@ def main() -> int:
     from logic.prompts import generate_verification_prompt
 
     pricing = _load_json(PRICING_FILE)
+    evaluator_model = os.environ["SMART_LLM_MODEL"]
+    evaluator_temperature = float(os.environ["TEMPERATURE"])
+    if not math.isfinite(evaluator_temperature):
+        raise SystemExit("TEMPERATURE must be finite")
     rows = []
     expected = []
     for variant in VARIANTS:
@@ -241,17 +368,29 @@ def main() -> int:
     for variant, trace_path, trace, task_id, run_id in expected:
         out_path = EVAL_ROOT / variant / f"{task_id}.json"
         if out_path.is_file():
+            _, evidence_status = _evidence_for_trace(
+                trace, variant, task_id, run_id
+            )
+            _report_text(run_id)
             rows.append(
                 _load_cached_evaluation(
                     out_path,
                     expected_variant=variant,
                     expected_task_id=task_id,
                     expected_run_id=run_id,
+                    expected_evaluator_model=evaluator_model,
+                    expected_temperature=evaluator_temperature,
+                    expected_evidence_status=evidence_status,
+                    pricing=pricing,
                 )
             )
             continue
 
-        spent = _existing_evaluator_cost(pricing)
+        spent = _existing_evaluator_cost(
+            pricing,
+            expected_evaluator_model=evaluator_model,
+            expected_temperature=evaluator_temperature,
+        )
         if spent >= args.max_evaluator_cost_usd:
             raise SystemExit(
                 f"Evaluator spend guard reached ${spent:.4f} before {variant}/{task_id}; "
@@ -266,7 +405,7 @@ def main() -> int:
             str(trace.get("question", "")), report, evidence, max_claims=MAX_CLAIMS
         )
         raw = create_chat_completion(
-            model=os.environ["SMART_LLM_MODEL"],
+            model=evaluator_model,
             messages=[{"role": "user", "content": prompt}],
             usage_tracker=tracker,
             request_timeout_seconds=120,
@@ -285,8 +424,8 @@ def main() -> int:
             "variant_id": variant,
             "task_id": task_id,
             "run_id": run_id,
-            "evaluator_model": os.environ["SMART_LLM_MODEL"],
-            "temperature": float(os.environ["TEMPERATURE"]),
+            "evaluator_model": evaluator_model,
+            "temperature": evaluator_temperature,
             "max_claims": MAX_CLAIMS,
             "evidence_status": evidence_status,
             "claims_checked": result["claims_checked"],
