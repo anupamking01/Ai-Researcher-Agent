@@ -144,13 +144,25 @@ def normalize_verifier_output(raw_result: str) -> dict[str, Any]:
         "contradicted",
     )
     normalized: dict[str, Any] = {}
-    for label in labels:
-        value = int(data.get(label, 0))
-        normalized[label] = max(value, 0)
+    for label in ("claims_checked", *labels):
+        if label not in data:
+            raise ValueError(f"Verifier output missing required count {label!r}")
+        value = data[label]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(
+                f"Verifier output {label} must be a non-negative integer"
+            )
+        normalized[label] = value
 
-    normalized["claims_checked"] = sum(normalized[label] for label in labels)
-    examples = data.get("examples", [])
-    normalized["examples"] = examples[:8] if isinstance(examples, list) else []
+    if sum(normalized[label] for label in labels) != normalized["claims_checked"]:
+        raise ValueError("Verifier label counts must sum to claims_checked")
+
+    if "examples" not in data:
+        raise ValueError("Verifier output missing required field 'examples'")
+    examples = data["examples"]
+    if not isinstance(examples, list):
+        raise ValueError("Verifier output examples must be a JSON list")
+    normalized["examples"] = examples[:8]
     return normalized
 
 

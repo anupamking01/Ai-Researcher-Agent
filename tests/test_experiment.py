@@ -57,17 +57,21 @@ def test_source_budget_handles_more_queries_than_calls():
     assert sum(budgets) == 3
 
 
-def test_verifier_output_is_normalized_and_recounted():
-    raw = json.dumps(
-        {
-            "claims_checked": 999,
-            "supported": 4,
-            "partially_supported": 2,
-            "unsupported": 1,
-            "contradicted": 1,
-            "examples": [{"claim": "x", "label": "supported"}] * 12,
-        }
-    )
+def _verifier_payload(**overrides):
+    payload = {
+        "claims_checked": 8,
+        "supported": 4,
+        "partially_supported": 2,
+        "unsupported": 1,
+        "contradicted": 1,
+        "examples": [{"claim": "x", "label": "supported"}] * 12,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_verifier_output_is_validated_and_examples_are_capped():
+    raw = json.dumps(_verifier_payload())
     parsed = normalize_verifier_output(raw)
 
     assert parsed["claims_checked"] == 8
@@ -77,9 +81,54 @@ def test_verifier_output_is_normalized_and_recounted():
     assert len(parsed["examples"]) == 8
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "claims_checked",
+        "supported",
+        "partially_supported",
+        "unsupported",
+        "contradicted",
+    ],
+)
+def test_verifier_output_rejects_missing_count_fields(field):
+    payload = _verifier_payload()
+    payload.pop(field)
+
+    with pytest.raises(ValueError, match=field):
+        normalize_verifier_output(json.dumps(payload))
+
+
+@pytest.mark.parametrize("value", [True, 1.5, "2", -1])
+def test_verifier_output_rejects_invalid_count_values(value):
+    with pytest.raises(ValueError, match="supported"):
+        normalize_verifier_output(json.dumps(_verifier_payload(supported=value)))
+
+
+def test_verifier_output_rejects_count_mismatch():
+    with pytest.raises(ValueError, match="sum to claims_checked"):
+        normalize_verifier_output(
+            json.dumps(_verifier_payload(claims_checked=999))
+        )
+
+
+@pytest.mark.parametrize("examples", [None, {}, "not-a-list"])
+def test_verifier_output_rejects_non_list_examples(examples):
+    with pytest.raises(ValueError, match="examples must be a JSON list"):
+        normalize_verifier_output(json.dumps(_verifier_payload(examples=examples)))
+
+
+def test_verifier_output_rejects_missing_examples():
+    payload = _verifier_payload()
+    payload.pop("examples")
+
+    with pytest.raises(ValueError, match="examples"):
+        normalize_verifier_output(json.dumps(payload))
+
+
 def test_verifier_accepts_json_code_fence():
     raw = """```json
-{"supported": 1, "partially_supported": 0, "unsupported": 0, "contradicted": 0, "examples": []}
+{"claims_checked": 1, "supported": 1, "partially_supported": 0, "unsupported": 0, "contradicted": 0, "examples": []}
 ```"""
     parsed = normalize_verifier_output(raw)
     assert parsed["claims_checked"] == 1
