@@ -322,6 +322,17 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
     }
     manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
+    from scripts.verify_human_reconciliation_outputs import (
+        _verify_producer_commit_implementation,
+        verify_bundle,
+    )
+
+    _verify_producer_commit_implementation(
+        producer_git_commit,
+        implementation,
+        root=Path(root),
+    )
+
     # The existence check above is not a lock. Reserve only after preflight and
     # still use exclusive creation so a concurrent publisher cannot be adopted.
     try:
@@ -335,8 +346,6 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
     _write_exclusive(json_path, json_bytes)
     _write_exclusive(markdown_path, markdown_bytes)
     _write_exclusive(manifest_path, manifest_bytes)
-
-    from scripts.verify_human_reconciliation_outputs import verify_bundle
 
     return verify_bundle(output_root, root=Path(root))
 

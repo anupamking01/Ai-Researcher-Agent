@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import subprocess
 from pathlib import Path
 
 from scripts import reconcile_human_automated as reconcile
@@ -54,6 +56,59 @@ def _verify_entry(entry, *, expected_path: str, content: bytes, label: str) -> N
         reconcile._fingerprint_bytes(content),
         label=f"{label} fingerprint",
     )
+
+
+def _verify_producer_commit_implementation(
+    producer: str,
+    implementation: dict,
+    *,
+    root: Path,
+) -> None:
+    """Bind the recorded producer commit to the manifest's exact source bytes."""
+    root = Path(root)
+    git_env = {
+        **os.environ,
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+    }
+    try:
+        object_type = subprocess.run(
+            ["git", "-C", str(root), "cat-file", "-t", producer],
+            check=True,
+            capture_output=True,
+            env=git_env,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise ValueError(
+            f"producer Git commit cannot be resolved: {producer}"
+        ) from exc
+    if object_type != "commit":
+        raise ValueError(
+            f"producer Git SHA must identify a commit object, got {object_type!r}"
+        )
+
+    for name in ("reconciler", "readiness_gate"):
+        entry = implementation[name]
+        path = entry["path"]
+        try:
+            content = subprocess.run(
+                ["git", "-C", str(root), "show", f"{producer}:{path}"],
+                check=True,
+                capture_output=True,
+                env=git_env,
+                timeout=10,
+            ).stdout
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            raise ValueError(
+                f"producer {name} cannot be read from commit {producer}: {path}"
+            ) from exc
+        _require_equal(
+            reconcile._fingerprint_bytes(content),
+            {"bytes": entry.get("bytes"), "sha256": entry.get("sha256")},
+            label=f"producer {name} fingerprint",
+        )
 
 
 def _validate_identity(payload: dict) -> None:
@@ -194,6 +249,11 @@ def verify_bundle(
         content=_regular_bytes(Path(readiness.__file__), label="current readiness gate"),
         label="readiness-gate implementation",
     )
+    _verify_producer_commit_implementation(
+        producer,
+        implementation,
+        root=Path(root),
+    )
 
     recomputed = reconcile.reconcile_verified(
         root=Path(root),
@@ -212,6 +272,7 @@ def verify_bundle(
         "manuscript_rendering_sha256": reconcile._fingerprint_bytes(markdown_bytes)["sha256"],
         "verified_input_fingerprints_bound": True,
         "implementation_bound": True,
+        "producer_commit_implementation_bound": True,
         "independent_recomputation_verified": True,
         "human_ratings_generated": False,
         "treatment_outputs_rerun": False,

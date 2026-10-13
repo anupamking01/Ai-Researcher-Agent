@@ -3,6 +3,8 @@
 These fixtures are not collected human ratings or study findings.
 """
 import json
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -91,6 +93,219 @@ def _payload():
 def _patch_recomputation(monkeypatch, payload):
     monkeypatch.setattr(reconcile, "reconcile_verified", lambda **kwargs: payload)
     monkeypatch.setattr(reconcile, "_producer_commit", lambda root: "a" * 40)
+    monkeypatch.setattr(
+        verify,
+        "_verify_producer_commit_implementation",
+        lambda producer, implementation, *, root: None,
+    )
+
+
+def _producer_repo(tmp_path):
+    root = tmp_path / "producer-repo"
+    scripts = root / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "reconcile_human_automated.py").write_bytes(
+        Path(reconcile.__file__).read_bytes()
+    )
+    (scripts / "verify_human_reconciliation_readiness.py").write_bytes(
+        Path(readiness.__file__).read_bytes()
+    )
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.name", "Synthetic Test"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "synthetic@example.invalid"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(["git", "add", "scripts"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "bound implementation"], cwd=root, check=True)
+    return root
+
+
+def _implementation_manifest():
+    return {
+        "reconciler": {
+            "path": "scripts/reconcile_human_automated.py",
+            **reconcile._fingerprint_bytes(Path(reconcile.__file__).read_bytes()),
+        },
+        "readiness_gate": {
+            "path": "scripts/verify_human_reconciliation_readiness.py",
+            **reconcile._fingerprint_bytes(Path(readiness.__file__).read_bytes()),
+        },
+    }
+
+
+def _rewrite_producer_commit(output, producer):
+    manifest_path = output / reconcile.RECONCILIATION_MANIFEST
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["producer_git_commit"] = producer
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_rejects_unresolvable_producer_commit(tmp_path, monkeypatch):
+    payload = _payload()
+    root = _producer_repo(tmp_path)
+    monkeypatch.setattr(reconcile, "reconcile_verified", lambda **kwargs: payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=root)
+    _rewrite_producer_commit(output, "f" * 40)
+
+    with pytest.raises(ValueError, match="producer Git commit cannot be resolved"):
+        verify.verify_bundle(output, root=root)
+
+
+def test_rejects_producer_commit_with_different_implementation_bytes(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    root = _producer_repo(tmp_path)
+    monkeypatch.setattr(reconcile, "reconcile_verified", lambda **kwargs: payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=root)
+
+    reconciler = root / "scripts" / "reconcile_human_automated.py"
+    reconciler.write_text("# substituted reconciler\n", encoding="utf-8")
+    subprocess.run(["git", "add", str(reconciler)], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "substitute implementation"], cwd=root, check=True
+    )
+    substituted_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    _rewrite_producer_commit(output, substituted_commit)
+
+    with pytest.raises(ValueError, match="producer reconciler fingerprint mismatch"):
+        verify.verify_bundle(output, root=root)
+
+
+def test_git_replacement_ref_cannot_substitute_producer_commit(tmp_path, monkeypatch):
+    payload = _payload()
+    root = _producer_repo(tmp_path)
+    good_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    monkeypatch.setattr(reconcile, "reconcile_verified", lambda **kwargs: payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=root)
+
+    reconciler = root / "scripts" / "reconcile_human_automated.py"
+    reconciler.write_text("# substituted reconciler\n", encoding="utf-8")
+    subprocess.run(["git", "add", str(reconciler)], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "substitute implementation"], cwd=root, check=True
+    )
+    substituted_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "replace", substituted_commit, good_commit], cwd=root, check=True
+    )
+    _rewrite_producer_commit(output, substituted_commit)
+
+    with pytest.raises(ValueError, match="producer reconciler fingerprint mismatch"):
+        verify.verify_bundle(output, root=root)
+
+
+def test_partial_clone_does_not_fetch_missing_producer_blobs(tmp_path):
+    source = _producer_repo(tmp_path)
+    producer = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=source,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "config", "uploadpack.allowFilter", "true"], cwd=source, check=True
+    )
+    partial = tmp_path / "partial-clone"
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "-q",
+            "--no-checkout",
+            "--filter=blob:none",
+            source.resolve().as_uri(),
+            str(partial),
+        ],
+        check=True,
+    )
+    missing = subprocess.run(
+        ["git", "rev-list", "--objects", "--missing=print", "HEAD"],
+        cwd=partial,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "?" in missing
+    pack_root = partial / ".git" / "objects" / "pack"
+    before = {path.name for path in pack_root.iterdir()}
+
+    with pytest.raises(ValueError, match="producer reconciler cannot be read"):
+        verify._verify_producer_commit_implementation(
+            producer,
+            _implementation_manifest(),
+            root=partial,
+        )
+
+    assert {path.name for path in pack_root.iterdir()} == before
+
+
+def test_annotated_tag_object_is_not_accepted_as_producer_commit(tmp_path):
+    root = _producer_repo(tmp_path)
+    subprocess.run(
+        ["git", "tag", "-a", "producer-tag", "-m", "synthetic producer tag"],
+        cwd=root,
+        check=True,
+    )
+    tag_object = subprocess.run(
+        ["git", "rev-parse", "refs/tags/producer-tag"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    with pytest.raises(ValueError, match="must identify a commit object"):
+        verify._verify_producer_commit_implementation(
+            tag_object,
+            _implementation_manifest(),
+            root=root,
+        )
+
+
+def test_mismatched_producer_does_not_reserve_publication_path(tmp_path, monkeypatch):
+    payload = _payload()
+    root = _producer_repo(tmp_path)
+    reconciler = root / "scripts" / "reconcile_human_automated.py"
+    reconciler.write_text("# substituted reconciler\n", encoding="utf-8")
+    subprocess.run(["git", "add", str(reconciler)], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "substitute implementation"], cwd=root, check=True
+    )
+    monkeypatch.setattr(reconcile, "reconcile_verified", lambda **kwargs: payload)
+    output = tmp_path / "reconciliation"
+
+    with pytest.raises(ValueError, match="producer reconciler fingerprint mismatch"):
+        reconcile.write_bundle(payload, output, root=root)
+
+    assert not output.exists()
 
 
 def test_write_bundle_is_create_only_and_independently_verified(tmp_path, monkeypatch):
@@ -102,6 +317,7 @@ def test_write_bundle_is_create_only_and_independently_verified(tmp_path, monkey
 
     assert receipt["status"] == "automated_human_reconciliation_bundle_verified"
     assert receipt["independent_recomputation_verified"] is True
+    assert receipt["producer_commit_implementation_bound"] is True
     manifest = json.loads(
         (output / reconcile.RECONCILIATION_MANIFEST).read_text(encoding="utf-8")
     )
