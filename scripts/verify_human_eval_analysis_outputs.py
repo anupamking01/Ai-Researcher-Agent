@@ -268,6 +268,7 @@ def verify_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
         "treatment_outputs_rerun": False,
         "canonical_analysis_sha256": _fingerprint(json_bytes)["sha256"],
         "manuscript_rendering_sha256": _fingerprint(markdown_bytes)["sha256"],
+        "output_manifest_sha256": _fingerprint(manifest_bytes)["sha256"],
         "implementation_bound": True,
         "independent_recomputation_verified": False,
     }
@@ -290,18 +291,37 @@ def verify_bundle_against_inputs(
     output_root = Path(output_root)
     receipt = verify_bundle(output_root)
 
-    # Re-read only after the ordinary manifest and rendering checks pass, then
-    # bind this read to the verified digest before comparing it with recomputation.
-    json_bytes = _regular_bytes(
-        output_root / analyze_human_eval.ANALYSIS_JSON,
+    # Capture the complete published bundle only after ordinary manifest and
+    # rendering checks pass, and bind every captured stream to that receipt.
+    # These are the exact bytes that must remain in place while the slower
+    # independent recomputation runs.
+    output_specs = {
+        "canonical human-analysis JSON": (
+            output_root / analyze_human_eval.ANALYSIS_JSON,
+            "canonical_analysis_sha256",
+        ),
+        "human-analysis Markdown": (
+            output_root / analyze_human_eval.ANALYSIS_MARKDOWN,
+            "manuscript_rendering_sha256",
+        ),
+        "human-analysis output manifest": (
+            output_root / analyze_human_eval.ANALYSIS_MANIFEST,
+            "output_manifest_sha256",
+        ),
+    }
+    captured_outputs = {}
+    for label, (path, receipt_key) in output_specs.items():
+        content = _regular_bytes(path, label=label)
+        _require_equal(
+            _fingerprint(content)["sha256"],
+            receipt[receipt_key],
+            label=f"{label} stability",
+        )
+        captured_outputs[label] = content
+    payload = _load_json(
+        captured_outputs["canonical human-analysis JSON"],
         label="canonical human-analysis JSON",
     )
-    _require_equal(
-        _fingerprint(json_bytes)["sha256"],
-        receipt["canonical_analysis_sha256"],
-        label="canonical human-analysis JSON stability",
-    )
-    payload = _load_json(json_bytes, label="canonical human-analysis JSON")
 
     from_retained_archive = rating_paths is None
     if from_retained_archive:
@@ -327,6 +347,11 @@ def verify_bundle_against_inputs(
         task_manifest_path=task_manifest_path,
         repo_root=repo_root,
     )
+
+    for label, (path, _receipt_key) in output_specs.items():
+        if _regular_bytes(path, label=label) != captured_outputs[label]:
+            raise ValueError(f"{label} changed during independent recomputation")
+
     if _canonical_json_bytes(payload) != _canonical_json_bytes(recomputed):
         raise ValueError(
             "canonical result does not match independently recomputed human analysis"
@@ -334,6 +359,7 @@ def verify_bundle_against_inputs(
 
     receipt["independent_recomputation_verified"] = True
     receipt["recomputed_from_retained_ratings"] = from_retained_archive
+    receipt["outputs_stable_during_independent_recomputation"] = True
     return receipt
 
 

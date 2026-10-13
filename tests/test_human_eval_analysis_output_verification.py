@@ -268,6 +268,38 @@ def test_independent_verifier_recomputes_from_retained_ratings(tmp_path, monkeyp
     assert observed["freeze_root"] == freeze_root
 
 
+@pytest.mark.parametrize(
+    ("filename", "label"),
+    [
+        (analyze_human_eval.ANALYSIS_JSON, "canonical human-analysis JSON"),
+        (analyze_human_eval.ANALYSIS_MARKDOWN, "human-analysis Markdown"),
+        (analyze_human_eval.ANALYSIS_MANIFEST, "human-analysis output manifest"),
+    ],
+)
+def test_independent_verifier_rejects_output_drift_during_recomputation(
+    tmp_path, monkeypatch, filename, label
+):
+    output = tmp_path / "analysis"
+    expected = _payload()
+    analyze_human_eval.write_bundle(expected, output)
+    artifact = output / filename
+
+    def mutate_output_during_recomputation(*_args, **_kwargs):
+        artifact.write_bytes(artifact.read_bytes() + b"\n")
+        return expected
+
+    monkeypatch.setattr(core, "analyze", mutate_output_during_recomputation)
+
+    with pytest.raises(
+        ValueError,
+        match=f"{label} changed during independent recomputation",
+    ):
+        verify.verify_bundle_against_inputs(
+            output,
+            rating_paths=[tmp_path / "retained.csv"],
+        )
+
+
 def test_independent_verifier_rejects_rehashed_outcome_tampering(
     tmp_path, monkeypatch
 ):

@@ -27,6 +27,10 @@ the complete canonical payload from the rating inputs and governing artifacts
 before printing its success message. This second pass covers variant summaries,
 paired effects and confidence intervals, missingness, agreement, and provenance;
 it does not trust the persisted result values or their self-reported hashes.
+The verifier captures the canonical JSON, deterministic Markdown, and output
+manifest against their verified digests before recomputation, then rereads all
+three afterward. If any byte stream differs at that final reread, verification
+fails instead of issuing a receipt for the older revision.
 
 Before reserving the create-only output directory, publication also validates
 the human-analysis identity and captures every implementation fingerprint needed
@@ -76,6 +80,8 @@ Verification fails closed when:
 - any canonical result value differs from a type-strict, independently
   recomputed payload, even when an editor has regenerated Markdown and updated
   every output hash consistently.
+- canonical JSON, Markdown, or the output manifest differs from its captured
+  bytes when reread after independent recomputation.
 
 A successful receipt is a publication-integrity check, not a new scientific
 result.
@@ -99,8 +105,11 @@ retry.
 
 This gate detects output/renderer drift, binds the analysis and verification
 implementation sources, and recomputes descriptive human-validation outputs
-from retained inputs. It does not prove that annotators were independent humans,
-replace the earlier
+from retained inputs. Its before/after byte check detects persistent mutation
+visible at the final reread, but it is not a filesystem lock: a transient change
+restored before the reread is undetectable, and the check makes no claim about
+changes after verification returns. It does not prove that annotators were
+independent humans, replace the earlier
 packet/freeze verification gates, or make multiple filesystem writes an atomic
 transaction. The upstream human-analysis code still verifies and snapshots the
 blinded and coordinator artifacts before treatment-level analysis. Real blinded
