@@ -95,6 +95,25 @@ A successful command prints a compact verification receipt and the line
 `HUMAN EVAL VERIFY: PASS (ratings remain blinded)`. It does not persist a new
 research result or treatment-level artifact.
 
+## Frozen-rating read consistency
+
+The verifier checks `frozen_ratings.csv` against the manifest, then parses it
+using the existing ratings loader. The loader's byte count and SHA-256 describe
+the exact bytes it parsed. Those must match the previously checked bytes before
+row comparisons, coverage checks, or agreement recomputation proceed.
+
+This rejects edits between the two reads, including line-ending changes that
+leave normalized ratings unchanged and same-length score substitutions. A
+mismatch raises `frozen-ratings parsed fingerprint` and produces no success
+receipt. The verifier does not repair files or rewrite their hashes. Unchanged
+valid bundles retain the same format and verification receipt in both external
+and retained-input modes.
+
+This check is not a filesystem lock or a guarantee against changes after
+verification returns. Keep the freeze stable under controlled storage; downstream
+analysis must still use its verified input snapshot rather than reread mutable
+working files. Never rehash an edited research artifact merely to make it pass.
+
 ## Scope and limits
 
 This gate is designed to catch accidental provenance drift and inconsistent
