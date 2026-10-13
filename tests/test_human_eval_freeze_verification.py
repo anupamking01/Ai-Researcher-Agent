@@ -330,6 +330,24 @@ def test_manifest_cannot_redirect_freeze_producer(frozen_case):
         _verify(frozen_case)
 
 
+def test_freeze_root_rejects_undeclared_blinding_key(frozen_case):
+    (frozen_case["freeze_root"] / "blinding_key.csv").write_text(
+        "blind_id,variant_id\nH001,D3\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="freeze root contents mismatch"):
+        _verify(frozen_case)
+
+
+def test_provenance_archive_rejects_undeclared_extra_file(frozen_case):
+    extra = frozen_case["freeze_root"] / "provenance" / "notes.txt"
+    extra.write_text("unexpected\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="provenance archive contents mismatch"):
+        _verify(frozen_case)
+
+
 def test_self_contained_freeze_verifies_after_external_ratings_are_removed(frozen_case):
     for path in frozen_case["ratings"]:
         path.unlink()

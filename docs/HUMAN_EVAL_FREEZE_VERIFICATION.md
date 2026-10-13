@@ -70,6 +70,9 @@ The verifier never reads `blinding_key.csv`. It fails closed unless all of the
 following agree:
 
 - freeze manifest schema, study ID, status, and `blinding_key_used=false`;
+- the exact top-level bundle inventory declared by the fixed format, with no
+  undeclared sidecars such as `blinding_key.csv`;
+- the `provenance/` archive contains only the declared freeze-producer source;
 - no duplicate JSON members at any depth in the freeze manifest or stored
   agreement output, including escape-equivalent names;
 - exact annotator-packet row schema (`blind_id`, `task_id`, `question`, and

@@ -70,6 +70,33 @@ def _snapshot_raw_ratings(rating_paths, root):
     return snapshots
 
 
+def _reject_undeclared_freeze_sidecars(freeze_root):
+    """Inspect source names without opening any undeclared freeze artifact."""
+    freeze_root = Path(freeze_root)
+    allowed_names = {
+        *freeze.OUTPUT_FILES,
+        "raw_rating_inputs",
+        "provenance",
+        "governing_inputs",
+    }
+    extra_names = {child.name for child in freeze_root.iterdir()} - allowed_names
+    if extra_names:
+        raise ValueError(
+            f"freeze root contents mismatch: undeclared artifacts {sorted(extra_names)!r}"
+        )
+
+    provenance_root = freeze_root / "provenance"
+    if provenance_root.is_dir() and not provenance_root.is_symlink():
+        extra_names = {
+            child.name for child in provenance_root.iterdir()
+        } - {"freeze_human_eval_ratings.py"}
+        if extra_names:
+            raise ValueError(
+                "provenance archive contents mismatch: "
+                f"undeclared artifacts {sorted(extra_names)!r}"
+            )
+
+
 def score(row, field):
     value = str(row.get(field) or "").strip()
     return int(value) if value else None
@@ -224,6 +251,7 @@ def analyze(
         if raw_archive.exists() or raw_archive.is_symlink():
             if raw_archive.is_symlink() or not raw_archive.is_dir():
                 raise ValueError(f"raw rating archive must be a regular directory: {raw_archive}")
+            (blind_freeze / "raw_rating_inputs").mkdir(parents=True, exist_ok=True)
             for child in sorted(raw_archive.iterdir(), key=lambda path: path.name):
                 _snapshot_file(
                     child,
@@ -252,12 +280,16 @@ def analyze(
         if governing_dir.exists() or governing_dir.is_symlink():
             if governing_dir.is_symlink() or not governing_dir.is_dir():
                 raise ValueError(f"governing input archive must be a regular directory: {governing_dir}")
+            (blind_freeze / "governing_inputs").mkdir(parents=True, exist_ok=True)
             for child in sorted(governing_dir.iterdir(), key=lambda path: path.name):
                 _snapshot_file(
                     child,
                     blind_freeze / "governing_inputs" / child.name,
                     label=f"blinded governing input {child.name}",
                 )
+        # Selective snapshotting must not launder an undeclared source sidecar
+        # out of the bundle that reaches the independent blinded verifier.
+        _reject_undeclared_freeze_sidecars(freeze_root)
         blind_rating_paths = _snapshot_raw_ratings(rating_paths, blind_root / "raw_ratings")
 
         blinded = blind_verify.verify_frozen_snapshot(

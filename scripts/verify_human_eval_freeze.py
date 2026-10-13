@@ -60,6 +60,50 @@ def _require_equal(actual, expected, *, label: str) -> None:
         raise ValueError(f"{label} mismatch: expected {expected!r}, got {actual!r}")
 
 
+def _verify_bundle_layout(freeze_root: Path, manifest: dict) -> None:
+    """Reject every freeze artifact not declared by the fixed bundle contract."""
+    rating_entries = manifest.get("rating_inputs")
+    if (
+        not isinstance(rating_entries, list)
+        or not rating_entries
+        or any(not isinstance(entry, dict) for entry in rating_entries)
+    ):
+        raise ValueError("freeze manifest rating_inputs must be a non-empty list of objects")
+    rating_archive_flags = ["archive_path" in entry for entry in rating_entries]
+    if any(rating_archive_flags) and not all(rating_archive_flags):
+        raise ValueError("freeze manifest raw rating archive paths are incomplete")
+
+    governing_entries = [manifest.get(role) for role in freeze.GOVERNING_INPUT_PATHS]
+    if any(not isinstance(entry, dict) for entry in governing_entries):
+        raise ValueError("governing input manifest entries must be objects")
+    governing_archive_flags = ["archive_path" in entry for entry in governing_entries]
+    if any(governing_archive_flags) and not all(governing_archive_flags):
+        raise ValueError("retained governing input archive paths are incomplete")
+
+    expected_names = {*freeze.OUTPUT_FILES, "provenance"}
+    if all(rating_archive_flags):
+        expected_names.add("raw_rating_inputs")
+    if all(governing_archive_flags):
+        expected_names.add("governing_inputs")
+    extra_names = {child.name for child in freeze_root.iterdir()} - expected_names
+    if extra_names:
+        raise ValueError(
+            f"freeze root contents mismatch: undeclared artifacts {sorted(extra_names)!r}"
+        )
+
+    provenance_root = freeze_root / "provenance"
+    if provenance_root.is_symlink() or not provenance_root.is_dir():
+        raise ValueError(f"provenance archive must be a regular directory: {provenance_root}")
+    extra_names = {
+        child.name for child in provenance_root.iterdir()
+    } - {"freeze_human_eval_ratings.py"}
+    if extra_names:
+        raise ValueError(
+            "provenance archive contents mismatch: "
+            f"undeclared artifacts {sorted(extra_names)!r}"
+        )
+
+
 def _verify_governing_archive(freeze_root: Path, manifest: dict, *, required: bool):
     """Verify fixed, in-bundle governing inputs; never follow manifest paths."""
     entries = {role: manifest.get(role) for role in freeze.GOVERNING_INPUT_PATHS}
@@ -304,6 +348,8 @@ def verify_frozen_snapshot(
             require_single_annotator=True,
         )
         _require_equal(rating_entries, raw_sources, label="raw rating inputs")
+
+    _verify_bundle_layout(freeze_root, manifest)
 
     frozen_entry = manifest.get("frozen_ratings")
     if not isinstance(frozen_entry, dict):

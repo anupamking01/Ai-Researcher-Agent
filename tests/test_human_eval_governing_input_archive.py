@@ -293,3 +293,102 @@ def test_analysis_carries_governing_archive_through_real_blinded_gate(inputs, mo
             packet_path=options["packet_path"], protocol_path=options["protocol_path"],
             assignment_plan_path=options["assignment_plan_path"], analysis_plan_path=plan,
         )
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "error"),
+    [
+        ("blinding_key.csv", "freeze root contents mismatch"),
+        ("provenance/notes.txt", "provenance archive contents mismatch"),
+    ],
+)
+def test_analysis_rejects_undeclared_freeze_sidecar_before_blinded_verifier(
+    inputs, monkeypatch, relative_path, error
+):
+    from scripts import human_eval_analysis_core as core
+
+    paths, options = inputs
+    freeze.freeze_ratings(paths, **options)
+    root = options["output_root"]
+    (root / relative_path).write_text("unexpected\n", encoding="utf-8")
+    plan = root.parent / "analysis-plan.md"
+    plan.write_text("Synthetic analysis-plan fixture\n", encoding="utf-8")
+    monkeypatch.setattr(
+        core,
+        "FROZEN_ANALYSIS_PLAN_SHA256",
+        hashlib.sha256(plan.read_bytes()).hexdigest(),
+    )
+
+    def forbid_blinded_verifier(*args, **kwargs):
+        raise AssertionError("undeclared sidecar was laundered out of analysis snapshot")
+
+    monkeypatch.setattr(
+        core.blind_verify,
+        "verify_frozen_snapshot",
+        forbid_blinded_verifier,
+    )
+    with pytest.raises(ValueError, match=error):
+        core.analyze(
+            [],
+            freeze_root=root,
+            packet_root=root.parent,
+            packet_path=options["packet_path"],
+            protocol_path=options["protocol_path"],
+            assignment_plan_path=options["assignment_plan_path"],
+            analysis_plan_path=plan,
+        )
+
+
+@pytest.mark.parametrize(
+    ("archive_name", "error"),
+    [
+        ("raw_rating_inputs", "freeze root contents mismatch"),
+        ("governing_inputs", "undeclared governing input archive"),
+    ],
+)
+def test_analysis_does_not_launder_undeclared_empty_archive(
+    inputs, monkeypatch, archive_name, error
+):
+    from scripts import human_eval_analysis_core as core
+
+    paths, options = inputs
+    manifest = freeze.freeze_ratings(paths, **options)
+    root = options["output_root"]
+    if archive_name == "raw_rating_inputs":
+        for entry in manifest["rating_inputs"]:
+            del entry["archive_path"]
+    else:
+        for role in ARCHIVES:
+            del manifest[role]["archive_path"]
+    for child in (root / archive_name).iterdir():
+        child.unlink()
+    _save_manifest(root, manifest)
+
+    plan = root.parent / "analysis-plan.md"
+    plan.write_text("Synthetic analysis-plan fixture\n", encoding="utf-8")
+    monkeypatch.setattr(
+        core,
+        "FROZEN_ANALYSIS_PLAN_SHA256",
+        hashlib.sha256(plan.read_bytes()).hexdigest(),
+    )
+    real_verify = verify.verify_frozen_snapshot
+
+    def reject_sanitized_acceptance(*args, **kwargs):
+        real_verify(*args, **kwargs)
+        raise AssertionError("undeclared empty archive was laundered out of snapshot")
+
+    monkeypatch.setattr(
+        core.blind_verify,
+        "verify_frozen_snapshot",
+        reject_sanitized_acceptance,
+    )
+    with pytest.raises(ValueError, match=error):
+        core.analyze(
+            paths,
+            freeze_root=root,
+            packet_root=root.parent,
+            packet_path=options["packet_path"],
+            protocol_path=options["protocol_path"],
+            assignment_plan_path=options["assignment_plan_path"],
+            analysis_plan_path=plan,
+        )
