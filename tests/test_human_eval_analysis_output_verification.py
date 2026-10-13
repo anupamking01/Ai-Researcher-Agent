@@ -212,6 +212,34 @@ def test_write_bundle_emits_manifest_and_verifies(tmp_path):
     }
 
 
+def test_invalid_payload_does_not_reserve_publication_path(tmp_path):
+    output = tmp_path / "analysis"
+    payload = _payload()
+    payload["human_ratings_generated"] = True
+
+    with pytest.raises(ValueError, match="analysis human_ratings_generated mismatch"):
+        analyze_human_eval.write_bundle(payload, output)
+
+    assert not output.exists()
+
+
+def test_provenance_preflight_failure_does_not_reserve_publication_path(
+    tmp_path, monkeypatch
+):
+    output = tmp_path / "analysis"
+    missing_verifier = tmp_path / "missing_verifier.py"
+    monkeypatch.setattr(
+        analyze_human_eval,
+        "ANALYSIS_VERIFIER_SOURCE",
+        missing_verifier,
+    )
+
+    with pytest.raises(ValueError, match="must be a regular file"):
+        analyze_human_eval.write_bundle(_payload(), output)
+
+    assert not output.exists()
+
+
 def test_independent_verifier_recomputes_from_retained_ratings(tmp_path, monkeypatch):
     output = tmp_path / "analysis"
     expected = _payload()

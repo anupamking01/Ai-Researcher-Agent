@@ -28,6 +28,15 @@ before printing its success message. This second pass covers variant summaries,
 paired effects and confidence intervals, missingness, agreement, and provenance;
 it does not trust the persisted result values or their self-reported hashes.
 
+Before reserving the create-only output directory, publication also validates
+the human-analysis identity and captures every implementation fingerprint needed
+by the manifest. Identity, serialization/rendering, plan-provenance, and source-
+provenance failures detected during this preflight therefore leave the requested
+version path untouched and available for a corrected retry. The final directory
+creation remains exclusive, so a concurrent publisher is never adopted after
+preflight. Independent recomputation still runs after publication starts; a
+failure at that stage preserves the create-only artifacts for inspection.
+
 ## Independent verification
 
 From the repository revision that produced an analysis bundle, run:
@@ -80,9 +89,11 @@ recorded generating commit and rerun the verifier instead of rewriting the old
 manifest.
 
 `analysis_manifest.json` is written last, so a missing manifest means the bundle
-must not be treated as successfully published. The output directory remains
-create-only; interrupted or failed attempts are preserved for inspection and a
-new versioned output path should be used for a retry.
+must not be treated as successfully published. Deterministic identity and
+provenance failures happen before the output path is reserved. Once writing has
+started, the output directory remains create-only; interrupted I/O attempts are
+preserved for inspection and a new versioned output path should be used for a
+retry.
 
 ## Limits
 

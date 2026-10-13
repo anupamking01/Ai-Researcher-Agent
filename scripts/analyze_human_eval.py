@@ -162,6 +162,10 @@ def _write_exclusive(path, content):
 def write_bundle(payload, output_root):
     """Publish and integrity-check a create-only human-analysis result bundle."""
     output_root = Path(output_root)
+    destination_error = f"refusing to overwrite human-analysis output: {output_root}"
+    if output_root.exists() or output_root.is_symlink():
+        raise ValueError(destination_error)
+
     # Validate the complete canonical JSON before reserving the immutable
     # destination. A missing rubric score must be null, never NaN/Infinity.
     try:
@@ -174,20 +178,29 @@ def write_bundle(payload, output_root):
         ) from exc
     markdown_bytes = render_markdown(payload).encode("utf-8")
 
-    try:
-        output_root.mkdir(parents=True, exist_ok=False)
-    except FileExistsError as exc:
-        raise ValueError(
-            f"refusing to overwrite human-analysis output: {output_root}"
-        ) from exc
+    from scripts.verify_human_eval_analysis_outputs import (
+        _validate_analysis_identity,
+        verify_bundle,
+    )
 
-    json_path = output_root / ANALYSIS_JSON
-    markdown_path = output_root / ANALYSIS_MARKDOWN
-    manifest_path = output_root / ANALYSIS_MANIFEST
-
-    _write_exclusive(json_path, json_bytes)
-    _write_exclusive(markdown_path, markdown_bytes)
-
+    # A create-only version path should not be consumed by a deterministic
+    # identity or source-provenance failure. Complete that preflight, including
+    # every source read needed by the manifest, before reserving the directory.
+    _validate_analysis_identity(payload)
+    implementation = {
+        "analysis_core": _implementation_fingerprint(
+            core.__file__,
+            logical_path="scripts/human_eval_analysis_core.py",
+        ),
+        "analysis_renderer": _implementation_fingerprint(
+            __file__,
+            logical_path="scripts/analyze_human_eval.py",
+        ),
+        "analysis_verifier": _implementation_fingerprint(
+            ANALYSIS_VERIFIER_SOURCE,
+            logical_path="scripts/verify_human_eval_analysis_outputs.py",
+        ),
+    }
     manifest = {
         "schema_version": 1,
         "study_id": payload.get("study_id"),
@@ -202,20 +215,7 @@ def write_bundle(payload, output_root):
                 **_fingerprint_bytes(markdown_bytes),
             },
         },
-        "implementation": {
-            "analysis_core": _implementation_fingerprint(
-                core.__file__,
-                logical_path="scripts/human_eval_analysis_core.py",
-            ),
-            "analysis_renderer": _implementation_fingerprint(
-                __file__,
-                logical_path="scripts/analyze_human_eval.py",
-            ),
-            "analysis_verifier": _implementation_fingerprint(
-                ANALYSIS_VERIFIER_SOURCE,
-                logical_path="scripts/verify_human_eval_analysis_outputs.py",
-            ),
-        },
+        "implementation": implementation,
         "integrity_note": (
             "The manifest binds the exact canonical analysis JSON, deterministic "
             "Markdown rendering, and analysis/verification implementation source "
@@ -225,9 +225,22 @@ def write_bundle(payload, output_root):
         ),
     }
     manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+    # The earlier existence check is not a lock. Reserve after preflight and
+    # still use exclusive creation so a concurrent publisher cannot be adopted.
+    try:
+        output_root.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise ValueError(destination_error) from exc
+
+    json_path = output_root / ANALYSIS_JSON
+    markdown_path = output_root / ANALYSIS_MARKDOWN
+    manifest_path = output_root / ANALYSIS_MANIFEST
+
+    _write_exclusive(json_path, json_bytes)
+    _write_exclusive(markdown_path, markdown_bytes)
     _write_exclusive(manifest_path, manifest_bytes)
 
-    from scripts.verify_human_eval_analysis_outputs import verify_bundle
     return verify_bundle(output_root)
 
 
