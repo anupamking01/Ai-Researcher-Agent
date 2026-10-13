@@ -8,7 +8,9 @@ benchmark results; it only defines metrics and aggregation utilities.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Iterable, Sequence
+from math import floor, sqrt
+from random import Random
+from typing import Callable, Iterable, Sequence
 
 
 @dataclass(frozen=True)
@@ -103,8 +105,114 @@ def safe_mean(values: Iterable[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
+def safe_median(values: Iterable[float]) -> float:
+    """Return the median, or 0.0 for an empty iterable."""
+    ordered = sorted(values)
+    size = len(ordered)
+    if size == 0:
+        return 0.0
+    midpoint = size // 2
+    if size % 2:
+        return float(ordered[midpoint])
+    return (ordered[midpoint - 1] + ordered[midpoint]) / 2
+
+
+def population_stddev(values: Iterable[float]) -> float:
+    """Return population standard deviation, defined as 0.0 when empty."""
+    values = list(values)
+    if not values:
+        return 0.0
+    mean = safe_mean(values)
+    return sqrt(safe_mean((value - mean) ** 2 for value in values))
+
+
+def _linear_quantile(ordered: Sequence[float], probability: float) -> float:
+    """Return the linearly interpolated quantile of a sorted sample."""
+    position = probability * (len(ordered) - 1)
+    lower_index = floor(position)
+    upper_index = min(lower_index + 1, len(ordered) - 1)
+    fraction = position - lower_index
+    return float(
+        ordered[lower_index]
+        + fraction * (ordered[upper_index] - ordered[lower_index])
+    )
+
+
+def bootstrap_confidence_interval(
+    values: Sequence[float],
+    statistic: Callable[[Iterable[float]], float] = safe_mean,
+    confidence: float = 0.95,
+    n_resamples: int = 2000,
+    seed: int = 0,
+) -> dict:
+    """Return a reproducible percentile-bootstrap interval for a statistic.
+
+    A local seeded RNG keeps reports reproducible without mutating global random
+    state. The returned interval is descriptive uncertainty and does not imply
+    statistical significance.
+    """
+    if not 0.0 < confidence < 1.0:
+        raise ValueError("confidence must be between 0 and 1")
+    if n_resamples <= 0:
+        raise ValueError("n_resamples must be positive")
+
+    sample = [float(value) for value in values]
+    if not sample:
+        return {
+            "estimate": 0.0,
+            "lower": 0.0,
+            "upper": 0.0,
+            "confidence": confidence,
+            "n_resamples": n_resamples,
+        }
+
+    rng = Random(seed)
+    estimates = sorted(
+        statistic(rng.choices(sample, k=len(sample))) for _ in range(n_resamples)
+    )
+    alpha = (1.0 - confidence) / 2.0
+    return {
+        "estimate": float(statistic(sample)),
+        "lower": _linear_quantile(estimates, alpha),
+        "upper": _linear_quantile(estimates, 1.0 - alpha),
+        "confidence": confidence,
+        "n_resamples": n_resamples,
+    }
+
+
+def paired_metric_comparison(
+    baseline: Sequence[float], candidate: Sequence[float]
+) -> dict:
+    """Summarize per-task deltas for two variants evaluated on the same tasks.
+
+    Values must be aligned by task and use a metric where larger is better.
+    Keeping the comparison paired prevents task difficulty from being hidden by
+    comparing two unrelated aggregate means. Statistical significance is not
+    inferred here; the returned dispersion and win/tie/loss counts are
+    descriptive evidence only.
+    """
+    if len(baseline) != len(candidate):
+        raise ValueError("paired comparisons require equal-length sequences")
+
+    deltas = [float(new) - float(old) for old, new in zip(baseline, candidate)]
+    return {
+        "n_pairs": len(deltas),
+        "mean_delta": safe_mean(deltas),
+        "median_delta": safe_median(deltas),
+        "delta_stddev": population_stddev(deltas),
+        "wins": sum(delta > 0 for delta in deltas),
+        "ties": sum(delta == 0 for delta in deltas),
+        "losses": sum(delta < 0 for delta in deltas),
+    }
+
+
 def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
-    """Aggregate run-level traces into experiment-level summary metrics."""
+    """Aggregate run-level traces into experiment-level summary metrics.
+
+    Means remain available for backwards compatibility. Median latency/cost
+    and dispersion metrics make comparisons less sensitive to occasional
+    network/model outliers and expose run-to-run instability explicitly.
+    """
     if not runs:
         return {
             "n_runs": 0,
@@ -115,11 +223,19 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
             "avg_claim_support_rate": 0.0,
             "avg_citation_precision_proxy": 0.0,
             "avg_latency_seconds": 0.0,
+            "median_latency_seconds": 0.0,
+            "latency_stddev_seconds": 0.0,
             "avg_total_tokens": 0.0,
             "avg_model_calls": 0.0,
             "avg_search_calls": 0.0,
+            "total_tokens_stddev": 0.0,
             "avg_estimated_cost_usd": 0.0,
+            "median_estimated_cost_usd": 0.0,
         }
+
+    latencies = [run.latency_seconds for run in runs]
+    total_tokens = [float(run.total_tokens) for run in runs]
+    costs = [run.estimated_cost_usd for run in runs]
 
     return {
         "n_runs": len(runs),
@@ -133,11 +249,15 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
         "avg_citation_precision_proxy": safe_mean(
             run.citation_precision_proxy for run in runs
         ),
-        "avg_latency_seconds": safe_mean(run.latency_seconds for run in runs),
-        "avg_total_tokens": safe_mean(float(run.total_tokens) for run in runs),
+        "avg_latency_seconds": safe_mean(latencies),
+        "median_latency_seconds": safe_median(latencies),
+        "latency_stddev_seconds": population_stddev(latencies),
+        "avg_total_tokens": safe_mean(total_tokens),
+        "total_tokens_stddev": population_stddev(total_tokens),
         "avg_model_calls": safe_mean(float(run.model_call_count) for run in runs),
         "avg_search_calls": safe_mean(float(run.search_call_count) for run in runs),
-        "avg_estimated_cost_usd": safe_mean(run.estimated_cost_usd for run in runs),
+        "avg_estimated_cost_usd": safe_mean(costs),
+        "median_estimated_cost_usd": safe_median(costs),
     }
 
 
