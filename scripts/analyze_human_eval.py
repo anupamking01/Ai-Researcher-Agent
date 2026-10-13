@@ -156,7 +156,7 @@ def _write_exclusive(path, content):
 
 
 def write_bundle(payload, output_root):
-    """Publish and verify a create-only human-analysis result bundle."""
+    """Publish and integrity-check a create-only human-analysis result bundle."""
     output_root = Path(output_root)
     # Validate the complete canonical JSON before reserving the immutable
     # destination. A missing rubric score must be null, never NaN/Infinity.
@@ -211,7 +211,8 @@ def write_bundle(payload, output_root):
         "integrity_note": (
             "The manifest binds the exact canonical analysis JSON, deterministic "
             "Markdown rendering, and analysis implementation source bytes. "
-            "It is written last and independently verified before success is reported."
+            "It is written last; the analysis command independently recomputes the "
+            "payload from verified inputs before success is reported."
         ),
     }
     manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
@@ -239,6 +240,18 @@ def main():
             task_manifest_path=args.task_manifest,
         )
         write_bundle(payload, args.output_root)
+        from scripts.verify_human_eval_analysis_outputs import (
+            verify_bundle_against_inputs,
+        )
+
+        verify_bundle_against_inputs(
+            args.output_root,
+            rating_paths=args.ratings,
+            freeze_root=args.freeze_root,
+            packet_root=args.packet_root,
+            analysis_plan_path=args.analysis_plan,
+            task_manifest_path=args.task_manifest,
+        )
     except (OSError, ValueError) as exc:
         raise SystemExit(f"HUMAN EVAL ANALYSIS: FAIL: {exc}") from exc
     print(json.dumps(payload, indent=2, sort_keys=True))

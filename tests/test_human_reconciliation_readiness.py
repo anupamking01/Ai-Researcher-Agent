@@ -56,6 +56,36 @@ def test_changed_contract_is_rejected_before_human_analysis_is_read(
     assert observed == ["reconciliation_contract"]
 
 
+def test_human_recomputation_uses_requested_checkout_paths(tmp_path, monkeypatch):
+    root = tmp_path / "alternate-checkout"
+    human_root = root / "outputs" / "human_eval" / "analysis-v1"
+    observed = {}
+
+    def fake_verify(output_root, **kwargs):
+        observed["output_root"] = output_root
+        observed.update(kwargs)
+
+    monkeypatch.setattr(
+        readiness.verify_human_eval_analysis_outputs,
+        "verify_bundle_against_inputs",
+        fake_verify,
+    )
+
+    readiness._verify_human_analysis_bundle(human_root, root=root)
+
+    assert observed == {
+        "output_root": human_root,
+        "freeze_root": root / "outputs" / "human_eval" / "frozen-v1",
+        "packet_root": root / "outputs" / "human_eval",
+        "packet_path": root / "outputs" / "human_eval" / "packet.jsonl",
+        "protocol_path": root / "paper" / "HUMAN_EVAL_PROTOCOL.md",
+        "assignment_plan_path": root / "paper" / "HUMAN_EVAL_ASSIGNMENT_PLAN.md",
+        "analysis_plan_path": root / "paper" / "HUMAN_EVAL_ANALYSIS_PLAN.md",
+        "task_manifest_path": root / "experiments" / "main_budget_tasks.json",
+        "repo_root": root,
+    }
+
+
 def _summary(diffs):
     return {
         "n_pairs": len(diffs),

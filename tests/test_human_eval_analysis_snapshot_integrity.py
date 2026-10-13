@@ -12,7 +12,9 @@ from pathlib import Path
 import pytest
 
 from scripts import freeze_human_eval_ratings as freeze
+from scripts import analyze_human_eval
 from scripts import human_eval_analysis_core as core
+from scripts import verify_human_eval_analysis_outputs as output_verify
 
 
 def _sha(data: bytes) -> str:
@@ -184,6 +186,41 @@ def _analyze(case):
         task_manifest_path=case["task_manifest"],
         repo_root=case["repo_root"],
     )
+
+
+def test_published_payload_recomputes_from_retained_rating_archive(
+    analysis_case, monkeypatch
+):
+    case = analysis_case
+    raw_archive = case["freeze_root"] / "raw_rating_inputs"
+    raw_archive.mkdir()
+    for index, source in enumerate(case["ratings"], start=1):
+        (raw_archive / f"{index:04d}.csv").write_bytes(source.read_bytes())
+    case["agreement_path"].write_text(
+        json.dumps(freeze.build_agreement(_rating_rows()), indent=2, sort_keys=True)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = _analyze(case)
+    output_root = case["packet_root"] / "analysis-v1"
+    monkeypatch.setattr(core, "PLAN", case["plan"])
+    analyze_human_eval.write_bundle(payload, output_root)
+
+    receipt = output_verify.verify_bundle_against_inputs(
+        output_root,
+        freeze_root=case["freeze_root"],
+        packet_root=case["packet_root"],
+        packet_path=case["packet_path"],
+        protocol_path=case["protocol"],
+        assignment_plan_path=case["assignment"],
+        analysis_plan_path=case["plan"],
+        task_manifest_path=case["task_manifest"],
+        repo_root=case["repo_root"],
+    )
+
+    assert receipt["independent_recomputation_verified"] is True
+    assert receipt["recomputed_from_retained_ratings"] is True
 
 
 def test_modified_analysis_plan_is_rejected_before_unblinding(analysis_case, monkeypatch):

@@ -21,8 +21,11 @@ That manifest SHA-256-binds:
 - `scripts/human_eval_analysis_core.py`;
 - `scripts/analyze_human_eval.py`.
 
-The command then verifies the persisted bundle before printing its success
-message.
+The command first verifies the persisted bundle, then independently recomputes
+the complete canonical payload from the rating inputs and governing artifacts
+before printing its success message. This second pass covers variant summaries,
+paired effects and confidence intervals, missingness, agreement, and provenance;
+it does not trust the persisted result values or their self-reported hashes.
 
 ## Independent verification
 
@@ -32,6 +35,13 @@ From the repository revision that produced an analysis bundle, run:
 python -m scripts.verify_human_eval_analysis_outputs \
   --output-root outputs/human_eval/analysis-v1
 ```
+
+By default, independent verification reads the exact CSV byte streams retained
+under `outputs/human_eval/frozen-v1/raw_rating_inputs/`. Explicit rating paths
+may instead be supplied as positional arguments when validating a not-yet-
+archived production invocation. The verifier reuses the frozen packet, protocol,
+assignment plan, analysis plan, task manifest, and treatment mapping gates; it
+makes no model/API calls and reruns no treatments.
 
 Verification fails closed when:
 
@@ -51,6 +61,9 @@ Verification fails closed when:
   the same captured input bytes;
 - the recorded analysis-plan byte count or SHA-256 does not match the literal
   preregistered plan anchored by the generating implementation.
+- any canonical result value differs from a type-strict, independently
+  recomputed payload, even when an editor has regenerated Markdown and updated
+  every output hash consistently.
 
 A successful receipt is a publication-integrity check, not a new scientific
 result.
@@ -70,8 +83,9 @@ new versioned output path should be used for a retry.
 
 ## Limits
 
-This gate detects output/renderer drift and binds the implementation source. It
-does not prove that annotators were independent humans, replace the earlier
+This gate detects output/renderer drift, binds the implementation source, and
+recomputes descriptive human-validation outputs from retained inputs. It does
+not prove that annotators were independent humans, replace the earlier
 packet/freeze verification gates, or make multiple filesystem writes an atomic
 transaction. The upstream human-analysis code still verifies and snapshots the
 blinded and coordinator artifacts before treatment-level analysis. Real blinded

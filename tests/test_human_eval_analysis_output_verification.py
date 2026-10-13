@@ -200,11 +200,76 @@ def test_write_bundle_emits_manifest_and_verifies(tmp_path):
 
     assert receipt["status"] == "human_validation_analysis_bundle_verified"
     assert receipt["implementation_bound"] is True
+    assert receipt["independent_recomputation_verified"] is False
     manifest = json.loads(
         (output / analyze_human_eval.ANALYSIS_MANIFEST).read_text(encoding="utf-8")
     )
     assert set(manifest["artifacts"]) == {"canonical_analysis", "manuscript_rendering"}
     assert set(manifest["implementation"]) == {"analysis_core", "analysis_renderer"}
+
+
+def test_independent_verifier_recomputes_from_retained_ratings(tmp_path, monkeypatch):
+    output = tmp_path / "analysis"
+    expected = _payload()
+    analyze_human_eval.write_bundle(expected, output)
+    freeze_root = tmp_path / "freeze"
+    raw_root = freeze_root / "raw_rating_inputs"
+    raw_root.mkdir(parents=True)
+    second = raw_root / "0002.csv"
+    first = raw_root / "0001.csv"
+    second.write_text("second\n", encoding="utf-8")
+    first.write_text("first\n", encoding="utf-8")
+    observed = {}
+
+    def fake_analyze(rating_paths, **kwargs):
+        observed["rating_paths"] = list(rating_paths)
+        observed.update(kwargs)
+        return expected
+
+    monkeypatch.setattr(core, "analyze", fake_analyze)
+
+    receipt = verify.verify_bundle_against_inputs(output, freeze_root=freeze_root)
+
+    assert receipt["independent_recomputation_verified"] is True
+    assert receipt["recomputed_from_retained_ratings"] is True
+    assert observed["rating_paths"] == []
+    assert observed["freeze_root"] == freeze_root
+
+
+def test_independent_verifier_rejects_rehashed_outcome_tampering(
+    tmp_path, monkeypatch
+):
+    output = tmp_path / "analysis"
+    expected = _payload()
+    analyze_human_eval.write_bundle(expected, output)
+    changed = json.loads(json.dumps(expected))
+    changed["variant_summary"]["D3"][core.DIMS[0]]["mean_report_score"] = 4.0
+    _rewrite_and_rehash(output, changed)
+    monkeypatch.setattr(core, "analyze", lambda *_args, **_kwargs: expected)
+
+    with pytest.raises(ValueError, match="independently recomputed human analysis"):
+        verify.verify_bundle_against_inputs(
+            output,
+            rating_paths=[tmp_path / "retained.csv"],
+        )
+
+
+def test_independent_verifier_uses_type_strict_payload_comparison(
+    tmp_path, monkeypatch
+):
+    output = tmp_path / "analysis"
+    expected = _payload()
+    analyze_human_eval.write_bundle(expected, output)
+    changed = json.loads(json.dumps(expected))
+    changed["n_tasks"] = 2.0
+    _rewrite_and_rehash(output, changed)
+    monkeypatch.setattr(core, "analyze", lambda *_args, **_kwargs: expected)
+
+    with pytest.raises(ValueError, match="independently recomputed human analysis"):
+        verify.verify_bundle_against_inputs(
+            output,
+            rating_paths=[tmp_path / "retained.csv"],
+        )
 
 
 def test_rejects_hand_edited_markdown_even_before_manifest_check(tmp_path):

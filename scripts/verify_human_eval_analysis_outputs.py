@@ -1,9 +1,11 @@
-"""Verify a published human-evaluation analysis result bundle.
+"""Verify and independently recompute a human-evaluation analysis result bundle.
 
 The canonical JSON is the machine-readable human-validation result. Markdown is
 only a deterministic rendering of that JSON. The manifest must bind both output
 byte streams and the exact analysis implementation source files used to produce
-them. This verifier makes no model/API calls and does not generate ratings.
+them. The command-line verifier additionally recomputes the complete payload
+from retained frozen ratings and exact governing inputs. It makes no model/API
+calls, generates no ratings, and reruns no treatments.
 """
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ import math
 from pathlib import Path
 
 from scripts import analyze_human_eval
+from scripts import freeze_human_eval_ratings as freeze
 from scripts import human_eval_analysis_core as core
 
 DEFAULT_OUTPUT_ROOT = analyze_human_eval.OUTPUT_ROOT
@@ -66,6 +69,35 @@ def _fingerprint(content: bytes) -> dict:
         "bytes": len(content),
         "sha256": hashlib.sha256(content).hexdigest(),
     }
+
+
+def _canonical_json_bytes(value) -> bytes:
+    """Encode JSON with type distinctions preserved for exact comparisons."""
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _retained_rating_paths(freeze_root: Path) -> list[Path]:
+    raw_root = Path(freeze_root) / "raw_rating_inputs"
+    if raw_root.is_symlink() or not raw_root.is_dir():
+        raise ValueError(
+            f"retained raw rating archive must be a regular directory: {raw_root}"
+        )
+    children = sorted(raw_root.iterdir(), key=lambda path: path.name)
+    if not children:
+        raise ValueError(f"retained raw rating archive is empty: {raw_root}")
+    for path in children:
+        if path.is_symlink() or not path.is_file() or path.suffix != ".csv":
+            raise ValueError(
+                "retained raw rating archive contains an undeclared or non-regular "
+                f"artifact: {path}"
+            )
+    return children
 
 
 def _require_equal(actual, expected, *, label: str) -> None:
@@ -227,15 +259,102 @@ def verify_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
         "canonical_analysis_sha256": _fingerprint(json_bytes)["sha256"],
         "manuscript_rendering_sha256": _fingerprint(markdown_bytes)["sha256"],
         "implementation_bound": True,
+        "independent_recomputation_verified": False,
     }
+
+
+def verify_bundle_against_inputs(
+    output_root: Path = DEFAULT_OUTPUT_ROOT,
+    *,
+    rating_paths=None,
+    freeze_root: Path = core.FREEZE_ROOT,
+    packet_root: Path = core.PACKET_ROOT,
+    packet_path: Path = freeze.DEFAULT_PACKET,
+    protocol_path: Path = freeze.DEFAULT_PROTOCOL,
+    assignment_plan_path: Path = freeze.DEFAULT_ASSIGNMENT_PLAN,
+    analysis_plan_path: Path = core.PLAN,
+    task_manifest_path: Path = core.TASKS,
+    repo_root: Path = core.ROOT,
+) -> dict:
+    """Verify bundle integrity, then independently recompute its full payload."""
+    output_root = Path(output_root)
+    receipt = verify_bundle(output_root)
+
+    # Re-read only after the ordinary manifest and rendering checks pass, then
+    # bind this read to the verified digest before comparing it with recomputation.
+    json_bytes = _regular_bytes(
+        output_root / analyze_human_eval.ANALYSIS_JSON,
+        label="canonical human-analysis JSON",
+    )
+    _require_equal(
+        _fingerprint(json_bytes)["sha256"],
+        receipt["canonical_analysis_sha256"],
+        label="canonical human-analysis JSON stability",
+    )
+    payload = _load_json(json_bytes, label="canonical human-analysis JSON")
+
+    from_retained_archive = rating_paths is None
+    if from_retained_archive:
+        # Validate the retained archive layout here, but let the blinded freeze
+        # verifier consume its declared archive paths. Passing those numbered
+        # archive names as if they were external inputs would incorrectly compare
+        # them with the original source filenames recorded in the manifest.
+        _retained_rating_paths(freeze_root)
+        analysis_rating_paths = []
+    else:
+        analysis_rating_paths = [Path(path) for path in rating_paths]
+        if not analysis_rating_paths:
+            raise ValueError("independent recomputation requires at least one rating file")
+
+    recomputed = core.analyze(
+        analysis_rating_paths,
+        freeze_root=freeze_root,
+        packet_root=packet_root,
+        packet_path=packet_path,
+        protocol_path=protocol_path,
+        assignment_plan_path=assignment_plan_path,
+        analysis_plan_path=analysis_plan_path,
+        task_manifest_path=task_manifest_path,
+        repo_root=repo_root,
+    )
+    if _canonical_json_bytes(payload) != _canonical_json_bytes(recomputed):
+        raise ValueError(
+            "canonical result does not match independently recomputed human analysis"
+        )
+
+    receipt["independent_recomputation_verified"] = True
+    receipt["recomputed_from_retained_ratings"] = from_retained_archive
+    return receipt
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("ratings", nargs="*", type=Path)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--freeze-root", type=Path, default=core.FREEZE_ROOT)
+    parser.add_argument("--packet-root", type=Path, default=core.PACKET_ROOT)
+    parser.add_argument("--packet", type=Path, default=freeze.DEFAULT_PACKET)
+    parser.add_argument("--protocol", type=Path, default=freeze.DEFAULT_PROTOCOL)
+    parser.add_argument(
+        "--assignment-plan", type=Path, default=freeze.DEFAULT_ASSIGNMENT_PLAN
+    )
+    parser.add_argument("--analysis-plan", type=Path, default=core.PLAN)
+    parser.add_argument("--task-manifest", type=Path, default=core.TASKS)
+    parser.add_argument("--repo-root", type=Path, default=core.ROOT)
     args = parser.parse_args()
     try:
-        receipt = verify_bundle(args.output_root)
+        receipt = verify_bundle_against_inputs(
+            args.output_root,
+            rating_paths=args.ratings or None,
+            freeze_root=args.freeze_root,
+            packet_root=args.packet_root,
+            packet_path=args.packet,
+            protocol_path=args.protocol,
+            assignment_plan_path=args.assignment_plan,
+            analysis_plan_path=args.analysis_plan,
+            task_manifest_path=args.task_manifest,
+            repo_root=args.repo_root,
+        )
     except (OSError, ValueError) as exc:
         raise SystemExit(f"HUMAN EVAL ANALYSIS VERIFY: FAIL: {exc}") from exc
     print(json.dumps(receipt, indent=2, sort_keys=True))

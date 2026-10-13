@@ -199,6 +199,23 @@ def validate_payloads(automated, human):
     }
 
 
+def _verify_human_analysis_bundle(human_root, *, root):
+    """Recompute the human bundle using only the selected checkout's inputs."""
+    root = Path(root)
+    packet_root = root / "outputs" / "human_eval"
+    return verify_human_eval_analysis_outputs.verify_bundle_against_inputs(
+        human_root,
+        freeze_root=packet_root / "frozen-v1",
+        packet_root=packet_root,
+        packet_path=packet_root / "packet.jsonl",
+        protocol_path=root / "paper" / "HUMAN_EVAL_PROTOCOL.md",
+        assignment_plan_path=root / "paper" / "HUMAN_EVAL_ASSIGNMENT_PLAN.md",
+        analysis_plan_path=root / "paper" / "HUMAN_EVAL_ANALYSIS_PLAN.md",
+        task_manifest_path=root / "experiments" / "main_budget_tasks.json",
+        repo_root=root,
+    )
+
+
 def verify_readiness(root=ROOT, human_root=None, contract=None):
     """Verify both canonical bundles and return a source-bound readiness receipt."""
     root = Path(root)
@@ -231,7 +248,7 @@ def verify_readiness(root=ROOT, human_root=None, contract=None):
         _load(before["automated_provenance"], "automated provenance"), root=root
     )
     verify_main_study_outputs.verify_outputs(root=root)
-    verify_human_eval_analysis_outputs.verify_bundle(human_root)
+    human_verification = _verify_human_analysis_bundle(human_root, root=root)
 
     after = {name: _regular_bytes(path, name) for name, path in paths.items()}
     for name in paths:
@@ -248,6 +265,10 @@ def verify_readiness(root=ROOT, human_root=None, contract=None):
         "automated_provenance_verified": True,
         "automated_output_consistency_verified": True,
         "human_analysis_bundle_verified": True,
+        "human_analysis_independently_recomputed": human_verification.get(
+            "independent_recomputation_verified"
+        )
+        is True,
         "cross_analysis_identity_verified": True,
         "inputs_stable_during_verification": True,
     }
