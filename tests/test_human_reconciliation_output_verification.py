@@ -468,6 +468,54 @@ def test_verifier_preserves_valid_json_null():
     }
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b'{"nested":{"status":"ambiguous","status":"valid"}}',
+        b'{"nested":{"st\\u0061tus":"ambiguous","status":"valid"}}',
+    ],
+)
+def test_verifier_rejects_recursive_duplicate_json_members(raw):
+    with pytest.raises(
+        ValueError,
+        match="synthetic reconciliation artifact.*duplicate JSON key.*status",
+    ):
+        verify._load_json(raw, label="synthetic reconciliation artifact")
+
+
+@pytest.mark.parametrize("duplicate_name", ["status", r"st\u0061tus"])
+def test_rejects_rehashed_canonical_json_with_duplicate_member(
+    tmp_path, monkeypatch, duplicate_name
+):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+
+    canonical_path = output / reconcile.RECONCILIATION_JSON
+    original = canonical_path.read_text(encoding="utf-8")
+    canonical_bytes = (
+        '{"' + duplicate_name + '":"ambiguous",' + original.lstrip()[1:]
+    ).encode("utf-8")
+    canonical_path.write_bytes(canonical_bytes)
+
+    manifest_path = output / reconcile.RECONCILIATION_MANIFEST
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"]["canonical_reconciliation"].update(
+        reconcile._fingerprint_bytes(canonical_bytes)
+    )
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="canonical reconciliation JSON.*duplicate JSON key.*status",
+    ):
+        verify.verify_bundle(output, root=tmp_path)
+
+
 def test_rejects_nonfinite_tampering_even_after_hash_update(tmp_path, monkeypatch):
     payload = _payload()
     _patch_recomputation(monkeypatch, payload)

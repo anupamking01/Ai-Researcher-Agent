@@ -44,8 +44,18 @@ def _regular_bytes(path, label):
 
 
 def _load(content, label):
+    def unique_object_pairs(pairs):
+        value = {}
+        for key, member in pairs:
+            if key in value:
+                raise ValueError(f"{label} contains duplicate JSON key {key!r}")
+            value[key] = member
+        return value
+
     try:
-        value = json.loads(content.decode("utf-8"))
+        value = json.loads(
+            content.decode("utf-8"), object_pairs_hook=unique_object_pairs
+        )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"{label} is not valid UTF-8 JSON") from exc
     _require(isinstance(value, dict), f"{label} must contain an object")

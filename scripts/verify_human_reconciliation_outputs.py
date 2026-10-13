@@ -27,12 +27,7 @@ def _regular_bytes(path: Path, *, label: str) -> bytes:
 
 
 def _load_json(content: bytes, *, label: str) -> dict:
-    try:
-        payload = json.loads(content.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"{label} is not valid UTF-8 JSON") from exc
-    if not isinstance(payload, dict):
-        raise ValueError(f"{label} must contain a JSON object")
+    payload = readiness._load(content, label)
     # Re-encoding in strict mode also catches exponent-overflow JSON numbers
     # (e.g. 1e400), which permissive json.loads converts to infinity.
     try:

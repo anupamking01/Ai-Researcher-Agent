@@ -35,7 +35,7 @@ governing contract merely by being fingerprinted alongside the results.
 
 `scripts/verify_human_reconciliation_outputs.py` performs a read-only, offline verification of a saved bundle. It:
 
-1. requires the expected canonical JSON, Markdown, and manifest to be regular files, and rejects non-finite numbers (including overflowed JSON exponents such as 1e400) when loading either JSON artifact;
+1. requires the expected canonical JSON, Markdown, and manifest to be regular files, rejects duplicate JSON members recursively (including Unicode-escape-equivalent names), and rejects non-finite numbers (including overflowed JSON exponents such as 1e400) when loading either JSON artifact;
 2. validates the frozen study identity, outcome, contrasts, dimensions, missingness rule, direction categories, and descriptive-only inference contract;
 3. verifies artifact byte counts and SHA-256 fingerprints;
 4. deterministically regenerates the manuscript Markdown from the canonical JSON and requires byte-for-byte equality;

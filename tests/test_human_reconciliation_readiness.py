@@ -18,6 +18,20 @@ def test_repository_reconciliation_contract_matches_frozen_anchor():
     )
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b'{"nested":{"status":"ambiguous","status":"valid"}}',
+        b'{"nested":{"st\\u0061tus":"ambiguous","status":"valid"}}',
+    ],
+)
+def test_readiness_loader_rejects_recursive_duplicate_json_members(raw):
+    with pytest.raises(
+        ValueError, match="synthetic analysis.*duplicate JSON key.*status"
+    ):
+        readiness._load(raw, "synthetic analysis")
+
+
 def test_changed_contract_is_rejected_before_human_analysis_is_read(
     tmp_path, monkeypatch
 ):
