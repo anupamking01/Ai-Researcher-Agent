@@ -393,8 +393,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-evaluator-cost-usd", type=float, default=1.25)
     args = parser.parse_args()
-    if args.max_evaluator_cost_usd <= 0:
-        raise SystemExit("--max-evaluator-cost-usd must be positive")
+    if (
+        not math.isfinite(args.max_evaluator_cost_usd)
+        or args.max_evaluator_cost_usd <= 0
+    ):
+        raise SystemExit("--max-evaluator-cost-usd must be finite and positive")
     for name in ("OPENAI_API_KEY", "SMART_LLM_MODEL", "TEMPERATURE"):
         if not os.getenv(name):
             raise SystemExit(f"Missing required environment variable: {name}")

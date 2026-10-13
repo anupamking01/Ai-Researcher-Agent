@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 import subprocess
 import sys
@@ -103,8 +104,8 @@ async def main() -> None:
     parser.add_argument("--max-agent-cost-usd", type=float, default=3.00)
     parser.add_argument("--task-id", action="append")
     args = parser.parse_args()
-    if args.max_agent_cost_usd <= 0:
-        raise SystemExit("--max-agent-cost-usd must be positive")
+    if not math.isfinite(args.max_agent_cost_usd) or args.max_agent_cost_usd <= 0:
+        raise SystemExit("--max-agent-cost-usd must be finite and positive")
 
     _check_environment()
     task_set_id, tasks = _load_task_file(args.task_file)
