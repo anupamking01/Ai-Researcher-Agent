@@ -227,7 +227,7 @@ def verify_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
         raise ValueError("analysis manifest implementation must be an object")
     _require_equal(
         set(implementation),
-        {"analysis_core", "analysis_renderer"},
+        {"analysis_core", "analysis_renderer", "analysis_verifier"},
         label="analysis manifest implementation set",
     )
 
@@ -235,6 +235,10 @@ def verify_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
     renderer_bytes = _regular_bytes(
         Path(analyze_human_eval.__file__),
         label="current human-analysis renderer",
+    )
+    verifier_bytes = _regular_bytes(
+        Path(__file__),
+        label="current human-analysis verifier",
     )
     _verify_entry(
         implementation["analysis_core"],
@@ -247,6 +251,12 @@ def verify_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
         expected_path="scripts/analyze_human_eval.py",
         content=renderer_bytes,
         label="analysis renderer implementation",
+    )
+    _verify_entry(
+        implementation["analysis_verifier"],
+        expected_path="scripts/verify_human_eval_analysis_outputs.py",
+        content=verifier_bytes,
+        label="analysis verifier implementation",
     )
 
     return {

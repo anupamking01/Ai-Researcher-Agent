@@ -205,7 +205,11 @@ def test_write_bundle_emits_manifest_and_verifies(tmp_path):
         (output / analyze_human_eval.ANALYSIS_MANIFEST).read_text(encoding="utf-8")
     )
     assert set(manifest["artifacts"]) == {"canonical_analysis", "manuscript_rendering"}
-    assert set(manifest["implementation"]) == {"analysis_core", "analysis_renderer"}
+    assert set(manifest["implementation"]) == {
+        "analysis_core",
+        "analysis_renderer",
+        "analysis_verifier",
+    }
 
 
 def test_independent_verifier_recomputes_from_retained_ratings(tmp_path, monkeypatch):
@@ -328,6 +332,18 @@ def test_rejects_analysis_implementation_drift(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "__file__", str(changed_core))
 
     with pytest.raises(ValueError, match="analysis core implementation fingerprint"):
+        verify.verify_bundle(output)
+
+
+def test_rejects_analysis_verifier_implementation_drift(tmp_path, monkeypatch):
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+
+    changed_verifier = tmp_path / "verify_human_eval_analysis_outputs.py"
+    changed_verifier.write_text("# changed verification gate\n", encoding="utf-8")
+    monkeypatch.setattr(verify, "__file__", str(changed_verifier))
+
+    with pytest.raises(ValueError, match="analysis verifier implementation fingerprint"):
         verify.verify_bundle(output)
 
 

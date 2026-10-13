@@ -2,8 +2,9 @@
 
 The published result bundle is create-only and includes an output manifest that
 binds the canonical JSON, deterministic Markdown rendering, and the exact
-analysis implementation files used to produce them. The bundle is verified
-after writing before the CLI reports success.
+analysis and publication-verification implementation files used to produce and
+validate them. The bundle is verified after writing before the CLI reports
+success.
 """
 import argparse
 import hashlib
@@ -16,6 +17,9 @@ OUTPUT_ROOT = core.PACKET_ROOT / "analysis-v1"
 ANALYSIS_JSON = "analysis.json"
 ANALYSIS_MARKDOWN = "analysis.md"
 ANALYSIS_MANIFEST = "analysis_manifest.json"
+ANALYSIS_VERIFIER_SOURCE = Path(__file__).with_name(
+    "verify_human_eval_analysis_outputs.py"
+)
 
 
 def render_markdown(payload):
@@ -207,10 +211,15 @@ def write_bundle(payload, output_root):
                 __file__,
                 logical_path="scripts/analyze_human_eval.py",
             ),
+            "analysis_verifier": _implementation_fingerprint(
+                ANALYSIS_VERIFIER_SOURCE,
+                logical_path="scripts/verify_human_eval_analysis_outputs.py",
+            ),
         },
         "integrity_note": (
             "The manifest binds the exact canonical analysis JSON, deterministic "
-            "Markdown rendering, and analysis implementation source bytes. "
+            "Markdown rendering, and analysis/verification implementation source "
+            "bytes. "
             "It is written last; the analysis command independently recomputes the "
             "payload from verified inputs before success is reported."
         ),

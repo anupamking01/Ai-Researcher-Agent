@@ -19,7 +19,8 @@ That manifest SHA-256-binds:
 - `analysis.json`;
 - `analysis.md`;
 - `scripts/human_eval_analysis_core.py`;
-- `scripts/analyze_human_eval.py`.
+- `scripts/analyze_human_eval.py`;
+- `scripts/verify_human_eval_analysis_outputs.py`.
 
 The command first verifies the persisted bundle, then independently recomputes
 the complete canonical payload from the rating inputs and governing artifacts
@@ -52,6 +53,8 @@ Verification fails closed when:
 - either output no longer matches its recorded byte count or SHA-256;
 - the current analysis core or renderer source bytes do not match the generating
   implementation recorded in the manifest;
+- the current publication verifier source bytes do not match the verification
+  implementation recorded in the manifest;
 - result identity fields attempt to relabel human validation as automated
   confirmatory analysis, claim generated human ratings, claim treatment reruns,
   or add undeclared human-validation hypothesis tests.
@@ -83,9 +86,10 @@ new versioned output path should be used for a retry.
 
 ## Limits
 
-This gate detects output/renderer drift, binds the implementation source, and
-recomputes descriptive human-validation outputs from retained inputs. It does
-not prove that annotators were independent humans, replace the earlier
+This gate detects output/renderer drift, binds the analysis and verification
+implementation sources, and recomputes descriptive human-validation outputs
+from retained inputs. It does not prove that annotators were independent humans,
+replace the earlier
 packet/freeze verification gates, or make multiple filesystem writes an atomic
 transaction. The upstream human-analysis code still verifies and snapshots the
 blinded and coordinator artifacts before treatment-level analysis. Real blinded
