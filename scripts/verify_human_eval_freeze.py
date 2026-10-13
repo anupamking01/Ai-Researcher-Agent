@@ -323,10 +323,17 @@ def verify_frozen_snapshot(
 
     # Only this normalized artifact combines raters. Raw archived/external
     # submissions above still enforce one annotator per file, regardless of name.
-    frozen_rows, _ = freeze._load_ratings(
+    frozen_rows, frozen_sources = freeze._load_ratings(
         [frozen_path],
         allowed_blind_ids=set(blind_ids),
         require_single_annotator=False,
+    )
+    # The loader fingerprints the exact bytes it parses. Never attest one
+    # file revision while validating normalized rows from a later revision.
+    _require_equal(
+        {"bytes": frozen_sources[0]["bytes"], "sha256": frozen_sources[0]["sha256"]},
+        _fingerprint(frozen_content),
+        label="frozen-ratings parsed fingerprint",
     )
     _require_equal(frozen_rows, raw_rows, label="frozen ratings versus normalized raw inputs")
 
