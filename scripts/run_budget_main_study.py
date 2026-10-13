@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 from dataclasses import replace
@@ -51,12 +53,74 @@ def _git_commit() -> str:
         return "unavailable"
 
 
-def _load_task_file(path: Path) -> tuple[str, list[dict]]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    tasks = payload.get("tasks", [])
-    if not tasks:
-        raise SystemExit(f"No tasks found in {path}")
-    return str(payload["task_set_id"]), tasks
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict:
+    payload = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError(f"duplicate JSON key: {key}")
+        payload[key] = value
+    return payload
+
+
+def _task_file_label(path: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(REPO_ROOT.resolve()).as_posix()
+    except ValueError:
+        return str(resolved)
+
+
+def _load_task_file(path: Path) -> tuple[str, list[dict], dict]:
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise SystemExit(f"Cannot read task file {path}: {exc}") from exc
+    try:
+        payload = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise SystemExit(f"Invalid task file {path}: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise SystemExit(f"Invalid task file {path}: top level must be an object")
+    task_set_id = payload.get("task_set_id")
+    if not isinstance(task_set_id, str) or not task_set_id.strip():
+        raise SystemExit(
+            f"Invalid task file {path}: task_set_id must be a non-empty string"
+        )
+    tasks = payload.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        raise SystemExit(f"Invalid task file {path}: tasks must be a non-empty list")
+
+    task_ids = set()
+    for index, task in enumerate(tasks, start=1):
+        if not isinstance(task, dict):
+            raise SystemExit(f"Invalid task file {path}: task {index} must be an object")
+        task_id = task.get("id")
+        if not isinstance(task_id, str) or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._-]*", task_id
+        ):
+            raise SystemExit(
+                f"Invalid task file {path}: task {index} id must be a safe non-empty identifier"
+            )
+        if task_id in task_ids:
+            raise SystemExit(f"Invalid task file {path}: duplicate task id: {task_id}")
+        task_ids.add(task_id)
+        for field in ("category", "question"):
+            value = task.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise SystemExit(
+                    f"Invalid task file {path}: task {index} {field} must be a non-empty string"
+                )
+
+    snapshot = {
+        "path": _task_file_label(path),
+        "size_bytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+    return task_set_id, tasks, snapshot
 
 
 def _load_pricing() -> dict:
@@ -108,7 +172,7 @@ async def main() -> None:
         raise SystemExit("--max-agent-cost-usd must be finite and positive")
 
     _check_environment()
-    task_set_id, tasks = _load_task_file(args.task_file)
+    task_set_id, tasks, task_snapshot = _load_task_file(args.task_file)
     if args.task_id:
         requested = set(args.task_id)
         tasks = [task for task in tasks if task["id"] in requested]
@@ -126,6 +190,9 @@ async def main() -> None:
         "study_id": "budget-main-v1",
         "task_set_id": task_set_id,
         "task_ids": [task["id"] for task in tasks],
+        "task_file": task_snapshot["path"],
+        "task_file_size_bytes": task_snapshot["size_bytes"],
+        "task_file_sha256": task_snapshot["sha256"],
         "variants": list(VARIANTS),
         "expected_runs": len(tasks) * len(VARIANTS),
         "smart_model": os.environ["SMART_LLM_MODEL"],
