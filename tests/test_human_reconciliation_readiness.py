@@ -1,11 +1,45 @@
 """Synthetic-only tests for the automated-human reconciliation readiness gate."""
 
 import copy
+import hashlib
 import statistics
 
 import pytest
 
 from scripts import verify_human_reconciliation_readiness as readiness
+
+
+def test_repository_reconciliation_contract_matches_frozen_anchor():
+    content = (readiness.ROOT / readiness.CONTRACT).read_bytes()
+    assert hashlib.sha256(content).hexdigest() == getattr(
+        readiness,
+        "FROZEN_RECONCILIATION_CONTRACT_SHA256",
+        None,
+    )
+
+
+def test_changed_contract_is_rejected_before_human_analysis_is_read(
+    tmp_path, monkeypatch
+):
+    observed = []
+
+    def fake_regular_bytes(path, label):
+        observed.append(label)
+        if label == "reconciliation_contract":
+            return b"post-freeze contract substitution\n"
+        if label == "human_analysis":
+            pytest.fail("human analysis was read before the contract anchor passed")
+        return b"{}"
+
+    monkeypatch.setattr(readiness, "_regular_bytes", fake_regular_bytes)
+    with pytest.raises(ValueError, match="frozen reconciliation contract fingerprint"):
+        readiness.verify_readiness(
+            root=tmp_path,
+            human_root=tmp_path / "human",
+            contract=tmp_path / "changed-contract.md",
+        )
+
+    assert observed == ["reconciliation_contract"]
 
 
 def _summary(diffs):

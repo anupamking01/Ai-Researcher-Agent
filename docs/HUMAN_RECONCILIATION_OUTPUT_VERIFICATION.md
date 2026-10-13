@@ -25,6 +25,12 @@ The manifest binds, by exact path, SHA-256, and byte count:
 
 This makes the published result auditable without treating manuscript text as a second source of truth.
 
+Before opening any human-analysis artifact, the readiness gate requires
+`paper/HUMAN_RECONCILIATION_FREEZE.md` to match its preregistered repository
+SHA-256 anchor exactly. The contract's runtime fingerprint is still retained
+among the verified inputs, but a newly substituted document cannot become the
+governing contract merely by being fingerprinted alongside the results.
+
 ## Independent verification
 
 `scripts/verify_human_reconciliation_outputs.py` performs a read-only, offline verification of a saved bundle. It:

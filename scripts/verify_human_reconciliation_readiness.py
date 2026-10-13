@@ -23,6 +23,9 @@ AUTO_JSON = Path("outputs/main_study_inference.json")
 AUTO_PROV = Path("outputs/main_study_analysis_provenance.json")
 HUMAN_ROOT = Path("outputs/human_eval/analysis-v1")
 CONTRACT = Path("paper/HUMAN_RECONCILIATION_FREEZE.md")
+FROZEN_RECONCILIATION_CONTRACT_SHA256 = (
+    "3732fb7a231e3be88935d469ab4c39f454a4d0d2adfcfed7e40298889b5a90aa"
+)
 STUDY = "budget-main-v1"
 CONTRASTS = tuple(name for _, _, name in analyze_main_study.PRIMARY_CONTRASTS)
 DIMS = tuple(human_core.DIMS)
@@ -191,14 +194,28 @@ def verify_readiness(root=ROOT, human_root=None, contract=None):
     root = Path(root)
     human_root = Path(human_root) if human_root else root / HUMAN_ROOT
     contract = Path(contract) if contract else root / CONTRACT
+    contract_content = _regular_bytes(contract, "reconciliation_contract")
+    contract_sha256 = hashlib.sha256(contract_content).hexdigest()
+    if contract_sha256 != FROZEN_RECONCILIATION_CONTRACT_SHA256:
+        raise ValueError(
+            "frozen reconciliation contract fingerprint mismatch: "
+            f"expected {FROZEN_RECONCILIATION_CONTRACT_SHA256}, got {contract_sha256}"
+        )
     paths = {
+        "reconciliation_contract": contract,
         "automated_analysis": root / AUTO_JSON,
         "automated_provenance": root / AUTO_PROV,
         "human_analysis": human_root / "analysis.json",
         "human_manifest": human_root / "analysis_manifest.json",
-        "reconciliation_contract": contract,
     }
-    before = {name: _regular_bytes(path, name) for name, path in paths.items()}
+    before = {"reconciliation_contract": contract_content}
+    before.update(
+        {
+            name: _regular_bytes(path, name)
+            for name, path in paths.items()
+            if name != "reconciliation_contract"
+        }
+    )
 
     verify_analysis_provenance.verify_receipt(
         _load(before["automated_provenance"], "automated provenance"), root=root
