@@ -16,6 +16,7 @@ from scripts import analyze_main_study
 from scripts import human_eval_analysis_core as human_core
 from scripts import verify_analysis_provenance
 from scripts import verify_human_eval_analysis_outputs
+from scripts import verify_main_study_execution
 from scripts import verify_main_study_outputs
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +26,9 @@ HUMAN_ROOT = Path("outputs/human_eval/analysis-v1")
 CONTRACT = Path("paper/HUMAN_RECONCILIATION_FREEZE.md")
 FROZEN_RECONCILIATION_CONTRACT_SHA256 = (
     "3732fb7a231e3be88935d469ab4c39f454a4d0d2adfcfed7e40298889b5a90aa"
+)
+FROZEN_LEGACY_AUTOMATED_PROVENANCE_SHA256 = (
+    "73f12a725f3cf4d27748a95e1f380ca5cfcac3b8fdd5adeda7abaa2f3f6e10e0"
 )
 STUDY = "budget-main-v1"
 CONTRASTS = tuple(name for _, _, name in analyze_main_study.PRIMARY_CONTRASTS)
@@ -216,6 +220,20 @@ def _verify_human_analysis_bundle(human_root, *, root):
     )
 
 
+def _verify_automated_provenance(content: bytes, *, root: Path) -> None:
+    """Require execution binding when present; retain the preserved legacy path."""
+    receipt = _load(content, "automated provenance")
+    if "verified_execution" in receipt:
+        verify_main_study_execution.verify_execution_receipt(receipt, root=root)
+        return
+    if hashlib.sha256(content).hexdigest() != FROZEN_LEGACY_AUTOMATED_PROVENANCE_SHA256:
+        raise ValueError(
+            "automated provenance is missing verified_execution and does not match "
+            "the pinned preserved legacy receipt"
+        )
+    verify_analysis_provenance.verify_receipt(receipt, root=root)
+
+
 def verify_readiness(root=ROOT, human_root=None, contract=None):
     """Verify both canonical bundles and return a source-bound readiness receipt."""
     root = Path(root)
@@ -244,9 +262,7 @@ def verify_readiness(root=ROOT, human_root=None, contract=None):
         }
     )
 
-    verify_analysis_provenance.verify_receipt(
-        _load(before["automated_provenance"], "automated provenance"), root=root
-    )
+    _verify_automated_provenance(before["automated_provenance"], root=root)
     verify_main_study_outputs.verify_outputs(root=root)
     human_verification = _verify_human_analysis_bundle(human_root, root=root)
 

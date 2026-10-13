@@ -84,6 +84,7 @@ jobs:
       - name: Independently verify analysis receipt
         run: |
           python -m scripts.verify_analysis_provenance             outputs/main_study_analysis_provenance.json
+          python -m scripts.verify_main_study_execution             outputs/main_study_analysis_provenance.json
           python -m scripts.verify_main_study_outputs
 
       - name: Upload canonical analysis bundle

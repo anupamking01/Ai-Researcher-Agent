@@ -1,9 +1,10 @@
 """Run main-study inference only after provenance and numeric-integrity checks.
 
 This is the preferred entry point for manuscript-facing analysis. It binds the
-analysis to a previously recorded SHA-256 manifest, verifies the exact input
-bytes, validates scientific numeric domains, executes the frozen analysis, and
-verifies that manuscript-facing outputs are an exact rendering of canonical
+analysis to a previously recorded SHA-256 manifest, captures and re-verifies an
+immutable snapshot of those exact input bytes, validates scientific numeric
+domains on that snapshot, executes the frozen analysis from the same snapshot,
+and verifies that manuscript-facing outputs are an exact rendering of canonical
 machine-readable results. A deterministic provenance receipt binding both inputs
 and final outputs is written only after all checks succeed. No input is repaired
 or rewritten.
@@ -14,6 +15,9 @@ import argparse
 import csv
 import hashlib
 import json
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from typing import Callable
 
@@ -27,11 +31,82 @@ CANONICAL_MAIN = "outputs/main_study_runs.csv"
 CANONICAL_SUPPORT = "outputs/posthoc_support_runs.csv"
 REQUIRED_INPUTS = {CANONICAL_MAIN, CANONICAL_SUPPORT}
 DEFAULT_PROVENANCE_OUTPUT = "outputs/main_study_analysis_provenance.json"
+VERIFIED_RUNNER = "scripts/run_verified_main_study_analysis.py"
+EXECUTION_VERIFIER = "scripts/verify_main_study_execution.py"
+SNAPSHOT_ANALYSIS_DRIVER = """\
+from pathlib import Path
+import sys
+from scripts import analyze_main_study
+
+analyze_main_study.MAIN_CSV = Path(sys.argv[1])
+analyze_main_study.SUPPORT_CSV = Path(sys.argv[2])
+analyze_main_study.OUT_JSON = Path(sys.argv[3])
+analyze_main_study.OUT_MD = Path(sys.argv[4])
+raise SystemExit(analyze_main_study.main())
+"""
 
 
 def _read_rows(path: Path) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8", newline="") as handle:
         return list(csv.DictReader(handle))
+
+
+def _capture_verified_inputs(
+    entries: list[dict], *, root: Path, snapshot_root: Path
+) -> dict[str, Path]:
+    """Capture and re-bind the exact bytes that the analysis will consume."""
+    by_path = {entry["path"]: entry for entry in entries}
+    captured = {}
+    for relative in sorted(REQUIRED_INPUTS):
+        content = (root / relative).read_bytes()
+        expected = by_path[relative]
+        if (
+            len(content) != expected["bytes"]
+            or hashlib.sha256(content).hexdigest() != expected["sha256"]
+        ):
+            raise ValueError(
+                f"research artifact changed while capturing verified analysis input: {relative}"
+            )
+        destination = snapshot_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+        captured[relative] = destination
+    return captured
+
+
+def _run_analysis_from_snapshots(snapshots: dict[str, Path], *, root: Path) -> int:
+    """Run the frozen analyzer in a process isolated from live module globals."""
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                SNAPSHOT_ANALYSIS_DRIVER,
+                str(snapshots[CANONICAL_MAIN]),
+                str(snapshots[CANONICAL_SUPPORT]),
+                str(root / DEFAULT_JSON),
+                str(root / DEFAULT_MARKDOWN),
+            ],
+            cwd=root,
+            check=False,
+            timeout=300,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError("unable to execute isolated frozen analysis") from exc
+    return completed.returncode
+
+
+def _bind_verified_execution(receipt: dict, *, root: Path) -> dict:
+    """Bind the orchestration layer and its independent verifier for future runs."""
+    bound = dict(receipt)
+    bound["verified_execution"] = {
+        "runner": {"path": VERIFIED_RUNNER, "sha256": _sha256(root / VERIFIED_RUNNER)},
+        "execution_verifier": {
+            "path": EXECUTION_VERIFIER,
+            "sha256": _sha256(root / EXECUTION_VERIFIER),
+        },
+    }
+    return bound
 
 
 def _sha256(path: Path) -> str:
@@ -66,13 +141,14 @@ def verify_and_run(
     manifest: dict,
     *,
     root: Path = REPO_ROOT,
-    analyze: Callable[[], int] = analyze_main_study.main,
+    analyze: Callable[[], int] | None = None,
 ) -> int:
     """Verify provenance/integrity before invoking the frozen analysis.
 
     The manifest must describe exactly the two canonical CSV inputs. Requiring
     an exact set prevents a valid hash for unrelated files from being mistaken
-    for provenance of the data actually consumed by the analysis.
+    for provenance of the data actually consumed by the analysis. Re-hashing the
+    captured bytes closes the gap between live-file verification and analysis.
     """
     entries = verify_manifest(manifest, root=root)
     manifested = {entry["path"] for entry in entries}
@@ -84,17 +160,25 @@ def verify_and_run(
             f"missing={missing}, extra={extra}"
         )
 
-    main_rows = _read_rows(root / CANONICAL_MAIN)
-    support_rows = _read_rows(root / CANONICAL_SUPPORT)
-    validate_rows(main_rows, support_rows)
-    return analyze()
+    with tempfile.TemporaryDirectory(prefix="vera-main-analysis-") as tmp_name:
+        snapshots = _capture_verified_inputs(
+            entries,
+            root=root,
+            snapshot_root=Path(tmp_name),
+        )
+        main_rows = _read_rows(snapshots[CANONICAL_MAIN])
+        support_rows = _read_rows(snapshots[CANONICAL_SUPPORT])
+        validate_rows(main_rows, support_rows)
+        if analyze is not None:
+            return analyze()
+        return _run_analysis_from_snapshots(snapshots, root=root)
 
 
 def verify_run_and_record(
     manifest: dict,
     *,
     root: Path = REPO_ROOT,
-    analyze: Callable[[], int] = analyze_main_study.main,
+    analyze: Callable[[], int] | None = None,
     receipt_builder: Callable[..., dict] = build_receipt,
     output_verifier: Callable[..., None] = verify_outputs,
     output: Path | None = None,
@@ -126,6 +210,11 @@ def verify_run_and_record(
     output_verifier(root=root)
     if output_verifier is verify_outputs:
         receipt = _bind_verified_outputs(receipt, root=root)
+    if output_verifier is verify_outputs and receipt_builder is build_receipt:
+        receipt = _bind_verified_execution(receipt, root=root)
+        from scripts.verify_main_study_execution import verify_execution_receipt
+
+        verify_execution_receipt(receipt, root=root)
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")

@@ -2,6 +2,7 @@
 
 import copy
 import hashlib
+import json
 import statistics
 
 import pytest
@@ -14,6 +15,15 @@ def test_repository_reconciliation_contract_matches_frozen_anchor():
     assert hashlib.sha256(content).hexdigest() == getattr(
         readiness,
         "FROZEN_RECONCILIATION_CONTRACT_SHA256",
+        None,
+    )
+
+
+def test_preserved_legacy_automated_receipt_matches_frozen_anchor():
+    content = (readiness.ROOT / readiness.AUTO_PROV).read_bytes()
+    assert hashlib.sha256(content).hexdigest() == getattr(
+        readiness,
+        "FROZEN_LEGACY_AUTOMATED_PROVENANCE_SHA256",
         None,
     )
 
@@ -84,6 +94,71 @@ def test_human_recomputation_uses_requested_checkout_paths(tmp_path, monkeypatch
         "task_manifest_path": root / "experiments" / "main_budget_tasks.json",
         "repo_root": root,
     }
+
+
+def test_future_automated_receipt_requires_execution_layer_verification(
+    tmp_path, monkeypatch
+):
+    payload = {"schema_version": 1, "verified_execution": {"runner": {}}}
+    calls = []
+    monkeypatch.setattr(
+        readiness.verify_analysis_provenance,
+        "verify_receipt",
+        lambda receipt, root: pytest.fail("legacy-only verification was used"),
+    )
+    monkeypatch.setattr(
+        readiness.verify_main_study_execution,
+        "verify_execution_receipt",
+        lambda receipt, root: calls.append((receipt, root)),
+    )
+
+    readiness._verify_automated_provenance(
+        json.dumps(payload).encode("utf-8"), root=tmp_path
+    )
+
+    assert calls == [(payload, tmp_path)]
+
+
+def test_preserved_legacy_receipt_keeps_legacy_verification_path(tmp_path, monkeypatch):
+    payload = {"schema_version": 1}
+    content = json.dumps(payload).encode("utf-8")
+    calls = []
+    monkeypatch.setattr(
+        readiness,
+        "FROZEN_LEGACY_AUTOMATED_PROVENANCE_SHA256",
+        hashlib.sha256(content).hexdigest(),
+    )
+    monkeypatch.setattr(
+        readiness.verify_analysis_provenance,
+        "verify_receipt",
+        lambda receipt, root: calls.append((receipt, root)),
+    )
+    monkeypatch.setattr(
+        readiness.verify_main_study_execution,
+        "verify_execution_receipt",
+        lambda receipt, root: pytest.fail("legacy receipt required new execution field"),
+    )
+
+    readiness._verify_automated_provenance(content, root=tmp_path)
+
+    assert calls == [(payload, tmp_path)]
+
+
+def test_stripped_future_execution_binding_cannot_downgrade_to_legacy(
+    tmp_path, monkeypatch
+):
+    payload = {"schema_version": 1, "verified_execution": {"runner": {}}}
+    payload.pop("verified_execution")
+    monkeypatch.setattr(
+        readiness.verify_analysis_provenance,
+        "verify_receipt",
+        lambda receipt, root: pytest.fail("stripped receipt reached legacy verifier"),
+    )
+
+    with pytest.raises(ValueError, match="missing verified_execution"):
+        readiness._verify_automated_provenance(
+            json.dumps(payload).encode("utf-8"), root=tmp_path
+        )
 
 
 def _summary(diffs):

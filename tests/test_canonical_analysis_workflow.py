@@ -43,9 +43,10 @@ def test_workflow_runs_verified_analysis_in_fail_closed_order() -> None:
     fingerprint = workflow.index("python -m scripts.fingerprint_research_artifacts")
     analysis = workflow.index("python -m scripts.run_verified_main_study_analysis")
     provenance = workflow.index("python -m scripts.verify_analysis_provenance")
+    execution = workflow.index("python -m scripts.verify_main_study_execution")
     output_check = workflow.index("python -m scripts.verify_main_study_outputs")
 
-    assert fingerprint < analysis < provenance < output_check
+    assert fingerprint < analysis < provenance < execution < output_check
 
 
 def test_workflow_invokes_package_aware_analysis_modules() -> None:
@@ -53,6 +54,7 @@ def test_workflow_invokes_package_aware_analysis_modules() -> None:
     assert "python -m scripts.fingerprint_research_artifacts" in workflow
     assert "python -m scripts.run_verified_main_study_analysis" in workflow
     assert "python -m scripts.verify_analysis_provenance" in workflow
+    assert "python -m scripts.verify_main_study_execution" in workflow
     assert "python -m scripts.verify_main_study_outputs" in workflow
 
 

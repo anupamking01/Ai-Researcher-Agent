@@ -156,6 +156,22 @@ The three confirmatory p-values are adjusted together with the Holm step-down pr
 
 Additional metrics and contrasts are exploratory unless separately preregistered.
 
+The manuscript-facing entry point, `scripts/run_verified_main_study_analysis.py`,
+does not analyze live CSV paths after merely checking them. It captures both
+canonical CSV inputs, re-checks the captured byte counts and SHA-256 digests
+against the recorded manifest, validates that snapshot, and points the frozen
+analyzer at the same snapshot. A concurrent edit therefore cannot make a
+successful provenance receipt describe different bytes from those analyzed.
+The analyzer runs in an isolated subprocess so concurrent in-process callers
+cannot redirect one another through module-global paths. Future receipts emitted
+by this updated entry point also bind the exact runner and independent
+`scripts/verify_main_study_execution.py` source bytes. The preserved canonical
+receipt predates that added execution-layer field and remains governed by
+`scripts/verify_analysis_provenance.py`; it is not retroactively relabeled.
+Downstream reconciliation permits that compatibility path only for the exact
+pinned SHA-256 of the preserved receipt, so stripping `verified_execution` from
+a future receipt cannot downgrade it to legacy verification.
+
 ## 10. Pilot vs. main study
 
 The repository keeps pilot evidence distinct from the main study.
