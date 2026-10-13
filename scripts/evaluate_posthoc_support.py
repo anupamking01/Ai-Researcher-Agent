@@ -41,6 +41,33 @@ def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _normalize_evaluator_output(raw_result: str) -> dict:
+    from logic.experiment import normalize_verifier_output
+
+    return normalize_verifier_output(raw_result, max_claims=MAX_CLAIMS)
+
+
+def _load_cached_evaluation(path: Path) -> dict:
+    payload = _load_json(path)
+    declared_cap = payload.get("max_claims")
+    if (
+        isinstance(declared_cap, bool)
+        or not isinstance(declared_cap, int)
+        or declared_cap != MAX_CLAIMS
+    ):
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} max_claims metadata must equal "
+            f"{MAX_CLAIMS}"
+        )
+    try:
+        _normalize_evaluator_output(json.dumps(payload))
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} is invalid: {exc}"
+        ) from exc
+    return payload
+
+
 def _cost_usage(usage_by_model: dict, pricing: dict) -> float:
     from scripts.summarize_pilot import _estimate_reported_token_cost
 
@@ -103,7 +130,6 @@ def main() -> int:
             raise SystemExit(f"Missing required environment variable: {name}")
 
     from agent.llm_utils import UsageTracker, create_chat_completion
-    from logic.experiment import normalize_verifier_output
     from logic.prompts import generate_verification_prompt
 
     pricing = _load_json(PRICING_FILE)
@@ -125,7 +151,7 @@ def main() -> int:
         run_id = str(trace.get("run_id", trace_path.stem))
         out_path = EVAL_ROOT / variant / f"{task_id}.json"
         if out_path.is_file():
-            rows.append(_load_json(out_path))
+            rows.append(_load_cached_evaluation(out_path))
             continue
 
         spent = _existing_evaluator_cost(pricing)
@@ -148,7 +174,7 @@ def main() -> int:
             usage_tracker=tracker,
             request_timeout_seconds=120,
         )
-        result = normalize_verifier_output(raw)
+        result = _normalize_evaluator_output(raw)
         usage = tracker.snapshot()
         if int(result.get("claims_checked", 0) or 0) <= 0:
             raise SystemExit(f"Common evaluator checked zero claims for {variant}/{task_id}")

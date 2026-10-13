@@ -20,6 +20,40 @@ def test_missing_overlay_is_optional(monkeypatch, tmp_path):
     web_scrape.add_header(Driver())
 
 
+def test_in_treatment_verifier_enforces_prompt_claim_cap(monkeypatch, tmp_path):
+    agent = ResearchAgent(
+        question="test question",
+        agent="test-agent",
+        agent_role_prompt="test-role",
+        websocket=None,
+    )
+    agent.research_summary = "saved evidence"
+    seen = {}
+
+    async def fake_call_agent(prompt):
+        seen["prompt"] = prompt
+        return json.dumps(
+            {
+                "claims_checked": 21,
+                "supported": 21,
+                "partially_supported": 0,
+                "unsupported": 0,
+                "contradicted": 0,
+                "examples": [],
+            }
+        )
+
+    monkeypatch.setattr(agent, "call_agent", fake_call_agent)
+    monkeypatch.chdir(tmp_path)
+
+    result = asyncio.run(agent.verify_report("generated report"))
+
+    assert "up to 20 important atomic factual claims" in seen["prompt"]
+    assert result["status"] == "parse_error"
+    assert result["claims_checked"] == 0
+
+
+
 def test_overlay_executes_when_present(monkeypatch, tmp_path):
     js_dir = tmp_path / "js"
     js_dir.mkdir()

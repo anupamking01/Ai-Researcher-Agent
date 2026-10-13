@@ -122,8 +122,17 @@ def allocate_source_budgets(total_budget: int, n_queries: int) -> list[int]:
     return [base + (1 if index < remainder else 0) for index in range(n_queries)]
 
 
-def normalize_verifier_output(raw_result: str) -> dict[str, Any]:
+def normalize_verifier_output(
+    raw_result: str, *, max_claims: int = 20
+) -> dict[str, Any]:
     """Parse and normalize the bounded verifier's JSON response."""
+    if (
+        isinstance(max_claims, bool)
+        or not isinstance(max_claims, int)
+        or max_claims <= 0
+    ):
+        raise ValueError("max_claims must be a positive integer")
+
     text = (raw_result or "").strip()
     if text.startswith("```"):
         lines = text.splitlines()
@@ -156,6 +165,11 @@ def normalize_verifier_output(raw_result: str) -> dict[str, Any]:
 
     if sum(normalized[label] for label in labels) != normalized["claims_checked"]:
         raise ValueError("Verifier label counts must sum to claims_checked")
+    if normalized["claims_checked"] > max_claims:
+        raise ValueError(
+            "Verifier claims_checked "
+            f"{normalized['claims_checked']} exceeds max_claims={max_claims}"
+        )
 
     if "examples" not in data:
         raise ValueError("Verifier output missing required field 'examples'")

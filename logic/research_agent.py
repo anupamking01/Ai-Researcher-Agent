@@ -310,15 +310,17 @@ class ResearchAgent:
 
     async def verify_report(self, report_text):
         """Run the paper's first claim-to-evidence verifier without repair."""
+        max_claims = 20
         raw_result = await self.call_agent(
             prompts.generate_verification_prompt(
                 self.question,
                 report_text,
                 self.research_summary,
+                max_claims=max_claims,
             )
         )
         try:
-            result = normalize_verifier_output(raw_result)
+            result = normalize_verifier_output(raw_result, max_claims=max_claims)
             result["status"] = "ok"
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             result = {

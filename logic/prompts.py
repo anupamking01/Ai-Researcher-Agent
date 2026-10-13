@@ -40,9 +40,12 @@ def generate_verification_prompt(question, report, research_summary, max_claims=
     post-hoc evaluator uses a lower predeclared cap to control evaluation cost
     while applying the identical rubric to every treatment variant.
     """
-    max_claims = int(max_claims)
-    if max_claims <= 0:
-        raise ValueError("max_claims must be positive")
+    if (
+        isinstance(max_claims, bool)
+        or not isinstance(max_claims, int)
+        or max_claims <= 0
+    ):
+        raise ValueError("max_claims must be a positive integer")
     return f"""
 You are evaluating factual support in a generated web-research report.
 

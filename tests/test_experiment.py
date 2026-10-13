@@ -112,6 +112,29 @@ def test_verifier_output_rejects_count_mismatch():
         )
 
 
+def test_verifier_output_accepts_claim_count_at_predeclared_cap():
+    parsed = normalize_verifier_output(
+        json.dumps(_verifier_payload()), max_claims=8
+    )
+
+    assert parsed["claims_checked"] == 8
+
+
+def test_verifier_output_rejects_claim_count_above_predeclared_cap():
+    with pytest.raises(ValueError, match="exceeds max_claims=7"):
+        normalize_verifier_output(
+            json.dumps(_verifier_payload()), max_claims=7
+        )
+
+
+@pytest.mark.parametrize("max_claims", [True, 1.5, "8", 0, -1])
+def test_verifier_output_rejects_invalid_claim_cap(max_claims):
+    with pytest.raises(ValueError, match="max_claims must be a positive integer"):
+        normalize_verifier_output(
+            json.dumps(_verifier_payload()), max_claims=max_claims
+        )
+
+
 @pytest.mark.parametrize("examples", [None, {}, "not-a-list"])
 def test_verifier_output_rejects_non_list_examples(examples):
     with pytest.raises(ValueError, match="examples must be a JSON list"):
@@ -137,8 +160,14 @@ def test_verifier_accepts_json_code_fence():
 def test_posthoc_verifier_claim_cap_is_parameterized():
     prompt = generate_verification_prompt("q", "report", "evidence", max_claims=12)
     assert "up to 12 important atomic factual claims" in prompt
-    with pytest.raises(ValueError):
-        generate_verification_prompt("q", "report", "evidence", max_claims=0)
+
+
+@pytest.mark.parametrize("max_claims", [True, 1.5, "12", 0, -1])
+def test_verification_prompt_rejects_invalid_claim_cap(max_claims):
+    with pytest.raises(ValueError, match="max_claims must be a positive integer"):
+        generate_verification_prompt(
+            "q", "report", "evidence", max_claims=max_claims
+        )
 
 
 def test_usage_tracker_aggregates_provider_usage_by_model():
