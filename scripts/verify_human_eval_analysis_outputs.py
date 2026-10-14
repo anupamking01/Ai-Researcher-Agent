@@ -283,6 +283,7 @@ def verify_bundle_against_inputs(
     packet_path: Path = freeze.DEFAULT_PACKET,
     protocol_path: Path = freeze.DEFAULT_PROTOCOL,
     assignment_plan_path: Path = freeze.DEFAULT_ASSIGNMENT_PLAN,
+    annotator_guide_path: Path = freeze.DEFAULT_ANNOTATOR_GUIDE,
     analysis_plan_path: Path = core.PLAN,
     task_manifest_path: Path = core.TASKS,
     repo_root: Path = core.ROOT,
@@ -343,6 +344,7 @@ def verify_bundle_against_inputs(
         packet_path=packet_path,
         protocol_path=protocol_path,
         assignment_plan_path=assignment_plan_path,
+        annotator_guide_path=annotator_guide_path,
         analysis_plan_path=analysis_plan_path,
         task_manifest_path=task_manifest_path,
         repo_root=repo_root,
@@ -374,6 +376,9 @@ def main() -> int:
     parser.add_argument(
         "--assignment-plan", type=Path, default=freeze.DEFAULT_ASSIGNMENT_PLAN
     )
+    parser.add_argument(
+        "--annotator-guide", type=Path, default=freeze.DEFAULT_ANNOTATOR_GUIDE
+    )
     parser.add_argument("--analysis-plan", type=Path, default=core.PLAN)
     parser.add_argument("--task-manifest", type=Path, default=core.TASKS)
     parser.add_argument("--repo-root", type=Path, default=core.ROOT)
@@ -387,6 +392,7 @@ def main() -> int:
             packet_path=args.packet,
             protocol_path=args.protocol,
             assignment_plan_path=args.assignment_plan,
+            annotator_guide_path=args.annotator_guide,
             analysis_plan_path=args.analysis_plan,
             task_manifest_path=args.task_manifest,
             repo_root=args.repo_root,

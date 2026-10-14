@@ -12,8 +12,9 @@ manifest change could otherwise go unnoticed before treatment identities are
 opened.
 
 Run the verifier while ratings are still blinded. New freezes retain the exact
-raw annotator CSVs, producer source, blinded packet, protocol, and assignment
-plan. To audit a relocated bundle without external governing files, run:
+raw annotator CSVs, producer source, blinded packet, protocol, assignment plan,
+and treatment-blind annotator guide. To audit a relocated bundle without
+external governing files, run:
 
 ```bash
 python -m scripts.verify_human_eval_freeze \
@@ -21,10 +22,11 @@ python -m scripts.verify_human_eval_freeze \
   --retained-inputs
 ```
 
-Without `--retained-inputs`, the existing external packet/protocol/assignment
-checks remain in force, using their default paths or explicit `--packet`,
-`--protocol`, and `--assignment-plan` options. Any declared retained archive is
-also verified in that mode: valid external files cannot hide archive damage.
+Without `--retained-inputs`, the existing external governing-input checks remain
+in force, using their default paths or explicit `--packet`, `--protocol`,
+`--assignment-plan`, and `--annotator-guide` options. Any declared retained
+archive is also verified in that mode: valid external files cannot hide archive
+damage.
 Do not combine these external governing-file options with `--retained-inputs`;
 the command rejects that ambiguity rather than silently ignoring supplied files.
 
@@ -40,7 +42,8 @@ same bytes exclusively under these fixed paths before publishing the manifest:
 
 - `governing_inputs/packet.jsonl`;
 - `governing_inputs/HUMAN_EVAL_PROTOCOL.md`;
-- `governing_inputs/HUMAN_EVAL_ASSIGNMENT_PLAN.md`.
+- `governing_inputs/HUMAN_EVAL_ASSIGNMENT_PLAN.md`;
+- `governing_inputs/HUMAN_EVAL_ANNOTATOR_GUIDE.md`.
 
 Each corresponding manifest entry binds its archive path, byte count, and
 SHA-256. Original packet names and existing protocol identifiers are retained as
@@ -54,15 +57,15 @@ archive entries, symlinked files/directories, and fingerprint drift. The human
 analysis pipeline carries the archive into its temporary blinded snapshot, so
 these checks still precede any treatment-mapping access.
 
-It also requires the retained or external protocol and assignment plan to match
-the literal preregistration anchors in `freeze_human_eval_ratings.py`, before
-opening any raw or normalized ratings. Rehashing a replacement document in the
-manifest cannot make that bundle valid.
+It also requires the retained or external protocol, assignment plan, and
+annotator guide to match their literal frozen anchors in
+`freeze_human_eval_ratings.py`, before opening any raw or normalized ratings.
+Rehashing a replacement document in the manifest cannot make that bundle valid.
 
-Older freezes without governing-input archives remain verifiable with the
-external files matching their original fingerprints. They cannot use
-`--retained-inputs`. Never backfill a historical freeze using today's working
-copies or rewrite an archived bundle to make it pass.
+Freezes predating the annotator-guide manifest binding do not satisfy this
+verifier. The study has not yet collected production annotations, so there is
+no observed-rating bundle to migrate. Never backfill a historical freeze using
+today's working copies or rewrite an archived bundle to make it pass.
 
 ## Checks performed
 
@@ -79,8 +82,8 @@ following agree:
   `report_markdown` only), with every field containing non-empty text and no
   duplicate JSON members (including escape-equivalent names);
 - SHA-256 and byte counts for the blinded packet and frozen output files;
-- protocol and assignment-plan fingerprints plus their literal preregistration
-  anchors;
+- protocol, assignment-plan, and annotator-guide fingerprints plus their
+  literal frozen anchors;
 - declared retained governing-input paths, bytes, and fingerprints;
 - deterministic in-bundle raw-rating archive paths, byte counts, and SHA-256
   fingerprints, with no undeclared archive files;

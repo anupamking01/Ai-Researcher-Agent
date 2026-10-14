@@ -1,9 +1,10 @@
 """Verify a blinded human-evaluation freeze before any unblinding.
 
 The verifier never reads the coordinator-only blinding key. It checks that the
-frozen outputs, archived raw rating inputs, blinded packet, protocol, and
-assignment plan still match the freeze manifest, then independently recomputes
-the normalized ratings, assignment coverage, and pre-unblinding agreement.
+frozen outputs, archived raw rating inputs, blinded packet, protocol, assignment
+plan, and annotator guide still match the freeze manifest, then independently
+recomputes the normalized ratings, assignment coverage, and pre-unblinding
+agreement.
 
 No ratings are generated, imputed, adjudicated, or joined to treatment labels.
 """
@@ -22,6 +23,7 @@ DEFAULT_FREEZE_ROOT = REPO_ROOT / "outputs" / "human_eval" / "frozen-v1"
 DEFAULT_PACKET = freeze.DEFAULT_PACKET
 DEFAULT_PROTOCOL = freeze.DEFAULT_PROTOCOL
 DEFAULT_ASSIGNMENT_PLAN = freeze.DEFAULT_ASSIGNMENT_PLAN
+DEFAULT_ANNOTATOR_GUIDE = freeze.DEFAULT_ANNOTATOR_GUIDE
 
 
 def _require_regular_file(path: Path, *, label: str) -> bytes:
@@ -148,6 +150,7 @@ def verify_frozen_snapshot(
     packet_path: Path = DEFAULT_PACKET,
     protocol_path: Path = DEFAULT_PROTOCOL,
     assignment_plan_path: Path = DEFAULT_ASSIGNMENT_PLAN,
+    annotator_guide_path: Path = DEFAULT_ANNOTATOR_GUIDE,
     use_retained_inputs: bool = False,
 ) -> dict:
     """Verify a frozen blinded snapshot and its retained pre-unblinding inputs."""
@@ -155,11 +158,13 @@ def verify_frozen_snapshot(
     packet_path = Path(packet_path)
     protocol_path = Path(protocol_path)
     assignment_plan_path = Path(assignment_plan_path)
+    annotator_guide_path = Path(annotator_guide_path)
     rating_paths = [Path(path) for path in (rating_paths or [])]
     if use_retained_inputs and (
         packet_path != DEFAULT_PACKET
         or protocol_path != DEFAULT_PROTOCOL
         or assignment_plan_path != DEFAULT_ASSIGNMENT_PLAN
+        or annotator_guide_path != DEFAULT_ANNOTATOR_GUIDE
     ):
         raise ValueError("cannot combine retained-input mode with external governing inputs")
 
@@ -189,6 +194,7 @@ def verify_frozen_snapshot(
         packet_content = retained["packet"]
         protocol_content = retained["protocol"]
         assignment_content = retained["assignment_plan"]
+        annotator_guide_content = retained["annotator_guide"]
     else:
         # Preserve the existing external-file cross-check. A valid archive must
         # never silently hide drift in working files explicitly being checked.
@@ -198,7 +204,15 @@ def verify_frozen_snapshot(
             assignment_plan_path,
             label="human-evaluation assignment plan",
         )
-    freeze._verify_frozen_governing_documents(protocol_content, assignment_content)
+        annotator_guide_content = _require_regular_file(
+            annotator_guide_path,
+            label="human-evaluation annotator guide",
+        )
+    freeze._verify_frozen_governing_documents(
+        protocol_content,
+        assignment_content,
+        annotator_guide_content,
+    )
     blind_ids = freeze._packet_blind_ids(packet_path, content=packet_content)
 
     packet_entry = manifest.get("packet")
@@ -238,6 +252,20 @@ def verify_frozen_snapshot(
         assignment_entry.get("sha256"),
         hashlib.sha256(assignment_content).hexdigest(),
         label="assignment-plan fingerprint",
+    )
+
+    annotator_guide_entry = manifest.get("annotator_guide")
+    if not isinstance(annotator_guide_entry, dict):
+        raise ValueError("freeze manifest annotator_guide entry must be an object")
+    _require_equal(
+        annotator_guide_entry.get("path"),
+        "paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md",
+        label="annotator-guide manifest path",
+    )
+    _require_equal(
+        annotator_guide_entry.get("sha256"),
+        hashlib.sha256(annotator_guide_content).hexdigest(),
+        label="annotator-guide fingerprint",
     )
 
     producer_entry = manifest.get("producer")
@@ -460,13 +488,18 @@ def main() -> int:
     parser.add_argument("--packet", type=Path)
     parser.add_argument("--protocol", type=Path)
     parser.add_argument("--assignment-plan", type=Path)
+    parser.add_argument("--annotator-guide", type=Path)
     parser.add_argument(
         "--retained-inputs", action="store_true",
-        help="verify using the retained packet/protocol/assignment, without external governing files",
+        help="verify using retained packet/protocol/assignment/guide inputs only",
     )
     args = parser.parse_args()
-    if args.retained_inputs and any((args.packet, args.protocol, args.assignment_plan)):
-        parser.error("cannot combine --retained-inputs with --packet/--protocol/--assignment-plan")
+    if args.retained_inputs and any(
+        (args.packet, args.protocol, args.assignment_plan, args.annotator_guide)
+    ):
+        parser.error(
+            "cannot combine --retained-inputs with external governing inputs"
+        )
 
     try:
         receipt = verify_frozen_snapshot(
@@ -475,6 +508,7 @@ def main() -> int:
             packet_path=args.packet or DEFAULT_PACKET,
             protocol_path=args.protocol or DEFAULT_PROTOCOL,
             assignment_plan_path=args.assignment_plan or DEFAULT_ASSIGNMENT_PLAN,
+            annotator_guide_path=args.annotator_guide or DEFAULT_ANNOTATOR_GUIDE,
             use_retained_inputs=args.retained_inputs,
         )
     except (OSError, ValueError) as exc:

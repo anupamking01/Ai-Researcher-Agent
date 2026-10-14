@@ -184,6 +184,7 @@ def analyze(
     packet_path=freeze.DEFAULT_PACKET,
     protocol_path=freeze.DEFAULT_PROTOCOL,
     assignment_plan_path=freeze.DEFAULT_ASSIGNMENT_PLAN,
+    annotator_guide_path=freeze.DEFAULT_ANNOTATOR_GUIDE,
     analysis_plan_path=PLAN,
     task_manifest_path=TASKS,
     repo_root=ROOT,
@@ -195,6 +196,7 @@ def analyze(
     packet_path = Path(packet_path)
     protocol_path = Path(protocol_path)
     assignment_plan_path = Path(assignment_plan_path)
+    annotator_guide_path = Path(annotator_guide_path)
     analysis_plan_path = Path(analysis_plan_path)
     task_manifest_path = Path(task_manifest_path)
     repo_root = Path(repo_root)
@@ -227,8 +229,15 @@ def analyze(
             blind_root / "assignment" / assignment_plan_path.name,
             label="human-evaluation assignment plan",
         )
+        blind_annotator_guide = _snapshot_file(
+            annotator_guide_path,
+            blind_root / "annotator_guide" / annotator_guide_path.name,
+            label="human-evaluation annotator guide",
+        )
         freeze._verify_frozen_governing_documents(
-            blind_protocol.read_bytes(), blind_assignment.read_bytes()
+            blind_protocol.read_bytes(),
+            blind_assignment.read_bytes(),
+            blind_annotator_guide.read_bytes(),
         )
         blind_analysis_plan = _snapshot_file(
             analysis_plan_path,
@@ -298,6 +307,7 @@ def analyze(
             packet_path=blind_packet,
             protocol_path=blind_protocol,
             assignment_plan_path=blind_assignment,
+            annotator_guide_path=blind_annotator_guide,
         )
         if (
             blinded.get("n_annotators") != 2

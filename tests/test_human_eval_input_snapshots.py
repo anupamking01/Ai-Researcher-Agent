@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from scripts import freeze_human_eval_ratings as freeze
+from scripts import export_human_eval_annotator_bundle as exporter
 
 
 def _csv_bytes(*, annotator="synthetic-a", score="2", notes="", newline="\r\n"):
@@ -35,6 +36,8 @@ def inputs(tmp_path):
     protocol.write_bytes(freeze.DEFAULT_PROTOCOL.read_bytes())
     assignment = tmp_path / "assignment.md"
     assignment.write_bytes(freeze.DEFAULT_ASSIGNMENT_PLAN.read_bytes())
+    annotator_guide = tmp_path / "annotator-guide.md"
+    annotator_guide.write_bytes(freeze.DEFAULT_ANNOTATOR_GUIDE.read_bytes())
     rating_paths = [tmp_path / "ratings-a.csv", tmp_path / "ratings-b.csv"]
     for path, annotator in zip(rating_paths, ("synthetic-a", "synthetic-b")):
         path.write_bytes(_csv_bytes(annotator=annotator))
@@ -42,6 +45,7 @@ def inputs(tmp_path):
         "packet_path": packet,
         "protocol_path": protocol,
         "assignment_plan_path": assignment,
+        "annotator_guide_path": annotator_guide,
         "output_root": tmp_path / "freeze",
     }
 
@@ -56,6 +60,7 @@ def _frozen_rows(options):
     [
         ("protocol_path", "protocol"),
         ("assignment_plan_path", "assignment plan"),
+        ("annotator_guide_path", "annotator guide"),
     ],
 )
 def test_governing_document_drift_is_rejected_before_ratings_are_read(
@@ -78,6 +83,12 @@ def test_repository_governing_documents_match_production_anchors():
     )
     assert hashlib.sha256(freeze.DEFAULT_ASSIGNMENT_PLAN.read_bytes()).hexdigest() == (
         freeze.FROZEN_ASSIGNMENT_PLAN_SHA256
+    )
+    assert hashlib.sha256(freeze.DEFAULT_ANNOTATOR_GUIDE.read_bytes()).hexdigest() == (
+        freeze.FROZEN_ANNOTATOR_GUIDE_SHA256
+    )
+    assert freeze.FROZEN_ANNOTATOR_GUIDE_SHA256 == (
+        exporter.FROZEN_ANNOTATOR_GUIDE_SHA256
     )
 
 
@@ -136,6 +147,7 @@ def test_packet_manifest_uses_validated_bytes_not_a_later_version(inputs, monkey
 @pytest.mark.parametrize("option,entry", [
     ("protocol_path", "protocol"),
     ("assignment_plan_path", "assignment_plan"),
+    ("annotator_guide_path", "annotator_guide"),
 ])
 def test_plan_provenance_is_captured_before_processing_ratings(inputs, monkeypatch, option, entry):
     rating_paths, options = inputs

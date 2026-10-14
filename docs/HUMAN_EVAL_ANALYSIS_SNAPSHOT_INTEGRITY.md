@@ -5,10 +5,11 @@ same captured bytes.
 
 Before any treatment identity is opened, the analyzer snapshots the archived raw
 rating inputs, blinded packet, frozen ratings, agreement artifact, freeze
-manifest, protocol, assignment plan, and human-analysis plan into private
-temporary scratch space. The pre-unblinding freeze verifier runs against those
-snapshots. If that gate passes and the frozen two-rater requirement is satisfied,
-the analyzer then reads the coordinator-only mapping artifacts.
+manifest, protocol, assignment plan, treatment-blind annotator guide, and
+human-analysis plan into private temporary scratch space. The pre-unblinding
+freeze verifier runs against those snapshots. If that gate passes and the
+frozen two-rater requirement is satisfied, the analyzer then reads the
+coordinator-only mapping artifacts.
 
 The captured human-analysis plan must also match the literal SHA-256 anchor in
 the analysis implementation before any coordinator mapping is read. Merely

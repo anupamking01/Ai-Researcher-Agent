@@ -12,17 +12,24 @@ bytes for CSV validation and scoring. An editor saving the path after capture
 cannot cause one revision's digest to attest to another revision's scores.
 
 The blinded packet is also captured once. Its allowed blind IDs, recorded byte
-count, and SHA-256 all describe the same captured content. Protocol and assignment
-plan fingerprints are captured before processing ratings, not after agreement
-has been calculated. Output fingerprints still describe the generated files.
+count, and SHA-256 all describe the same captured content. Protocol,
+assignment-plan, and annotator-guide fingerprints are captured before processing
+ratings, not after agreement has been calculated. Output fingerprints still
+describe the generated files.
 
-The captured protocol and assignment-plan bytes must also match literal
-SHA-256 anchors in the freeze implementation. This prevents a substituted or
-post-hoc governing document from becoming self-consistent merely because a new
-manifest fingerprints it. Both anchors are checked before any human-rating CSV
-is opened. Changing either frozen document therefore requires an explicit,
-reviewed source change to its production anchor; passing a different path is
-not sufficient.
+The captured protocol, assignment-plan, and treatment-blind annotator-guide
+bytes must also match literal SHA-256 anchors in the freeze implementation.
+This prevents substituted or post-hoc governing instructions from becoming
+self-consistent merely because a new manifest fingerprints them. All anchors
+are checked before any human-rating CSV is opened. Changing any frozen document
+therefore requires an explicit, reviewed source change to its production
+anchor; passing a different path is not sufficient.
+
+The same captured guide bytes are retained as
+`governing_inputs/HUMAN_EVAL_ANNOTATOR_GUIDE.md` and recorded in the freeze
+manifest. This connects the distribution-stage instructions to the later
+pre-unblinding rating snapshot without adding treatment identity or implying
+that annotations have been collected.
 
 Raw input hashes are not hashes of normalized CSV text: UTF-8 bytes and line
 endings are retained for fingerprinting. The exact captured bytes that were

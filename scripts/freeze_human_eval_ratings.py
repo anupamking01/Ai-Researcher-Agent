@@ -30,6 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PACKET = REPO_ROOT / "outputs" / "human_eval" / "packet.jsonl"
 DEFAULT_PROTOCOL = REPO_ROOT / "paper" / "HUMAN_EVAL_PROTOCOL.md"
 DEFAULT_ASSIGNMENT_PLAN = REPO_ROOT / "paper" / "HUMAN_EVAL_ASSIGNMENT_PLAN.md"
+DEFAULT_ANNOTATOR_GUIDE = REPO_ROOT / "paper" / "HUMAN_EVAL_ANNOTATOR_GUIDE.md"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "outputs" / "human_eval" / "frozen-v1"
 FROZEN_PROTOCOL_SHA256 = (
     "8dadc9b25bd8f3c33dd2ddeb10b672d97c844b83cbd63101520002dcac8f409f"
@@ -37,12 +38,16 @@ FROZEN_PROTOCOL_SHA256 = (
 FROZEN_ASSIGNMENT_PLAN_SHA256 = (
     "ad66f5fc97e13d93365341fd650d00951e4923c2919676922e5a97ef500def71"
 )
+FROZEN_ANNOTATOR_GUIDE_SHA256 = (
+    "3e27ef38231ed70fe36370af31ced7762a253a72dc5cc4997d8ef62d0a6e3370"
+)
 MIN_RATERS_PER_ITEM = 2
 PACKET_FIELDS = ("blind_id", "task_id", "question", "report_markdown")
 GOVERNING_INPUT_PATHS = {
     "packet": "governing_inputs/packet.jsonl",
     "protocol": "governing_inputs/HUMAN_EVAL_PROTOCOL.md",
     "assignment_plan": "governing_inputs/HUMAN_EVAL_ASSIGNMENT_PLAN.md",
+    "annotator_guide": "governing_inputs/HUMAN_EVAL_ANNOTATOR_GUIDE.md",
 }
 
 SCORE_FIELDS = (
@@ -80,11 +85,14 @@ def sha256_file(path: Path) -> str:
 
 
 def _verify_frozen_governing_documents(
-    protocol_content: bytes, assignment_content: bytes
-) -> tuple[str, str]:
-    """Require the preregistered rubric and assignment plan byte-for-byte."""
+    protocol_content: bytes,
+    assignment_content: bytes,
+    annotator_guide_content: bytes,
+) -> tuple[str, str, str]:
+    """Require every frozen human-evaluation instruction byte-for-byte."""
     protocol_sha256 = hashlib.sha256(protocol_content).hexdigest()
     assignment_plan_sha256 = hashlib.sha256(assignment_content).hexdigest()
+    annotator_guide_sha256 = hashlib.sha256(annotator_guide_content).hexdigest()
     if protocol_sha256 != FROZEN_PROTOCOL_SHA256:
         raise ValueError(
             "frozen human-evaluation protocol fingerprint mismatch: "
@@ -95,7 +103,12 @@ def _verify_frozen_governing_documents(
             "frozen human-evaluation assignment plan fingerprint mismatch: "
             f"expected {FROZEN_ASSIGNMENT_PLAN_SHA256}, got {assignment_plan_sha256}"
         )
-    return protocol_sha256, assignment_plan_sha256
+    if annotator_guide_sha256 != FROZEN_ANNOTATOR_GUIDE_SHA256:
+        raise ValueError(
+            "frozen human-evaluation annotator guide fingerprint mismatch: "
+            f"expected {FROZEN_ANNOTATOR_GUIDE_SHA256}, got {annotator_guide_sha256}"
+        )
+    return protocol_sha256, assignment_plan_sha256, annotator_guide_sha256
 
 
 def _unique_json_object(pairs):
@@ -618,12 +631,14 @@ def freeze_ratings(
     packet_path: Path = DEFAULT_PACKET,
     protocol_path: Path = DEFAULT_PROTOCOL,
     assignment_plan_path: Path = DEFAULT_ASSIGNMENT_PLAN,
+    annotator_guide_path: Path = DEFAULT_ANNOTATOR_GUIDE,
     output_root: Path = DEFAULT_OUTPUT_ROOT,
 ) -> dict:
     """Validate ratings and persist a blinded, fingerprinted, immutable snapshot."""
     packet_path = Path(packet_path)
     protocol_path = Path(protocol_path)
     assignment_plan_path = Path(assignment_plan_path)
+    annotator_guide_path = Path(annotator_guide_path)
     output_root = Path(output_root)
     producer_content = Path(__file__).resolve().read_bytes()
 
@@ -631,6 +646,8 @@ def freeze_ratings(
         raise ValueError(f"frozen human-evaluation protocol is missing: {protocol_path}")
     if not assignment_plan_path.is_file():
         raise ValueError(f"frozen human-evaluation assignment plan is missing: {assignment_plan_path}")
+    if not annotator_guide_path.is_file():
+        raise ValueError(f"frozen human-evaluation annotator guide is missing: {annotator_guide_path}")
 
     destination_error = (
         "refusing to overwrite an existing human-evaluation output path: "
@@ -646,8 +663,15 @@ def freeze_ratings(
     packet_content = packet_path.read_bytes()
     protocol_content = protocol_path.read_bytes()
     assignment_content = assignment_plan_path.read_bytes()
-    protocol_sha256, assignment_plan_sha256 = _verify_frozen_governing_documents(
-        protocol_content, assignment_content
+    annotator_guide_content = annotator_guide_path.read_bytes()
+    (
+        protocol_sha256,
+        assignment_plan_sha256,
+        annotator_guide_sha256,
+    ) = _verify_frozen_governing_documents(
+        protocol_content,
+        assignment_content,
+        annotator_guide_content,
     )
     blind_ids = _packet_blind_ids(packet_path, content=packet_content)
     rows, sources, captured_inputs = _load_ratings(
@@ -713,6 +737,7 @@ def freeze_ratings(
             "packet": packet_content,
             "protocol": protocol_content,
             "assignment_plan": assignment_content,
+            "annotator_guide": annotator_guide_content,
         }.items():
             with (staging_root / GOVERNING_INPUT_PATHS[role]).open("xb") as handle:
                 handle.write(content)
@@ -740,6 +765,12 @@ def freeze_ratings(
                 "bytes": len(assignment_content),
                 "path": "paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md",
                 "sha256": assignment_plan_sha256,
+            },
+            "annotator_guide": {
+                "archive_path": GOVERNING_INPUT_PATHS["annotator_guide"],
+                "bytes": len(annotator_guide_content),
+                "path": "paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md",
+                "sha256": annotator_guide_sha256,
             },
             "assignment_coverage": assignment_coverage,
             "producer": {
@@ -799,6 +830,7 @@ def main() -> int:
     parser.add_argument("--packet", type=Path, default=DEFAULT_PACKET)
     parser.add_argument("--protocol", type=Path, default=DEFAULT_PROTOCOL)
     parser.add_argument("--assignment-plan", type=Path, default=DEFAULT_ASSIGNMENT_PLAN)
+    parser.add_argument("--annotator-guide", type=Path, default=DEFAULT_ANNOTATOR_GUIDE)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     args = parser.parse_args()
 
@@ -808,6 +840,7 @@ def main() -> int:
             packet_path=args.packet,
             protocol_path=args.protocol,
             assignment_plan_path=args.assignment_plan,
+            annotator_guide_path=args.annotator_guide,
             output_root=args.output_root,
         )
     except (OSError, ValueError) as exc:

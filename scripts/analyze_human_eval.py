@@ -252,12 +252,18 @@ def main():
     parser.add_argument("--output-root", type=Path, default=OUTPUT_ROOT)
     parser.add_argument("--analysis-plan", type=Path, default=core.PLAN)
     parser.add_argument("--task-manifest", type=Path, default=core.TASKS)
+    parser.add_argument(
+        "--annotator-guide",
+        type=Path,
+        default=core.freeze.DEFAULT_ANNOTATOR_GUIDE,
+    )
     args = parser.parse_args()
     try:
         payload = core.analyze(
             args.ratings,
             freeze_root=args.freeze_root,
             packet_root=args.packet_root,
+            annotator_guide_path=args.annotator_guide,
             analysis_plan_path=args.analysis_plan,
             task_manifest_path=args.task_manifest,
         )
@@ -271,6 +277,7 @@ def main():
             rating_paths=args.ratings,
             freeze_root=args.freeze_root,
             packet_root=args.packet_root,
+            annotator_guide_path=args.annotator_guide,
             analysis_plan_path=args.analysis_plan,
             task_manifest_path=args.task_manifest,
         )

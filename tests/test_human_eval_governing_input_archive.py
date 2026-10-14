@@ -20,9 +20,11 @@ ARCHIVES = {
     "packet": "governing_inputs/packet.jsonl",
     "protocol": "governing_inputs/HUMAN_EVAL_PROTOCOL.md",
     "assignment_plan": "governing_inputs/HUMAN_EVAL_ASSIGNMENT_PLAN.md",
+    "annotator_guide": "governing_inputs/HUMAN_EVAL_ANNOTATOR_GUIDE.md",
 }
 OPTIONS = {"packet": "packet_path", "protocol": "protocol_path",
-           "assignment_plan": "assignment_plan_path"}
+           "assignment_plan": "assignment_plan_path",
+           "annotator_guide": "annotator_guide_path"}
 
 
 @pytest.fixture
@@ -36,6 +38,8 @@ def inputs(tmp_path):
     protocol.write_bytes(freeze.DEFAULT_PROTOCOL.read_bytes())
     assignment = tmp_path / "original-assignment.md"
     assignment.write_bytes(freeze.DEFAULT_ASSIGNMENT_PLAN.read_bytes())
+    guide = tmp_path / "original-annotator-guide.md"
+    guide.write_bytes(freeze.DEFAULT_ANNOTATOR_GUIDE.read_bytes())
     paths = [tmp_path / "a.csv", tmp_path / "b.csv"]
     for index, path in enumerate(paths):
         with path.open("w", encoding="utf-8", newline="") as handle:
@@ -46,7 +50,9 @@ def inputs(tmp_path):
                                  "", "3", "Synthetic missing-dimension reason."])
     return paths, {
         "packet_path": packet, "protocol_path": protocol,
-        "assignment_plan_path": assignment, "output_root": tmp_path / "freeze",
+        "assignment_plan_path": assignment,
+        "annotator_guide_path": guide,
+        "output_root": tmp_path / "freeze",
     }
 
 
@@ -110,7 +116,11 @@ def test_default_verifier_rejects_declared_governing_archive_drift(inputs, role)
 
 @pytest.mark.parametrize(
     ("role", "label"),
-    [("protocol", "protocol"), ("assignment_plan", "assignment plan")],
+    [
+        ("protocol", "protocol"),
+        ("assignment_plan", "assignment plan"),
+        ("annotator_guide", "annotator guide"),
+    ],
 )
 def test_verifier_rejects_rehashed_governing_document_before_ratings(
     inputs, monkeypatch, role, label

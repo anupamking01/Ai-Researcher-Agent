@@ -54,8 +54,8 @@ By default, independent verification reads the exact CSV byte streams retained
 under `outputs/human_eval/frozen-v1/raw_rating_inputs/`. Explicit rating paths
 may instead be supplied as positional arguments when validating a not-yet-
 archived production invocation. The verifier reuses the frozen packet, protocol,
-assignment plan, analysis plan, task manifest, and treatment mapping gates; it
-makes no model/API calls and reruns no treatments.
+assignment plan, annotator guide, analysis plan, task manifest, and treatment
+mapping gates; it makes no model/API calls and reruns no treatments.
 
 Verification fails closed when:
 
