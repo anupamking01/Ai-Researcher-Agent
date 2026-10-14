@@ -13,9 +13,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import ctypes
+import errno
 import hashlib
 import io
 import json
+import os
+import stat
+import tempfile
 import unicodedata
 from itertools import combinations
 from pathlib import Path
@@ -251,7 +256,7 @@ def _load_ratings(
                 "name": path.name,
                 "bytes": len(content),
                 "sha256": hashlib.sha256(content).hexdigest(),
-            }
+        }
         )
 
         with io.StringIO(content.decode("utf-8"), newline="") as handle:
@@ -531,6 +536,82 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
+def _open_bound_directory(path: Path) -> int:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(
+        os, "O_NOFOLLOW", 0
+    )
+    try:
+        directory_fd = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(
+            f"human-evaluation staging root must be a regular directory: {path}"
+        ) from exc
+    if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
+        os.close(directory_fd)
+        raise ValueError(
+            f"human-evaluation staging root must be a regular directory: {path}"
+        )
+    return directory_fd
+
+
+def _require_directory_binding(path: Path, directory_fd: int) -> None:
+    try:
+        current = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError(
+            f"human-evaluation staging root changed during publication: {path}"
+        ) from exc
+    opened = os.fstat(directory_fd)
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
+    ):
+        raise ValueError(
+            f"human-evaluation staging root changed during publication: {path}"
+        )
+
+
+def _publish_directory_noreplace(staging_root: Path, output_root: Path) -> None:
+    """Atomically install a verified freeze without replacing any path."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        renameat2 = libc.renameat2
+    except AttributeError as exc:
+        raise ValueError(
+            "atomic no-replace freeze publication is unavailable on this platform"
+        ) from exc
+    renameat2.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    at_fdcwd = -100
+    rename_noreplace = 1
+    if (
+        renameat2(
+            at_fdcwd,
+            os.fsencode(staging_root),
+            at_fdcwd,
+            os.fsencode(output_root),
+            rename_noreplace,
+        )
+        == 0
+    ):
+        return
+    error_number = ctypes.get_errno()
+    if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise ValueError(
+            f"refusing to overwrite human-evaluation output: {output_root}"
+        )
+    raise OSError(
+        error_number,
+        f"could not atomically publish human-evaluation freeze: {output_root}",
+    )
+
+
 def freeze_ratings(
     rating_paths: list[Path],
     *,
@@ -586,107 +667,130 @@ def freeze_ratings(
             "missing": len(rows) - rated,
         }
 
-    # Reserve the destination only after validation, but before any output write.
-    # The earlier existence check is not a lock: another attempt may have won
-    # during validation. Never adopt its directory, even if it is still empty.
+    # Build the entire freeze off-path. The final path remains absent until a
+    # fully written candidate has passed independent retained-input verification.
+    output_root.parent.mkdir(parents=True, exist_ok=True)
+    staging_root = Path(
+        tempfile.mkdtemp(
+            prefix=f".{output_root.name}.staging-",
+            dir=output_root.parent,
+        )
+    )
+    output_fd = _open_bound_directory(staging_root)
     try:
-        output_root.mkdir(parents=True, exist_ok=False)
-    except FileExistsError as exc:
-        raise ValueError(destination_error) from exc
-    frozen_path = output_root / "frozen_ratings.csv"
-    agreement_path = output_root / "agreement.json"
-    manifest_path = output_root / "freeze_manifest.json"
+        frozen_path = staging_root / "frozen_ratings.csv"
+        agreement_path = staging_root / "agreement.json"
+        manifest_path = staging_root / "freeze_manifest.json"
 
-    _write_csv(frozen_path, rows)
-    agreement_path.write_text(
-        json.dumps(agreement, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+        _write_csv(frozen_path, rows)
+        agreement_path.write_text(
+            json.dumps(agreement, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
-    raw_root = output_root / "raw_rating_inputs"
-    raw_root.mkdir(exist_ok=False)
-    for index, (source, content) in enumerate(zip(sources, captured_inputs), start=1):
-        archive_name = f"{index:04d}.csv"
-        archive_path = raw_root / archive_name
-        with archive_path.open("xb") as handle:
-            handle.write(content)
-        source["archive_path"] = f"raw_rating_inputs/{archive_name}"
+        raw_root = staging_root / "raw_rating_inputs"
+        raw_root.mkdir(exist_ok=False)
+        for index, (source, content) in enumerate(
+            zip(sources, captured_inputs), start=1
+        ):
+            archive_name = f"{index:04d}.csv"
+            archive_path = raw_root / archive_name
+            with archive_path.open("xb") as handle:
+                handle.write(content)
+            source["archive_path"] = f"raw_rating_inputs/{archive_name}"
 
-    provenance_root = output_root / "provenance"
-    provenance_root.mkdir(exist_ok=False)
-    producer_rel = "provenance/freeze_human_eval_ratings.py"
-    producer_archive = output_root / producer_rel
-    with producer_archive.open("xb") as handle:
-        handle.write(producer_content)
+        provenance_root = staging_root / "provenance"
+        provenance_root.mkdir(exist_ok=False)
+        producer_rel = "provenance/freeze_human_eval_ratings.py"
+        producer_archive = staging_root / producer_rel
+        with producer_archive.open("xb") as handle:
+            handle.write(producer_content)
 
-    # Retain the same governing bytes captured before ratings processing. Do
-    # not reopen working files here: they may have changed or disappeared.
-    (output_root / "governing_inputs").mkdir(exist_ok=False)
-    for role, content in {
-        "packet": packet_content,
-        "protocol": protocol_content,
-        "assignment_plan": assignment_content,
-    }.items():
-        with (output_root / GOVERNING_INPUT_PATHS[role]).open("xb") as handle:
-            handle.write(content)
+        # Retain the same governing bytes captured before ratings processing.
+        # Do not reopen working files here: they may have changed or disappeared.
+        (staging_root / "governing_inputs").mkdir(exist_ok=False)
+        for role, content in {
+            "packet": packet_content,
+            "protocol": protocol_content,
+            "assignment_plan": assignment_content,
+        }.items():
+            with (staging_root / GOVERNING_INPUT_PATHS[role]).open("xb") as handle:
+                handle.write(content)
 
-    manifest = {
-        "schema_version": 1,
-        "study_id": "budget-main-v1",
-        "status": "blinded_human_ratings_frozen",
-        "blinding_key_used": False,
-        "packet": {
-            "archive_path": GOVERNING_INPUT_PATHS["packet"],
-            "name": packet_path.name,
-            "bytes": len(packet_content),
-            "sha256": hashlib.sha256(packet_content).hexdigest(),
-            "n_blind_ids": len(blind_ids),
-        },
-        "protocol": {
-            "archive_path": GOVERNING_INPUT_PATHS["protocol"],
-            "bytes": len(protocol_content),
-            "path": "paper/HUMAN_EVAL_PROTOCOL.md",
-            "sha256": protocol_sha256,
-        },
-        "assignment_plan": {
-            "archive_path": GOVERNING_INPUT_PATHS["assignment_plan"],
-            "bytes": len(assignment_content),
-            "path": "paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md",
-            "sha256": assignment_plan_sha256,
-        },
-        "assignment_coverage": assignment_coverage,
-        "producer": {
-            "path": producer_rel,
-            "bytes": len(producer_content),
-            "sha256": hashlib.sha256(producer_content).hexdigest(),
-        },
-        "rating_inputs": sources,
-        "frozen_ratings": {
-            "path": "frozen_ratings.csv",
-            "bytes": frozen_path.stat().st_size,
-            "sha256": sha256_file(frozen_path),
-            "n_rows": len(rows),
-            "n_annotators": len({row["annotator_id"] for row in rows}),
-            "n_unique_blind_ids_rated": len({row["blind_id"] for row in rows}),
-            "dimension_counts": dimension_counts,
-        },
-        "agreement": {
-            "path": "agreement.json",
-            "bytes": agreement_path.stat().st_size,
-            "sha256": sha256_file(agreement_path),
-        },
-        "integrity_note": (
-            "This snapshot is blinded and pre-unblinding. It retains the exact raw "
-            "rating bytes that were parsed, validates and freezes human-entered ratings "
-            "only, and does not generate, impute, adjudicate, or join ratings to "
-            "treatment identities."
-        ),
-    }
-    manifest_path.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    return manifest
+        manifest = {
+            "schema_version": 1,
+            "study_id": "budget-main-v1",
+            "status": "blinded_human_ratings_frozen",
+            "blinding_key_used": False,
+            "packet": {
+                "archive_path": GOVERNING_INPUT_PATHS["packet"],
+                "name": packet_path.name,
+                "bytes": len(packet_content),
+                "sha256": hashlib.sha256(packet_content).hexdigest(),
+                "n_blind_ids": len(blind_ids),
+            },
+            "protocol": {
+                "archive_path": GOVERNING_INPUT_PATHS["protocol"],
+                "bytes": len(protocol_content),
+                "path": "paper/HUMAN_EVAL_PROTOCOL.md",
+                "sha256": protocol_sha256,
+            },
+            "assignment_plan": {
+                "archive_path": GOVERNING_INPUT_PATHS["assignment_plan"],
+                "bytes": len(assignment_content),
+                "path": "paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md",
+                "sha256": assignment_plan_sha256,
+            },
+            "assignment_coverage": assignment_coverage,
+            "producer": {
+                "path": producer_rel,
+                "bytes": len(producer_content),
+                "sha256": hashlib.sha256(producer_content).hexdigest(),
+            },
+            "rating_inputs": sources,
+            "frozen_ratings": {
+                "path": "frozen_ratings.csv",
+                "bytes": frozen_path.stat().st_size,
+                "sha256": sha256_file(frozen_path),
+                "n_rows": len(rows),
+                "n_annotators": len({row["annotator_id"] for row in rows}),
+                "n_unique_blind_ids_rated": len({row["blind_id"] for row in rows}),
+                "dimension_counts": dimension_counts,
+            },
+            "agreement": {
+                "path": "agreement.json",
+                "bytes": agreement_path.stat().st_size,
+                "sha256": sha256_file(agreement_path),
+            },
+            "integrity_note": (
+                "This snapshot is blinded and pre-unblinding. It retains the exact raw "
+                "rating bytes that were parsed, validates and freezes human-entered ratings "
+                "only, and does not generate, impute, adjudicate, or join ratings to "
+                "treatment identities."
+            ),
+        }
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        _require_directory_binding(staging_root, output_fd)
+        # Local import avoids a module-import cycle: the verifier intentionally
+        # imports this producer to recompute normalized ratings and agreement.
+        from scripts import verify_human_eval_freeze as verifier
+
+        verifier.verify_frozen_snapshot(
+            freeze_root=staging_root,
+            use_retained_inputs=True,
+        )
+        _require_directory_binding(staging_root, output_fd)
+        _publish_directory_noreplace(staging_root, output_root)
+        _require_directory_binding(output_root, output_fd)
+        return manifest
+    finally:
+        # Retain failed staging trees for forensics. Path-based cleanup could
+        # delete a concurrent replacement after a binding check.
+        os.close(output_fd)
 
 
 def main() -> int:

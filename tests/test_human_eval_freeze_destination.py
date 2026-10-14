@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from scripts import freeze_human_eval_ratings as freeze
+from scripts import verify_human_eval_freeze as verifier
 
 
 @pytest.fixture
@@ -105,9 +106,13 @@ def test_completed_competing_freeze_is_preserved(inputs, tmp_path, monkeypatch):
 def test_directory_created_after_preflight_is_not_adopted(inputs, monkeypatch):
     ratings, options = inputs
     agreement = freeze.build_agreement
+    reserved = False
 
     def reserve_elsewhere(rows):
-        options["output_root"].mkdir()
+        nonlocal reserved
+        if not reserved:
+            options["output_root"].mkdir()
+            reserved = True
         return agreement(rows)
 
     monkeypatch.setattr(freeze, "build_agreement", reserve_elsewhere)
@@ -116,26 +121,28 @@ def test_directory_created_after_preflight_is_not_adopted(inputs, monkeypatch):
     assert list(options["output_root"].iterdir()) == []
 
 
-def test_second_attempt_is_rejected_before_first_output_write(inputs, monkeypatch):
+def test_interleaved_second_attempt_can_win_atomic_publication(inputs, monkeypatch):
     ratings, options = inputs
     write_csv = freeze._write_csv
-    rejections = []
+    competing_ratings = _ratings(ratings[0].with_name("interleaved.csv"), "4")
+    winner = {}
 
     def interleaved_write(path, rows):
         with monkeypatch.context() as context:
             context.setattr(freeze, "_write_csv", write_csv)
-            with pytest.raises(ValueError, match="refusing to overwrite"):
-                freeze.freeze_ratings(ratings, **options)
-        rejections.append(True)
+            freeze.freeze_ratings(competing_ratings, **options)
+        winner.update(_snapshot(options["output_root"]))
         write_csv(path, rows)
 
     monkeypatch.setattr(freeze, "_write_csv", interleaved_write)
-    manifest = freeze.freeze_ratings(ratings, **options)
-    assert rejections == [True]
-    assert manifest["frozen_ratings"]["n_rows"] == 2
+    with pytest.raises(ValueError, match="refusing to overwrite"):
+        freeze.freeze_ratings(ratings, **options)
+
+    assert _snapshot(options["output_root"]) == winner
+    assert winner
 
 
-def test_failed_first_write_leaves_reserved_directory_and_no_success(inputs, monkeypatch):
+def test_failed_first_write_never_publishes_final_directory(inputs, monkeypatch):
     ratings, options = inputs
 
     def fail_write(path, rows):
@@ -146,10 +153,83 @@ def test_failed_first_write_leaves_reserved_directory_and_no_success(inputs, mon
         with pytest.raises(OSError, match="synthetic write failure"):
             freeze.freeze_ratings(ratings, **options)
 
-    assert options["output_root"].is_dir()
-    assert list(options["output_root"].iterdir()) == []
+    assert not options["output_root"].exists()
+    staging = list(options["output_root"].parent.glob(".frozen.staging-*"))
+    assert len(staging) == 1
+    assert staging[0].is_dir()
+
+
+def test_staged_snapshot_is_verified_before_atomic_publication(inputs, monkeypatch):
+    ratings, options = inputs
+    real_verify = verifier.verify_frozen_snapshot
+    observations = []
+
+    def observe_verification(*args, **kwargs):
+        freeze_root = Path(kwargs["freeze_root"])
+        observations.append(
+            {
+                "final_exists": options["output_root"].exists(),
+                "staging_name": freeze_root.name,
+            }
+        )
+        return real_verify(*args, **kwargs)
+
+    monkeypatch.setattr(verifier, "verify_frozen_snapshot", observe_verification)
+    freeze.freeze_ratings(ratings, **options)
+
+    assert len(observations) == 1
+    assert observations[0]["final_exists"] is False
+    assert observations[0]["staging_name"].startswith(".frozen.staging-")
+
+
+def test_competing_destination_created_at_publish_is_preserved(
+    inputs, monkeypatch
+):
+    ratings, options = inputs
+    output = options["output_root"]
+    staged = []
+
+    def competing_publish(staging_root, destination):
+        staged.append(Path(staging_root))
+        destination.mkdir()
+        (destination / "winner.txt").write_text("competing freeze", encoding="utf-8")
+        raise ValueError(f"refusing to overwrite human-evaluation output: {destination}")
+
+    monkeypatch.setattr(
+        freeze, "_publish_directory_noreplace", competing_publish, raising=False
+    )
     with pytest.raises(ValueError, match="refusing to overwrite"):
         freeze.freeze_ratings(ratings, **options)
+
+    assert (output / "winner.txt").read_text(encoding="utf-8") == "competing freeze"
+    assert len(staged) == 1
+    assert staged[0].is_dir()
+
+
+def test_staging_directory_replacement_is_detected_before_publish(
+    inputs, monkeypatch
+):
+    ratings, options = inputs
+    replacements = []
+
+    def replace_staging(*args, **kwargs):
+        staging = Path(kwargs["freeze_root"])
+        detached = staging.with_name(f"{staging.name}-detached")
+        staging.rename(detached)
+        staging.mkdir()
+        (staging / "owner.txt").write_text("replacement", encoding="utf-8")
+        replacements.append((staging, detached))
+        return {"status": "synthetic verifier result"}
+
+    monkeypatch.setattr(verifier, "verify_frozen_snapshot", replace_staging)
+    with pytest.raises(ValueError, match="staging root changed"):
+        freeze.freeze_ratings(ratings, **options)
+
+    assert not options["output_root"].exists()
+    assert len(replacements) == 1
+    replacement, detached = replacements[0]
+    assert (replacement / "owner.txt").read_text(encoding="utf-8") == "replacement"
+    assert (detached / "freeze_manifest.json").is_file()
 
 
 def test_fresh_nested_destination_preserves_output_hashes(inputs):

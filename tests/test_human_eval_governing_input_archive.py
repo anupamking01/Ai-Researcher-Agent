@@ -81,7 +81,7 @@ def test_freeze_archives_exact_pre_validation_governing_bytes(inputs, monkeypatc
 
     def remove_originals_after_validation(rows):
         for key in OPTIONS.values():
-            options[key].unlink()
+            options[key].unlink(missing_ok=True)
         return original_agreement(rows)
 
     monkeypatch.setattr(freeze, "build_agreement", remove_originals_after_validation)
@@ -228,10 +228,10 @@ def test_archive_write_failure_never_publishes_manifest_or_reuses_destination(in
         context.setattr(Path, "open", fail_archive_write)
         with pytest.raises(OSError, match="synthetic archive write failure"):
             freeze.freeze_ratings(paths, **options)
-    assert options["output_root"].is_dir()
-    assert not (options["output_root"] / "freeze_manifest.json").exists()
-    with pytest.raises(ValueError, match="refusing to overwrite"):
-        freeze.freeze_ratings(paths, **options)
+    assert not options["output_root"].exists()
+    staging = list(options["output_root"].parent.glob(".freeze.staging-*"))
+    assert len(staging) == 1
+    assert not (staging[0] / "freeze_manifest.json").exists()
 
 
 def test_cli_retained_inputs_mode_is_offline_and_read_only(inputs):

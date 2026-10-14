@@ -120,7 +120,7 @@ def test_packet_manifest_uses_validated_bytes_not_a_later_version(inputs, monkey
 
     def edit_after_validation(rows):
         if remove_after_validation:
-            packet.unlink()
+            packet.unlink(missing_ok=True)
         else:
             packet.write_bytes(b'{"blind_id":"H999","question":"replacement"}\n')
         return agreement(rows)
