@@ -355,6 +355,128 @@ def test_provenance_preflight_failure_does_not_reserve_publication_path(
     assert not output.exists()
 
 
+def test_failed_candidate_verification_never_publishes_final_directory(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+
+    def fail_verification(*args, **kwargs):
+        raise ValueError("synthetic candidate verification failure")
+
+    monkeypatch.setattr(verify, "verify_bundle", fail_verification)
+    with pytest.raises(ValueError, match="synthetic candidate verification failure"):
+        reconcile.write_bundle(payload, output, root=tmp_path)
+
+    assert not output.exists()
+    staging = list(tmp_path.glob(".reconciliation.staging-*"))
+    assert len(staging) == 1
+    candidate = staging[0] / "candidate"
+    assert {
+        reconcile.RECONCILIATION_JSON,
+        reconcile.RECONCILIATION_MARKDOWN,
+        reconcile.RECONCILIATION_MANIFEST,
+    } == {path.name for path in candidate.iterdir()}
+
+
+def test_staging_path_replacement_cannot_publish_replacement_directory(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    real_publish = reconcile._publish_directory_noreplace
+    detached = []
+
+    def replace_before_publish(
+        source_parent_fd,
+        source_name,
+        destination_parent_fd,
+        destination_name,
+        *,
+        output_root,
+    ):
+        staging_root = Path(f"/proc/self/fd/{source_parent_fd}").resolve()
+        moved = staging_root.with_name(f"{staging_root.name}-detached")
+        staging_root.rename(moved)
+        staging_root.mkdir()
+        detached.append(moved)
+        return real_publish(
+            source_parent_fd,
+            source_name,
+            destination_parent_fd,
+            destination_name,
+            output_root=output_root,
+        )
+
+    monkeypatch.setattr(
+        reconcile, "_publish_directory_noreplace", replace_before_publish
+    )
+    receipt = reconcile.write_bundle(payload, output, root=tmp_path)
+
+    assert receipt["status"] == "automated_human_reconciliation_bundle_verified"
+    assert (output / reconcile.RECONCILIATION_MANIFEST).is_file()
+    assert len(detached) == 1
+    assert list(detached[0].iterdir()) == []
+
+
+def test_destination_parent_replacement_is_detected_without_touching_replacement(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "published-parent" / "reconciliation"
+    real_publish = reconcile._publish_directory_noreplace
+    detached = []
+
+    def replace_parent_before_publish(*args, output_root, **kwargs):
+        parent = output_root.parent
+        moved = parent.with_name(f"{parent.name}-detached")
+        parent.rename(moved)
+        parent.mkdir()
+        detached.append(moved)
+        return real_publish(*args, output_root=output_root, **kwargs)
+
+    monkeypatch.setattr(
+        reconcile, "_publish_directory_noreplace", replace_parent_before_publish
+    )
+    with pytest.raises(ValueError, match="output parent changed"):
+        reconcile.write_bundle(payload, output, root=tmp_path)
+
+    assert not output.exists()
+    assert list(output.parent.iterdir()) == []
+    assert len(detached) == 1
+    assert (
+        detached[0] / output.name / reconcile.RECONCILIATION_MANIFEST
+    ).is_file()
+
+
+def test_setup_failure_closes_previously_opened_directory_descriptors(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    real_open = reconcile._open_bound_directory
+    calls = 0
+
+    def fail_second_open(path):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise ValueError("synthetic staging-container open failure")
+        return real_open(path)
+
+    before = len(list(Path("/proc/self/fd").iterdir()))
+    monkeypatch.setattr(reconcile, "_open_bound_directory", fail_second_open)
+    with pytest.raises(ValueError, match="synthetic staging-container open failure"):
+        reconcile.write_bundle(payload, output, root=tmp_path)
+    after = len(list(Path("/proc/self/fd").iterdir()))
+
+    assert after == before
+
+
 def test_rejects_hand_edited_markdown(tmp_path, monkeypatch):
     payload = _payload()
     _patch_recomputation(monkeypatch, payload)

@@ -4,19 +4,25 @@ This module does not create ratings, rerun treatments/evaluators, add hypothesis
 tests, or alter the confirmatory automated analysis. It only executes the
 pre-frozen descriptive reconciliation contract after the readiness gate passes.
 
-Published reconciliation results are create-only: canonical JSON is the source
-of truth, manuscript Markdown is a deterministic rendering, and a manifest binds
-both artifacts, the verified upstream inputs, the producing Git commit, and the
-exact reconciliation implementation bytes.
+Published reconciliation results are create-only and atomically visible:
+canonical JSON is the source of truth, manuscript Markdown is a deterministic
+rendering, and a manifest binds both artifacts, the verified upstream inputs,
+the producing Git commit, and the exact reconciliation implementation bytes.
 """
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import hashlib
 import json
+import os
 import re
+import stat
 import statistics
 import subprocess
+import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 
 from scripts import verify_human_reconciliation_readiness as readiness
@@ -262,6 +268,113 @@ def _write_exclusive(path: Path, content: bytes) -> None:
         raise ValueError(f"refusing to overwrite reconciliation artifact: {path}") from exc
 
 
+def _open_bound_directory(path: Path) -> int:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(
+        os, "O_NOFOLLOW", 0
+    )
+    try:
+        directory_fd = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(
+            f"reconciliation staging root must be a regular directory: {path}"
+        ) from exc
+    if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
+        os.close(directory_fd)
+        raise ValueError(
+            f"reconciliation staging root must be a regular directory: {path}"
+        )
+    return directory_fd
+
+
+def _require_directory_entry_binding(
+    parent_fd: int,
+    name: str,
+    directory_fd: int,
+    *,
+    label: str,
+) -> None:
+    try:
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError(
+            f"reconciliation {label} changed during publication: {name}"
+        ) from exc
+    opened = os.fstat(directory_fd)
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
+    ):
+        raise ValueError(
+            f"reconciliation {label} changed during publication: {name}"
+        )
+
+
+def _require_directory_path_binding(
+    path: Path,
+    directory_fd: int,
+    *,
+    label: str,
+) -> None:
+    try:
+        current = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError(
+            f"reconciliation {label} changed during publication: {path}"
+        ) from exc
+    opened = os.fstat(directory_fd)
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
+    ):
+        raise ValueError(
+            f"reconciliation {label} changed during publication: {path}"
+        )
+
+
+def _publish_directory_noreplace(
+    source_parent_fd: int,
+    source_name: str,
+    destination_parent_fd: int,
+    destination_name: str,
+    *,
+    output_root: Path,
+) -> None:
+    """Atomically install a verified result without replacing any path."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        renameat2 = libc.renameat2
+    except AttributeError as exc:
+        raise ValueError(
+            "atomic no-replace reconciliation publication is unavailable on this platform"
+        ) from exc
+    renameat2.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    if (
+        renameat2(
+            source_parent_fd,
+            os.fsencode(source_name),
+            destination_parent_fd,
+            os.fsencode(destination_name),
+            1,
+        )
+        == 0
+    ):
+        return
+    error_number = ctypes.get_errno()
+    if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise ValueError(f"refusing to overwrite reconciliation output: {output_root}")
+    raise OSError(
+        error_number,
+        f"could not atomically publish reconciliation output: {output_root}",
+    )
+
+
 def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict:
     """Publish and independently verify a create-only reconciliation bundle."""
     output_root = Path(output_root)
@@ -333,21 +446,75 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
         root=Path(root),
     )
 
-    # The existence check above is not a lock. Reserve only after preflight and
-    # still use exclusive creation so a concurrent publisher cannot be adopted.
-    try:
-        output_root.mkdir(parents=True, exist_ok=False)
-    except FileExistsError as exc:
-        raise ValueError(destination_error) from exc
+    # Build and independently verify the complete result off-path. The final
+    # destination remains absent until one atomic no-replace publication step.
+    output_root.parent.mkdir(parents=True, exist_ok=True)
+    staging_container = Path(
+        tempfile.mkdtemp(
+            prefix=f".{output_root.name}.staging-",
+            dir=output_root.parent,
+        )
+    )
+    # The private 0700 container and retained dirfds isolate normal concurrent
+    # publishers. As with the other research publishers, a hostile same-UID or
+    # root process can still mutate owned files and is outside the threat model.
+    with ExitStack() as descriptors:
+        output_parent_fd = _open_bound_directory(output_root.parent)
+        descriptors.callback(os.close, output_parent_fd)
+        _require_directory_path_binding(
+            output_root.parent,
+            output_parent_fd,
+            label="output parent",
+        )
+        staging_container_fd = _open_bound_directory(staging_container)
+        descriptors.callback(os.close, staging_container_fd)
+        candidate_name = "candidate"
+        candidate_root = staging_container / candidate_name
+        candidate_root.mkdir(exist_ok=False)
+        candidate_fd = _open_bound_directory(candidate_root)
+        descriptors.callback(os.close, candidate_fd)
 
-    json_path = output_root / RECONCILIATION_JSON
-    markdown_path = output_root / RECONCILIATION_MARKDOWN
-    manifest_path = output_root / RECONCILIATION_MANIFEST
-    _write_exclusive(json_path, json_bytes)
-    _write_exclusive(markdown_path, markdown_bytes)
-    _write_exclusive(manifest_path, manifest_bytes)
+        _write_exclusive(candidate_root / RECONCILIATION_JSON, json_bytes)
+        _write_exclusive(candidate_root / RECONCILIATION_MARKDOWN, markdown_bytes)
+        _write_exclusive(candidate_root / RECONCILIATION_MANIFEST, manifest_bytes)
 
-    return verify_bundle(output_root, root=Path(root))
+        # Resolve the verifier's path through the retained container fd, so an
+        # external rename/replacement of the hidden container cannot redirect
+        # verification to different bytes.
+        anchored_candidate = (
+            Path(f"/proc/self/fd/{staging_container_fd}") / candidate_name
+        )
+        receipt = verify_bundle(anchored_candidate, root=Path(root))
+        _require_directory_entry_binding(
+            staging_container_fd,
+            candidate_name,
+            candidate_fd,
+            label="staged candidate",
+        )
+        _require_directory_path_binding(
+            output_root.parent,
+            output_parent_fd,
+            label="output parent",
+        )
+        _publish_directory_noreplace(
+            staging_container_fd,
+            candidate_name,
+            output_parent_fd,
+            output_root.name,
+            output_root=output_root,
+        )
+        _require_directory_entry_binding(
+            output_parent_fd,
+            output_root.name,
+            candidate_fd,
+            label="published output",
+        )
+        _require_directory_path_binding(
+            output_root.parent,
+            output_parent_fd,
+            label="output parent",
+        )
+        return receipt
 
 
 def main() -> int:
