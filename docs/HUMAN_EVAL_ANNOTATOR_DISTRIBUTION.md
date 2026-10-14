@@ -46,6 +46,23 @@ Verify it again immediately before distribution:
 
 Distribute the contents of that directory, not the coordinator packet root.
 
+Before a completed CSV is accepted for the multi-rater freeze, either the
+annotator or coordinator can run a treatment-blind submission preflight:
+
+    python -m scripts.freeze_human_eval_ratings \
+      completed-annotator.csv \
+      --preflight-bundle outputs/human_eval/annotator-bundle-v1
+
+This read-only mode verifies one captured distribution-bundle revision, then
+parses exactly one completed CSV with the same frozen schema, score, note,
+identity, duplicate-row, and spreadsheet-safety rules used by the coordinator.
+It also requires the submission to cover every blind ID exactly once. The
+command writes no freeze or analysis output and never reads `blinding_key.csv`,
+another annotator's submission, or treatment metadata. Its receipt contains the
+annotator ID, report and missing-dimension counts, the exact submitted-file
+fingerprint, and the verified annotator-manifest fingerprint; it contains no
+scores, agreement statistic, treatment identity, or research result.
+
 ## Integrity properties
 
 The exporter fails closed if the coordinator packet does not pass its existing

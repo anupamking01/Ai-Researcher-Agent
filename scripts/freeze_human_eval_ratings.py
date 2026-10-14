@@ -467,6 +467,56 @@ def _validate_submission_coverage(rows: list[dict], blind_ids: list[str]) -> Non
         )
 
 
+def preflight_annotator_submission(
+    rating_path: Path,
+    *,
+    annotator_bundle_root: Path,
+) -> dict:
+    """Validate one complete human submission without opening coordinator data."""
+    from scripts import export_human_eval_annotator_bundle as exporter
+
+    rating_path = Path(rating_path)
+    annotator_bundle_root = Path(annotator_bundle_root)
+    with tempfile.TemporaryDirectory(prefix="vera-annotator-preflight-") as tmp_name:
+        snapshot_root = Path(tmp_name) / "bundle"
+        snapshot_root.mkdir()
+        captured = exporter._snapshot_annotator_bundle(
+            annotator_bundle_root,
+            snapshot_root,
+        )
+        bundle_receipt = exporter.verify_annotator_bundle(snapshot_root)
+        packet_rows = exporter._read_jsonl_packet(captured["packet.jsonl"])
+        blind_ids = [row["blind_id"].strip() for row in packet_rows]
+        rows, sources = _load_ratings(
+            [rating_path],
+            allowed_blind_ids=set(blind_ids),
+            require_single_annotator=True,
+        )
+        _validate_submission_coverage(rows, blind_ids)
+
+    source = sources[0]
+    return {
+        "schema_version": 1,
+        "study_id": bundle_receipt["study_id"],
+        "status": "human_eval_annotator_submission_verified",
+        "annotator_id": rows[0]["annotator_id"],
+        "n_reports": len(rows),
+        "n_missing_dimension_values": sum(
+            not str(row[field]).strip()
+            for row in rows
+            for field in SCORE_FIELDS
+        ),
+        "submission": {
+            "name": source["name"],
+            "bytes": source["bytes"],
+            "sha256": source["sha256"],
+        },
+        "annotator_manifest_sha256": hashlib.sha256(
+            captured["annotator_manifest.json"]
+        ).hexdigest(),
+    }
+
+
 def _score(row: dict, field: str) -> int | None:
     value = str(row.get(field) or "").strip()
     return int(value) if value else None
@@ -873,7 +923,34 @@ def main() -> int:
     parser.add_argument("--assignment-plan", type=Path, default=DEFAULT_ASSIGNMENT_PLAN)
     parser.add_argument("--annotator-guide", type=Path, default=DEFAULT_ANNOTATOR_GUIDE)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument(
+        "--preflight-bundle",
+        type=Path,
+        help=(
+            "validate exactly one completed ratings CSV against this treatment-blind "
+            "annotator distribution bundle without freezing or writing outputs"
+        ),
+    )
     args = parser.parse_args()
+
+    if args.preflight_bundle is not None:
+        if len(args.ratings) != 1:
+            raise SystemExit(
+                "HUMAN EVAL SUBMISSION PREFLIGHT: FAIL: exactly one completed "
+                "annotator CSV is required"
+            )
+        try:
+            receipt = preflight_annotator_submission(
+                args.ratings[0],
+                annotator_bundle_root=args.preflight_bundle,
+            )
+        except (OSError, ValueError) as exc:
+            raise SystemExit(
+                f"HUMAN EVAL SUBMISSION PREFLIGHT: FAIL: {exc}"
+            ) from exc
+        print(json.dumps(receipt, indent=2, sort_keys=True))
+        print("HUMAN EVAL SUBMISSION PREFLIGHT: PASS (ratings remain blinded)")
+        return 0
 
     try:
         manifest = freeze_ratings(
