@@ -7,8 +7,14 @@ validate them. The bundle is verified after writing before the CLI reports
 success.
 """
 import argparse
+import ctypes
+import errno
 import hashlib
 import json
+import os
+import stat
+import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 
 from scripts import freeze_human_eval_ratings as freeze
@@ -160,8 +166,108 @@ def _write_exclusive(path, content):
         raise ValueError(f"refusing to overwrite human-analysis artifact: {path}") from exc
 
 
-def write_bundle(payload, output_root):
-    """Publish and integrity-check a create-only human-analysis result bundle."""
+def _open_bound_directory(path, *, dir_fd=None):
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(
+        os, "O_NOFOLLOW", 0
+    )
+    try:
+        directory_fd = os.open(path, flags, dir_fd=dir_fd)
+    except OSError as exc:
+        raise ValueError(
+            f"human-analysis staging root must be a regular directory: {path}"
+        ) from exc
+    try:
+        is_directory = stat.S_ISDIR(os.fstat(directory_fd).st_mode)
+    except BaseException:
+        os.close(directory_fd)
+        raise
+    if not is_directory:
+        os.close(directory_fd)
+        raise ValueError(
+            f"human-analysis staging root must be a regular directory: {path}"
+        )
+    return directory_fd
+
+
+def _require_directory_entry_binding(parent_fd, name, directory_fd, *, label):
+    try:
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError(
+            f"human-analysis {label} changed during publication: {name}"
+        ) from exc
+    opened = os.fstat(directory_fd)
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
+    ):
+        raise ValueError(
+            f"human-analysis {label} changed during publication: {name}"
+        )
+
+
+def _require_directory_path_binding(path, directory_fd, *, label):
+    try:
+        current = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError(
+            f"human-analysis {label} changed during publication: {path}"
+        ) from exc
+    opened = os.fstat(directory_fd)
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
+    ):
+        raise ValueError(
+            f"human-analysis {label} changed during publication: {path}"
+        )
+
+
+def _publish_directory(
+    source_parent_fd,
+    source_name,
+    destination_parent_fd,
+    destination_name,
+    *,
+    output_root,
+):
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        renameat2 = libc.renameat2
+    except AttributeError as exc:
+        raise ValueError(
+            "atomic no-replace human-analysis publication is unavailable on this platform"
+        ) from exc
+    renameat2.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    if (
+        renameat2(
+            source_parent_fd,
+            os.fsencode(source_name),
+            destination_parent_fd,
+            os.fsencode(destination_name),
+            1,
+        )
+        == 0
+    ):
+        return
+    error_number = ctypes.get_errno()
+    if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise ValueError(f"refusing to overwrite human-analysis output: {output_root}")
+    raise OSError(
+        error_number,
+        f"could not atomically publish human-analysis output: {output_root}",
+    )
+
+
+def write_bundle(payload, output_root, *, verify_candidate=None):
+    """Verify off-path, then publish a create-only human-analysis result bundle."""
     output_root = Path(output_root)
     destination_error = f"refusing to overwrite human-analysis output: {output_root}"
     if output_root.exists() or output_root.is_symlink():
@@ -238,27 +344,104 @@ def write_bundle(payload, output_root):
             "Markdown rendering, analysis/verification implementation source "
             "bytes, and governing-input anchor and verifier implementation bytes. "
             "It is written last; the analysis command independently recomputes the "
-            "payload from verified inputs before success is reported."
+            "payload from verified inputs before the result is published."
         ),
     }
     manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
-    # The earlier existence check is not a lock. Reserve after preflight and
-    # still use exclusive creation so a concurrent publisher cannot be adopted.
-    try:
-        output_root.mkdir(parents=True, exist_ok=False)
-    except FileExistsError as exc:
-        raise ValueError(destination_error) from exc
+    output_root.parent.mkdir(parents=True, exist_ok=True)
+    # The private random 0700 container and retained dirfds isolate normal
+    # concurrent publishers. Hostile same-UID or root mutation of owned paths
+    # during the creation-to-open interval is outside this threat model.
+    with ExitStack() as descriptors:
+        output_parent_fd = _open_bound_directory(output_root.parent)
+        descriptors.callback(os.close, output_parent_fd)
+        _require_directory_path_binding(
+            output_root.parent,
+            output_parent_fd,
+            label="output parent",
+        )
 
-    json_path = output_root / ANALYSIS_JSON
-    markdown_path = output_root / ANALYSIS_MARKDOWN
-    manifest_path = output_root / ANALYSIS_MANIFEST
+        # Create every staging entry relative to the retained output-parent fd.
+        # A pathname replacement of that parent can therefore be detected without
+        # redirecting setup or writes into the replacement directory.
+        anchored_output_parent = Path(f"/proc/self/fd/{output_parent_fd}")
+        staging_container = Path(
+            tempfile.mkdtemp(
+                prefix=f".{output_root.name}.staging-",
+                dir=anchored_output_parent,
+            )
+        )
+        staging_container_name = staging_container.name
+        _require_directory_path_binding(
+            output_root.parent,
+            output_parent_fd,
+            label="output parent",
+        )
+        staging_container_fd = _open_bound_directory(
+            staging_container_name,
+            dir_fd=output_parent_fd,
+        )
+        descriptors.callback(os.close, staging_container_fd)
+        _require_directory_entry_binding(
+            output_parent_fd,
+            staging_container_name,
+            staging_container_fd,
+            label="staging container",
+        )
+        candidate_name = "candidate"
+        os.mkdir(candidate_name, mode=0o700, dir_fd=staging_container_fd)
+        candidate_fd = _open_bound_directory(
+            candidate_name,
+            dir_fd=staging_container_fd,
+        )
+        descriptors.callback(os.close, candidate_fd)
 
-    _write_exclusive(json_path, json_bytes)
-    _write_exclusive(markdown_path, markdown_bytes)
-    _write_exclusive(manifest_path, manifest_bytes)
+        anchored_candidate = (
+            Path(f"/proc/self/fd/{staging_container_fd}") / candidate_name
+        )
 
-    return verify_bundle(output_root)
+        json_path = anchored_candidate / ANALYSIS_JSON
+        markdown_path = anchored_candidate / ANALYSIS_MARKDOWN
+        manifest_path = anchored_candidate / ANALYSIS_MANIFEST
+
+        _write_exclusive(json_path, json_bytes)
+        _write_exclusive(markdown_path, markdown_bytes)
+        _write_exclusive(manifest_path, manifest_bytes)
+
+        receipt = verify_bundle(anchored_candidate)
+        if verify_candidate is not None:
+            receipt = verify_candidate(anchored_candidate)
+        _require_directory_entry_binding(
+            staging_container_fd,
+            candidate_name,
+            candidate_fd,
+            label="staged candidate",
+        )
+        _require_directory_path_binding(
+            output_root.parent,
+            output_parent_fd,
+            label="output parent",
+        )
+        _publish_directory(
+            staging_container_fd,
+            candidate_name,
+            output_parent_fd,
+            output_root.name,
+            output_root=output_root,
+        )
+        _require_directory_entry_binding(
+            output_parent_fd,
+            output_root.name,
+            candidate_fd,
+            label="published output",
+        )
+        _require_directory_path_binding(
+            output_root.parent,
+            output_parent_fd,
+            label="output parent",
+        )
+        return receipt
 
 
 def main():
@@ -284,19 +467,25 @@ def main():
             analysis_plan_path=args.analysis_plan,
             task_manifest_path=args.task_manifest,
         )
-        write_bundle(payload, args.output_root)
         from scripts.verify_human_eval_analysis_outputs import (
             verify_bundle_against_inputs,
         )
 
-        verify_bundle_against_inputs(
+        def verify_candidate(candidate_root):
+            return verify_bundle_against_inputs(
+                candidate_root,
+                rating_paths=args.ratings,
+                freeze_root=args.freeze_root,
+                packet_root=args.packet_root,
+                annotator_guide_path=args.annotator_guide,
+                analysis_plan_path=args.analysis_plan,
+                task_manifest_path=args.task_manifest,
+            )
+
+        write_bundle(
+            payload,
             args.output_root,
-            rating_paths=args.ratings,
-            freeze_root=args.freeze_root,
-            packet_root=args.packet_root,
-            annotator_guide_path=args.annotator_guide,
-            analysis_plan_path=args.analysis_plan,
-            task_manifest_path=args.task_manifest,
+            verify_candidate=verify_candidate,
         )
     except (OSError, ValueError) as exc:
         raise SystemExit(f"HUMAN EVAL ANALYSIS: FAIL: {exc}") from exc

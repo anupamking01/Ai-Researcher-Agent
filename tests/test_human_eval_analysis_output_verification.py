@@ -4,6 +4,7 @@ These fixtures are not collected human ratings or study findings.
 """
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -263,6 +264,185 @@ def test_provenance_preflight_failure_does_not_reserve_publication_path(
         analyze_human_eval.write_bundle(_payload(), output)
 
     assert not output.exists()
+
+
+def test_failed_candidate_verification_never_publishes_final_directory(
+    tmp_path, monkeypatch
+):
+    output = tmp_path / "analysis"
+
+    def fail_verification(*args, **kwargs):
+        raise ValueError("synthetic candidate verification failure")
+
+    monkeypatch.setattr(verify, "verify_bundle", fail_verification)
+    with pytest.raises(ValueError, match="synthetic candidate verification failure"):
+        analyze_human_eval.write_bundle(_payload(), output)
+
+    assert not output.exists()
+    staging = list(tmp_path.glob(".analysis.staging-*"))
+    assert len(staging) == 1
+    assert {
+        analyze_human_eval.ANALYSIS_JSON,
+        analyze_human_eval.ANALYSIS_MARKDOWN,
+        analyze_human_eval.ANALYSIS_MANIFEST,
+    } == {path.name for path in (staging[0] / "candidate").iterdir()}
+
+
+def test_failed_independent_recomputation_never_publishes_final_directory(tmp_path):
+    output = tmp_path / "analysis"
+    observed = {}
+
+    def fail_recomputation(candidate_root):
+        observed["candidate_root"] = candidate_root
+        assert candidate_root != output
+        assert (candidate_root / analyze_human_eval.ANALYSIS_MANIFEST).is_file()
+        raise ValueError("synthetic independent recomputation failure")
+
+    with pytest.raises(ValueError, match="synthetic independent recomputation failure"):
+        analyze_human_eval.write_bundle(
+            _payload(),
+            output,
+            verify_candidate=fail_recomputation,
+        )
+
+    assert "candidate_root" in observed
+    assert not output.exists()
+
+
+def test_open_bound_directory_closes_descriptor_when_fstat_fails(
+    tmp_path, monkeypatch
+):
+    real_open = analyze_human_eval.os.open
+    real_fstat = analyze_human_eval.os.fstat
+    opened = []
+
+    def tracked_open(*args, **kwargs):
+        descriptor = real_open(*args, **kwargs)
+        opened.append(descriptor)
+        return descriptor
+
+    def fail_fstat(_descriptor):
+        raise OSError("synthetic fstat failure")
+
+    monkeypatch.setattr(analyze_human_eval.os, "open", tracked_open)
+    monkeypatch.setattr(analyze_human_eval.os, "fstat", fail_fstat)
+    with pytest.raises(OSError, match="synthetic fstat failure"):
+        analyze_human_eval._open_bound_directory(tmp_path)
+
+    assert len(opened) == 1
+    with pytest.raises(OSError):
+        real_fstat(opened[0])
+
+
+def test_concurrent_destination_is_never_replaced(tmp_path, monkeypatch):
+    output = tmp_path / "analysis"
+    real_publish = analyze_human_eval._publish_directory
+
+    def publish_after_competitor(*args, output_root, **kwargs):
+        output_root.mkdir()
+        return real_publish(*args, output_root=output_root, **kwargs)
+
+    monkeypatch.setattr(
+        analyze_human_eval,
+        "_publish_directory",
+        publish_after_competitor,
+    )
+    with pytest.raises(ValueError, match="refusing to overwrite human-analysis output"):
+        analyze_human_eval.write_bundle(_payload(), output)
+
+    assert output.is_dir()
+    assert list(output.iterdir()) == []
+    staging = list(tmp_path.glob(".analysis.staging-*"))
+    assert len(staging) == 1
+
+
+def test_staging_path_replacement_cannot_publish_replacement_directory(
+    tmp_path, monkeypatch
+):
+    output = tmp_path / "analysis"
+    real_publish = analyze_human_eval._publish_directory
+    detached = []
+
+    def replace_before_publish(*args, output_root, **kwargs):
+        staging_root = Path(f"/proc/self/fd/{args[0]}").resolve()
+        moved = staging_root.with_name(f"{staging_root.name}-detached")
+        staging_root.rename(moved)
+        staging_root.mkdir()
+        detached.append(moved)
+        return real_publish(*args, output_root=output_root, **kwargs)
+
+    monkeypatch.setattr(
+        analyze_human_eval,
+        "_publish_directory",
+        replace_before_publish,
+    )
+    receipt = analyze_human_eval.write_bundle(_payload(), output)
+
+    assert receipt["status"] == "human_validation_analysis_bundle_verified"
+    assert (output / analyze_human_eval.ANALYSIS_MANIFEST).is_file()
+    assert len(detached) == 1
+    assert list(detached[0].iterdir()) == []
+
+
+def test_destination_parent_replacement_is_detected_without_touching_replacement(
+    tmp_path, monkeypatch
+):
+    output = tmp_path / "published-parent" / "analysis"
+    real_publish = analyze_human_eval._publish_directory
+    detached = []
+
+    def replace_parent_before_publish(*args, output_root, **kwargs):
+        parent = output_root.parent
+        moved = parent.with_name(f"{parent.name}-detached")
+        parent.rename(moved)
+        parent.mkdir()
+        detached.append(moved)
+        return real_publish(*args, output_root=output_root, **kwargs)
+
+    monkeypatch.setattr(
+        analyze_human_eval,
+        "_publish_directory",
+        replace_parent_before_publish,
+    )
+    with pytest.raises(ValueError, match="output parent changed"):
+        analyze_human_eval.write_bundle(_payload(), output)
+
+    assert not output.exists()
+    assert list(output.parent.iterdir()) == []
+    assert len(detached) == 1
+    assert (detached[0] / output.name / analyze_human_eval.ANALYSIS_MANIFEST).is_file()
+
+
+def test_destination_parent_replacement_during_staging_setup_is_detected(
+    tmp_path, monkeypatch
+):
+    output = tmp_path / "published-parent" / "analysis"
+    real_mkdtemp = analyze_human_eval.tempfile.mkdtemp
+    detached = []
+
+    def create_staging_then_replace_parent(*args, **kwargs):
+        staging = real_mkdtemp(*args, **kwargs)
+        parent = output.parent
+        moved = parent.with_name(f"{parent.name}-detached")
+        parent.rename(moved)
+        parent.mkdir()
+        (parent / Path(staging).name).mkdir()
+        detached.append(moved)
+        return staging
+
+    monkeypatch.setattr(
+        analyze_human_eval.tempfile,
+        "mkdtemp",
+        create_staging_then_replace_parent,
+    )
+    with pytest.raises(ValueError, match="output parent changed"):
+        analyze_human_eval.write_bundle(_payload(), output)
+
+    assert not output.exists()
+    assert [path.name for path in output.parent.iterdir()] == [
+        next(detached[0].glob(".analysis.staging-*")).name
+    ]
+    assert len(detached) == 1
 
 
 def test_independent_verifier_recomputes_from_retained_ratings(tmp_path, monkeypatch):
