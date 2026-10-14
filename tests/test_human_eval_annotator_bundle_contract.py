@@ -37,6 +37,9 @@ def _write_bundle(root: Path, packet_rows: list[dict], *, template_ids=None, n_r
         "status": "human_eval_annotator_distribution",
         "coordinator_artifacts_included": False,
         "n_reports": len(packet_rows) if n_reports is None else n_reports,
+        "content_validator_runtime": (
+            exporter.build.content_validator_runtime_contract()
+        ),
         "artifacts": {
             "packet": {"path": "packet.jsonl", **exporter._fingerprint(packet_bytes)},
             "ratings_template": {"path": "ratings_template.csv", **exporter._fingerprint(template_bytes)},

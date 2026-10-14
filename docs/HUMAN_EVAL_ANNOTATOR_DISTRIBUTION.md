@@ -23,8 +23,8 @@ frozen treatment-blind guide:
 - `annotator_instructions.md`
 
 It also writes `annotator_manifest.json`, which contains only fingerprints of
-those three files and an explicit declaration that coordinator artifacts are not
-included.
+those three files, the treatment-blind content-audit runtime contract, and an
+explicit declaration that coordinator artifacts are not included.
 
 ## Recommended workflow
 
@@ -101,6 +101,14 @@ The standalone verifier requires `annotator_instructions.md` to match the
 frozen guide fingerprint even if its local manifest fingerprint has been
 recomputed. Source-bound verification additionally requires its bytes to match
 the selected frozen guide source file.
+
+The manifest also binds the runtime semantics used to audit annotator-visible
+content: Python implementation/version, Unicode database version, exact
+`markdown-it-py` and delegated `mdurl` versions, CommonMark preset, and renderer
+options. Standalone and source-bound verification fail closed when this contract
+is absent or differs from the verification environment. This preserves what
+“rendered annotator-visible text” meant when the distribution was created;
+source bytes alone do not capture parser behavior.
 
 ## Limits
 

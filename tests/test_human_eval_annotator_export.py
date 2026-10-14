@@ -190,6 +190,65 @@ def test_export_contains_only_annotator_safe_artifacts(packet_case):
     ).read_bytes() == exporter.DEFAULT_ANNOTATOR_GUIDE.read_bytes()
 
 
+def test_export_manifest_binds_content_validator_runtime(packet_case):
+    _export(packet_case)
+    manifest = json.loads(
+        (packet_case["export_root"] / "annotator_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert manifest["content_validator_runtime"] == (
+        build.content_validator_runtime_contract()
+    )
+
+
+def test_bundle_verifier_rejects_missing_content_validator_runtime(packet_case):
+    _export(packet_case)
+    manifest_path = packet_case["export_root"] / "annotator_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("content_validator_runtime", None)
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="content validator runtime contract"):
+        exporter.verify_annotator_bundle(packet_case["export_root"])
+
+
+def test_bundle_verifier_rejects_tampered_content_validator_runtime(packet_case):
+    _export(packet_case)
+    manifest_path = packet_case["export_root"] / "annotator_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["content_validator_runtime"] = {
+        **build.content_validator_runtime_contract(),
+        "markdown_it_py_version": "0.0.0-tampered",
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="content validator runtime contract"):
+        exporter.verify_annotator_bundle(packet_case["export_root"])
+
+
+def test_bundle_verifier_rejects_content_validator_environment_drift(
+    packet_case, monkeypatch
+):
+    _export(packet_case)
+    current = build.content_validator_runtime_contract()
+    monkeypatch.setattr(
+        build,
+        "content_validator_runtime_contract",
+        lambda: {**current, "mdurl_version": "0.0.0-drifted"},
+    )
+
+    with pytest.raises(ValueError, match="content validator runtime contract"):
+        exporter.verify_annotator_bundle(packet_case["export_root"])
+
+
 def test_exported_bytes_come_from_same_snapshot_that_was_verified(packet_case, monkeypatch):
     live_packet = packet_case["packet_root"] / "packet.jsonl"
     original = live_packet.read_bytes()

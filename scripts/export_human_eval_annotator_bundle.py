@@ -324,6 +324,10 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
         raise ValueError("annotator manifest is not valid UTF-8 JSON") from exc
     if not isinstance(manifest, dict):
         raise ValueError("annotator manifest must contain a JSON object")
+    if "content_validator_runtime" not in manifest:
+        raise ValueError(
+            "annotator manifest content validator runtime contract is missing"
+        )
 
     required_manifest_keys = {
         "schema_version",
@@ -332,6 +336,7 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
         "coordinator_artifacts_included",
         "n_reports",
         "artifacts",
+        "content_validator_runtime",
     }
     allowed_manifest_keys = required_manifest_keys | {"distribution_note"}
     if not required_manifest_keys.issubset(manifest) or not set(manifest).issubset(
@@ -355,6 +360,13 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
             raise ValueError(
                 f"annotator manifest {key} mismatch: expected {expected!r}, got {manifest.get(key)!r}"
             )
+    expected_runtime = build.content_validator_runtime_contract()
+    if manifest.get("content_validator_runtime") != expected_runtime:
+        raise ValueError(
+            "annotator manifest content validator runtime contract mismatch: "
+            f"expected {expected_runtime!r}, got "
+            f"{manifest.get('content_validator_runtime')!r}"
+        )
 
     forbidden_manifest_keys = {
         "blind_seed",
@@ -521,6 +533,9 @@ def export_annotator_bundle(
                 "status": "human_eval_annotator_distribution",
                 "coordinator_artifacts_included": False,
                 "n_reports": len(_read_jsonl_packet(packet_bytes)),
+                "content_validator_runtime": (
+                    build.content_validator_runtime_contract()
+                ),
                 "artifacts": {
                     "packet": {
                         "path": "packet.jsonl",
