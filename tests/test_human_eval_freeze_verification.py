@@ -308,6 +308,34 @@ def test_freeze_retains_exact_producer_source(frozen_case):
     assert producer["sha256"] == hashlib.sha256(expected).hexdigest()
 
 
+def test_freeze_retains_exact_blinding_validator_source(frozen_case):
+    manifest = json.loads(
+        (frozen_case["freeze_root"] / "freeze_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    validator = manifest["content_validator"]
+    archived = frozen_case["freeze_root"] / validator["path"]
+    expected = Path(freeze.packet_build.__file__).resolve().read_bytes()
+
+    assert validator["path"] == "provenance/build_human_eval_packet.py"
+    assert archived.read_bytes() == expected
+    assert validator["bytes"] == len(expected)
+    assert validator["sha256"] == hashlib.sha256(expected).hexdigest()
+
+
+def test_tampered_archived_blinding_validator_is_rejected(frozen_case):
+    archived = (
+        frozen_case["freeze_root"]
+        / "provenance"
+        / "build_human_eval_packet.py"
+    )
+    archived.write_bytes(archived.read_bytes() + b"\n# tampered\n")
+
+    with pytest.raises(ValueError, match="archived content validator fingerprint"):
+        _verify(frozen_case)
+
+
 def test_tampered_archived_freeze_producer_is_rejected(frozen_case):
     archived = (
         frozen_case["freeze_root"]

@@ -40,7 +40,7 @@ def _write_source(root: Path, variant: str, task_id: str, question: str) -> None
     report = root / "outputs" / run_id / "research_report.md"
     report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text(
-        f"# Synthetic report\n\n{variant} fixture for {task_id}.\n",
+        f"# Synthetic report\n\nNeutral fixture for {task_id}.\n",
         encoding="utf-8",
     )
     trace = root / "outputs" / "experiment_traces" / variant / f"{run_id}.json"
@@ -113,6 +113,25 @@ def _insert_duplicate_json_member(path: Path, needle: str, duplicate: str) -> No
     text = path.read_text(encoding="utf-8")
     assert needle in text
     path.write_text(text.replace(needle, f"{duplicate}, {needle}", 1), encoding="utf-8")
+
+
+def test_packet_verifier_rejects_coherently_rehashed_treatment_leakage(packet_case):
+    packet_path = packet_case["output_root"] / "packet.jsonl"
+    rows = [
+        json.loads(line)
+        for line in packet_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    rows[0]["report_markdown"] += "\n\nInternal variant_id=P6V."
+    packet_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False, sort_keys=True) for row in rows)
+        + "\n",
+        encoding="utf-8",
+    )
+    _refresh_artifact(packet_case, "packet")
+
+    with pytest.raises(ValueError, match="annotator-facing treatment leakage"):
+        _verify(packet_case)
 
 
 def test_packet_verifier_checks_source_mapping_and_artifact_fingerprints(packet_case):

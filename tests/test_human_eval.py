@@ -27,7 +27,7 @@ def _write_trace(
     report_md = report_dir / "research_report.md"
     if create_report:
         report_md.write_text(
-            f"# Report for {task_id}\n\nEvidence-backed report body from run {run_id}.\n",
+            f"# Report for {task_id}\n\nEvidence-backed synthetic report body.\n",
             encoding="utf-8",
         )
 
@@ -145,6 +145,97 @@ def test_build_packet_is_deterministic_and_blinds_variant_labels(tmp_path):
         "clarity_1_5",
         "notes",
     }
+
+
+def test_build_packet_rejects_treatment_leakage_before_publication(tmp_path):
+    trace_root = _write_complete_matrix(tmp_path)
+    leaked_report = tmp_path / "outputs" / "d3-main-01" / "research_report.md"
+    leaked_report.write_text(
+        "# Synthetic report\n\nInternal variant_id P6V must not reach annotators.\n",
+        encoding="utf-8",
+    )
+    output_root = tmp_path / "packet"
+
+    with pytest.raises(ValueError, match="annotator-facing treatment leakage"):
+        _build_packet(trace_root, output_root, tmp_path)
+
+    assert not output_root.exists()
+
+
+@pytest.mark.parametrize(
+    "leaked_text",
+    [
+        "Internal treatment _P6V_ must remain hidden.",
+        "Internal treatment Ｐ６Ｖ must remain hidden.",
+        "Internal treatment P\u200b6V must remain hidden.",
+        "Internal treatment P**6**V must remain hidden.",
+        "Internal treatment D&#51; must remain hidden.",
+        "Internal treatment P[6](https://example.test)V must remain hidden.",
+        "Internal treatment <span>P</span>6V must remain hidden.",
+        "Internal treatment ![P](missing.png)6V must remain hidden.",
+        '<input type="button" value="P&#54;V">',
+        '<abbr title="P&#54;V">Treatment</abbr>',
+        "P<span hidden>x</span>6V",
+        'P<span style="display:none">x</span>6V',
+        "P<script>0</script>6V",
+    ],
+    ids=[
+        "markdown-underscores",
+        "fullwidth",
+        "zero-width",
+        "markdown-emphasis",
+        "html-entity",
+        "markdown-link",
+        "inline-html",
+        "image-alt-text",
+        "input-value",
+        "title-tooltip",
+        "hidden-html",
+        "css-hidden-html",
+        "active-html",
+    ],
+)
+def test_blinding_audit_rejects_rendered_treatment_label_variants(leaked_text):
+    with pytest.raises(ValueError, match="annotator-facing treatment leakage"):
+        packet_builder.validate_annotator_facing_content(
+            [
+                {
+                    "blind_id": "H001",
+                    "question": "Synthetic question?",
+                    "report_markdown": leaked_text,
+                }
+            ],
+            label="synthetic packet",
+        )
+
+
+def test_blinding_audit_preserves_markdown_block_boundaries():
+    packet_builder.validate_annotator_facing_content(
+        [
+            {
+                "blind_id": "H001",
+                "question": "Synthetic question?",
+                "report_markdown": "A paragraph ending in P\n\n6V starts another paragraph.",
+            }
+        ],
+        label="synthetic packet",
+    )
+
+
+def test_blinding_audit_rejects_raw_html_even_across_table_cells():
+    with pytest.raises(ValueError, match="raw HTML is not permitted"):
+        packet_builder.validate_annotator_facing_content(
+            [
+                {
+                    "blind_id": "H001",
+                    "question": "Synthetic question?",
+                    "report_markdown": (
+                        "<table><tr><td>P</td><td>6V</td></tr></table>"
+                    ),
+                }
+            ],
+            label="synthetic packet",
+        )
 
 
 @pytest.mark.parametrize(

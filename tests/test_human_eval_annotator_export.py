@@ -95,6 +95,36 @@ def _opened_directory(directory_fd: int) -> Path:
     return Path(os.readlink(f"/proc/self/fd/{directory_fd}"))
 
 
+def test_bundle_verifier_rejects_coherently_rehashed_treatment_leakage(packet_case):
+    _export(packet_case)
+    packet_path = packet_case["export_root"] / "packet.jsonl"
+    rows = [
+        json.loads(line)
+        for line in packet_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    rows[0]["report_markdown"] += "\n\nInternal variant_id=P6V."
+    packet_bytes = (
+        "\n".join(json.dumps(row, ensure_ascii=False, sort_keys=True) for row in rows)
+        + "\n"
+    ).encode("utf-8")
+    packet_path.write_bytes(packet_bytes)
+
+    manifest_path = packet_case["export_root"] / "annotator_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"]["packet"] = {
+        "path": "packet.jsonl",
+        **exporter._fingerprint(packet_bytes),
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="annotator-facing treatment leakage"):
+        exporter.verify_annotator_bundle(packet_case["export_root"])
+
+
 def test_repository_annotator_guide_is_frozen_and_treatment_blind():
     guide = getattr(exporter, "DEFAULT_ANNOTATOR_GUIDE", Path("missing-guide"))
     expected_sha256 = getattr(exporter, "FROZEN_ANNOTATOR_GUIDE_SHA256", None)

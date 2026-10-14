@@ -14,8 +14,13 @@ import csv
 import hashlib
 import json
 import random
+import re
+import unicodedata
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import unquote
+
+from markdown_it import MarkdownIt
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -59,6 +64,142 @@ RATING_FIELDS = (
     "clarity_1_5",
     "notes",
 )
+
+_TREATMENT_LABEL_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:P6V|P6|D6|D3)(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+_COORDINATOR_MARKER_RE = re.compile(
+    r"(?:variant_id|run_id|trace_path|report_path|blinding_key\.csv|experiment_traces)",
+    re.IGNORECASE,
+)
+_MARKDOWN_RENDERER = MarkdownIt("commonmark", {"html": True})
+_BLOCK_TAGS = frozenset(
+    {
+        "address",
+        "article",
+        "aside",
+        "blockquote",
+        "br",
+        "div",
+        "dl",
+        "dt",
+        "dd",
+        "figcaption",
+        "figure",
+        "footer",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "hr",
+        "li",
+        "main",
+        "nav",
+        "ol",
+        "p",
+        "pre",
+        "section",
+        "table",
+        "tbody",
+        "td",
+        "tfoot",
+        "th",
+        "thead",
+        "tr",
+        "ul",
+    }
+)
+
+
+class _RenderedTextParser(HTMLParser):
+    """Collect browser-visible text while preserving inline adjacency."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.attribute_values: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        self.attribute_values.extend(
+            value for _, value in attrs if isinstance(value, str) and value
+        )
+        if tag in _BLOCK_TAGS:
+            self.parts.append(" ")
+        if tag == "img":
+            alt_text = next(
+                (value for name, value in attrs if name == "alt"),
+                "",
+            )
+            self.parts.append(alt_text or "")
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _BLOCK_TAGS:
+            self.parts.append(" ")
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+
+def _canonical_audit_text(text: str) -> str:
+    return "".join(
+        character
+        for character in unicodedata.normalize("NFKC", text)
+        if unicodedata.category(character) != "Cf"
+    )
+
+
+def _rendered_markdown_text(text: str) -> str:
+    parser = _RenderedTextParser()
+    parser.feed(_MARKDOWN_RENDERER.render(text))
+    parser.close()
+    return "\n".join(("".join(parser.parts), *parser.attribute_values))
+
+
+def _contains_raw_html(text: str) -> bool:
+    for token in _MARKDOWN_RENDERER.parse(text):
+        if token.type in {"html_block", "html_inline"}:
+            return True
+        if any(
+            child.type in {"html_block", "html_inline"}
+            for child in (token.children or ())
+        ):
+            return True
+    return False
+
+
+def validate_annotator_facing_content(rows: list[dict], *, label: str) -> None:
+    """Reject treatment/coordinator markers embedded in annotator-visible text."""
+    for index, row in enumerate(rows, start=1):
+        blind_id = str(row.get("blind_id") or f"row {index}").strip()
+        for field in ("question", "report_markdown"):
+            text = row.get(field)
+            if not isinstance(text, str):
+                continue
+            if _contains_raw_html(text):
+                raise ValueError(
+                    "annotator-facing treatment leakage risk in "
+                    f"{label} {blind_id} {field}: raw HTML is not permitted"
+                )
+            for audit_text in (
+                _canonical_audit_text(text),
+                _canonical_audit_text(_rendered_markdown_text(text)),
+            ):
+                match = _COORDINATOR_MARKER_RE.search(
+                    audit_text
+                ) or _TREATMENT_LABEL_RE.search(audit_text)
+                if match:
+                    raise ValueError(
+                        "annotator-facing treatment leakage in "
+                        f"{label} {blind_id} {field}: "
+                        f"forbidden marker {match.group(0)!r}"
+                    )
 
 
 def _load_json_object(content: bytes, *, label: str) -> dict:
@@ -370,6 +511,8 @@ def build_packet(
                 "report": record["report_fingerprint"],
             }
         )
+
+    validate_annotator_facing_content(packet_rows, label="packet")
 
     if output_root.is_symlink():
         raise ValueError(f"human-evaluation output root must not be a symbolic link: {output_root}")

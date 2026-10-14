@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import freeze_human_eval_ratings as freeze_module
 from scripts.freeze_human_eval_ratings import (
     DEFAULT_PROTOCOL,
     RATING_FIELDS,
@@ -171,6 +172,43 @@ def test_unknown_blind_id_fails_closed(tmp_path: Path):
             protocol_path=protocol,
             output_root=tmp_path / "freeze",
         )
+
+
+def test_freeze_rejects_treatment_leakage_before_reading_ratings(
+    tmp_path: Path, monkeypatch
+):
+    packet = _packet(tmp_path)
+    rows = [
+        json.loads(line)
+        for line in packet.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    rows[0]["report_markdown"] = "Internal treatment P6V must remain hidden."
+    packet.write_text(
+        "\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    protocol = _protocol(tmp_path)
+    ratings = _ratings(tmp_path, "ratings.csv", [_row("ann-a", "H001")])
+    ratings_read = False
+
+    def reject_rating_read(*args, **kwargs):
+        nonlocal ratings_read
+        ratings_read = True
+        raise AssertionError("ratings must not be read after packet leakage")
+
+    monkeypatch.setattr(freeze_module, "_load_ratings", reject_rating_read)
+
+    with pytest.raises(ValueError, match="annotator-facing treatment leakage"):
+        freeze_ratings(
+            [ratings],
+            packet_path=packet,
+            protocol_path=protocol,
+            output_root=tmp_path / "freeze",
+        )
+
+    assert ratings_read is False
+    assert not (tmp_path / "freeze").exists()
 
 
 @pytest.mark.parametrize(

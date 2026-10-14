@@ -89,7 +89,7 @@ def _reject_undeclared_freeze_sidecars(freeze_root):
     if provenance_root.is_dir() and not provenance_root.is_symlink():
         extra_names = {
             child.name for child in provenance_root.iterdir()
-        } - {"freeze_human_eval_ratings.py"}
+        } - {"freeze_human_eval_ratings.py", "build_human_eval_packet.py"}
         if extra_names:
             raise ValueError(
                 "provenance archive contents mismatch: "
@@ -267,20 +267,24 @@ def analyze(
                     blind_freeze / "raw_rating_inputs" / child.name,
                     label=f"blinded raw rating archive {child.name}",
                 )
-        # Preserve the exact archived freeze implementation inside the same
-        # blinded snapshot. The independent verifier requires these bytes,
-        # not the current producer implementation or a later source revision.
+        # Preserve the exact archived freeze implementation and shared packet
+        # content validator inside the same blinded snapshot. The independent
+        # verifier requires these bytes, not a later source revision.
         producer_dir = freeze_root / "provenance"
         if producer_dir.exists() or producer_dir.is_symlink():
             if producer_dir.is_symlink() or not producer_dir.is_dir():
                 raise ValueError(
                     f"blinded freeze provenance must be a regular directory: {producer_dir}"
                 )
-            _snapshot_file(
-                producer_dir / "freeze_human_eval_ratings.py",
-                blind_freeze / "provenance" / "freeze_human_eval_ratings.py",
-                label="blinded freeze producer",
-            )
+            for filename, label in (
+                ("freeze_human_eval_ratings.py", "blinded freeze producer"),
+                ("build_human_eval_packet.py", "blinded content validator"),
+            ):
+                _snapshot_file(
+                    producer_dir / filename,
+                    blind_freeze / "provenance" / filename,
+                    label=label,
+                )
         # Legacy/malformed freezes without a producer are rejected by the
         # independent verifier, not backfilled with today's source code.
         # Carry retained governing inputs through the same blinded snapshot;

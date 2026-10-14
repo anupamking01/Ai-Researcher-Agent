@@ -267,6 +267,7 @@ def _read_jsonl_packet(content: bytes) -> list[dict]:
         rows.append(row)
     if not rows:
         raise ValueError("annotator packet contains no reports")
+    build.validate_annotator_facing_content(rows, label="annotator packet")
     return rows
 
 

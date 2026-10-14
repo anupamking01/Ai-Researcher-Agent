@@ -25,6 +25,8 @@ import unicodedata
 from itertools import combinations
 from pathlib import Path
 
+from scripts import build_human_eval_packet as packet_build
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PACKET = REPO_ROOT / "outputs" / "human_eval" / "packet.jsonl"
@@ -128,6 +130,7 @@ def _packet_blind_ids(packet_path: Path, *, content: bytes | None = None) -> lis
         content = packet_path.read_bytes()
 
     ids: list[str] = []
+    packet_rows: list[dict] = []
     seen: set[str] = set()
     for line_number, raw in enumerate(content.decode("utf-8").splitlines(), start=1):
         if not raw.strip():
@@ -150,9 +153,13 @@ def _packet_blind_ids(packet_path: Path, *, content: bytes | None = None) -> lis
             raise ValueError(f"duplicate blind_id in packet: {blind_id}")
         seen.add(blind_id)
         ids.append(blind_id)
+        packet_rows.append(row)
 
     if not ids:
         raise ValueError("blinded packet contains no evaluation items")
+    packet_build.validate_annotator_facing_content(
+        packet_rows, label="blinded packet"
+    )
     return ids
 
 
@@ -662,6 +669,7 @@ def freeze_ratings(
     annotator_guide_path = Path(annotator_guide_path)
     output_root = Path(output_root)
     producer_content = Path(__file__).resolve().read_bytes()
+    content_validator_content = Path(packet_build.__file__).resolve().read_bytes()
 
     if not protocol_path.is_file():
         raise ValueError(f"frozen human-evaluation protocol is missing: {protocol_path}")
@@ -751,6 +759,10 @@ def freeze_ratings(
         producer_archive = staging_root / producer_rel
         with producer_archive.open("xb") as handle:
             handle.write(producer_content)
+        content_validator_rel = "provenance/build_human_eval_packet.py"
+        content_validator_archive = staging_root / content_validator_rel
+        with content_validator_archive.open("xb") as handle:
+            handle.write(content_validator_content)
 
         # Retain the same governing bytes captured before ratings processing.
         # Do not reopen working files here: they may have changed or disappeared.
@@ -799,6 +811,11 @@ def freeze_ratings(
                 "path": producer_rel,
                 "bytes": len(producer_content),
                 "sha256": hashlib.sha256(producer_content).hexdigest(),
+            },
+            "content_validator": {
+                "path": content_validator_rel,
+                "bytes": len(content_validator_content),
+                "sha256": hashlib.sha256(content_validator_content).hexdigest(),
             },
             "rating_inputs": sources,
             "frozen_ratings": {

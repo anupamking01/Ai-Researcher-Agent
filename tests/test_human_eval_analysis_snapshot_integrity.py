@@ -90,7 +90,7 @@ def analysis_case(tmp_path: Path, monkeypatch):
                     "blind_id": f"H{index:03d}",
                     "task_id": "main-01",
                     "question": "Synthetic question?",
-                    "report_markdown": f"Synthetic report {variant}",
+                    "report_markdown": f"Synthetic report for main item {index}",
                 },
                 sort_keys=True,
             )

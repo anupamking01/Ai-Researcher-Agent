@@ -119,6 +119,7 @@ def _read_packet(content: bytes, *, task_manifest: dict) -> list[dict]:
         )
     if not rows:
         raise ValueError("packet.jsonl contains no reports")
+    build.validate_annotator_facing_content(rows, label="packet.jsonl")
     return rows
 
 

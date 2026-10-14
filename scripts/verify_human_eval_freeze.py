@@ -98,7 +98,7 @@ def _verify_bundle_layout(freeze_root: Path, manifest: dict) -> None:
         raise ValueError(f"provenance archive must be a regular directory: {provenance_root}")
     extra_names = {
         child.name for child in provenance_root.iterdir()
-    } - {"freeze_human_eval_ratings.py"}
+    } - {"freeze_human_eval_ratings.py", "build_human_eval_packet.py"}
     if extra_names:
         raise ValueError(
             "provenance archive contents mismatch: "
@@ -282,6 +282,27 @@ def verify_frozen_snapshot(
         {"bytes": producer_entry.get("bytes"), "sha256": producer_entry.get("sha256")},
         _fingerprint(producer_content),
         label="archived freeze producer fingerprint",
+    )
+
+    validator_entry = manifest.get("content_validator")
+    if not isinstance(validator_entry, dict):
+        raise ValueError("freeze manifest content_validator entry must be an object")
+    _require_equal(
+        validator_entry.get("path"),
+        "provenance/build_human_eval_packet.py",
+        label="content validator manifest path",
+    )
+    validator_path = freeze_root / "provenance" / "build_human_eval_packet.py"
+    validator_content = _require_regular_file(
+        validator_path, label="archived content validator"
+    )
+    _require_equal(
+        {
+            "bytes": validator_entry.get("bytes"),
+            "sha256": validator_entry.get("sha256"),
+        },
+        _fingerprint(validator_content),
+        label="archived content validator fingerprint",
     )
 
     rating_entries = manifest.get("rating_inputs")
