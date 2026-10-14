@@ -3,7 +3,8 @@
 The coordinator packet contains a treatment mapping and blinding metadata that
 must not be distributed to annotators. This utility snapshots the coordinator
 packet, verifies that snapshot with the existing packet verifier, then exports
-only packet.jsonl and ratings_template.csv plus a seed-free annotator manifest.
+only packet.jsonl, ratings_template.csv, the frozen treatment-blind annotator
+guide, and a seed-free annotator manifest.
 
 No ratings are generated, no treatment identity is exposed, and no model/API
 calls are made.
@@ -30,8 +31,17 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PACKET_ROOT = build.DEFAULT_OUTPUT_ROOT
 DEFAULT_OUTPUT_ROOT = DEFAULT_PACKET_ROOT / "annotator-bundle-v1"
 DEFAULT_TASK_MANIFEST = build.DEFAULT_TASK_MANIFEST
+DEFAULT_ANNOTATOR_GUIDE = REPO_ROOT / "paper" / "HUMAN_EVAL_ANNOTATOR_GUIDE.md"
+FROZEN_ANNOTATOR_GUIDE_SHA256 = (
+    "3e27ef38231ed70fe36370af31ced7762a253a72dc5cc4997d8ef62d0a6e3370"
+)
 COORDINATOR_ARTIFACTS = ("packet.jsonl", "ratings_template.csv", "blinding_key.csv", "manifest.json")
-ANNOTATOR_ARTIFACTS = ("packet.jsonl", "ratings_template.csv", "annotator_manifest.json")
+ANNOTATOR_ARTIFACTS = (
+    "packet.jsonl",
+    "ratings_template.csv",
+    "annotator_instructions.md",
+    "annotator_manifest.json",
+)
 DISTRIBUTION_NOTE = (
     "This directory is safe for annotator distribution only after this "
     "manifest verifies. It intentionally excludes blinding_key.csv and "
@@ -48,6 +58,17 @@ def _regular_bytes(path: Path, *, label: str) -> bytes:
 
 def _fingerprint(content: bytes) -> dict:
     return {"bytes": len(content), "sha256": hashlib.sha256(content).hexdigest()}
+
+
+def _frozen_guide_bytes(path: Path) -> bytes:
+    content = _regular_bytes(path, label="frozen annotator guide")
+    actual = hashlib.sha256(content).hexdigest()
+    if actual != FROZEN_ANNOTATOR_GUIDE_SHA256:
+        raise ValueError(
+            "frozen annotator guide fingerprint mismatch: "
+            f"expected {FROZEN_ANNOTATOR_GUIDE_SHA256}, got {actual}"
+        )
+    return content
 
 
 def _unique_json_object(label: str):
@@ -190,6 +211,7 @@ def _source_bound_receipt(
     receipt: dict,
     coordinator_bytes: dict[str, bytes],
     annotator_bytes: dict[str, bytes],
+    guide_bytes: bytes,
 ) -> dict:
     """Bind a locally verified distribution snapshot to its coordinator source."""
     for name in ("packet.jsonl", "ratings_template.csv"):
@@ -197,12 +219,17 @@ def _source_bound_receipt(
             raise ValueError(
                 f"annotator {name} does not match the verified coordinator source"
             )
+    if annotator_bytes["annotator_instructions.md"] != guide_bytes:
+        raise ValueError(
+            "annotator instructions do not match the frozen annotator guide source"
+        )
     return {
         **receipt,
         "source_bound_to_verified_coordinator": True,
         "coordinator_manifest_sha256": _fingerprint(
             coordinator_bytes["manifest.json"]
         )["sha256"],
+        "annotator_guide_sha256": _fingerprint(guide_bytes)["sha256"],
     }
 
 
@@ -341,13 +368,27 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
         raise ValueError(f"annotator manifest leaks coordinator metadata: {leaked}")
 
     artifacts = manifest.get("artifacts")
-    if not isinstance(artifacts, dict) or set(artifacts) != {"packet", "ratings_template"}:
+    if not isinstance(artifacts, dict) or set(artifacts) != {
+        "packet",
+        "ratings_template",
+        "annotator_instructions",
+    }:
         raise ValueError("annotator manifest artifact contract mismatch")
+    guide_bytes = _regular_bytes(
+        output_root / "annotator_instructions.md",
+        label="annotator instructions",
+    )
+    if _fingerprint(guide_bytes)["sha256"] != FROZEN_ANNOTATOR_GUIDE_SHA256:
+        raise ValueError("annotator instructions do not match the frozen guide")
     expected_artifacts = {
         "packet": {"path": "packet.jsonl", **_fingerprint(packet_bytes)},
         "ratings_template": {
             "path": "ratings_template.csv",
             **_fingerprint(template_bytes),
+        },
+        "annotator_instructions": {
+            "path": "annotator_instructions.md",
+            **_fingerprint(guide_bytes),
         },
     }
     if artifacts != expected_artifacts:
@@ -374,6 +415,7 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
         "coordinator_artifacts_included": False,
         "packet_sha256": _fingerprint(packet_bytes)["sha256"],
         "ratings_template_sha256": _fingerprint(template_bytes)["sha256"],
+        "annotator_guide_sha256": _fingerprint(guide_bytes)["sha256"],
     }
 
 
@@ -383,12 +425,14 @@ def verify_annotator_bundle_against_source(
     output_root: Path = DEFAULT_OUTPUT_ROOT,
     task_manifest_path: Path = DEFAULT_TASK_MANIFEST,
     repo_root: Path = REPO_ROOT,
+    annotator_guide_path: Path = DEFAULT_ANNOTATOR_GUIDE,
 ) -> dict:
     """Verify a distribution bundle against one verified coordinator snapshot."""
     packet_root = Path(packet_root)
     output_root = Path(output_root)
     task_manifest_path = Path(task_manifest_path)
     repo_root = Path(repo_root)
+    guide_bytes = _frozen_guide_bytes(Path(annotator_guide_path))
     if packet_root.is_symlink() or not packet_root.is_dir():
         raise ValueError(f"coordinator packet root must be a regular directory: {packet_root}")
     if output_root.is_symlink() or not output_root.is_dir():
@@ -411,6 +455,7 @@ def verify_annotator_bundle_against_source(
             receipt=receipt,
             coordinator_bytes=coordinator_bytes,
             annotator_bytes=annotator_bytes,
+            guide_bytes=guide_bytes,
         )
 
 
@@ -420,12 +465,14 @@ def export_annotator_bundle(
     output_root: Path = DEFAULT_OUTPUT_ROOT,
     task_manifest_path: Path = DEFAULT_TASK_MANIFEST,
     repo_root: Path = REPO_ROOT,
+    annotator_guide_path: Path = DEFAULT_ANNOTATOR_GUIDE,
 ) -> dict:
     """Snapshot, verify, and export only annotator-facing packet artifacts."""
     packet_root = Path(packet_root)
     output_root = Path(output_root)
     task_manifest_path = Path(task_manifest_path)
     repo_root = Path(repo_root)
+    guide_bytes = _frozen_guide_bytes(Path(annotator_guide_path))
 
     if packet_root.is_symlink() or not packet_root.is_dir():
         raise ValueError(f"coordinator packet root must be a regular directory: {packet_root}")
@@ -462,6 +509,11 @@ def export_annotator_bundle(
         try:
             _write_exclusive_at(output_fd, "packet.jsonl", packet_bytes)
             _write_exclusive_at(output_fd, "ratings_template.csv", template_bytes)
+            _write_exclusive_at(
+                output_fd,
+                "annotator_instructions.md",
+                guide_bytes,
+            )
             manifest = {
                 "schema_version": 1,
                 "study_id": "budget-main-v1",
@@ -477,6 +529,10 @@ def export_annotator_bundle(
                         "path": "ratings_template.csv",
                         **_fingerprint(template_bytes),
                     },
+                    "annotator_instructions": {
+                        "path": "annotator_instructions.md",
+                        **_fingerprint(guide_bytes),
+                    },
                 },
                 "distribution_note": DISTRIBUTION_NOTE,
             }
@@ -488,10 +544,10 @@ def export_annotator_bundle(
                 "annotator_manifest.json",
                 manifest_bytes,
             )
-            # Verify one captured publication revision and prove that its two
-            # annotator-facing byte streams still equal the coordinator snapshot
-            # verified above. Local manifest consistency alone cannot establish
-            # source identity after a coherent packet+manifest replacement.
+            # Verify one captured publication revision and prove that its
+            # coordinator-generated byte streams and frozen guide still equal
+            # their verified sources. Local manifest consistency alone cannot
+            # establish source identity after a coherent artifact replacement.
             annotator_snapshot = Path(tmp_name) / "annotator"
             annotator_snapshot.mkdir()
             _require_directory_binding(staging_root, output_fd)
@@ -508,6 +564,7 @@ def export_annotator_bundle(
                 receipt=receipt,
                 coordinator_bytes=captured,
                 annotator_bytes=annotator_bytes,
+                guide_bytes=guide_bytes,
             )
             _require_directory_binding(staging_root, output_fd)
             _publish_directory_noreplace(staging_root, output_root)
@@ -526,6 +583,11 @@ def main() -> int:
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--task-manifest", type=Path, default=DEFAULT_TASK_MANIFEST)
     parser.add_argument("--repo-root", type=Path, default=REPO_ROOT)
+    parser.add_argument(
+        "--annotator-guide",
+        type=Path,
+        default=DEFAULT_ANNOTATOR_GUIDE,
+    )
     verification = parser.add_mutually_exclusive_group()
     verification.add_argument("--verify-only", action="store_true")
     verification.add_argument("--verify-against-source", action="store_true")
@@ -537,6 +599,7 @@ def main() -> int:
                 output_root=args.output_root,
                 task_manifest_path=args.task_manifest,
                 repo_root=args.repo_root,
+                annotator_guide_path=args.annotator_guide,
             )
         elif args.verify_only:
             receipt = verify_annotator_bundle(args.output_root)
@@ -546,6 +609,7 @@ def main() -> int:
                 output_root=args.output_root,
                 task_manifest_path=args.task_manifest,
                 repo_root=args.repo_root,
+                annotator_guide_path=args.annotator_guide,
             )
     except (OSError, ValueError) as exc:
         raise SystemExit(f"HUMAN EVAL ANNOTATOR EXPORT: FAIL: {exc}") from exc

@@ -29,6 +29,8 @@ def _write_bundle(root: Path, packet_rows: list[dict], *, template_ids=None, n_r
         writer.writerow({"blind_id": str(blind_id)})
     template_bytes = output.getvalue().encode("utf-8")
     (root / "ratings_template.csv").write_bytes(template_bytes)
+    guide_bytes = exporter.DEFAULT_ANNOTATOR_GUIDE.read_bytes()
+    (root / "annotator_instructions.md").write_bytes(guide_bytes)
     manifest = {
         "schema_version": 1,
         "study_id": "budget-main-v1",
@@ -38,6 +40,10 @@ def _write_bundle(root: Path, packet_rows: list[dict], *, template_ids=None, n_r
         "artifacts": {
             "packet": {"path": "packet.jsonl", **exporter._fingerprint(packet_bytes)},
             "ratings_template": {"path": "ratings_template.csv", **exporter._fingerprint(template_bytes)},
+            "annotator_instructions": {
+                "path": "annotator_instructions.md",
+                **exporter._fingerprint(guide_bytes),
+            },
         },
     }
     (root / "annotator_manifest.json").write_text(
@@ -74,6 +80,9 @@ def test_standalone_bundle_accepts_valid_synthetic_packet(tmp_path):
     receipt = exporter.verify_annotator_bundle(root)
     assert receipt["n_reports"] == 2
     assert receipt["coordinator_artifacts_included"] is False
+    assert receipt["annotator_guide_sha256"] == (
+        exporter.FROZEN_ANNOTATOR_GUIDE_SHA256
+    )
 
 
 @pytest.mark.parametrize("duplicate_key", ["blind_id", r"bl\u0069nd_id"])

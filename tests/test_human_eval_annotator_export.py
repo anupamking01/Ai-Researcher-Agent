@@ -1,4 +1,5 @@
 """Synthetic checks for annotator-safe human-evaluation distribution bundles."""
+import hashlib
 import json
 import os
 import shutil
@@ -94,6 +95,40 @@ def _opened_directory(directory_fd: int) -> Path:
     return Path(os.readlink(f"/proc/self/fd/{directory_fd}"))
 
 
+def test_repository_annotator_guide_is_frozen_and_treatment_blind():
+    guide = getattr(exporter, "DEFAULT_ANNOTATOR_GUIDE", Path("missing-guide"))
+    expected_sha256 = getattr(exporter, "FROZEN_ANNOTATOR_GUIDE_SHA256", None)
+
+    assert guide.is_file()
+    content = guide.read_bytes()
+    assert hashlib.sha256(content).hexdigest() == expected_sha256
+    text = content.decode("utf-8")
+    for forbidden in ("D3", "D6", "P6", "P6V", "blinding_key.csv"):
+        assert forbidden not in text
+    for required in (
+        "Correctness",
+        "Completeness",
+        "Source quality",
+        "Synthesis / reasoning",
+        "Clarity",
+    ):
+        assert required in text
+
+    protocol = (exporter.REPO_ROOT / "paper" / "HUMAN_EVAL_PROTOCOL.md").read_text(
+        encoding="utf-8"
+    )
+    for rubric_anchor in (
+        "major factual errors, contradictions, or misleading conclusions",
+        "misses central requirements or leaves major aspects unanswered",
+        "relies mainly on weak, irrelevant, unverifiable, or clearly",
+        "fragmented, contradictory, or unsupported reasoning",
+        "confusing, disorganized, repetitive, or difficult to interpret",
+    ):
+        assert rubric_anchor in text
+        assert rubric_anchor in protocol
+    assert "annotator_instructions.md" in protocol
+
+
 def test_export_contains_only_annotator_safe_artifacts(packet_case):
     receipt = _export(packet_case)
 
@@ -101,9 +136,11 @@ def test_export_contains_only_annotator_safe_artifacts(packet_case):
     assert receipt["coordinator_artifacts_included"] is False
     assert receipt["source_bound_to_verified_coordinator"] is True
     assert len(receipt["coordinator_manifest_sha256"]) == 64
+    assert len(receipt["annotator_guide_sha256"]) == 64
     assert {path.name for path in packet_case["export_root"].iterdir()} == {
         "packet.jsonl",
         "ratings_template.csv",
+        "annotator_instructions.md",
         "annotator_manifest.json",
     }
     manifest = json.loads(
@@ -115,6 +152,12 @@ def test_export_contains_only_annotator_safe_artifacts(packet_case):
     assert "blinding_key" not in manifest
     assert "variant_id" not in manifest
     assert "run_id" not in manifest
+    assert manifest["artifacts"]["annotator_instructions"]["path"] == (
+        "annotator_instructions.md"
+    )
+    assert (
+        packet_case["export_root"] / "annotator_instructions.md"
+    ).read_bytes() == exporter.DEFAULT_ANNOTATOR_GUIDE.read_bytes()
 
 
 def test_exported_bytes_come_from_same_snapshot_that_was_verified(packet_case, monkeypatch):
@@ -477,6 +520,43 @@ def test_bundle_verifier_rejects_manifest_fingerprint_drift(packet_case):
 
     with pytest.raises(ValueError, match="fingerprint mismatch"):
         exporter.verify_annotator_bundle(packet_case["export_root"])
+
+
+def test_bundle_verifier_rejects_coherently_rehashed_guide_tamper(packet_case):
+    _export(packet_case)
+    guide = packet_case["export_root"] / "annotator_instructions.md"
+    guide_bytes = guide.read_bytes() + b"\nSynthetic changed instruction.\n"
+    guide.write_bytes(guide_bytes)
+
+    manifest_path = packet_case["export_root"] / "annotator_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"]["annotator_instructions"] = {
+        "path": "annotator_instructions.md",
+        **exporter._fingerprint(guide_bytes),
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="do not match the frozen guide"):
+        exporter.verify_annotator_bundle(packet_case["export_root"])
+
+
+def test_export_rejects_changed_guide_before_staging(packet_case, tmp_path):
+    changed_guide = tmp_path / "changed-guide.md"
+    changed_guide.write_bytes(exporter.DEFAULT_ANNOTATOR_GUIDE.read_bytes() + b"\n")
+
+    with pytest.raises(ValueError, match="guide fingerprint mismatch"):
+        exporter.export_annotator_bundle(
+            packet_root=packet_case["packet_root"],
+            output_root=packet_case["export_root"],
+            task_manifest_path=packet_case["task_manifest"],
+            repo_root=packet_case["repo_root"],
+            annotator_guide_path=changed_guide,
+        )
+
+    assert not packet_case["export_root"].exists()
 
 
 def test_verify_only_cli_reports_no_coordinator_artifacts(packet_case):

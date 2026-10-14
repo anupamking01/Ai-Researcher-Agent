@@ -4,6 +4,11 @@ Status: **protocol frozen; human ratings not yet collected**.
 
 Study: `budget-main-v1`
 
+Distribution-only revision: **2026-10-14, before collection of any human
+ratings**. This revision adds a treatment-blind annotator guide to the safe
+distribution bundle. It does not change the rubric, assignment, estimands,
+missingness rules, agreement statistics, or analysis plan.
+
 This protocol defines a blinded human evaluation layer for the D3, D6, P6, and P6V research-agent variants. It complements the common post-hoc support evaluator by measuring dimensions that automated claim-support scoring does not fully capture: overall correctness, completeness, source quality, synthesis/reasoning, and clarity.
 
 No human-quality result should be reported until real annotations have been collected under this protocol. Missing ratings must never be imputed as positive evidence, and synthetic or model-generated ratings must not be presented as human judgments.
@@ -47,7 +52,10 @@ It writes four files under `outputs/human_eval/`:
 
 ### Blinding rule
 
-Annotators receive only `packet.jsonl` and a copy of `ratings_template.csv`. `blinding_key.csv` remains inaccessible to annotators until all scores intended for the analysis are frozen.
+Annotators receive only `packet.jsonl`, a copy of `ratings_template.csv`, and
+the frozen treatment-blind `annotator_instructions.md` guide. `blinding_key.csv`
+remains inaccessible to annotators until all scores intended for the analysis
+are frozen.
 
 The coordinator must not rename files, add treatment hints, or disclose expected hypotheses during annotation.
 
