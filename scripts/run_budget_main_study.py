@@ -62,7 +62,7 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict:
     return payload
 
 
-def _task_file_label(path: Path) -> str:
+def _file_label(path: Path) -> str:
     resolved = path.resolve()
     try:
         return resolved.relative_to(REPO_ROOT.resolve()).as_posix()
@@ -116,15 +116,78 @@ def _load_task_file(path: Path) -> tuple[str, list[dict], dict]:
                 )
 
     snapshot = {
-        "path": _task_file_label(path),
+        "path": _file_label(path),
         "size_bytes": len(raw),
         "sha256": hashlib.sha256(raw).hexdigest(),
     }
     return task_set_id, tasks, snapshot
 
 
-def _load_pricing() -> dict:
-    return json.loads(PRICING_FILE.read_text(encoding="utf-8"))
+def _load_pricing(path: Path) -> tuple[dict, dict]:
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise SystemExit(f"Cannot read pricing file {path}: {exc}") from exc
+    try:
+        payload = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise SystemExit(f"Invalid pricing file {path}: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise SystemExit(f"Invalid pricing file {path}: top level must be an object")
+    if payload.get("unit") != "per_1m_text_tokens":
+        raise SystemExit(
+            f"Invalid pricing file {path}: unit must equal per_1m_text_tokens"
+        )
+    models = payload.get("models")
+    if not isinstance(models, dict) or not models:
+        raise SystemExit(
+            f"Invalid pricing file {path}: models must be a non-empty object"
+        )
+    for model, rates in models.items():
+        if not isinstance(model, str) or not model.strip() or model != model.strip():
+            raise SystemExit(
+                f"Invalid pricing file {path}: model name must be a non-empty "
+                "string without surrounding whitespace"
+            )
+        if not isinstance(rates, dict):
+            raise SystemExit(
+                f"Invalid pricing file {path}: model {model} must be an object"
+            )
+        for field in ("input", "output"):
+            value = rates.get(field)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                raise SystemExit(
+                    f"Invalid pricing file {path}: model {model} {field} must be "
+                    "a finite non-negative number"
+                )
+        if "cached_input" in rates:
+            value = rates["cached_input"]
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                raise SystemExit(
+                    f"Invalid pricing file {path}: model {model} cached_input "
+                    "must be a finite non-negative number"
+                )
+
+    snapshot = {
+        "path": _file_label(path),
+        "size_bytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+    return payload, snapshot
 
 
 def _trace_cost_usd(path: Path, pricing: dict) -> float:
@@ -180,10 +243,17 @@ async def main() -> None:
         if missing:
             raise SystemExit(f"Unknown task IDs: {sorted(missing)}")
 
+    pricing, pricing_snapshot = _load_pricing(PRICING_FILE)
+    for env_name in ("SMART_LLM_MODEL", "FAST_LLM_MODEL"):
+        model = os.environ[env_name]
+        if model not in pricing["models"]:
+            raise SystemExit(
+                f"Pricing file {PRICING_FILE} has no rate for {env_name}={model}"
+            )
+
     from logic.experiment import ExperimentConfig
     from logic.run import run_agent
 
-    pricing = _load_pricing()
     base = ExperimentConfig.from_variant("D3")
     manifest = {
         "schema_version": 1,
@@ -206,7 +276,9 @@ async def main() -> None:
         "browse_timeout_seconds": base.browse_timeout_seconds,
         "run_timeout_seconds": base.run_timeout_seconds,
         "max_concurrent_browses": base.max_concurrent_browses,
-        "pricing_file": str(PRICING_FILE.relative_to(REPO_ROOT)),
+        "pricing_file": pricing_snapshot["path"],
+        "pricing_file_size_bytes": pricing_snapshot["size_bytes"],
+        "pricing_file_sha256": pricing_snapshot["sha256"],
         "budget_note": "Treatment cap and evaluator reserve are separate safeguards; both use frozen uncached rates.",
     }
     _write_json("main_study_manifest.json", manifest)

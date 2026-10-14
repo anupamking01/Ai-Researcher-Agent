@@ -108,7 +108,19 @@ def test_main_study_manifest_records_task_snapshot_before_execution(tmp_path, mo
     raw = _write_payload(task_file, _valid_payload())
     pricing_file = tmp_path / "experiments" / "pricing.json"
     pricing_file.parent.mkdir()
-    pricing_file.write_text("{}\n", encoding="utf-8")
+    pricing_file.write_text(
+        json.dumps(
+            {
+                "unit": "per_1m_text_tokens",
+                "models": {
+                    "test-smart": {"input": 1.0, "output": 2.0},
+                    "test-fast": {"input": 0.5, "output": 1.0},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     monkeypatch.setattr(run_budget_main_study, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(run_budget_main_study, "PRICING_FILE", pricing_file)
