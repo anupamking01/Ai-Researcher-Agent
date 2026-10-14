@@ -412,6 +412,7 @@ def verify_frozen_snapshot(
     _require_equal(frozen_rows, raw_rows, label="frozen ratings versus normalized raw inputs")
 
     coverage = freeze._validate_assignment_coverage(frozen_rows, blind_ids)
+    freeze._validate_submission_coverage(frozen_rows, blind_ids)
     _require_equal(manifest.get("assignment_coverage"), coverage, label="assignment coverage")
 
     dimension_counts = {}

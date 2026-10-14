@@ -49,6 +49,14 @@ rejected before any output directory is reserved. Keep separate original
 submissions; do not split a combined file after the fact and claim that doing so
 establishes independent human provenance.
 
+Each annotator's one submitted CSV must also contain every blinded packet ID
+exactly once. Aggregate coverage assembled from several partial annotators is
+not a substitute for complete independent review of the packet, even when each
+item happens to have two rows overall. This completeness check runs only after
+the existing duplicate, split-submission, and minimum-rater gates, preserving
+their more specific diagnostics. The independent freeze verifier recomputes the
+same per-annotator coverage from retained raw inputs and normalized ratings.
+
 `verify_human_eval_freeze.py` applies the same checks to archived raw inputs and
 optional external copies. Only its explicit read of the normalized
 `frozen_ratings.csv` permits multiple annotators, and those rows must still match
@@ -124,6 +132,7 @@ annotations or research results.
 
 `tests/test_human_eval_submission_identity.py` covers combined raw submissions,
 header-only inputs, an output-like raw filename, a rehashed combined archive,
-valid multi-annotator normalized output, optional external verification, and
-CLI rejection before publication. The snapshot fixtures keep each synthetic
-annotator in a separate raw file without weakening their byte-capture checks.
+fragmented aggregate coverage, valid multi-annotator normalized output,
+optional external verification, and CLI rejection before publication. The
+snapshot fixtures keep each synthetic annotator in a separate raw file without
+weakening their byte-capture checks.

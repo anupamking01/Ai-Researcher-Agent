@@ -439,6 +439,27 @@ def _validate_assignment_coverage(rows: list[dict], blind_ids: list[str]) -> dic
     }
 
 
+def _validate_submission_coverage(rows: list[dict], blind_ids: list[str]) -> None:
+    """Require every independent annotator submission to cover the full packet."""
+    expected = set(blind_ids)
+    by_annotator: dict[str, set[str]] = {}
+    for row in rows:
+        by_annotator.setdefault(row["annotator_id"], set()).add(row["blind_id"])
+
+    incomplete = []
+    for annotator_id, observed in sorted(by_annotator.items()):
+        missing = sorted(expected - observed)
+        if missing:
+            preview = ", ".join(missing[:10])
+            suffix = "" if len(missing) <= 10 else ", ..."
+            incomplete.append(f"{annotator_id!r} missing {preview}{suffix}")
+    if incomplete:
+        raise ValueError(
+            "each submitted ratings CSV must cover every blinded report exactly "
+            f"once; incomplete annotators: {'; '.join(incomplete)}"
+        )
+
+
 def _score(row: dict, field: str) -> int | None:
     value = str(row.get(field) or "").strip()
     return int(value) if value else None
@@ -681,6 +702,7 @@ def freeze_ratings(
         require_single_annotator=True,
     )
     assignment_coverage = _validate_assignment_coverage(rows, blind_ids)
+    _validate_submission_coverage(rows, blind_ids)
     agreement = build_agreement(rows)
 
     dimension_counts = {}

@@ -265,6 +265,123 @@ def _csv_for_cells(annotator, blind_ids):
     return stream.getvalue().encode("utf-8")
 
 
+def _fragmented_submissions(tmp_path):
+    specifications = (
+        ("synthetic-a", ["H001"]),
+        ("synthetic-b", ["H001"]),
+        ("synthetic-c", ["H002"]),
+        ("synthetic-d", ["H002"]),
+    )
+    paths = []
+    for annotator, blind_ids in specifications:
+        path = tmp_path / f"{annotator}.csv"
+        path.write_bytes(_csv_for_cells(annotator, blind_ids))
+        paths.append(path)
+    return paths
+
+
+def test_each_raw_submission_must_cover_the_complete_packet(submission_inputs):
+    paths, options = submission_inputs
+    fragmented = _fragmented_submissions(paths[0].parent)
+    originals = [path.read_bytes() for path in fragmented]
+
+    # Aggregate coverage is two raters per item, but no annotator completed the
+    # frozen packet. This must fail before a blinded freeze is published.
+    with pytest.raises(ValueError, match="must cover every blinded report exactly once"):
+        freeze.freeze_ratings(fragmented, **options)
+
+    assert originals == [path.read_bytes() for path in fragmented]
+    assert not options["output_root"].exists()
+
+
+def test_shared_submission_coverage_gate_rejects_partial_packet_files(
+    submission_inputs,
+):
+    paths, _options = submission_inputs
+    fragmented = _fragmented_submissions(paths[0].parent)
+    rows, _sources = freeze._load_ratings(
+        fragmented,
+        allowed_blind_ids={"H001", "H002"},
+        require_single_annotator=True,
+    )
+
+    with pytest.raises(ValueError, match="must cover every blinded report exactly once"):
+        freeze._validate_submission_coverage(rows, ["H001", "H002"])
+
+
+def test_verifier_rejects_rehashed_fragmented_multi_annotator_archive(
+    submission_inputs,
+):
+    paths, options = submission_inputs
+    manifest = freeze.freeze_ratings(paths, **options)
+    root = options["output_root"]
+    archive_root = root / "raw_rating_inputs"
+    for child in archive_root.iterdir():
+        child.unlink()
+
+    fragmented = _fragmented_submissions(paths[0].parent)
+    archived_paths = []
+    rating_entries = []
+    for index, source in enumerate(fragmented, start=1):
+        content = source.read_bytes()
+        archive_path = archive_root / f"{index:04d}.csv"
+        archive_path.write_bytes(content)
+        archived_paths.append(archive_path)
+        rating_entries.append(
+            {
+                "input_index": index,
+                "name": source.name,
+                "bytes": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "archive_path": f"raw_rating_inputs/{index:04d}.csv",
+            }
+        )
+
+    rows, _sources = freeze._load_ratings(
+        archived_paths,
+        allowed_blind_ids={"H001", "H002"},
+        require_single_annotator=True,
+    )
+    frozen_path = root / "frozen_ratings.csv"
+    freeze._write_csv(frozen_path, rows)
+    agreement_path = root / "agreement.json"
+    agreement_path.write_text(
+        json.dumps(freeze.build_agreement(rows), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    manifest["rating_inputs"] = rating_entries
+    manifest["assignment_coverage"] = freeze._validate_assignment_coverage(
+        rows, ["H001", "H002"]
+    )
+    manifest["frozen_ratings"].update(
+        {
+            "bytes": frozen_path.stat().st_size,
+            "sha256": hashlib.sha256(frozen_path.read_bytes()).hexdigest(),
+            "n_rows": len(rows),
+            "n_annotators": 4,
+            "n_unique_blind_ids_rated": 2,
+            "dimension_counts": {
+                field: {"rated": len(rows), "missing": 0}
+                for field in freeze.SCORE_FIELDS
+            },
+        }
+    )
+    manifest["agreement"].update(
+        {
+            "bytes": agreement_path.stat().st_size,
+            "sha256": hashlib.sha256(agreement_path.read_bytes()).hexdigest(),
+        }
+    )
+    (root / "freeze_manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must cover every blinded report exactly once"):
+        verify.verify_frozen_snapshot(**_verify_options(options))
+
+
 @pytest.mark.parametrize("spelling", ["synthetic-a", " synthetic-a "])
 def test_split_raw_submissions_from_same_annotator_are_rejected_before_freeze(
     submission_inputs, spelling
