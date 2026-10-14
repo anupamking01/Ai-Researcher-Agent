@@ -48,6 +48,20 @@ ordered input to its deterministic archive path, byte count, and SHA-256.
 Existing CSV structure, score, note, and independent-rater coverage checks still
 apply. No treatment key is read.
 
+The independent verifier treats the freeze manifest as a closed schema at every
+object boundary. The root, governing-input descriptors, coverage summary,
+producer and validator identities, ordered rating-input descriptors, normalized
+output summary, per-dimension counts, and agreement descriptor may contain only
+the fields and JSON value types emitted by the freeze producer. Missing fields,
+added metadata, and objects hidden in scalar fields are rejected before retained
+inputs or computed outputs are trusted. It also
+requires each rating-input index to match its archive order, requires the source
+name to be a single filename, and requires the producer's exact blinded,
+pre-unblinding integrity statement. Consequently, reserializing a manifest with
+an added treatment label, coordinator field, redirected source identity, or
+misleading integrity claim cannot produce a verified freeze even when every
+artifact fingerprint remains unchanged.
+
 ## Raw submission identity gate
 
 The importer enforces the already-frozen assignment rule: every raw submitted
@@ -70,10 +84,11 @@ same per-annotator coverage from retained raw inputs and normalized ratings.
 optional external copies. Only its explicit read of the normalized
 `frozen_ratings.csv` permits multiple annotators, and those rows must still match
 the validated raw submissions exactly. Naming a raw input `frozen_ratings.csv`
-does not bypass the guard. The manifest schema, retained raw bytes, scores,
+does not bypass the guard. The closed manifest schema, retained raw bytes, scores,
 missingness rules, agreement calculation, and full-packet coverage rule are
-unchanged. Historical nonconforming bundles fail this current gate; retain their
-original bytes and document the protocol deviation rather than rewriting them.
+verified together. Historical nonconforming bundles fail this current gate;
+retain their original bytes and document the protocol deviation rather than
+rewriting them.
 
 The importer and verifier also reject non-overlapping fragments of one
 annotator's ratings spread across multiple raw CSVs, including IDs that differ

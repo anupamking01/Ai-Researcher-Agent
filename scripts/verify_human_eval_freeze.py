@@ -62,6 +62,296 @@ def _require_equal(actual, expected, *, label: str) -> None:
         raise ValueError(f"{label} mismatch: expected {expected!r}, got {actual!r}")
 
 
+def _require_object_schema(
+    value,
+    *,
+    required: set[str] | frozenset[str],
+    label: str,
+    optional: set[str] | frozenset[str] = frozenset(),
+) -> None:
+    """Reject missing or undeclared manifest members at one object boundary."""
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"freeze manifest schema mismatch at {label}: expected an object"
+        )
+    actual = set(value)
+    missing = sorted(set(required) - actual)
+    undeclared = sorted(actual - set(required) - set(optional))
+    if missing or undeclared:
+        raise ValueError(
+            f"freeze manifest schema mismatch at {label}: "
+            f"missing={missing}, undeclared={undeclared}"
+        )
+
+
+def _require_field_types(
+    value: dict,
+    *,
+    field_types: dict[str, type],
+    label: str,
+    optional_types: dict[str, type] | None = None,
+) -> None:
+    """Require producer-exact JSON scalar/container types, including int != bool."""
+    type_names = {
+        str: "string",
+        int: "integer",
+        bool: "boolean",
+        dict: "object",
+        list: "array",
+    }
+    for field, expected_type in {
+        **field_types,
+        **(optional_types or {}),
+    }.items():
+        if field not in value:
+            continue
+        if type(value[field]) is not expected_type:
+            expected_name = type_names.get(expected_type, expected_type.__name__)
+            raise ValueError(
+                f"freeze manifest schema mismatch at {label}.{field}: "
+                f"expected {expected_name}"
+            )
+
+
+def _require_json_shape(value, expected, *, label: str) -> None:
+    """Require an exact recursively typed object shape without comparing values."""
+    if isinstance(expected, dict):
+        _require_object_schema(value, required=set(expected), label=label)
+        for field, expected_child in expected.items():
+            _require_json_shape(
+                value[field],
+                expected_child,
+                label=f"{label}.{field}",
+            )
+        return
+    _require_field_types(
+        {"value": value},
+        field_types={"value": type(expected)},
+        label=label,
+    )
+
+
+def _require_safe_filename(value, *, label: str) -> None:
+    """Require one portable, non-reserved filename with no control characters."""
+    if (
+        not isinstance(value, str)
+        or not value
+        or value in {".", ".."}
+        or "/" in value
+        or "\\" in value
+        or any(ord(character) < 32 for character in value)
+    ):
+        raise ValueError(
+            f"freeze manifest schema mismatch at {label}: expected a safe filename"
+        )
+
+
+def _verify_manifest_schema(manifest: dict) -> None:
+    """Require the exact schema emitted by the blinded-freeze producer."""
+    if "content_validator_runtime" not in manifest:
+        raise ValueError(
+            "freeze manifest schema mismatch: content validator runtime "
+            "contract is missing"
+        )
+    _require_object_schema(
+        manifest,
+        required={
+            "schema_version",
+            "study_id",
+            "status",
+            "blinding_key_used",
+            "packet",
+            "protocol",
+            "assignment_plan",
+            "annotator_guide",
+            "assignment_coverage",
+            "producer",
+            "content_validator",
+            "content_validator_runtime",
+            "rating_inputs",
+            "frozen_ratings",
+            "agreement",
+            "integrity_note",
+        },
+        label="root",
+    )
+    _require_field_types(
+        manifest,
+        field_types={
+            "schema_version": int,
+            "study_id": str,
+            "status": str,
+            "blinding_key_used": bool,
+            "packet": dict,
+            "protocol": dict,
+            "assignment_plan": dict,
+            "annotator_guide": dict,
+            "assignment_coverage": dict,
+            "producer": dict,
+            "content_validator": dict,
+            "content_validator_runtime": dict,
+            "rating_inputs": list,
+            "frozen_ratings": dict,
+            "agreement": dict,
+            "integrity_note": str,
+        },
+        label="root",
+    )
+    _require_object_schema(
+        manifest["packet"],
+        required={"name", "bytes", "sha256", "n_blind_ids"},
+        optional={"archive_path"},
+        label="packet",
+    )
+    _require_field_types(
+        manifest["packet"],
+        field_types={
+            "name": str,
+            "bytes": int,
+            "sha256": str,
+            "n_blind_ids": int,
+        },
+        optional_types={"archive_path": str},
+        label="packet",
+    )
+    _require_safe_filename(manifest["packet"]["name"], label="packet.name")
+    for role in ("protocol", "assignment_plan", "annotator_guide"):
+        _require_object_schema(
+            manifest[role],
+            required={"bytes", "path", "sha256"},
+            optional={"archive_path"},
+            label=role,
+        )
+        _require_field_types(
+            manifest[role],
+            field_types={"bytes": int, "path": str, "sha256": str},
+            optional_types={"archive_path": str},
+            label=role,
+        )
+    _require_object_schema(
+        manifest["assignment_coverage"],
+        required={
+            "required_min_raters_per_item",
+            "n_items",
+            "min_observed_raters_per_item",
+            "max_observed_raters_per_item",
+            "items_by_rater_count",
+        },
+        label="assignment_coverage",
+    )
+    _require_field_types(
+        manifest["assignment_coverage"],
+        field_types={
+            "required_min_raters_per_item": int,
+            "n_items": int,
+            "min_observed_raters_per_item": int,
+            "max_observed_raters_per_item": int,
+            "items_by_rater_count": dict,
+        },
+        label="assignment_coverage",
+    )
+    rater_histogram = manifest["assignment_coverage"]["items_by_rater_count"]
+    for count, n_items in rater_histogram.items():
+        if not isinstance(count, str) or type(n_items) is not int:
+            raise ValueError(
+                "freeze manifest schema mismatch at "
+                "assignment_coverage.items_by_rater_count: "
+                "expected string keys and integer counts"
+            )
+    for role in ("producer", "content_validator"):
+        _require_object_schema(
+            manifest[role],
+            required={"path", "bytes", "sha256"},
+            label=role,
+        )
+        _require_field_types(
+            manifest[role],
+            field_types={"path": str, "bytes": int, "sha256": str},
+            label=role,
+        )
+    _require_json_shape(
+        manifest["content_validator_runtime"],
+        freeze.packet_build.content_validator_runtime_contract(),
+        label="content_validator_runtime",
+    )
+
+    rating_entries = manifest["rating_inputs"]
+    if not isinstance(rating_entries, list) or not rating_entries:
+        raise ValueError(
+            "freeze manifest schema mismatch at rating_inputs: "
+            "expected a non-empty list"
+        )
+    for index, entry in enumerate(rating_entries, start=1):
+        _require_object_schema(
+            entry,
+            required={"input_index", "name", "bytes", "sha256"},
+            optional={"archive_path"},
+            label=f"rating_inputs[{index}]",
+        )
+        _require_field_types(
+            entry,
+            field_types={"input_index": int, "name": str, "bytes": int, "sha256": str},
+            optional_types={"archive_path": str},
+            label=f"rating_inputs[{index}]",
+        )
+        _require_safe_filename(entry["name"], label=f"rating_inputs[{index}].name")
+
+    frozen_entry = manifest["frozen_ratings"]
+    _require_object_schema(
+        frozen_entry,
+        required={
+            "path",
+            "bytes",
+            "sha256",
+            "n_rows",
+            "n_annotators",
+            "n_unique_blind_ids_rated",
+            "dimension_counts",
+        },
+        label="frozen_ratings",
+    )
+    _require_field_types(
+        frozen_entry,
+        field_types={
+            "path": str,
+            "bytes": int,
+            "sha256": str,
+            "n_rows": int,
+            "n_annotators": int,
+            "n_unique_blind_ids_rated": int,
+            "dimension_counts": dict,
+        },
+        label="frozen_ratings",
+    )
+    dimension_counts = frozen_entry["dimension_counts"]
+    _require_object_schema(
+        dimension_counts,
+        required=set(freeze.SCORE_FIELDS),
+        label="frozen_ratings.dimension_counts",
+    )
+    for field in freeze.SCORE_FIELDS:
+        _require_object_schema(
+            dimension_counts[field],
+            required={"rated", "missing"},
+            label=f"frozen_ratings.dimension_counts.{field}",
+        )
+        _require_field_types(
+            dimension_counts[field],
+            field_types={"rated": int, "missing": int},
+            label=f"frozen_ratings.dimension_counts.{field}",
+        )
+    _require_object_schema(
+        manifest["agreement"],
+        required={"path", "bytes", "sha256"},
+        label="agreement",
+    )
+    _require_field_types(
+        manifest["agreement"],
+        field_types={"path": str, "bytes": int, "sha256": str},
+        label="agreement",
+    )
+
+
 def _verify_bundle_layout(freeze_root: Path, manifest: dict) -> None:
     """Reject every freeze artifact not declared by the fixed bundle contract."""
     rating_entries = manifest.get("rating_inputs")
@@ -174,6 +464,7 @@ def verify_frozen_snapshot(
     manifest_path = freeze_root / "freeze_manifest.json"
     manifest_content = _require_regular_file(manifest_path, label="freeze manifest")
     manifest = _load_json_bytes(manifest_content, label="freeze manifest")
+    _verify_manifest_schema(manifest)
 
     _require_equal(manifest.get("schema_version"), 1, label="freeze manifest schema_version")
     _require_equal(manifest.get("study_id"), "budget-main-v1", label="freeze manifest study_id")
@@ -183,6 +474,11 @@ def verify_frozen_snapshot(
         label="freeze manifest status",
     )
     _require_equal(manifest.get("blinding_key_used"), False, label="blinding_key_used")
+    _require_equal(
+        manifest.get("integrity_note"),
+        freeze.FREEZE_INTEGRITY_NOTE,
+        label="freeze manifest integrity note",
+    )
 
     retained = _verify_governing_archive(freeze_root, manifest, required=use_retained_inputs)
     if use_retained_inputs:
@@ -235,8 +531,11 @@ def verify_frozen_snapshot(
         label="protocol manifest path",
     )
     _require_equal(
-        protocol_entry.get("sha256"),
-        hashlib.sha256(protocol_content).hexdigest(),
+        {
+            "bytes": protocol_entry.get("bytes"),
+            "sha256": protocol_entry.get("sha256"),
+        },
+        _fingerprint(protocol_content),
         label="protocol fingerprint",
     )
 
@@ -249,8 +548,11 @@ def verify_frozen_snapshot(
         label="assignment-plan manifest path",
     )
     _require_equal(
-        assignment_entry.get("sha256"),
-        hashlib.sha256(assignment_content).hexdigest(),
+        {
+            "bytes": assignment_entry.get("bytes"),
+            "sha256": assignment_entry.get("sha256"),
+        },
+        _fingerprint(assignment_content),
         label="assignment-plan fingerprint",
     )
 
@@ -263,8 +565,11 @@ def verify_frozen_snapshot(
         label="annotator-guide manifest path",
     )
     _require_equal(
-        annotator_guide_entry.get("sha256"),
-        hashlib.sha256(annotator_guide_content).hexdigest(),
+        {
+            "bytes": annotator_guide_entry.get("bytes"),
+            "sha256": annotator_guide_entry.get("sha256"),
+        },
+        _fingerprint(annotator_guide_content),
         label="annotator-guide fingerprint",
     )
 
@@ -319,6 +624,12 @@ def verify_frozen_snapshot(
     ):
         raise ValueError("freeze manifest rating_inputs must be a non-empty list of objects")
 
+    for index, entry in enumerate(rating_entries, start=1):
+        _require_equal(
+            entry.get("input_index"),
+            index,
+            label=f"rating input {index} index",
+        )
     archive_flags = ["archive_path" in entry for entry in rating_entries]
     if any(archive_flags) and not all(archive_flags):
         raise ValueError("freeze manifest raw rating archive paths are incomplete")

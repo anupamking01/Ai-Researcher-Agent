@@ -74,6 +74,12 @@ OUTPUT_FILES = (
     "freeze_manifest.json",
 )
 SPREADSHEET_FORMULA_PREFIXES = ("=", "+", "-", "@")
+FREEZE_INTEGRITY_NOTE = (
+    "This snapshot is blinded and pre-unblinding. It retains the exact raw "
+    "rating bytes that were parsed, validates and freezes human-entered ratings "
+    "only, and does not generate, impute, adjudicate, or join ratings to "
+    "treatment identities."
+)
 
 
 def sha256_file(path: Path) -> str:
@@ -884,12 +890,7 @@ def freeze_ratings(
                 "bytes": agreement_path.stat().st_size,
                 "sha256": sha256_file(agreement_path),
             },
-            "integrity_note": (
-                "This snapshot is blinded and pre-unblinding. It retains the exact raw "
-                "rating bytes that were parsed, validates and freezes human-entered ratings "
-                "only, and does not generate, impute, adjudicate, or join ratings to "
-                "treatment identities."
-            ),
+            "integrity_note": FREEZE_INTEGRITY_NOTE,
         }
         manifest_path.write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",

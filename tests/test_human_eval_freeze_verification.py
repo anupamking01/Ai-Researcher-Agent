@@ -5,6 +5,7 @@ No scores in this module are collected human ratings or experimental results.
 import csv
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -91,6 +92,13 @@ def _rewrite_manifest(case, mutate):
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _manifest_child(manifest, path):
+    child = manifest
+    for key in path:
+        child = child[key]
+    return child
+
+
 @pytest.mark.parametrize("duplicate_key", ["status", r"st\u0061tus"])
 def test_duplicate_freeze_manifest_key_is_rejected(frozen_case, duplicate_key):
     path = frozen_case["freeze_root"] / "freeze_manifest.json"
@@ -101,6 +109,134 @@ def test_duplicate_freeze_manifest_key_is_rejected(frozen_case, duplicate_key):
     )
 
     with pytest.raises(ValueError, match="duplicate JSON key.*status.*freeze manifest"):
+        _verify(frozen_case)
+
+
+@pytest.mark.parametrize(
+    "object_path",
+    [
+        (),
+        ("packet",),
+        ("protocol",),
+        ("assignment_plan",),
+        ("annotator_guide",),
+        ("assignment_coverage",),
+        ("producer",),
+        ("content_validator",),
+        ("content_validator_runtime",),
+        ("rating_inputs", 0),
+        ("frozen_ratings",),
+        ("frozen_ratings", "dimension_counts"),
+        ("frozen_ratings", "dimension_counts", "correctness_1_5"),
+        ("agreement",),
+    ],
+)
+def test_freeze_manifest_rejects_undeclared_fields_at_every_level(
+    frozen_case, object_path
+):
+    def mutate(manifest):
+        _manifest_child(manifest, object_path)["variant_id"] = "D3"
+
+    _rewrite_manifest(frozen_case, mutate)
+
+    with pytest.raises(ValueError, match="freeze manifest schema mismatch"):
+        _verify(frozen_case)
+
+
+@pytest.mark.parametrize(
+    ("object_path", "field"),
+    [
+        ((), "integrity_note"),
+        (("rating_inputs", 0), "input_index"),
+        (("rating_inputs", 0), "name"),
+    ],
+)
+def test_freeze_manifest_requires_all_declared_fields(frozen_case, object_path, field):
+    def mutate(manifest):
+        _manifest_child(manifest, object_path).pop(field)
+
+    _rewrite_manifest(frozen_case, mutate)
+
+    with pytest.raises(ValueError, match="freeze manifest schema mismatch"):
+        _verify(frozen_case)
+
+
+def test_freeze_manifest_integrity_statement_is_immutable(frozen_case):
+    _rewrite_manifest(
+        frozen_case,
+        lambda manifest: manifest.__setitem__(
+            "integrity_note", "Treatment identities were opened before freezing."
+        ),
+    )
+
+    with pytest.raises(ValueError, match="freeze manifest integrity note mismatch"):
+        _verify(frozen_case)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("input_index", 99, "rating input 1 index mismatch"),
+        (
+            "name",
+            "../annotator-a.csv",
+            r"rating_inputs\[1\]\.name.*safe filename",
+        ),
+    ],
+)
+def test_self_contained_freeze_validates_rating_input_identity_fields(
+    frozen_case, field, value, error
+):
+    _rewrite_manifest(
+        frozen_case,
+        lambda manifest: manifest["rating_inputs"][0].__setitem__(field, value),
+    )
+
+    with pytest.raises(ValueError, match=error):
+        verify_frozen_snapshot(
+            [],
+            freeze_root=frozen_case["freeze_root"],
+            packet_path=frozen_case["packet_path"],
+            protocol_path=frozen_case["protocol_path"],
+            assignment_plan_path=frozen_case["assignment_plan_path"],
+        )
+
+
+@pytest.mark.parametrize("value", [True, 1.0])
+def test_rating_input_index_requires_an_integer(frozen_case, value):
+    _rewrite_manifest(
+        frozen_case,
+        lambda manifest: manifest["rating_inputs"][0].__setitem__(
+            "input_index", value
+        ),
+    )
+
+    with pytest.raises(ValueError, match=r"rating_inputs\[1\]\.input_index.*integer"):
+        _verify(frozen_case)
+
+
+@pytest.mark.parametrize("value", ["..", "annotator\x00.csv"])
+def test_rating_input_name_requires_a_safe_filename(frozen_case, value):
+    _rewrite_manifest(
+        frozen_case,
+        lambda manifest: manifest["rating_inputs"][0].__setitem__("name", value),
+    )
+
+    with pytest.raises(ValueError, match=r"rating_inputs\[1\]\.name.*safe filename"):
+        _verify(frozen_case)
+
+
+def test_legacy_manifest_rejects_object_hidden_in_scalar_field(frozen_case):
+    shutil.rmtree(frozen_case["freeze_root"] / "governing_inputs")
+
+    def mutate(manifest):
+        for role in ("packet", "protocol", "assignment_plan", "annotator_guide"):
+            manifest[role].pop("archive_path")
+        manifest["protocol"]["bytes"] = {"variant_id": "D3"}
+
+    _rewrite_manifest(frozen_case, mutate)
+
+    with pytest.raises(ValueError, match=r"protocol\.bytes.*integer"):
         _verify(frozen_case)
 
 
