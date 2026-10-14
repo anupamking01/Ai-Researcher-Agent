@@ -167,6 +167,90 @@ def _validate_analysis_identity(payload: dict) -> None:
         label="analysis plan provenance",
     )
 
+    governing_inputs = {
+        "protocol": (
+            freeze.DEFAULT_PROTOCOL,
+            "paper/HUMAN_EVAL_PROTOCOL.md",
+            freeze.FROZEN_PROTOCOL_SHA256,
+        ),
+        "assignment_plan": (
+            freeze.DEFAULT_ASSIGNMENT_PLAN,
+            "paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md",
+            freeze.FROZEN_ASSIGNMENT_PLAN_SHA256,
+        ),
+        "annotator_guide": (
+            freeze.DEFAULT_ANNOTATOR_GUIDE,
+            "paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md",
+            freeze.FROZEN_ANNOTATOR_GUIDE_SHA256,
+        ),
+    }
+    for key, (path, logical_path, frozen_sha256) in governing_inputs.items():
+        label = key.replace("_", "-")
+        content = _regular_bytes(path, label=f"current frozen {label}")
+        _require_equal(
+            _fingerprint(content)["sha256"],
+            frozen_sha256,
+            label=f"current frozen {label} fingerprint",
+        )
+        _verify_entry(
+            provenance.get(key),
+            expected_path=logical_path,
+            content=content,
+            label=f"{label} provenance",
+        )
+
+
+def _verify_implementation(manifest: dict) -> None:
+    """Bind every source dependency before executing its validation logic."""
+    implementation = manifest.get("implementation")
+    if not isinstance(implementation, dict):
+        raise ValueError("analysis manifest implementation must be an object")
+    _require_equal(
+        set(implementation),
+        {
+            "analysis_core",
+            "analysis_renderer",
+            "analysis_verifier",
+            "ratings_freezer",
+        },
+        label="analysis manifest implementation set",
+    )
+
+    sources = (
+        (
+            "analysis_core",
+            Path(core.__file__),
+            "scripts/human_eval_analysis_core.py",
+            "analysis core implementation",
+        ),
+        (
+            "analysis_renderer",
+            Path(analyze_human_eval.__file__),
+            "scripts/analyze_human_eval.py",
+            "analysis renderer implementation",
+        ),
+        (
+            "analysis_verifier",
+            Path(__file__),
+            "scripts/verify_human_eval_analysis_outputs.py",
+            "analysis verifier implementation",
+        ),
+        (
+            "ratings_freezer",
+            Path(freeze.__file__),
+            "scripts/freeze_human_eval_ratings.py",
+            "ratings freezer implementation",
+        ),
+    )
+    for key, source, logical_path, label in sources:
+        source_bytes = _regular_bytes(source, label=f"current {label}")
+        _verify_entry(
+            implementation[key],
+            expected_path=logical_path,
+            content=source_bytes,
+            label=label,
+        )
+
 
 def verify_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
     """Verify exact outputs, deterministic rendering, and implementation hashes."""
@@ -184,6 +268,7 @@ def verify_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
 
     payload = _load_json(json_bytes, label="canonical human-analysis JSON")
     manifest = _load_json(manifest_bytes, label="human-analysis output manifest")
+    _verify_implementation(manifest)
     _validate_analysis_identity(payload)
 
     expected_markdown = analyze_human_eval.render_markdown(payload).encode("utf-8")
@@ -220,43 +305,6 @@ def verify_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
         expected_path=analyze_human_eval.ANALYSIS_MARKDOWN,
         content=markdown_bytes,
         label="manuscript rendering",
-    )
-
-    implementation = manifest.get("implementation")
-    if not isinstance(implementation, dict):
-        raise ValueError("analysis manifest implementation must be an object")
-    _require_equal(
-        set(implementation),
-        {"analysis_core", "analysis_renderer", "analysis_verifier"},
-        label="analysis manifest implementation set",
-    )
-
-    core_bytes = _regular_bytes(Path(core.__file__), label="current human-analysis core")
-    renderer_bytes = _regular_bytes(
-        Path(analyze_human_eval.__file__),
-        label="current human-analysis renderer",
-    )
-    verifier_bytes = _regular_bytes(
-        Path(__file__),
-        label="current human-analysis verifier",
-    )
-    _verify_entry(
-        implementation["analysis_core"],
-        expected_path="scripts/human_eval_analysis_core.py",
-        content=core_bytes,
-        label="analysis core implementation",
-    )
-    _verify_entry(
-        implementation["analysis_renderer"],
-        expected_path="scripts/analyze_human_eval.py",
-        content=renderer_bytes,
-        label="analysis renderer implementation",
-    )
-    _verify_entry(
-        implementation["analysis_verifier"],
-        expected_path="scripts/verify_human_eval_analysis_outputs.py",
-        content=verifier_bytes,
-        label="analysis verifier implementation",
     )
 
     return {

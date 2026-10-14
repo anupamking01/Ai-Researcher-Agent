@@ -11,6 +11,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from scripts import freeze_human_eval_ratings as freeze
 from scripts import human_eval_analysis_core as core
 
 OUTPUT_ROOT = core.PACKET_ROOT / "analysis-v1"
@@ -200,6 +201,10 @@ def write_bundle(payload, output_root):
             ANALYSIS_VERIFIER_SOURCE,
             logical_path="scripts/verify_human_eval_analysis_outputs.py",
         ),
+        "ratings_freezer": _implementation_fingerprint(
+            freeze.__file__,
+            logical_path="scripts/freeze_human_eval_ratings.py",
+        ),
     }
     manifest = {
         "schema_version": 1,
@@ -218,8 +223,8 @@ def write_bundle(payload, output_root):
         "implementation": implementation,
         "integrity_note": (
             "The manifest binds the exact canonical analysis JSON, deterministic "
-            "Markdown rendering, and analysis/verification implementation source "
-            "bytes. "
+            "Markdown rendering, analysis/verification implementation source "
+            "bytes, and governing-input anchor implementation bytes. "
             "It is written last; the analysis command independently recomputes the "
             "payload from verified inputs before success is reported."
         ),

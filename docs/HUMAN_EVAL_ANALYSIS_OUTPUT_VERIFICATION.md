@@ -20,7 +20,9 @@ That manifest SHA-256-binds:
 - `analysis.md`;
 - `scripts/human_eval_analysis_core.py`;
 - `scripts/analyze_human_eval.py`;
-- `scripts/verify_human_eval_analysis_outputs.py`.
+- `scripts/verify_human_eval_analysis_outputs.py`;
+- `scripts/freeze_human_eval_ratings.py`, which owns the frozen governing-input
+  paths and SHA-256 anchors consumed by the verifier.
 
 The command first verifies the persisted bundle, then independently recomputes
 the complete canonical payload from the rating inputs and governing artifacts
@@ -36,10 +38,15 @@ Before reserving the create-only output directory, publication also validates
 the human-analysis identity and captures every implementation fingerprint needed
 by the manifest. Identity, serialization/rendering, plan-provenance, and source-
 provenance failures detected during this preflight therefore leave the requested
-version path untouched and available for a corrected retry. The final directory
-creation remains exclusive, so a concurrent publisher is never adopted after
-preflight. Independent recomputation still runs after publication starts; a
-failure at that stage preserves the create-only artifacts for inspection.
+version path untouched and available for a corrected retry. The canonical
+payload directly records the frozen protocol, assignment-plan, and
+annotator-guide fingerprints and logical paths; the standalone verifier checks
+those entries against the generating checkout and its literal freeze anchors,
+and verifies the anchor implementation itself before trusting those constants.
+The final directory creation remains exclusive, so a concurrent publisher is
+never adopted after preflight. Independent recomputation still runs after
+publication starts; a failure at that stage preserves the create-only artifacts
+for inspection.
 
 ## Independent verification
 
@@ -77,6 +84,9 @@ Verification fails closed when:
   the same captured input bytes;
 - the recorded analysis-plan byte count or SHA-256 does not match the literal
   preregistered plan anchored by the generating implementation.
+- the recorded protocol, assignment-plan, or annotator-guide path, byte count,
+  or SHA-256 does not match the frozen governing document and its literal
+  implementation anchor;
 - any canonical result value differs from a type-strict, independently
   recomputed payload, even when an editor has regenerated Markdown and updated
   every output hash consistently.

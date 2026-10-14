@@ -130,6 +130,8 @@ def analysis_case(tmp_path: Path, monkeypatch):
     protocol.write_bytes(freeze.DEFAULT_PROTOCOL.read_bytes())
     assignment = tmp_path / "assignment.md"
     assignment.write_bytes(freeze.DEFAULT_ASSIGNMENT_PLAN.read_bytes())
+    guide = tmp_path / "annotator-guide.md"
+    guide.write_bytes(freeze.DEFAULT_ANNOTATOR_GUIDE.read_bytes())
     plan = tmp_path / "analysis_plan.md"
     plan.write_text("# Synthetic human-analysis plan\n", encoding="utf-8")
     monkeypatch.setattr(
@@ -168,6 +170,7 @@ def analysis_case(tmp_path: Path, monkeypatch):
         "freeze_manifest": freeze_manifest,
         "protocol": protocol,
         "assignment": assignment,
+        "guide": guide,
         "plan": plan,
         "ratings": [raw_a, raw_b],
         "repo_root": tmp_path,
@@ -182,6 +185,7 @@ def _analyze(case):
         packet_path=case["packet_path"],
         protocol_path=case["protocol"],
         assignment_plan_path=case["assignment"],
+        annotator_guide_path=case["guide"],
         analysis_plan_path=case["plan"],
         task_manifest_path=case["task_manifest"],
         repo_root=case["repo_root"],
@@ -221,6 +225,29 @@ def test_published_payload_recomputes_from_retained_rating_archive(
 
     assert receipt["independent_recomputation_verified"] is True
     assert receipt["recomputed_from_retained_ratings"] is True
+
+
+def test_analysis_payload_binds_frozen_governing_documents(analysis_case):
+    payload = _analyze(analysis_case)
+
+    expected = {
+        "protocol": (analysis_case["protocol"], "paper/HUMAN_EVAL_PROTOCOL.md"),
+        "assignment_plan": (
+            analysis_case["assignment"],
+            "paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md",
+        ),
+        "annotator_guide": (
+            analysis_case["guide"],
+            "paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md",
+        ),
+    }
+    for key, (path, logical_path) in expected.items():
+        content = path.read_bytes()
+        assert payload["provenance"][key] == {
+            "path": logical_path,
+            "bytes": len(content),
+            "sha256": _sha(content),
+        }
 
 
 def test_modified_analysis_plan_is_rejected_before_unblinding(analysis_case, monkeypatch):

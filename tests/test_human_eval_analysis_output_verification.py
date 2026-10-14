@@ -8,12 +8,39 @@ import json
 import pytest
 
 from scripts import analyze_human_eval
+from scripts import freeze_human_eval_ratings as freeze
 from scripts import human_eval_analysis_core as core
 from scripts import verify_human_eval_analysis_outputs as verify
 
 
 def _payload():
     plan_bytes = core.PLAN.read_bytes()
+    provenance = {
+        "analysis_plan": {
+            "path": core.PLAN.name,
+            "bytes": len(plan_bytes),
+            "sha256": hashlib.sha256(plan_bytes).hexdigest(),
+        }
+    }
+    for key, path, logical_path in (
+        ("protocol", freeze.DEFAULT_PROTOCOL, "paper/HUMAN_EVAL_PROTOCOL.md"),
+        (
+            "assignment_plan",
+            freeze.DEFAULT_ASSIGNMENT_PLAN,
+            "paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md",
+        ),
+        (
+            "annotator_guide",
+            freeze.DEFAULT_ANNOTATOR_GUIDE,
+            "paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md",
+        ),
+    ):
+        content = path.read_bytes()
+        provenance[key] = {
+            "path": logical_path,
+            "bytes": len(content),
+            "sha256": hashlib.sha256(content).hexdigest(),
+        }
     summary = {
         variant: {
             field: {
@@ -94,13 +121,7 @@ def _payload():
         "n_tasks": 2,
         "task_ids": ["task-a", "task-b"],
         "verification": {"analysis_inputs_snapshot_bound": True},
-        "provenance": {
-            "analysis_plan": {
-                "path": core.PLAN.name,
-                "bytes": len(plan_bytes),
-                "sha256": hashlib.sha256(plan_bytes).hexdigest(),
-            }
-        },
+        "provenance": provenance,
         "pre_unblinding_agreement": agreement,
         "variant_summary": summary,
         "paired_contrasts": contrasts,
@@ -209,6 +230,7 @@ def test_write_bundle_emits_manifest_and_verifies(tmp_path):
         "analysis_core",
         "analysis_renderer",
         "analysis_verifier",
+        "ratings_freezer",
     }
 
 
@@ -407,6 +429,23 @@ def test_rejects_analysis_verifier_implementation_drift(tmp_path, monkeypatch):
         verify.verify_bundle(output)
 
 
+def test_rejects_ratings_freezer_implementation_drift(tmp_path, monkeypatch):
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+
+    changed_freezer = tmp_path / "freeze_human_eval_ratings.py"
+    changed_freezer.write_text("# changed governing-input anchors\n", encoding="utf-8")
+    monkeypatch.setattr(freeze, "__file__", str(changed_freezer))
+    monkeypatch.setattr(
+        freeze,
+        "DEFAULT_PROTOCOL",
+        tmp_path / "must-not-read-drifted-protocol.md",
+    )
+
+    with pytest.raises(ValueError, match="ratings freezer implementation fingerprint"):
+        verify.verify_bundle(output)
+
+
 @pytest.mark.parametrize(
     "field,value",
     [
@@ -497,6 +536,23 @@ def test_rejects_analysis_plan_provenance_drift_after_rehash(tmp_path):
     _rewrite_and_rehash(output, payload)
 
     with pytest.raises(ValueError, match="analysis plan provenance mismatch"):
+        verify.verify_bundle(output)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    ["protocol", "assignment_plan", "annotator_guide"],
+)
+def test_rejects_governing_document_provenance_drift_after_rehash(tmp_path, entry):
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    payload = json.loads(
+        (output / analyze_human_eval.ANALYSIS_JSON).read_text(encoding="utf-8")
+    )
+    payload["provenance"][entry]["sha256"] = "0" * 64
+    _rewrite_and_rehash(output, payload)
+
+    with pytest.raises(ValueError, match=f"{entry.replace('_', '-')} provenance"):
         verify.verify_bundle(output)
 
 

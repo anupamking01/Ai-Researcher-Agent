@@ -37,13 +37,13 @@ FROZEN_ANALYSIS_PLAN_SHA256 = (
 )
 
 
-def fingerprint(path):
+def fingerprint(path, *, logical_path=None):
     path = Path(path)
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"missing regular file: {path}")
     data = path.read_bytes()
     return {
-        "path": path.name,
+        "path": str(logical_path) if logical_path is not None else path.name,
         "bytes": len(data),
         "sha256": hashlib.sha256(data).hexdigest(),
     }
@@ -440,6 +440,22 @@ def analyze(
                 "pre_unblinding_agreement": agreement_path,
             }.items()
         }
+        provenance.update(
+            {
+                "protocol": fingerprint(
+                    blind_protocol,
+                    logical_path="paper/HUMAN_EVAL_PROTOCOL.md",
+                ),
+                "assignment_plan": fingerprint(
+                    blind_assignment,
+                    logical_path="paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md",
+                ),
+                "annotator_guide": fingerprint(
+                    blind_annotator_guide,
+                    logical_path="paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md",
+                ),
+            }
+        )
 
         return {
             "schema_version": 1,

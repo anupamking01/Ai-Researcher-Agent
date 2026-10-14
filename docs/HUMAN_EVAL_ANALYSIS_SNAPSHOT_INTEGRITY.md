@@ -23,6 +23,10 @@ captured only after the blinded gate. The packet verifier runs against that
 second snapshot, using the already captured blinded packet. All report-level
 aggregation, treatment mapping, agreement inclusion, and provenance hashes are
 computed from the verified snapshots rather than reopening the live source paths.
+The canonical analysis provenance records the exact captured protocol,
+assignment plan, and annotator guide under stable repository-logical paths, so a
+published result remains directly attributable to the instructions that governed
+collection even when the freeze archive is stored separately.
 
 This closes a time-of-check/time-of-use gap where an editor save after a verifier
 returned could previously change the scores, task universe, treatment mapping,

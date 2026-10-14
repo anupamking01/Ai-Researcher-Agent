@@ -8,12 +8,39 @@ import json
 import pytest
 
 from scripts import analyze_human_eval as publisher
+from scripts import freeze_human_eval_ratings as freeze
 from scripts import human_eval_analysis_core as core
 from scripts import verify_human_eval_analysis_outputs as verifier
 
 
 def _synthetic_payload():
     plan_bytes = core.PLAN.read_bytes()
+    provenance = {
+        "analysis_plan": {
+            "path": core.PLAN.name,
+            "bytes": len(plan_bytes),
+            "sha256": hashlib.sha256(plan_bytes).hexdigest(),
+        }
+    }
+    for key, path, logical_path in (
+        ("protocol", freeze.DEFAULT_PROTOCOL, "paper/HUMAN_EVAL_PROTOCOL.md"),
+        (
+            "assignment_plan",
+            freeze.DEFAULT_ASSIGNMENT_PLAN,
+            "paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md",
+        ),
+        (
+            "annotator_guide",
+            freeze.DEFAULT_ANNOTATOR_GUIDE,
+            "paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md",
+        ),
+    ):
+        content = path.read_bytes()
+        provenance[key] = {
+            "path": logical_path,
+            "bytes": len(content),
+            "sha256": hashlib.sha256(content).hexdigest(),
+        }
     summary_block = {
         "n_reports_total": 1,
         "n_reports_scored": 1,
@@ -59,13 +86,7 @@ def _synthetic_payload():
         "n_tasks": 1,
         "task_ids": ["task-a"],
         "verification": {"analysis_inputs_snapshot_bound": True},
-        "provenance": {
-            "analysis_plan": {
-                "path": core.PLAN.name,
-                "bytes": len(plan_bytes),
-                "sha256": hashlib.sha256(plan_bytes).hexdigest(),
-            }
-        },
+        "provenance": provenance,
         "pre_unblinding_agreement": {
             "status": "pre-unblinding_pairwise_agreement",
             "n_annotators": 2,
