@@ -377,6 +377,8 @@ def _publish_directory_noreplace(
 
 def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict:
     """Publish and independently verify a create-only reconciliation bundle."""
+    from scripts import verify_human_reconciliation_outputs as output_verifier
+
     output_root = Path(output_root)
     destination_error = f"refusing to overwrite reconciliation output: {output_root}"
     if output_root.exists() or output_root.is_symlink():
@@ -408,6 +410,10 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
             Path(readiness.__file__),
             logical_path="scripts/verify_human_reconciliation_readiness.py",
         ),
+        "reconciliation_verifier": _implementation_fingerprint(
+            Path(output_verifier.__file__),
+            logical_path="scripts/verify_human_reconciliation_outputs.py",
+        ),
     }
     manifest = {
         "schema_version": 1,
@@ -435,12 +441,7 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
     }
     manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
-    from scripts.verify_human_reconciliation_outputs import (
-        _verify_producer_commit_implementation,
-        verify_bundle,
-    )
-
-    _verify_producer_commit_implementation(
+    output_verifier._verify_producer_commit_implementation(
         producer_git_commit,
         implementation,
         root=Path(root),
@@ -484,7 +485,7 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
         anchored_candidate = (
             Path(f"/proc/self/fd/{staging_container_fd}") / candidate_name
         )
-        receipt = verify_bundle(anchored_candidate, root=Path(root))
+        receipt = output_verifier.verify_bundle(anchored_candidate, root=Path(root))
         _require_directory_entry_binding(
             staging_container_fd,
             candidate_name,

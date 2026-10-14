@@ -110,6 +110,9 @@ def _producer_repo(tmp_path):
     (scripts / "verify_human_reconciliation_readiness.py").write_bytes(
         Path(readiness.__file__).read_bytes()
     )
+    (scripts / "verify_human_reconciliation_outputs.py").write_bytes(
+        Path(verify.__file__).read_bytes()
+    )
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
     subprocess.run(["git", "config", "user.name", "Synthetic Test"], cwd=root, check=True)
     subprocess.run(
@@ -131,6 +134,10 @@ def _implementation_manifest():
         "readiness_gate": {
             "path": "scripts/verify_human_reconciliation_readiness.py",
             **reconcile._fingerprint_bytes(Path(readiness.__file__).read_bytes()),
+        },
+        "reconciliation_verifier": {
+            "path": "scripts/verify_human_reconciliation_outputs.py",
+            **reconcile._fingerprint_bytes(Path(verify.__file__).read_bytes()),
         },
     }
 
@@ -182,6 +189,39 @@ def test_rejects_producer_commit_with_different_implementation_bytes(
     _rewrite_producer_commit(output, substituted_commit)
 
     with pytest.raises(ValueError, match="producer reconciler fingerprint mismatch"):
+        verify.verify_bundle(output, root=root)
+
+
+def test_rejects_producer_commit_with_different_verifier_bytes(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    root = _producer_repo(tmp_path)
+    monkeypatch.setattr(reconcile, "reconcile_verified", lambda **kwargs: payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=root)
+
+    verifier = root / "scripts" / "verify_human_reconciliation_outputs.py"
+    verifier.write_text("# substituted verifier\n", encoding="utf-8")
+    subprocess.run(["git", "add", str(verifier)], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "substitute verifier implementation"],
+        cwd=root,
+        check=True,
+    )
+    substituted_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    _rewrite_producer_commit(output, substituted_commit)
+
+    with pytest.raises(
+        ValueError,
+        match="producer reconciliation_verifier fingerprint mismatch",
+    ):
         verify.verify_bundle(output, root=root)
 
 
@@ -322,7 +362,15 @@ def test_write_bundle_is_create_only_and_independently_verified(tmp_path, monkey
         (output / reconcile.RECONCILIATION_MANIFEST).read_text(encoding="utf-8")
     )
     assert manifest["verified_input_fingerprints"] == payload["verified_input_fingerprints"]
-    assert set(manifest["implementation"]) == {"reconciler", "readiness_gate"}
+    assert set(manifest["implementation"]) == {
+        "reconciler",
+        "readiness_gate",
+        "reconciliation_verifier",
+    }
+    assert manifest["implementation"]["reconciliation_verifier"] == {
+        "path": "scripts/verify_human_reconciliation_outputs.py",
+        **reconcile._fingerprint_bytes(Path(verify.__file__).read_bytes()),
+    }
 
     with pytest.raises(ValueError, match="refusing to overwrite reconciliation output"):
         reconcile.write_bundle(payload, output, root=tmp_path)
@@ -553,6 +601,23 @@ def test_rejects_reconciler_implementation_drift(tmp_path, monkeypatch):
     monkeypatch.setattr(reconcile, "__file__", str(changed))
 
     with pytest.raises(ValueError, match="reconciler implementation fingerprint"):
+        verify.verify_bundle(output, root=tmp_path)
+
+
+def test_rejects_reconciliation_verifier_implementation_drift(tmp_path, monkeypatch):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+
+    changed = tmp_path / "verify_human_reconciliation_outputs.py"
+    changed.write_text("# changed verifier implementation\n", encoding="utf-8")
+    monkeypatch.setattr(verify, "__file__", str(changed))
+
+    with pytest.raises(
+        ValueError,
+        match="reconciliation verifier implementation fingerprint",
+    ):
         verify.verify_bundle(output, root=tmp_path)
 
 

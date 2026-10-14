@@ -84,7 +84,7 @@ def _verify_producer_commit_implementation(
             f"producer Git SHA must identify a commit object, got {object_type!r}"
         )
 
-    for name in ("reconciler", "readiness_gate"):
+    for name in ("reconciler", "readiness_gate", "reconciliation_verifier"):
         entry = implementation[name]
         path = entry["path"]
         try:
@@ -229,7 +229,7 @@ def verify_bundle(
         raise ValueError("reconciliation manifest implementation must be an object")
     _require_equal(
         set(implementation),
-        {"reconciler", "readiness_gate"},
+        {"reconciler", "readiness_gate", "reconciliation_verifier"},
         label="reconciliation manifest implementation set",
     )
     _verify_entry(
@@ -243,6 +243,12 @@ def verify_bundle(
         expected_path="scripts/verify_human_reconciliation_readiness.py",
         content=_regular_bytes(Path(readiness.__file__), label="current readiness gate"),
         label="readiness-gate implementation",
+    )
+    _verify_entry(
+        implementation["reconciliation_verifier"],
+        expected_path="scripts/verify_human_reconciliation_outputs.py",
+        content=_regular_bytes(Path(__file__), label="current reconciliation verifier"),
+        label="reconciliation verifier implementation",
     )
     _verify_producer_commit_implementation(
         producer,
