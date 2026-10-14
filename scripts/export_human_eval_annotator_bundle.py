@@ -47,6 +47,7 @@ DISTRIBUTION_NOTE = (
     "manifest verifies. It intentionally excludes blinding_key.csv and "
     "the coordinator packet manifest."
 )
+CONTENT_VALIDATOR_PATH = "scripts/build_human_eval_packet.py"
 
 
 def _regular_bytes(path: Path, *, label: str) -> bytes:
@@ -58,6 +59,13 @@ def _regular_bytes(path: Path, *, label: str) -> bytes:
 
 def _fingerprint(content: bytes) -> dict:
     return {"bytes": len(content), "sha256": hashlib.sha256(content).hexdigest()}
+
+
+def _content_validator_source_contract() -> dict:
+    content = _regular_bytes(
+        Path(build.__file__), label="annotator content validator source"
+    )
+    return {"path": CONTENT_VALIDATOR_PATH, **_fingerprint(content)}
 
 
 def _frozen_guide_bytes(path: Path) -> bytes:
@@ -328,6 +336,10 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
         raise ValueError(
             "annotator manifest content validator runtime contract is missing"
         )
+    if "content_validator" not in manifest:
+        raise ValueError(
+            "annotator manifest content validator source contract is missing"
+        )
 
     required_manifest_keys = {
         "schema_version",
@@ -336,6 +348,7 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
         "coordinator_artifacts_included",
         "n_reports",
         "artifacts",
+        "content_validator",
         "content_validator_runtime",
     }
     allowed_manifest_keys = required_manifest_keys | {"distribution_note"}
@@ -366,6 +379,13 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
             "annotator manifest content validator runtime contract mismatch: "
             f"expected {expected_runtime!r}, got "
             f"{manifest.get('content_validator_runtime')!r}"
+        )
+    expected_validator = _content_validator_source_contract()
+    if manifest.get("content_validator") != expected_validator:
+        raise ValueError(
+            "annotator manifest content validator source contract mismatch: "
+            f"expected {expected_validator!r}, got "
+            f"{manifest.get('content_validator')!r}"
         )
 
     forbidden_manifest_keys = {
@@ -533,6 +553,7 @@ def export_annotator_bundle(
                 "status": "human_eval_annotator_distribution",
                 "coordinator_artifacts_included": False,
                 "n_reports": len(_read_jsonl_packet(packet_bytes)),
+                "content_validator": _content_validator_source_contract(),
                 "content_validator_runtime": (
                     build.content_validator_runtime_contract()
                 ),

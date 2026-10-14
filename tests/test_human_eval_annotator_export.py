@@ -203,6 +203,66 @@ def test_export_manifest_binds_content_validator_runtime(packet_case):
     )
 
 
+def test_export_manifest_binds_content_validator_source(packet_case):
+    _export(packet_case)
+    manifest = json.loads(
+        (packet_case["export_root"] / "annotator_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    validator_bytes = Path(build.__file__).resolve().read_bytes()
+
+    assert manifest["content_validator"] == {
+        "path": "scripts/build_human_eval_packet.py",
+        **exporter._fingerprint(validator_bytes),
+    }
+
+
+def test_bundle_verifier_rejects_missing_content_validator_source(packet_case):
+    _export(packet_case)
+    manifest_path = packet_case["export_root"] / "annotator_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("content_validator", None)
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="content validator source contract"):
+        exporter.verify_annotator_bundle(packet_case["export_root"])
+
+
+def test_bundle_verifier_rejects_tampered_content_validator_source(packet_case):
+    _export(packet_case)
+    manifest_path = packet_case["export_root"] / "annotator_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["content_validator"] = {
+        **manifest["content_validator"],
+        "sha256": "0" * 64,
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="content validator source contract"):
+        exporter.verify_annotator_bundle(packet_case["export_root"])
+
+
+def test_bundle_verifier_rejects_content_validator_source_drift(
+    packet_case, monkeypatch, tmp_path
+):
+    _export(packet_case)
+    drifted_validator = tmp_path / "build_human_eval_packet.py"
+    drifted_validator.write_bytes(
+        Path(build.__file__).resolve().read_bytes() + b"\n# synthetic drift\n"
+    )
+    monkeypatch.setattr(build, "__file__", str(drifted_validator))
+
+    with pytest.raises(ValueError, match="content validator source contract"):
+        exporter.verify_annotator_bundle(packet_case["export_root"])
+
+
 def test_bundle_verifier_rejects_missing_content_validator_runtime(packet_case):
     _export(packet_case)
     manifest_path = packet_case["export_root"] / "annotator_manifest.json"

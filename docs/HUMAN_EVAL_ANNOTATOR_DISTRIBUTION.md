@@ -23,8 +23,9 @@ frozen treatment-blind guide:
 - `annotator_instructions.md`
 
 It also writes `annotator_manifest.json`, which contains only fingerprints of
-those three files, the treatment-blind content-audit runtime contract, and an
-explicit declaration that coordinator artifacts are not included.
+those three files, the treatment-blind content-audit implementation and runtime
+contracts, and an explicit declaration that coordinator artifacts are not
+included.
 
 ## Recommended workflow
 
@@ -109,6 +110,15 @@ options. Standalone and source-bound verification fail closed when this contract
 is absent or differs from the verification environment. This preserves what
 “rendered annotator-visible text” meant when the distribution was created;
 source bytes alone do not capture parser behavior.
+
+The same manifest binds the exact `scripts/build_human_eval_packet.py` validator
+implementation by repository path, byte length, and SHA-256. Verification fails
+closed when the field is absent, altered, or differs from the validator source
+loaded by the verifier. The source and runtime contracts are complementary: the
+source fingerprint identifies the audit rules, while the runtime contract fixes
+the parser and Unicode semantics those rules depended on. The manifest records
+only this public repository provenance and does not add a blind seed, treatment
+mapping, assignment, rating, or result.
 
 ## Limits
 

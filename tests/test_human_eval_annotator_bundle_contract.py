@@ -37,6 +37,7 @@ def _write_bundle(root: Path, packet_rows: list[dict], *, template_ids=None, n_r
         "status": "human_eval_annotator_distribution",
         "coordinator_artifacts_included": False,
         "n_reports": len(packet_rows) if n_reports is None else n_reports,
+        "content_validator": exporter._content_validator_source_contract(),
         "content_validator_runtime": (
             exporter.build.content_validator_runtime_contract()
         ),
