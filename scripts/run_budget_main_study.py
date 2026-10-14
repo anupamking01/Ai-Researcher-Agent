@@ -191,20 +191,190 @@ def _load_pricing(path: Path) -> tuple[dict, dict]:
 
 
 def _trace_cost_usd(path: Path, pricing: dict) -> float:
-    from scripts.summarize_pilot import _estimate_reported_token_cost
+    if path.parent.is_symlink() or not path.parent.is_dir():
+        raise SystemExit(
+            f"Invalid treatment trace directory {path.parent}: must be a regular directory"
+        )
+    if path.is_symlink() or not path.is_file():
+        raise SystemExit(f"Invalid treatment trace {path}: must be a regular file")
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise SystemExit(f"Cannot read treatment trace {path}: {exc}") from exc
+    try:
+        payload = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise SystemExit(f"Invalid treatment trace {path}: {exc}") from exc
 
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    trace = payload.get("trace", {})
-    cost, status = _estimate_reported_token_cost(trace.get("provider_usage_by_model", {}), pricing)
-    if cost is None:
-        raise RuntimeError(f"Cannot cost {path}: {status}")
-    return float(cost)
+    if not isinstance(payload, dict):
+        raise SystemExit(f"Invalid treatment trace {path}: top level must be an object")
+    if type(payload.get("schema_version")) is not int or payload["schema_version"] != 2:
+        raise SystemExit(
+            f"Invalid treatment trace {path}: schema_version must equal 2"
+        )
+    experiment = payload.get("experiment")
+    trace = payload.get("trace")
+    if not isinstance(experiment, dict) or not isinstance(trace, dict):
+        raise SystemExit(
+            f"Invalid treatment trace {path}: experiment and trace must be objects"
+        )
+
+    expected_variant = path.parent.name
+    experiment_variant = experiment.get("variant_id")
+    trace_variant = trace.get("variant_id")
+    if (
+        expected_variant not in VARIANTS
+        or experiment_variant != expected_variant
+        or trace_variant != expected_variant
+    ):
+        raise SystemExit(
+            f"Invalid treatment trace {path}: variant_id identity mismatch"
+        )
+    experiment_task = experiment.get("task_id")
+    trace_task = trace.get("task_id")
+    if (
+        not isinstance(experiment_task, str)
+        or not experiment_task.strip()
+        or experiment_task != experiment_task.strip()
+        or experiment_task != trace_task
+    ):
+        raise SystemExit(f"Invalid treatment trace {path}: task_id identity mismatch")
+    run_id = trace.get("run_id")
+    if not isinstance(run_id, str) or run_id != path.stem:
+        raise SystemExit(
+            f"Invalid treatment trace {path}: run_id must match filename"
+        )
+    if trace.get("usage_accounting_status") != "provider_usage_complete":
+        raise SystemExit(
+            f"Invalid treatment trace {path}: usage_accounting_status must equal "
+            "provider_usage_complete"
+        )
+
+    usage_by_model = trace.get("provider_usage_by_model")
+    if not isinstance(usage_by_model, dict) or not usage_by_model:
+        raise SystemExit(
+            f"Invalid treatment trace {path}: provider_usage_by_model must be a "
+            "non-empty object"
+        )
+
+    total_model_calls = 0
+    total_unavailable_calls = 0
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+    cost_parts = []
+    for model, usage in usage_by_model.items():
+        if not isinstance(model, str) or not model.strip() or model != model.strip():
+            raise SystemExit(
+                f"Invalid treatment trace {path}: model name must be a non-empty "
+                "string without surrounding whitespace"
+            )
+        rates = pricing["models"].get(model)
+        if rates is None:
+            raise SystemExit(
+                f"Invalid treatment trace {path}: model {model} has no frozen price"
+            )
+        if not isinstance(usage, dict):
+            raise SystemExit(
+                f"Invalid treatment trace {path}: usage for {model} must be an object"
+            )
+        required_fields = (
+            "model_calls",
+            "unavailable_calls",
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+        )
+        for field in required_fields:
+            value = usage.get(field)
+            if type(value) is not int or value < 0:
+                raise SystemExit(
+                    f"Invalid treatment trace {path}: {model} {field} must be a "
+                    "non-negative integer"
+                )
+        if usage["model_calls"] <= 0:
+            raise SystemExit(
+                f"Invalid treatment trace {path}: {model} model_calls must be positive"
+            )
+        if usage["unavailable_calls"] != 0:
+            raise SystemExit(
+                f"Invalid treatment trace {path}: complete provider accounting "
+                "requires zero unavailable calls"
+            )
+        if usage["total_tokens"] != (
+            usage["prompt_tokens"] + usage["completion_tokens"]
+        ):
+            raise SystemExit(
+                f"Invalid treatment trace {path}: {model} total_tokens must equal "
+                "prompt_tokens + completion_tokens"
+            )
+
+        total_model_calls += usage["model_calls"]
+        total_unavailable_calls += usage["unavailable_calls"]
+        total_prompt_tokens += usage["prompt_tokens"]
+        total_completion_tokens += usage["completion_tokens"]
+        cost_parts.extend(
+            (
+                (usage["prompt_tokens"] / 1_000_000) * rates["input"],
+                (usage["completion_tokens"] / 1_000_000) * rates["output"],
+            )
+        )
+
+    expected_total_tokens = total_prompt_tokens + total_completion_tokens
+    token_fields = ("prompt_tokens", "completion_tokens", "total_tokens")
+    aggregate_tokens = (
+        trace.get("prompt_tokens"),
+        trace.get("completion_tokens"),
+        trace.get("total_tokens"),
+    )
+    if (
+        not all(type(trace.get(field)) is int for field in token_fields)
+        or aggregate_tokens
+        != (total_prompt_tokens, total_completion_tokens, expected_total_tokens)
+        or expected_total_tokens <= 0
+    ):
+        raise SystemExit(
+            f"Invalid treatment trace {path}: aggregate token ledger mismatch"
+        )
+    call_fields = ("model_call_count", "unavailable_usage_call_count")
+    if (
+        not all(type(trace.get(field)) is int for field in call_fields)
+        or trace.get("model_call_count") != total_model_calls
+        or trace.get("unavailable_usage_call_count") != total_unavailable_calls
+        or total_unavailable_calls != 0
+    ):
+        raise SystemExit(
+            f"Invalid treatment trace {path}: aggregate call ledger mismatch"
+        )
+
+    cost = math.fsum(cost_parts)
+    if not math.isfinite(cost) or cost < 0:
+        raise SystemExit(f"Invalid treatment trace {path}: computed cost is invalid")
+    return cost
 
 
 def _current_treatment_cost(pricing: dict) -> float:
+    if TRACE_ROOT.is_symlink():
+        raise SystemExit(f"Invalid treatment trace root: {TRACE_ROOT}")
     if not TRACE_ROOT.exists():
         return 0.0
-    return sum(_trace_cost_usd(path, pricing) for path in TRACE_ROOT.glob("*/*.json"))
+    if not TRACE_ROOT.is_dir():
+        raise SystemExit(f"Invalid treatment trace root: {TRACE_ROOT}")
+    for variant in VARIANTS:
+        variant_dir = TRACE_ROOT / variant
+        if variant_dir.is_symlink() or (
+            variant_dir.exists() and not variant_dir.is_dir()
+        ):
+            raise SystemExit(
+                f"Invalid treatment trace directory {variant_dir}: "
+                "must be a regular directory"
+            )
+    return math.fsum(
+        _trace_cost_usd(path, pricing)
+        for path in sorted(TRACE_ROOT.glob("*/*.json"))
+    )
 
 
 def _write_json(name: str, payload: dict) -> Path:
@@ -251,6 +421,8 @@ async def main() -> None:
                 f"Pricing file {PRICING_FILE} has no rate for {env_name}={model}"
             )
 
+    initial_treatment_cost = _current_treatment_cost(pricing)
+
     from logic.experiment import ExperimentConfig
     from logic.run import run_agent
 
@@ -292,7 +464,7 @@ async def main() -> None:
         "completed_runs": 0,
         "failed_runs": 0,
         "timeout_runs": 0,
-        "estimated_treatment_cost_usd": 0.0,
+        "estimated_treatment_cost_usd": initial_treatment_cost,
         "events": [],
         "current": None,
         "started_at_utc": _utc_now(),
