@@ -98,6 +98,64 @@ def test_separate_submissions_preserve_raw_bytes_and_combined_output(submission_
         assert receipt["blinding_key_used"] is False
 
 
+def test_canonically_equivalent_ids_cannot_supply_two_independent_raters(
+    submission_inputs,
+):
+    paths, options = submission_inputs
+    # These spellings are distinct Python strings and CSV byte sequences but
+    # the same Unicode identity: precomposed e-acute versus e + combining acute.
+    paths[0].write_bytes(_csv_bytes(["synthetic-é"]))
+    paths[1].write_bytes(_csv_bytes(["synthetic-e\u0301"]))
+    originals = [path.read_bytes() for path in paths]
+
+    with pytest.raises(ValueError, match="canonically equivalent annotator_id"):
+        freeze.freeze_ratings(paths, **options)
+
+    assert originals == [path.read_bytes() for path in paths]
+    assert not options["output_root"].exists()
+
+
+def _canonical_collision_rows():
+    return [
+        {
+            "annotator_id": annotator_id,
+            "blind_id": "H001",
+            **{field: "3" for field in freeze.SCORE_FIELDS},
+            "notes": "",
+        }
+        for annotator_id in ("synthetic-é", "synthetic-e\u0301")
+    ]
+
+
+def test_coverage_helper_rejects_canonically_equivalent_rater_ids():
+    with pytest.raises(ValueError, match="canonically equivalent annotator_id"):
+        freeze._validate_assignment_coverage(_canonical_collision_rows(), ["H001"])
+
+
+def test_agreement_helper_rejects_canonically_equivalent_rater_ids():
+    with pytest.raises(ValueError, match="canonically equivalent annotator_id"):
+        freeze.build_agreement(_canonical_collision_rows())
+
+
+def test_single_decomposed_id_preserves_submitted_spelling_and_bytes(
+    submission_inputs,
+):
+    paths, options = submission_inputs
+    decomposed = "synthetic-e\u0301"
+    paths[0].write_bytes(_csv_bytes([decomposed]))
+    original = paths[0].read_bytes()
+
+    manifest = freeze.freeze_ratings(paths, **options)
+
+    assert (options["output_root"] / manifest["rating_inputs"][0]["archive_path"]).read_bytes() == original
+    with (options["output_root"] / "frozen_ratings.csv").open(
+        encoding="utf-8", newline=""
+    ) as handle:
+        frozen_ids = {row["annotator_id"] for row in csv.DictReader(handle)}
+    assert decomposed in frozen_ids
+    assert "synthetic-é" not in frozen_ids
+
+
 @pytest.mark.parametrize("source_kind", ["archive", "legacy"])
 def test_verifier_rejects_rehashed_combined_raw_input(submission_inputs, source_kind):
     paths, options = submission_inputs
@@ -175,6 +233,26 @@ def test_split_raw_submissions_from_same_annotator_are_rejected_before_freeze(
         freeze.freeze_ratings([first, second, paths[1]], **options)
     assert not options["output_root"].exists()
     assert originals == [source.read_bytes() for source in (first, second, paths[1])]
+
+
+def test_canonical_id_variants_cannot_split_one_annotator_across_files(
+    submission_inputs,
+):
+    paths, options = submission_inputs
+    first = paths[0].parent / "accented-part-1.csv"
+    second = paths[0].parent / "accented-part-2.csv"
+    independent = paths[0].parent / "independent.csv"
+    first.write_bytes(_csv_for_cells("synthetic-é", ["H001"]))
+    second.write_bytes(_csv_for_cells("synthetic-e\u0301", ["H002"]))
+    independent.write_bytes(_csv_bytes(["synthetic-b"]))
+    submitted = [first, second, independent]
+    originals = [source.read_bytes() for source in submitted]
+
+    with pytest.raises(ValueError, match="multiple submitted ratings CSV"):
+        freeze.freeze_ratings(submitted, **options)
+
+    assert originals == [source.read_bytes() for source in submitted]
+    assert not options["output_root"].exists()
 
 
 def test_verifier_rejects_rehashed_split_of_one_raw_annotator(submission_inputs):

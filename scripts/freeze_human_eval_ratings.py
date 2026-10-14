@@ -16,6 +16,7 @@ import csv
 import hashlib
 import io
 import json
+import unicodedata
 from itertools import combinations
 from pathlib import Path
 
@@ -188,6 +189,26 @@ def _reject_spreadsheet_active_text(
         )
 
 
+def _annotator_identity_key(annotator_id: str) -> str:
+    """Collapse canonically equivalent Unicode spellings for identity checks."""
+    return unicodedata.normalize("NFC", annotator_id)
+
+
+def _validate_annotator_identity_spellings(rows: list[dict]) -> None:
+    """Reject multiple display spellings for one canonical annotator identity."""
+    spellings: dict[str, str] = {}
+    for row in rows:
+        annotator_id = row["annotator_id"]
+        identity_key = _annotator_identity_key(annotator_id)
+        previous = spellings.get(identity_key)
+        if previous is not None and previous != annotator_id:
+            raise ValueError(
+                "canonically equivalent annotator_id values cannot represent "
+                f"independent raters: {previous!r} and {annotator_id!r}"
+            )
+        spellings[identity_key] = annotator_id
+
+
 def _load_ratings(
     rating_paths: list[Path],
     *,
@@ -202,7 +223,7 @@ def _load_ratings(
     rows: list[dict] = []
     sources: list[dict] = []
     captured_inputs: list[bytes] = []
-    seen: set[tuple[str, str]] = set()
+    seen: dict[tuple[str, str], str] = {}
     annotator_source_indices: dict[str, int] = {}
 
     for source_index, path in enumerate(rating_paths, start=1):
@@ -290,13 +311,20 @@ def _load_ratings(
                         f"{path.name}:{line_number} references unknown blind_id {blind_id!r}"
                     )
 
-                key = (annotator_id, blind_id)
+                key = (_annotator_identity_key(annotator_id), blind_id)
                 if key in seen:
+                    previous_annotator_id = seen[key]
+                    if previous_annotator_id != annotator_id:
+                        raise ValueError(
+                            "canonically equivalent annotator_id values cannot supply "
+                            "independent ratings: "
+                            f"{previous_annotator_id!r} and {annotator_id!r} for {blind_id}"
+                        )
                     raise ValueError(
                         f"duplicate independent rating for annotator/blind item: "
                         f"{annotator_id}/{blind_id}"
                     )
-                seen.add(key)
+                seen[key] = annotator_id
 
                 scores = {
                     field: _parse_score(
@@ -329,14 +357,15 @@ def _load_ratings(
             raise ValueError(f"{path.name}: ratings CSV contains no annotation rows")
         if require_single_annotator:
             annotator_id = next(iter(source_annotators))
-            previous_source = annotator_source_indices.get(annotator_id)
+            identity_key = _annotator_identity_key(annotator_id)
+            previous_source = annotator_source_indices.get(identity_key)
             if previous_source is not None:
                 raise ValueError(
                     f"annotator_id {annotator_id!r} appears in multiple submitted ratings CSV "
                     f"files (inputs {previous_source} and {source_index}); "
                     "one complete submission per annotator is required"
                 )
-            annotator_source_indices[annotator_id] = source_index
+            annotator_source_indices[identity_key] = source_index
 
     if not rows:
         raise ValueError("ratings files contain no annotation rows")
@@ -349,9 +378,12 @@ def _load_ratings(
 
 def _validate_assignment_coverage(rows: list[dict], blind_ids: list[str]) -> dict:
     """Require two distinct independent raters for every blinded report."""
+    _validate_annotator_identity_spellings(rows)
     raters_by_item = {blind_id: set() for blind_id in blind_ids}
     for row in rows:
-        raters_by_item[row["blind_id"]].add(row["annotator_id"])
+        raters_by_item[row["blind_id"]].add(
+            _annotator_identity_key(row["annotator_id"])
+        )
 
     counts = {blind_id: len(raters) for blind_id, raters in raters_by_item.items()}
     incomplete = sorted(blind_id for blind_id, count in counts.items() if count < MIN_RATERS_PER_ITEM)
@@ -417,6 +449,7 @@ def quadratic_weighted_kappa(pairs: list[tuple[int, int]]) -> float | None:
 
 
 def build_agreement(rows: list[dict]) -> dict:
+    _validate_annotator_identity_spellings(rows)
     by_annotator: dict[str, dict[str, dict]] = {}
     for row in rows:
         by_annotator.setdefault(row["annotator_id"], {})[row["blind_id"]] = row

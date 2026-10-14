@@ -57,6 +57,15 @@ only in surrounding whitespace. This enforces the frozen whole-submission
 correction rule; it does not bar the one intentionally combined normalized
 `frozen_ratings.csv`.
 
+Annotator identity comparisons also use Unicode NFC canonical equivalence.
+Visually identical spellings such as a precomposed accented character and the
+same base character plus a combining accent therefore cannot be counted as two
+independent raters or split across submissions. The submitted spelling and raw
+CSV bytes remain unchanged; normalization is used only for identity and
+coverage checks. This is not proof that differently spelled IDs belong to
+different people, so the coordinator must still enforce eligibility and
+independence.
+
 ## Spreadsheet-active text gate
 
 The importer rejects `annotator_id` or `notes` values whose normalized text
