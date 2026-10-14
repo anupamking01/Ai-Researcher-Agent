@@ -4,6 +4,7 @@ These fixtures are not collected human ratings or study findings.
 """
 import hashlib
 import json
+import platform
 from pathlib import Path
 
 import pytest
@@ -236,6 +237,134 @@ def test_write_bundle_emits_manifest_and_verifies(tmp_path):
         "packet_verifier",
         "ratings_freezer",
     }
+
+
+def _expected_analysis_environment():
+    requirements = (core.ROOT / "requirements.txt").read_bytes()
+    python_version = (core.ROOT / ".python-version").read_bytes()
+    return {
+        "requirements": {
+            "path": "requirements.txt",
+            **analyze_human_eval._fingerprint_bytes(requirements),
+        },
+        "python_version": {
+            "path": ".python-version",
+            **analyze_human_eval._fingerprint_bytes(python_version),
+        },
+        "runtime": {
+            "schema_version": 1,
+            "python_implementation": platform.python_implementation(),
+            "python_version": platform.python_version(),
+            "random_state_version": core.random.Random.VERSION,
+        },
+    }
+
+
+def test_write_bundle_binds_pinned_and_actual_analysis_environment(tmp_path):
+    output = tmp_path / "analysis"
+    receipt = analyze_human_eval.write_bundle(_payload(), output)
+    manifest = json.loads(
+        (output / analyze_human_eval.ANALYSIS_MANIFEST).read_text(encoding="utf-8")
+    )
+
+    assert manifest["analysis_environment"] == _expected_analysis_environment()
+    assert receipt["analysis_environment_bound"] is True
+
+
+def test_rejects_missing_analysis_environment_contract(tmp_path):
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    manifest_path = output / analyze_human_eval.ANALYSIS_MANIFEST
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("analysis_environment", None)
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="analysis environment"):
+        verify.verify_bundle(output)
+
+
+def test_rejects_tampered_analysis_environment_contract(tmp_path):
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    manifest_path = output / analyze_human_eval.ANALYSIS_MANIFEST
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["analysis_environment"] = _expected_analysis_environment()
+    manifest["analysis_environment"]["requirements"]["sha256"] = "0" * 64
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="analysis requirements fingerprint"):
+        verify.verify_bundle(output)
+
+
+def test_rejects_analysis_runtime_drift(tmp_path, monkeypatch):
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    expected = _expected_analysis_environment()["runtime"]
+    monkeypatch.setattr(
+        analyze_human_eval,
+        "analysis_runtime_contract",
+        lambda: {**expected, "python_version": "0.0.0-drifted"},
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="analysis runtime contract"):
+        verify.verify_bundle(output)
+
+
+@pytest.mark.parametrize(
+    ("field", "malformed"),
+    [
+        ("schema_version", True),
+        ("random_state_version", float(core.random.Random.VERSION)),
+    ],
+)
+def test_rejects_non_exact_analysis_runtime_types(tmp_path, field, malformed):
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    manifest_path = output / analyze_human_eval.ANALYSIS_MANIFEST
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["analysis_environment"]["runtime"][field] = malformed
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="analysis runtime contract"):
+        verify.verify_bundle(output)
+
+
+@pytest.mark.parametrize(
+    ("field", "malformed"),
+    [
+        ("bytes", "matching_float"),
+        ("unexpected", "undeclared"),
+    ],
+)
+def test_rejects_non_exact_analysis_pin_entry_schema(
+    tmp_path, field, malformed
+):
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    manifest_path = output / analyze_human_eval.ANALYSIS_MANIFEST
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if malformed == "matching_float":
+        malformed = float(
+            manifest["analysis_environment"]["requirements"]["bytes"]
+        )
+    manifest["analysis_environment"]["requirements"][field] = malformed
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="analysis requirements manifest entry"):
+        verify.verify_bundle(output)
 
 
 def test_invalid_payload_does_not_reserve_publication_path(tmp_path):

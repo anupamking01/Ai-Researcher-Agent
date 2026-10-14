@@ -224,6 +224,14 @@ The packet is deterministic under a fixed seed and fails closed on duplicate tre
 
 Annotators must not receive `blinding_key.csv` until ratings are frozen. At least a predeclared subset should be independently double-scored and inter-annotator agreement should be reported before adjudication.
 
+After real ratings are frozen, the complementary human-analysis command writes
+a create-only result bundle whose manifest binds the exact analysis and verifier
+sources, `requirements.txt`, `.python-version`, and the Python implementation,
+version, and standard-library PRNG state contract that produced the numeric
+outputs. Independent verification rejects source, pinned-environment, or runtime
+drift before recomputing the analysis. This records reproducibility metadata; it
+does not create ratings or convert pending human validation into a result.
+
 Full instructions are in `paper/HUMAN_EVAL_PROTOCOL.md`.
 
 ## 12. Reproducibility map

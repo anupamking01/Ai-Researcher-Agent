@@ -12,6 +12,7 @@ import errno
 import hashlib
 import json
 import os
+import platform
 import stat
 import tempfile
 from contextlib import ExitStack
@@ -27,6 +28,18 @@ ANALYSIS_MANIFEST = "analysis_manifest.json"
 ANALYSIS_VERIFIER_SOURCE = Path(__file__).with_name(
     "verify_human_eval_analysis_outputs.py"
 )
+ANALYSIS_REQUIREMENTS = core.ROOT / "requirements.txt"
+ANALYSIS_PYTHON_VERSION = core.ROOT / ".python-version"
+
+
+def analysis_runtime_contract() -> dict:
+    """Describe the interpreter and PRNG state contract for numeric outputs."""
+    return {
+        "schema_version": 1,
+        "python_implementation": platform.python_implementation(),
+        "python_version": platform.python_version(),
+        "random_state_version": core.random.Random.VERSION,
+    }
 
 
 def render_markdown(payload):
@@ -324,6 +337,17 @@ def write_bundle(payload, output_root, *, verify_candidate=None):
             logical_path="scripts/freeze_human_eval_ratings.py",
         ),
     }
+    analysis_environment = {
+        "requirements": _implementation_fingerprint(
+            ANALYSIS_REQUIREMENTS,
+            logical_path="requirements.txt",
+        ),
+        "python_version": _implementation_fingerprint(
+            ANALYSIS_PYTHON_VERSION,
+            logical_path=".python-version",
+        ),
+        "runtime": analysis_runtime_contract(),
+    }
     manifest = {
         "schema_version": 1,
         "study_id": payload.get("study_id"),
@@ -339,10 +363,12 @@ def write_bundle(payload, output_root, *, verify_candidate=None):
             },
         },
         "implementation": implementation,
+        "analysis_environment": analysis_environment,
         "integrity_note": (
             "The manifest binds the exact canonical analysis JSON, deterministic "
             "Markdown rendering, analysis/verification implementation source "
-            "bytes, and governing-input anchor and verifier implementation bytes. "
+            "bytes, governing-input anchor and verifier implementation bytes, "
+            "pinned environment files, and actual Python/PRNG runtime contract. "
             "It is written last; the analysis command independently recomputes the "
             "payload from verified inputs before the result is published."
         ),
