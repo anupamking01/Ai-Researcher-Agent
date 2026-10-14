@@ -324,6 +324,53 @@ def test_freeze_retains_exact_blinding_validator_source(frozen_case):
     assert validator["sha256"] == hashlib.sha256(expected).hexdigest()
 
 
+def test_freeze_binds_markdown_renderer_contract(frozen_case):
+    manifest = json.loads(
+        (frozen_case["freeze_root"] / "freeze_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert manifest["content_validator_runtime"] == (
+        freeze.packet_build.content_validator_runtime_contract()
+    )
+    assert manifest["content_validator_runtime"]["mdurl_version"]
+
+
+def test_tampered_markdown_renderer_contract_is_rejected(frozen_case):
+    _rewrite_manifest(
+        frozen_case,
+        lambda manifest: manifest["content_validator_runtime"].__setitem__(
+            "markdown_it_py_version", "0.0.0-tampered"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="content validator runtime contract"):
+        _verify(frozen_case)
+
+
+def test_renderer_environment_drift_is_rejected(frozen_case, monkeypatch):
+    current = freeze.packet_build.content_validator_runtime_contract()
+    monkeypatch.setattr(
+        freeze.packet_build,
+        "content_validator_runtime_contract",
+        lambda: {**current, "markdown_it_py_version": "0.0.0-drifted"},
+    )
+
+    with pytest.raises(ValueError, match="content validator runtime contract"):
+        _verify(frozen_case)
+
+
+def test_missing_markdown_renderer_contract_is_rejected(frozen_case):
+    _rewrite_manifest(
+        frozen_case,
+        lambda manifest: manifest.pop("content_validator_runtime"),
+    )
+
+    with pytest.raises(ValueError, match="content validator runtime contract"):
+        _verify(frozen_case)
+
+
 def test_tampered_archived_blinding_validator_is_rejected(frozen_case):
     archived = (
         frozen_case["freeze_root"]

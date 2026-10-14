@@ -31,6 +31,15 @@ manifest. This connects the distribution-stage instructions to the later
 pre-unblinding rating snapshot without adding treatment identity or implying
 that annotations have been collected.
 
+The freeze also records the runtime contract for its archived annotator-content
+validator: Python implementation/version, Unicode database version, exact
+`markdown-it-py` and delegated `mdurl` versions, CommonMark preset, and renderer
+options. Those values affect normalization and the rendered text inspected for
+hidden treatment labels, so source bytes alone are not sufficient provenance.
+Independent verification fails closed when its runtime contract differs; use
+the recorded environment to reproduce verification rather than silently
+accepting different rendering semantics.
+
 Raw input hashes are not hashes of normalized CSV text: UTF-8 bytes and line
 endings are retained for fingerprinting. The exact captured bytes that were
 parsed are also written create-only inside the freeze as

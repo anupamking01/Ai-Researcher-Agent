@@ -304,6 +304,12 @@ def verify_frozen_snapshot(
         _fingerprint(validator_content),
         label="archived content validator fingerprint",
     )
+    runtime_entry = manifest.get("content_validator_runtime")
+    _require_equal(
+        runtime_entry,
+        freeze.packet_build.content_validator_runtime_contract(),
+        label="content validator runtime contract",
+    )
 
     rating_entries = manifest.get("rating_inputs")
     if (

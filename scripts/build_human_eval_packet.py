@@ -12,7 +12,9 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import importlib.metadata
 import json
+import platform
 import random
 import re
 import unicodedata
@@ -73,7 +75,10 @@ _COORDINATOR_MARKER_RE = re.compile(
     r"(?:variant_id|run_id|trace_path|report_path|blinding_key\.csv|experiment_traces)",
     re.IGNORECASE,
 )
-_MARKDOWN_RENDERER = MarkdownIt("commonmark", {"html": True})
+MARKDOWN_RENDERER_DISTRIBUTION = "markdown-it-py"
+MARKDOWN_RENDERER_PRESET = "commonmark"
+MARKDOWN_RENDERER_OPTIONS = {"html": True}
+_MARKDOWN_RENDERER = MarkdownIt(MARKDOWN_RENDERER_PRESET, MARKDOWN_RENDERER_OPTIONS)
 _BLOCK_TAGS = frozenset(
     {
         "address",
@@ -145,6 +150,22 @@ class _RenderedTextParser(HTMLParser):
 
     def handle_data(self, data: str) -> None:
         self.parts.append(data)
+
+
+def content_validator_runtime_contract() -> dict:
+    """Describe every runtime component that affects visible-text auditing."""
+    return {
+        "schema_version": 1,
+        "python_implementation": platform.python_implementation(),
+        "python_version": platform.python_version(),
+        "unicode_database_version": unicodedata.unidata_version,
+        "markdown_it_py_version": importlib.metadata.version(
+            MARKDOWN_RENDERER_DISTRIBUTION
+        ),
+        "mdurl_version": importlib.metadata.version("mdurl"),
+        "markdown_preset": MARKDOWN_RENDERER_PRESET,
+        "markdown_options": dict(MARKDOWN_RENDERER_OPTIONS),
+    }
 
 
 def _canonical_audit_text(text: str) -> str:

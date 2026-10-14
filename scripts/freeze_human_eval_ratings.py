@@ -670,6 +670,7 @@ def freeze_ratings(
     output_root = Path(output_root)
     producer_content = Path(__file__).resolve().read_bytes()
     content_validator_content = Path(packet_build.__file__).resolve().read_bytes()
+    content_validator_runtime = packet_build.content_validator_runtime_contract()
 
     if not protocol_path.is_file():
         raise ValueError(f"frozen human-evaluation protocol is missing: {protocol_path}")
@@ -817,6 +818,7 @@ def freeze_ratings(
                 "bytes": len(content_validator_content),
                 "sha256": hashlib.sha256(content_validator_content).hexdigest(),
             },
+            "content_validator_runtime": content_validator_runtime,
             "rating_inputs": sources,
             "frozen_ratings": {
                 "path": "frozen_ratings.csv",
