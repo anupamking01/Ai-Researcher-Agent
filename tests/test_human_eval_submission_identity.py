@@ -115,6 +115,37 @@ def test_canonically_equivalent_ids_cannot_supply_two_independent_raters(
     assert not options["output_root"].exists()
 
 
+@pytest.mark.parametrize(
+    "hidden_character",
+    ["\u200b", "\u202e", "\x00"],
+    ids=["zero-width-space", "bidi-override", "nul-control"],
+)
+def test_annotator_id_rejects_hidden_unicode_characters_before_freeze(
+    submission_inputs, hidden_character
+):
+    paths, options = submission_inputs
+    paths[0].write_bytes(_csv_bytes([f"synthetic-{hidden_character}a"]))
+    originals = [path.read_bytes() for path in paths]
+
+    with pytest.raises(ValueError, match="annotator_id.*control or format"):
+        freeze.freeze_ratings(paths, **options)
+
+    assert originals == [path.read_bytes() for path in paths]
+    assert not options["output_root"].exists()
+
+
+def test_annotator_id_rejects_control_character_before_whitespace_normalization(
+    submission_inputs,
+):
+    paths, options = submission_inputs
+    paths[0].write_bytes(_csv_bytes(["\tsynthetic-a"]))
+
+    with pytest.raises(ValueError, match=r"annotator_id.*U\+0009"):
+        freeze.freeze_ratings(paths, **options)
+
+    assert not options["output_root"].exists()
+
+
 def _canonical_collision_rows():
     return [
         {
@@ -135,6 +166,21 @@ def test_coverage_helper_rejects_canonically_equivalent_rater_ids():
 def test_agreement_helper_rejects_canonically_equivalent_rater_ids():
     with pytest.raises(ValueError, match="canonically equivalent annotator_id"):
         freeze.build_agreement(_canonical_collision_rows())
+
+
+def test_hidden_character_cannot_create_a_second_rater_in_coverage_helper():
+    rows = [
+        {
+            "annotator_id": annotator_id,
+            "blind_id": "H001",
+            **{field: "3" for field in freeze.SCORE_FIELDS},
+            "notes": "",
+        }
+        for annotator_id in ("synthetic-a", "synthetic-\u200ba")
+    ]
+
+    with pytest.raises(ValueError, match="annotator_id.*control or format"):
+        freeze._validate_assignment_coverage(rows, ["H001"])
 
 
 def test_single_decomposed_id_preserves_submitted_spelling_and_bytes(

@@ -66,6 +66,12 @@ coverage checks. This is not proof that differently spelled IDs belong to
 different people, so the coordinator must still enforce eligibility and
 independence.
 
+Annotator IDs must also be visible, auditable text: Unicode control and format
+characters are rejected. This prevents zero-width or bidirectional-control
+characters from creating identifiers that look identical while counting as
+independent raters. Ordinary Unicode letters and combining marks remain valid,
+and accepted raw CSV bytes are still retained unchanged.
+
 ## Spreadsheet-active text gate
 
 The importer rejects `annotator_id` or `notes` values whose normalized text

@@ -194,11 +194,22 @@ def _annotator_identity_key(annotator_id: str) -> str:
     return unicodedata.normalize("NFC", annotator_id)
 
 
+def _validate_annotator_id_characters(annotator_id: str) -> None:
+    """Require visible, auditable text for an independent-rater identifier."""
+    for character in annotator_id:
+        if unicodedata.category(character) in {"Cc", "Cf"}:
+            raise ValueError(
+                "annotator_id contains a Unicode control or format character "
+                f"(U+{ord(character):04X}); use a visible stable identifier"
+            )
+
+
 def _validate_annotator_identity_spellings(rows: list[dict]) -> None:
     """Reject multiple display spellings for one canonical annotator identity."""
     spellings: dict[str, str] = {}
     for row in rows:
         annotator_id = row["annotator_id"]
+        _validate_annotator_id_characters(annotator_id)
         identity_key = _annotator_identity_key(annotator_id)
         previous = spellings.get(identity_key)
         if previous is not None and previous != annotator_id:
@@ -282,7 +293,9 @@ def _load_ratings(
                     raise ValueError(
                         f"{path.name}:{line_number}: missing ratings CSV fields: {missing_fields}"
                     )
-                annotator_id = str(raw.get("annotator_id") or "").strip()
+                submitted_annotator_id = str(raw.get("annotator_id") or "")
+                _validate_annotator_id_characters(submitted_annotator_id)
+                annotator_id = submitted_annotator_id.strip()
                 blind_id = str(raw.get("blind_id") or "").strip()
                 notes = str(raw.get("notes") or "").strip()
 
