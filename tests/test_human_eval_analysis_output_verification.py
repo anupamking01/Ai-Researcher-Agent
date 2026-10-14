@@ -230,6 +230,9 @@ def test_write_bundle_emits_manifest_and_verifies(tmp_path):
         "analysis_core",
         "analysis_renderer",
         "analysis_verifier",
+        "blinded_freeze_verifier",
+        "packet_builder",
+        "packet_verifier",
         "ratings_freezer",
     }
 
@@ -443,6 +446,40 @@ def test_rejects_ratings_freezer_implementation_drift(tmp_path, monkeypatch):
     )
 
     with pytest.raises(ValueError, match="ratings freezer implementation fingerprint"):
+        verify.verify_bundle(output)
+
+
+@pytest.mark.parametrize(
+    "module,filename,label",
+    [
+        (
+            core.blind_verify,
+            "verify_human_eval_freeze.py",
+            "blinded freeze verifier implementation fingerprint",
+        ),
+        (
+            core.packet,
+            "build_human_eval_packet.py",
+            "packet builder implementation fingerprint",
+        ),
+        (
+            core.map_verify,
+            "verify_human_eval_packet.py",
+            "packet verifier implementation fingerprint",
+        ),
+    ],
+)
+def test_rejects_upstream_validation_implementation_drift(
+    tmp_path, monkeypatch, module, filename, label
+):
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+
+    changed_verifier = tmp_path / filename
+    changed_verifier.write_text("# changed upstream verification gate\n", encoding="utf-8")
+    monkeypatch.setattr(module, "__file__", str(changed_verifier))
+
+    with pytest.raises(ValueError, match=label):
         verify.verify_bundle(output)
 
 

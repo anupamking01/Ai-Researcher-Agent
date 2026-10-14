@@ -201,6 +201,18 @@ def write_bundle(payload, output_root):
             ANALYSIS_VERIFIER_SOURCE,
             logical_path="scripts/verify_human_eval_analysis_outputs.py",
         ),
+        "blinded_freeze_verifier": _implementation_fingerprint(
+            core.blind_verify.__file__,
+            logical_path="scripts/verify_human_eval_freeze.py",
+        ),
+        "packet_builder": _implementation_fingerprint(
+            core.packet.__file__,
+            logical_path="scripts/build_human_eval_packet.py",
+        ),
+        "packet_verifier": _implementation_fingerprint(
+            core.map_verify.__file__,
+            logical_path="scripts/verify_human_eval_packet.py",
+        ),
         "ratings_freezer": _implementation_fingerprint(
             freeze.__file__,
             logical_path="scripts/freeze_human_eval_ratings.py",
@@ -224,7 +236,7 @@ def write_bundle(payload, output_root):
         "integrity_note": (
             "The manifest binds the exact canonical analysis JSON, deterministic "
             "Markdown rendering, analysis/verification implementation source "
-            "bytes, and governing-input anchor implementation bytes. "
+            "bytes, and governing-input anchor and verifier implementation bytes. "
             "It is written last; the analysis command independently recomputes the "
             "payload from verified inputs before success is reported."
         ),

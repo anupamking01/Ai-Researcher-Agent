@@ -21,6 +21,12 @@ That manifest SHA-256-binds:
 - `scripts/human_eval_analysis_core.py`;
 - `scripts/analyze_human_eval.py`;
 - `scripts/verify_human_eval_analysis_outputs.py`;
+- `scripts/verify_human_eval_freeze.py`, which validates the blinded ratings
+  snapshot consumed by the analysis;
+- `scripts/build_human_eval_packet.py`, whose parsing and identity helpers are
+  consumed by the analysis core and packet verifier;
+- `scripts/verify_human_eval_packet.py`, which validates the packet and
+  coordinator mapping inputs before unblinding; and
 - `scripts/freeze_human_eval_ratings.py`, which owns the frozen governing-input
   paths and SHA-256 anchors consumed by the verifier.
 
@@ -75,6 +81,9 @@ Verification fails closed when:
   implementation recorded in the manifest;
 - the current publication verifier source bytes do not match the verification
   implementation recorded in the manifest;
+- the current blinded-freeze verifier, packet builder, or packet verifier source
+  bytes do not match the upstream input-validation implementations recorded in
+  the manifest;
 - result identity fields attempt to relabel human validation as automated
   confirmatory analysis, claim generated human ratings, claim treatment reruns,
   or add undeclared human-validation hypothesis tests.
