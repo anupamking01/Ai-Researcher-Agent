@@ -57,6 +57,18 @@ only in surrounding whitespace. This enforces the frozen whole-submission
 correction rule; it does not bar the one intentionally combined normalized
 `frozen_ratings.csv`.
 
+## Spreadsheet-active text gate
+
+The importer rejects `annotator_id` or `notes` values whose normalized text
+begins with `=`, `+`, `-`, or `@`. Spreadsheet programs can interpret those
+prefixes as formulas when a CSV is opened, even though CSV quoting is otherwise
+valid. Rejecting the submission before publication keeps the frozen CSV inert
+without silently escaping or changing the annotator's text; the coordinator
+must ask for plain-text wording and retain the original submitted file outside
+the failed freeze. The verifier applies the same rule to archived and normalized
+ratings. This transport-safety check does not alter scores, missingness, the
+rubric, the assignment plan, or treatment blinding.
+
 This is a file-level provenance check, not proof of distinct eligible humans.
 Coordinator eligibility, independence, and correction responsibilities remain
 those in `paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md`.

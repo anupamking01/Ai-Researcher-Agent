@@ -60,6 +60,7 @@ OUTPUT_FILES = (
     "agreement.json",
     "freeze_manifest.json",
 )
+SPREADSHEET_FORMULA_PREFIXES = ("=", "+", "-", "@")
 
 
 def sha256_file(path: Path) -> str:
@@ -176,6 +177,17 @@ def _strict_csv_rows(reader: csv.DictReader, *, path: Path, handle: io.StringIO)
             ) from exc
 
 
+def _reject_spreadsheet_active_text(
+    value: str, *, field: str, path: Path, line_number: int
+) -> None:
+    """Keep text cells inert when a frozen CSV is opened in a spreadsheet."""
+    if value.startswith(SPREADSHEET_FORMULA_PREFIXES):
+        raise ValueError(
+            f"{path.name}:{line_number}: {field} begins with a spreadsheet-active "
+            "formula marker; rewrite it as plain text before freezing"
+        )
+
+
 def _load_ratings(
     rating_paths: list[Path],
     *,
@@ -255,6 +267,18 @@ def _load_ratings(
 
                 if not annotator_id:
                     raise ValueError(f"{path.name}:{line_number} is missing annotator_id")
+                _reject_spreadsheet_active_text(
+                    annotator_id,
+                    field="annotator_id",
+                    path=path,
+                    line_number=line_number,
+                )
+                _reject_spreadsheet_active_text(
+                    notes,
+                    field="notes",
+                    path=path,
+                    line_number=line_number,
+                )
                 source_annotators.add(annotator_id)
                 if require_single_annotator and len(source_annotators) > 1:
                     raise ValueError(

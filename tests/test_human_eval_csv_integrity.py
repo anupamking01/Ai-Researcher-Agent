@@ -196,6 +196,37 @@ def test_accepts_explicit_empty_notes_cell(tmp_path, inputs):
     assert manifest["frozen_ratings"]["n_rows"] == 2
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("annotator_id", '=HYPERLINK("https://example.invalid","reviewer")'),
+        ("notes", "+SUM(1,1)"),
+        ("notes", "-1+2"),
+        ("notes", "  @SUM(1,1)"),
+    ],
+)
+def test_rejects_spreadsheet_active_text_before_publication(
+    tmp_path, inputs, field, value
+):
+    records = [dict(zip(RATING_FIELDS, row)) for row in _rows("Synthetic note")]
+    records[0][field] = value
+    ratings = [
+        _write(
+            tmp_path / f"submission-{index}.csv",
+            RATING_FIELDS,
+            [[record[name] for name in RATING_FIELDS]],
+        )
+        for index, record in enumerate(records, start=1)
+    ]
+    originals = {path: path.read_bytes() for path in ratings}
+
+    with pytest.raises(ValueError, match=rf"submission-1\.csv:2: {field}.*spreadsheet-active"):
+        freeze_ratings(ratings, **inputs)
+
+    assert all(path.read_bytes() == content for path, content in originals.items())
+    assert not inputs["output_root"].exists()
+
+
 def test_cli_rejects_extra_cell_without_success_receipt(tmp_path, inputs):
     ratings = _write(tmp_path / "bad.csv", RATING_FIELDS, [row + ["extra"] for row in _rows()])
     result = subprocess.run(
