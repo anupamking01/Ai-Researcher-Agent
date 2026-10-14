@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import analyze_main_study
 from scripts.fingerprint_research_artifacts import build_manifest
 from scripts import run_verified_main_study_analysis as verified
 from scripts.run_verified_main_study_analysis import verify_and_run, verify_run_and_record
@@ -24,6 +25,68 @@ def _study(tmp_path: Path):
     main.write_text(MAIN_HEADER + MAIN_ROW, encoding="utf-8")
     support.write_text(SUPPORT_HEADER + SUPPORT_ROW, encoding="utf-8")
     return main, support
+
+
+def _analysis_outputs(strict_support: float) -> tuple[bytes, bytes]:
+    means = {
+        "strict_support_rate": strict_support,
+        "broad_support_rate": strict_support,
+        "successful_sources": 2.0,
+        "total_tokens": 100.0,
+        "treatment_cost_usd": 0.05,
+        "latency_seconds": 1.2,
+    }
+    payload = {
+        "variant_summary": {
+            variant: {"means": dict(means), "zero_evidence_runs": 0}
+            for variant in analyze_main_study.VARIANTS
+        },
+        "primary_contrasts": {
+            name: {
+                "mean_difference": 0.0,
+                "median_difference": 0.0,
+                "bootstrap_95pct_ci_mean_difference": [0.0, 0.0],
+                "exact_two_sided_signflip_p": 1.0,
+                "holm_adjusted_p": 1.0,
+                "paired_dz": None,
+                "positive_tasks": 0,
+                "negative_tasks": 0,
+                "tied_tasks": 10,
+            }
+            for _, _, name in analyze_main_study.PRIMARY_CONTRASTS
+        },
+        "cost_quality_pareto": {"frontier": ["D3"]},
+    }
+    return (
+        json.dumps(payload, indent=2, sort_keys=True).encode("utf-8"),
+        analyze_main_study._markdown(payload).encode("utf-8"),
+    )
+
+
+def _stage_analysis(monkeypatch, json_bytes: bytes, markdown_bytes: bytes):
+    observed = {}
+
+    def stage(
+        manifest,
+        *,
+        root,
+        analyze=None,
+        output_json=None,
+        output_markdown=None,
+    ):
+        assert analyze is None
+        assert output_json is not None
+        assert output_markdown is not None
+        observed["json"] = Path(output_json)
+        observed["markdown"] = Path(output_markdown)
+        observed["json"].parent.mkdir(parents=True, exist_ok=True)
+        observed["markdown"].parent.mkdir(parents=True, exist_ok=True)
+        observed["json"].write_bytes(json_bytes)
+        observed["markdown"].write_bytes(markdown_bytes)
+        return 0
+
+    monkeypatch.setattr(verified, "verify_and_run", stage)
+    return observed
 
 
 def test_verified_gate_runs_analysis_only_after_checks(tmp_path):
@@ -298,3 +361,198 @@ def test_receipt_preflight_failure_blocks_analysis(tmp_path):
             output_verifier=lambda root: None,
         )
     assert calls == []
+
+
+def test_failed_candidate_verification_preserves_published_outputs(
+    tmp_path, monkeypatch
+):
+    outputs = tmp_path / "outputs"
+    paper = tmp_path / "paper"
+    outputs.mkdir()
+    paper.mkdir()
+    canonical_json, canonical_markdown = _analysis_outputs(0.5)
+    json_path = outputs / "main_study_inference.json"
+    markdown_path = paper / "MAIN_STUDY_INFERENCE.md"
+    json_path.write_bytes(canonical_json)
+    markdown_path.write_bytes(canonical_markdown)
+    receipt = outputs / "main_study_analysis_provenance.json"
+    receipt.write_text('{"status":"previous-success"}\n', encoding="utf-8")
+    observed = _stage_analysis(monkeypatch, b"{not-json", b"invalid markdown")
+
+    with pytest.raises(ValueError, match="canonical inference JSON is malformed"):
+        verify_run_and_record(
+            {"aggregate_sha256": "synthetic"},
+            root=tmp_path,
+            receipt_builder=lambda manifest, root: {"schema_version": 1},
+            output=receipt,
+        )
+
+    assert observed["json"] != json_path
+    assert observed["markdown"] != markdown_path
+    assert json_path.read_bytes() == canonical_json
+    assert markdown_path.read_bytes() == canonical_markdown
+    assert not receipt.exists()
+
+
+def test_divergent_verified_candidate_cannot_replace_published_outputs(
+    tmp_path, monkeypatch
+):
+    outputs = tmp_path / "outputs"
+    paper = tmp_path / "paper"
+    outputs.mkdir()
+    paper.mkdir()
+    canonical_json, canonical_markdown = _analysis_outputs(0.5)
+    candidate_json, candidate_markdown = _analysis_outputs(0.9)
+    json_path = outputs / "main_study_inference.json"
+    markdown_path = paper / "MAIN_STUDY_INFERENCE.md"
+    json_path.write_bytes(canonical_json)
+    markdown_path.write_bytes(canonical_markdown)
+    _stage_analysis(monkeypatch, candidate_json, candidate_markdown)
+
+    with pytest.raises(ValueError, match="differs from published canonical outputs"):
+        verify_run_and_record(
+            {"aggregate_sha256": "synthetic"},
+            root=tmp_path,
+            receipt_builder=lambda manifest, root: {"schema_version": 1},
+        )
+
+    assert json_path.read_bytes() == canonical_json
+    assert markdown_path.read_bytes() == canonical_markdown
+
+
+def test_identical_verified_candidate_reuses_published_outputs_and_records_receipt(
+    tmp_path, monkeypatch
+):
+    outputs = tmp_path / "outputs"
+    paper = tmp_path / "paper"
+    outputs.mkdir()
+    paper.mkdir()
+    canonical_json, canonical_markdown = _analysis_outputs(0.5)
+    json_path = outputs / "main_study_inference.json"
+    markdown_path = paper / "MAIN_STUDY_INFERENCE.md"
+    json_path.write_bytes(canonical_json)
+    markdown_path.write_bytes(canonical_markdown)
+    _stage_analysis(monkeypatch, canonical_json, canonical_markdown)
+    receipt = outputs / "main_study_analysis_provenance.json"
+
+    assert verify_run_and_record(
+        {"aggregate_sha256": "synthetic"},
+        root=tmp_path,
+        receipt_builder=lambda manifest, root: {"schema_version": 1},
+        output=receipt,
+    ) == 0
+
+    assert json_path.read_bytes() == canonical_json
+    assert markdown_path.read_bytes() == canonical_markdown
+    recorded = json.loads(receipt.read_text(encoding="utf-8"))
+    assert set(recorded["verified_outputs"]) == {
+        "canonical_inference",
+        "manuscript_rendering",
+    }
+
+
+def test_first_publication_rollback_never_deletes_a_concurrent_replacement(
+    tmp_path, monkeypatch
+):
+    candidate_json, candidate_markdown = _analysis_outputs(0.5)
+    candidate_root = tmp_path / "candidate"
+    candidate_json_path = candidate_root / "analysis.json"
+    candidate_markdown_path = candidate_root / "analysis.md"
+    candidate_root.mkdir()
+    candidate_json_path.write_bytes(candidate_json)
+    candidate_markdown_path.write_bytes(candidate_markdown)
+    published_json = tmp_path / "outputs" / "main_study_inference.json"
+    replacement = b'{"publisher":"concurrent"}\n'
+    real_create = verified._create_output_at
+
+    def replace_json_then_collide_on_markdown(directory_fd, name, content):
+        if name == verified.DEFAULT_JSON.name:
+            real_create(directory_fd, name, content)
+            published_json.unlink()
+            published_json.write_bytes(replacement)
+            return
+        raise FileExistsError(name)
+
+    monkeypatch.setattr(
+        verified,
+        "_create_output_at",
+        replace_json_then_collide_on_markdown,
+    )
+
+    with pytest.raises(ValueError, match="concurrent canonical analysis publication"):
+        verified._publish_verified_outputs(
+            candidate_json_path,
+            candidate_markdown_path,
+            root=tmp_path,
+        )
+
+    assert published_json.read_bytes() == replacement
+
+
+def test_parent_swap_cannot_redirect_or_launder_verified_candidate(
+    tmp_path, monkeypatch
+):
+    candidate_json, candidate_markdown = _analysis_outputs(0.5)
+    _stage_analysis(monkeypatch, candidate_json, candidate_markdown)
+    external = tmp_path / "external"
+    external.mkdir()
+    # Semantically equivalent JSON would pass the renderer check, but these
+    # bytes were never the verified candidate and must not be receipt-bound.
+    external_json = external / "main_study_inference.json"
+    external_json.write_bytes(candidate_json + b"\n")
+    detached = tmp_path / "detached-outputs"
+    real_open = verified._open_output_directory
+    swapped = []
+
+    def open_then_swap(path):
+        directory_fd = real_open(path)
+        if Path(path) == tmp_path / "outputs" and not swapped:
+            Path(path).rename(detached)
+            Path(path).symlink_to(external, target_is_directory=True)
+            swapped.append(True)
+        return directory_fd
+
+    monkeypatch.setattr(verified, "_open_output_directory", open_then_swap)
+    receipt = external / "main_study_analysis_provenance.json"
+
+    with pytest.raises(ValueError, match="canonical analysis parent changed"):
+        verify_run_and_record(
+            {"aggregate_sha256": "synthetic"},
+            root=tmp_path,
+            receipt_builder=lambda manifest, root: {"schema_version": 1},
+        )
+
+    assert swapped == [True]
+    assert (detached / "main_study_inference.json").read_bytes() == candidate_json
+    assert external_json.read_bytes() == candidate_json + b"\n"
+    assert not receipt.exists()
+
+
+def test_receipt_rejects_semantically_equivalent_post_publication_byte_drift(
+    tmp_path, monkeypatch
+):
+    candidate_json, candidate_markdown = _analysis_outputs(0.5)
+    _stage_analysis(monkeypatch, candidate_json, candidate_markdown)
+    real_publish = verified._publish_verified_outputs
+
+    def publish_then_drift(candidate_json_path, candidate_markdown_path, *, root):
+        real_publish(candidate_json_path, candidate_markdown_path, root=root)
+        canonical = root / verified.DEFAULT_JSON
+        canonical.write_bytes(canonical.read_bytes() + b"\n")
+
+    monkeypatch.setattr(
+        verified,
+        "_publish_verified_outputs",
+        publish_then_drift,
+    )
+    receipt = tmp_path / "outputs" / "main_study_analysis_provenance.json"
+
+    with pytest.raises(ValueError, match="changed after candidate verification"):
+        verify_run_and_record(
+            {"aggregate_sha256": "synthetic"},
+            root=tmp_path,
+            receipt_builder=lambda manifest, root: {"schema_version": 1},
+            output=receipt,
+        )
+
+    assert not receipt.exists()

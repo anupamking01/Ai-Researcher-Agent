@@ -15,6 +15,8 @@ import argparse
 import csv
 import hashlib
 import json
+import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -74,8 +76,20 @@ def _capture_verified_inputs(
     return captured
 
 
-def _run_analysis_from_snapshots(snapshots: dict[str, Path], *, root: Path) -> int:
+def _run_analysis_from_snapshots(
+    snapshots: dict[str, Path],
+    *,
+    root: Path,
+    output_json: Path | None = None,
+    output_markdown: Path | None = None,
+) -> int:
     """Run the frozen analyzer in a process isolated from live module globals."""
+    output_json = Path(output_json) if output_json is not None else root / DEFAULT_JSON
+    output_markdown = (
+        Path(output_markdown)
+        if output_markdown is not None
+        else root / DEFAULT_MARKDOWN
+    )
     try:
         completed = subprocess.run(
             [
@@ -84,8 +98,8 @@ def _run_analysis_from_snapshots(snapshots: dict[str, Path], *, root: Path) -> i
                 SNAPSHOT_ANALYSIS_DRIVER,
                 str(snapshots[CANONICAL_MAIN]),
                 str(snapshots[CANONICAL_SUPPORT]),
-                str(root / DEFAULT_JSON),
-                str(root / DEFAULT_MARKDOWN),
+                str(output_json),
+                str(output_markdown),
             ],
             cwd=root,
             check=False,
@@ -94,6 +108,170 @@ def _run_analysis_from_snapshots(snapshots: dict[str, Path], *, root: Path) -> i
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ValueError("unable to execute isolated frozen analysis") from exc
     return completed.returncode
+
+
+def _open_output_directory(path: Path) -> int:
+    """Open a stable, non-symlink directory for descriptor-relative publication."""
+    path = Path(path)
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        raise ValueError(f"canonical analysis parent must be a regular directory: {path}")
+    path.mkdir(parents=True, exist_ok=True)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(
+        os, "O_NOFOLLOW", 0
+    )
+    try:
+        directory_fd = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(
+            f"canonical analysis parent must be a regular directory: {path}"
+        ) from exc
+    if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
+        os.close(directory_fd)
+        raise ValueError(f"canonical analysis parent must be a regular directory: {path}")
+    return directory_fd
+
+
+def _read_output_at(directory_fd: int, name: str, *, label: str) -> bytes | None:
+    try:
+        metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(f"published {label} must be a regular file")
+    try:
+        file_fd = os.open(
+            name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_fd,
+        )
+    except OSError as exc:
+        raise ValueError(f"unable to read published {label}") from exc
+    with os.fdopen(file_fd, "rb") as handle:
+        return handle.read()
+
+
+def _require_directory_binding(path: Path, directory_fd: int) -> None:
+    """Require the canonical path to still name the opened directory inode."""
+    path = Path(path)
+    try:
+        current = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError(f"canonical analysis parent changed during publication: {path}") from exc
+    opened = os.fstat(directory_fd)
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
+    ):
+        raise ValueError(f"canonical analysis parent changed during publication: {path}")
+
+
+def _canonical_output_bytes(root: Path, relative: Path, *, label: str) -> bytes:
+    parent = root / relative.parent
+    directory_fd = _open_output_directory(parent)
+    try:
+        content = _read_output_at(directory_fd, relative.name, label=label)
+        if content is None:
+            raise ValueError(f"verified analysis output is missing: {root / relative}")
+        _require_directory_binding(parent, directory_fd)
+        return content
+    finally:
+        os.close(directory_fd)
+
+
+def _create_output_at(directory_fd: int, name: str, content: bytes) -> None:
+    file_fd = os.open(
+        name,
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_NOFOLLOW", 0),
+        0o666,
+        dir_fd=directory_fd,
+    )
+    with os.fdopen(file_fd, "wb") as handle:
+        handle.write(content)
+
+
+def _publish_verified_outputs(
+    candidate_json: Path,
+    candidate_markdown: Path,
+    *,
+    root: Path,
+) -> None:
+    """Publish once, or prove a rerun is byte-identical to canonical results."""
+    candidate_json = Path(candidate_json)
+    candidate_markdown = Path(candidate_markdown)
+    if candidate_json.is_symlink() or not candidate_json.is_file():
+        raise ValueError(f"verified candidate JSON is missing: {candidate_json}")
+    if candidate_markdown.is_symlink() or not candidate_markdown.is_file():
+        raise ValueError(f"verified candidate Markdown is missing: {candidate_markdown}")
+    expected_json = candidate_json.read_bytes()
+    expected_markdown = candidate_markdown.read_bytes()
+
+    json_parent = root / DEFAULT_JSON.parent
+    markdown_parent = root / DEFAULT_MARKDOWN.parent
+    json_fd = _open_output_directory(json_parent)
+    try:
+        markdown_fd = _open_output_directory(markdown_parent)
+    except BaseException:
+        os.close(json_fd)
+        raise
+    try:
+        published_json = _read_output_at(
+            json_fd, DEFAULT_JSON.name, label="canonical inference JSON"
+        )
+        published_markdown = _read_output_at(
+            markdown_fd,
+            DEFAULT_MARKDOWN.name,
+            label="manuscript inference Markdown",
+        )
+        if (published_json is None) != (published_markdown is None):
+            raise ValueError(
+                "published canonical analysis output set is incomplete; "
+                "refusing to repair or replace it automatically"
+            )
+        if published_json is not None:
+            if (
+                published_json != expected_json
+                or published_markdown != expected_markdown
+            ):
+                raise ValueError(
+                    "verified analysis differs from published canonical outputs; "
+                    "preserving the published result files"
+                )
+            _require_directory_binding(json_parent, json_fd)
+            _require_directory_binding(markdown_parent, markdown_fd)
+            return
+
+        try:
+            _create_output_at(json_fd, DEFAULT_JSON.name, expected_json)
+            _create_output_at(
+                markdown_fd, DEFAULT_MARKDOWN.name, expected_markdown
+            )
+        except OSError as exc:
+            raise ValueError(
+                "concurrent canonical analysis publication detected; "
+                "partial state is preserved for explicit inspection"
+            ) from exc
+
+        if (
+            _read_output_at(
+                json_fd, DEFAULT_JSON.name, label="canonical inference JSON"
+            )
+            != expected_json
+            or _read_output_at(
+                markdown_fd,
+                DEFAULT_MARKDOWN.name,
+                label="manuscript inference Markdown",
+            )
+            != expected_markdown
+        ):
+            raise ValueError("published canonical analysis bytes changed during publication")
+        _require_directory_binding(json_parent, json_fd)
+        _require_directory_binding(markdown_parent, markdown_fd)
+    finally:
+        os.close(markdown_fd)
+        os.close(json_fd)
 
 
 def _bind_verified_execution(receipt: dict, *, root: Path) -> dict:
@@ -115,7 +293,12 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _bind_verified_outputs(receipt: dict, *, root: Path) -> dict:
+def _bind_verified_outputs(
+    receipt: dict,
+    *,
+    root: Path,
+    expected_sha256: dict[str, str] | None = None,
+) -> dict:
     """Return a receipt that cryptographically binds the verified result files.
 
     Output verification establishes semantic consistency between canonical JSON
@@ -123,15 +306,35 @@ def _bind_verified_outputs(receipt: dict, *, root: Path) -> dict:
     the success receipt an attestation of the specific result artifacts that
     passed that check, rather than only an attestation of inputs/code/plan.
     """
+    canonical_bytes = _canonical_output_bytes(
+        root,
+        DEFAULT_JSON,
+        label="canonical inference JSON",
+    )
+    manuscript_bytes = _canonical_output_bytes(
+        root,
+        DEFAULT_MARKDOWN,
+        label="manuscript inference Markdown",
+    )
+    observed = {
+        "canonical_inference": hashlib.sha256(canonical_bytes).hexdigest(),
+        "manuscript_rendering": hashlib.sha256(manuscript_bytes).hexdigest(),
+    }
+    if expected_sha256 is not None and observed != expected_sha256:
+        raise ValueError(
+            "published canonical outputs changed after candidate verification; "
+            "refusing to issue a success receipt"
+        )
+
     bound = dict(receipt)
     bound["verified_outputs"] = {
         "canonical_inference": {
             "path": DEFAULT_JSON.as_posix(),
-            "sha256": _sha256(root / DEFAULT_JSON),
+            "sha256": observed["canonical_inference"],
         },
         "manuscript_rendering": {
             "path": DEFAULT_MARKDOWN.as_posix(),
-            "sha256": _sha256(root / DEFAULT_MARKDOWN),
+            "sha256": observed["manuscript_rendering"],
         },
     }
     return bound
@@ -142,6 +345,8 @@ def verify_and_run(
     *,
     root: Path = REPO_ROOT,
     analyze: Callable[[], int] | None = None,
+    output_json: Path | None = None,
+    output_markdown: Path | None = None,
 ) -> int:
     """Verify provenance/integrity before invoking the frozen analysis.
 
@@ -171,7 +376,12 @@ def verify_and_run(
         validate_rows(main_rows, support_rows)
         if analyze is not None:
             return analyze()
-        return _run_analysis_from_snapshots(snapshots, root=root)
+        return _run_analysis_from_snapshots(
+            snapshots,
+            root=root,
+            output_json=output_json,
+            output_markdown=output_markdown,
+        )
 
 
 def verify_run_and_record(
@@ -203,13 +413,56 @@ def verify_run_and_record(
     destination.unlink(missing_ok=True)
 
     receipt = receipt_builder(manifest, root=root)
-    result = verify_and_run(manifest, root=root, analyze=analyze)
-    if result != 0:
-        return result
+    expected_output_sha256 = None
+    if analyze is None:
+        with tempfile.TemporaryDirectory(
+            prefix="vera-main-analysis-candidate-"
+        ) as candidate_name:
+            candidate_root = Path(candidate_name)
+            candidate_json = candidate_root / DEFAULT_JSON
+            candidate_markdown = candidate_root / DEFAULT_MARKDOWN
+            result = verify_and_run(
+                manifest,
+                root=root,
+                output_json=candidate_json,
+                output_markdown=candidate_markdown,
+            )
+            if result != 0:
+                return result
+            output_verifier(
+                root=root,
+                json_path=candidate_json,
+                markdown_path=candidate_markdown,
+            )
+            _publish_verified_outputs(
+                candidate_json,
+                candidate_markdown,
+                root=root,
+            )
+            expected_output_sha256 = {
+                "canonical_inference": hashlib.sha256(
+                    candidate_json.read_bytes()
+                ).hexdigest(),
+                "manuscript_rendering": hashlib.sha256(
+                    candidate_markdown.read_bytes()
+                ).hexdigest(),
+            }
+    else:
+        result = verify_and_run(manifest, root=root, analyze=analyze)
+        if result != 0:
+            return result
+        output_verifier(root=root)
 
-    output_verifier(root=root)
+    # Re-read the published pair after the candidate-to-canonical boundary.
+    # This is the exact revision that the success receipt will bind.
     if output_verifier is verify_outputs:
-        receipt = _bind_verified_outputs(receipt, root=root)
+        output_verifier(root=root)
+    if output_verifier is verify_outputs:
+        receipt = _bind_verified_outputs(
+            receipt,
+            root=root,
+            expected_sha256=expected_output_sha256,
+        )
     if output_verifier is verify_outputs and receipt_builder is build_receipt:
         receipt = _bind_verified_execution(receipt, root=root)
         from scripts.verify_main_study_execution import verify_execution_receipt
