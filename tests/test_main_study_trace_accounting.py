@@ -239,6 +239,165 @@ def _write_main_inputs(tmp_path):
     return task_file, pricing_file
 
 
+def _configure_main(tmp_path, monkeypatch):
+    task_file, pricing_file = _write_main_inputs(tmp_path)
+    trace_root = tmp_path / "outputs" / "experiment_traces"
+    monkeypatch.setattr(run_budget_main_study, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(run_budget_main_study, "PRICING_FILE", pricing_file)
+    monkeypatch.setattr(run_budget_main_study, "TRACE_ROOT", trace_root)
+    monkeypatch.setattr(
+        run_budget_main_study.sys,
+        "argv",
+        ["run_budget_main_study.py", f"--task-file={task_file}"],
+    )
+    for name, value in {
+        "OPENAI_API_KEY": "test-key",
+        "SMART_LLM_MODEL": "test-smart",
+        "FAST_LLM_MODEL": "test-fast",
+        "TEMPERATURE": "1",
+    }.items():
+        monkeypatch.setenv(name, value)
+    return trace_root
+
+
+@pytest.mark.parametrize(
+    "state_name",
+    ["main_study_manifest.json", "main_study_progress.json"],
+)
+def test_existing_main_study_state_blocks_before_model_imports_or_overwrite(
+    tmp_path, monkeypatch, state_name
+):
+    _configure_main(tmp_path, monkeypatch)
+    state_path = tmp_path / "outputs" / state_name
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    original = b'{"preserved":true}\n'
+    state_path.write_bytes(original)
+
+    imported = []
+    real_import = builtins.__import__
+
+    def fail_if_model_module_imported(name, *args, **kwargs):
+        if name in {"logic.experiment", "logic.run"}:
+            imported.append(name)
+            raise AssertionError(f"model module imported with existing state: {name}")
+        return real_import(name, *args, **kwargs)
+
+    with monkeypatch.context() as import_patch:
+        import_patch.setattr(builtins, "__import__", fail_if_model_module_imported)
+        with pytest.raises(SystemExit, match="Refusing to overwrite existing main-study state"):
+            asyncio.run(run_budget_main_study.main())
+
+    assert imported == []
+    assert state_path.read_bytes() == original
+
+
+def test_existing_treatment_trace_blocks_rerun_before_model_imports(
+    tmp_path, monkeypatch
+):
+    trace_root = _configure_main(tmp_path, monkeypatch)
+    _write_trace(trace_root)
+
+    imported = []
+    real_import = builtins.__import__
+
+    def fail_if_model_module_imported(name, *args, **kwargs):
+        if name in {"logic.experiment", "logic.run"}:
+            imported.append(name)
+            raise AssertionError(f"model module imported before rerun gate: {name}")
+        return real_import(name, *args, **kwargs)
+
+    with monkeypatch.context() as import_patch:
+        import_patch.setattr(builtins, "__import__", fail_if_model_module_imported)
+        with pytest.raises(SystemExit, match="Refusing to rerun treatments: 1 existing trace"):
+            asyncio.run(run_budget_main_study.main())
+
+    assert imported == []
+    assert not (tmp_path / "outputs" / "main_study_manifest.json").exists()
+    assert not (tmp_path / "outputs" / "main_study_progress.json").exists()
+
+
+def test_symlinked_outputs_root_blocks_before_model_imports(tmp_path, monkeypatch):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tmp_path / "outputs").symlink_to(outside, target_is_directory=True)
+    _configure_main(tmp_path, monkeypatch)
+
+    imported = []
+    real_import = builtins.__import__
+
+    def fail_if_model_module_imported(name, *args, **kwargs):
+        if name in {"logic.experiment", "logic.run"}:
+            imported.append(name)
+            raise AssertionError(f"model module imported before output-root gate: {name}")
+        return real_import(name, *args, **kwargs)
+
+    with monkeypatch.context() as import_patch:
+        import_patch.setattr(builtins, "__import__", fail_if_model_module_imported)
+        with pytest.raises(SystemExit, match="Invalid main-study outputs root"):
+            asyncio.run(run_budget_main_study.main())
+
+    assert imported == []
+    assert list(outside.iterdir()) == []
+
+
+def test_create_only_json_write_preserves_state_published_after_preflight(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(run_budget_main_study, "REPO_ROOT", tmp_path)
+    path = tmp_path / "outputs" / "main_study_manifest.json"
+    path.parent.mkdir(parents=True)
+    original = b'{"winner":"other-process"}\n'
+    path.write_bytes(original)
+
+    with pytest.raises(SystemExit, match="Refusing to overwrite existing main-study state"):
+        run_budget_main_study._write_json(
+            "main_study_manifest.json",
+            {"winner": "this-process"},
+            create_only=True,
+        )
+
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    ("name", "create_only"),
+    [
+        ("main_study_manifest.json", True),
+        ("main_study_progress.json", False),
+    ],
+)
+def test_json_write_rejects_outputs_root_swapped_to_symlink_after_preflight(
+    tmp_path, monkeypatch, name, create_only
+):
+    monkeypatch.setattr(run_budget_main_study, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "TRACE_ROOT",
+        tmp_path / "outputs" / "experiment_traces",
+    )
+    assert run_budget_main_study._preflight_new_study_state(PRICING) == 0.0
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    target = outside / name
+    original = b'{"preserved":"outside"}\n'
+    if not create_only:
+        target.write_bytes(original)
+    (tmp_path / "outputs").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(SystemExit, match="Invalid main-study outputs root"):
+        run_budget_main_study._write_json(
+            name,
+            {"winner": "this-process"},
+            create_only=create_only,
+        )
+
+    if create_only:
+        assert not target.exists()
+    else:
+        assert target.read_bytes() == original
+
+
 def test_invalid_trace_ledger_fails_before_outputs_and_model_imports(
     tmp_path, monkeypatch
 ):

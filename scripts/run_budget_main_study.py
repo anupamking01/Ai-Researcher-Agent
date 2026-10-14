@@ -5,6 +5,12 @@ frozen 10-task D3/D6/P6/P6V matrix and stops before starting another treatment
 run if provider-reported spend from completed treatment runs has already reached
 ``--max-agent-cost-usd``. The default $3.00 treatment cap leaves a separate
 reserve for common post-hoc evaluation under the user's fixed API-credit limit.
+
+Treatment execution is deliberately start-only. If a prior main-study manifest,
+progress record, or treatment trace exists, the runner stops before importing
+model code or replacing artifacts. Recovery of measurement may use the separate
+evaluator-recovery workflow; treatment outputs require explicit adjudication and
+must never be silently rerun or selected for a better observed outcome.
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ import json
 import math
 import os
 import re
+import stat
 import subprocess
 import sys
 from dataclasses import replace
@@ -355,11 +362,11 @@ def _trace_cost_usd(path: Path, pricing: dict) -> float:
     return cost
 
 
-def _current_treatment_cost(pricing: dict) -> float:
+def _treatment_trace_paths() -> tuple[Path, ...]:
     if TRACE_ROOT.is_symlink():
         raise SystemExit(f"Invalid treatment trace root: {TRACE_ROOT}")
     if not TRACE_ROOT.exists():
-        return 0.0
+        return ()
     if not TRACE_ROOT.is_dir():
         raise SystemExit(f"Invalid treatment trace root: {TRACE_ROOT}")
     for variant in VARIANTS:
@@ -371,19 +378,109 @@ def _current_treatment_cost(pricing: dict) -> float:
                 f"Invalid treatment trace directory {variant_dir}: "
                 "must be a regular directory"
             )
+    return tuple(sorted(TRACE_ROOT.glob("*/*.json")))
+
+
+def _current_treatment_cost(pricing: dict) -> float:
     return math.fsum(
         _trace_cost_usd(path, pricing)
-        for path in sorted(TRACE_ROOT.glob("*/*.json"))
+        for path in _treatment_trace_paths()
     )
 
 
-def _write_json(name: str, payload: dict) -> Path:
+def _preflight_new_study_state(pricing: dict) -> float:
+    outputs_root = REPO_ROOT / "outputs"
+    if outputs_root.is_symlink() or (
+        outputs_root.exists() and not outputs_root.is_dir()
+    ):
+        raise SystemExit(
+            f"Invalid main-study outputs root {outputs_root}: "
+            "must be a regular directory"
+        )
+
+    trace_paths = _treatment_trace_paths()
+    treatment_cost = math.fsum(
+        _trace_cost_usd(path, pricing) for path in trace_paths
+    )
+    for name in ("main_study_manifest.json", "main_study_progress.json"):
+        path = outputs_root / name
+        if path.is_symlink() or path.exists():
+            raise SystemExit(
+                f"Refusing to overwrite existing main-study state: {path}"
+            )
+    if trace_paths:
+        noun = "trace" if len(trace_paths) == 1 else "traces"
+        raise SystemExit(
+            f"Refusing to rerun treatments: {len(trace_paths)} existing {noun}"
+        )
+    return treatment_cost
+
+
+def _open_outputs_root_fd() -> int:
+    outputs_root = REPO_ROOT / "outputs"
+    if outputs_root.is_symlink():
+        raise SystemExit(f"Invalid main-study outputs root: {outputs_root}")
+    try:
+        outputs_root.mkdir(parents=True, exist_ok=True)
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(
+            os, "O_NOFOLLOW", 0
+        )
+        directory_fd = os.open(outputs_root, flags)
+    except OSError as exc:
+        raise SystemExit(f"Invalid main-study outputs root: {outputs_root}") from exc
+    if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
+        os.close(directory_fd)
+        raise SystemExit(f"Invalid main-study outputs root: {outputs_root}")
+    return directory_fd
+
+
+def _write_json(name: str, payload: dict, *, create_only: bool = False) -> Path:
     path = REPO_ROOT / "outputs" / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    tmp.replace(path)
-    return path
+    encoded = json.dumps(payload, indent=2, sort_keys=True)
+    directory_fd = _open_outputs_root_fd()
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        if create_only:
+            try:
+                file_fd = os.open(
+                    name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow,
+                    0o666,
+                    dir_fd=directory_fd,
+                )
+            except FileExistsError as exc:
+                raise SystemExit(
+                    f"Refusing to overwrite existing main-study state: {path}"
+                ) from exc
+            with os.fdopen(file_fd, "w", encoding="utf-8") as handle:
+                handle.write(encoded)
+            return path
+
+        tmp_name = f"{name}.tmp"
+        try:
+            file_fd = os.open(
+                tmp_name,
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC | nofollow,
+                0o666,
+                dir_fd=directory_fd,
+            )
+            with os.fdopen(file_fd, "w", encoding="utf-8") as handle:
+                handle.write(encoded)
+            os.replace(
+                tmp_name,
+                name,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+            )
+        except OSError as exc:
+            try:
+                os.unlink(tmp_name, dir_fd=directory_fd)
+            except OSError:
+                pass
+            raise SystemExit(f"Cannot write main-study state {path}: {exc}") from exc
+        return path
+    finally:
+        os.close(directory_fd)
 
 
 class ConsoleWebSocket:
@@ -421,7 +518,7 @@ async def main() -> None:
                 f"Pricing file {PRICING_FILE} has no rate for {env_name}={model}"
             )
 
-    initial_treatment_cost = _current_treatment_cost(pricing)
+    initial_treatment_cost = _preflight_new_study_state(pricing)
 
     from logic.experiment import ExperimentConfig
     from logic.run import run_agent
@@ -453,7 +550,7 @@ async def main() -> None:
         "pricing_file_sha256": pricing_snapshot["sha256"],
         "budget_note": "Treatment cap and evaluator reserve are separate safeguards; both use frozen uncached rates.",
     }
-    _write_json("main_study_manifest.json", manifest)
+    _write_json("main_study_manifest.json", manifest, create_only=True)
 
     progress = {
         "schema_version": 1,
