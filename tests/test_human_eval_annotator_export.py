@@ -1,5 +1,7 @@
 """Synthetic checks for annotator-safe human-evaluation distribution bundles."""
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -88,6 +90,10 @@ def _export(case):
     )
 
 
+def _opened_directory(directory_fd: int) -> Path:
+    return Path(os.readlink(f"/proc/self/fd/{directory_fd}"))
+
+
 def test_export_contains_only_annotator_safe_artifacts(packet_case):
     receipt = _export(packet_case)
 
@@ -133,13 +139,14 @@ def test_exported_bytes_come_from_same_snapshot_that_was_verified(packet_case, m
 
 
 def test_export_rejects_coherently_rehashed_output_replacement(packet_case, monkeypatch):
-    real_write = exporter._write_exclusive
+    real_write = exporter._write_exclusive_at
 
-    def replace_after_publication(path, content):
-        real_write(path, content)
-        if Path(path).name != "annotator_manifest.json":
-            return
-        packet_path = packet_case["export_root"] / "packet.jsonl"
+    def replace_after_publication(directory_fd, name, content):
+        identity = real_write(directory_fd, name, content)
+        if name != "annotator_manifest.json":
+            return identity
+        staging_root = _opened_directory(directory_fd)
+        packet_path = staging_root / "packet.jsonl"
         rows = [
             json.loads(line)
             for line in packet_path.read_text(encoding="utf-8").splitlines()
@@ -153,7 +160,7 @@ def test_export_rejects_coherently_rehashed_output_replacement(packet_case, monk
             + "\n"
         ).encode("utf-8")
         packet_path.write_bytes(packet_bytes)
-        manifest_path = packet_case["export_root"] / "annotator_manifest.json"
+        manifest_path = staging_root / "annotator_manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["artifacts"]["packet"] = {
             "path": "packet.jsonl",
@@ -163,30 +170,270 @@ def test_export_rejects_coherently_rehashed_output_replacement(packet_case, monk
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        return identity
 
-    monkeypatch.setattr(exporter, "_write_exclusive", replace_after_publication)
+    monkeypatch.setattr(exporter, "_write_exclusive_at", replace_after_publication)
 
     with pytest.raises(
         ValueError,
-        match="annotator packet.jsonl does not match the verified coordinator source",
+        match="annotator manifest does not match the published candidate",
     ):
         _export(packet_case)
+
+
+def test_export_rejects_output_root_replacement_before_success(
+    packet_case, monkeypatch
+):
+    output_root = packet_case["export_root"]
+    detached = output_root.with_name("detached-annotator-distribution")
+    replacement = output_root.with_name("replacement-annotator-distribution")
+    real_snapshot = exporter._snapshot_annotator_bundle
+    swapped = []
+
+    def replace_root_before_snapshot(live_root, snapshot_root):
+        if not swapped:
+            shutil.copytree(live_root, replacement)
+            live_root.rename(detached)
+            live_root.symlink_to(replacement, target_is_directory=True)
+            swapped.append(True)
+        return real_snapshot(live_root, snapshot_root)
+
+    monkeypatch.setattr(
+        exporter,
+        "_snapshot_annotator_bundle",
+        replace_root_before_snapshot,
+    )
+
+    with pytest.raises(ValueError, match="annotator bundle output root changed"):
+        _export(packet_case)
+
+    assert swapped == [True]
+    assert detached.is_dir()
+    assert not output_root.exists()
+
+
+def test_export_rejects_competing_output_created_before_atomic_publish(
+    packet_case, monkeypatch
+):
+    output_root = packet_case["export_root"]
+    real_publish = exporter._publish_directory_noreplace
+    competed = []
+
+    def create_competing_output(staging_root, destination):
+        destination.mkdir()
+        (destination / "owner.txt").write_text("competing output\n", encoding="utf-8")
+        competed.append(True)
+        return real_publish(staging_root, destination)
+
+    monkeypatch.setattr(
+        exporter,
+        "_publish_directory_noreplace",
+        create_competing_output,
+    )
+
+    with pytest.raises(ValueError, match="refusing to overwrite annotator bundle output"):
+        _export(packet_case)
+
+    assert competed == [True]
+    assert (output_root / "owner.txt").read_text(encoding="utf-8") == "competing output\n"
+
+
+def test_export_preserves_reused_staging_path_after_publish(packet_case, monkeypatch):
+    real_publish = exporter._publish_directory_noreplace
+    reused = []
+
+    def reuse_staging_path(staging_root, destination):
+        real_publish(staging_root, destination)
+        staging_root.mkdir()
+        (staging_root / "owner.txt").write_text(
+            "concurrent owner\n",
+            encoding="utf-8",
+        )
+        reused.append(staging_root)
+
+    monkeypatch.setattr(
+        exporter,
+        "_publish_directory_noreplace",
+        reuse_staging_path,
+    )
+
+    _export(packet_case)
+
+    assert len(reused) == 1
+    assert (reused[0] / "owner.txt").read_text(encoding="utf-8") == "concurrent owner\n"
+
+
+def test_export_preserves_replacement_staging_path_after_failure(
+    packet_case, monkeypatch
+):
+    real_snapshot = exporter._snapshot_annotator_bundle
+    replacements = []
+
+    def replace_staging_before_snapshot(staging_root, snapshot_root):
+        detached = staging_root.with_name(f"{staging_root.name}-detached")
+        staging_root.rename(detached)
+        staging_root.mkdir()
+        (staging_root / "owner.txt").write_text(
+            "concurrent owner\n",
+            encoding="utf-8",
+        )
+        replacements.append(staging_root)
+        return real_snapshot(staging_root, snapshot_root)
+
+    monkeypatch.setattr(
+        exporter,
+        "_snapshot_annotator_bundle",
+        replace_staging_before_snapshot,
+    )
+
+    with pytest.raises(ValueError, match="artifact set mismatch"):
+        _export(packet_case)
+
+    assert len(replacements) == 1
+    assert (replacements[0] / "owner.txt").read_text(encoding="utf-8") == "concurrent owner\n"
+
+
+def test_export_preserves_conflicting_expected_file_on_exclusive_create_failure(
+    packet_case, monkeypatch
+):
+    real_write = exporter._write_exclusive_at
+    staging_roots = []
+
+    def create_conflict_before_first_write(directory_fd, name, content):
+        if not staging_roots:
+            staging_root = _opened_directory(directory_fd)
+            (staging_root / name).write_text(
+                "concurrent owner\n",
+                encoding="utf-8",
+            )
+            staging_roots.append(staging_root)
+        return real_write(directory_fd, name, content)
+
+    monkeypatch.setattr(
+        exporter,
+        "_write_exclusive_at",
+        create_conflict_before_first_write,
+    )
+
+    with pytest.raises(ValueError, match="refusing to overwrite annotator-bundle artifact"):
+        _export(packet_case)
+
+    assert len(staging_roots) == 1
+    assert (staging_roots[0] / "packet.jsonl").read_text(encoding="utf-8") == (
+        "concurrent owner\n"
+    )
+
+
+def test_export_never_writes_through_a_replaced_output_root(
+    packet_case, monkeypatch
+):
+    output_root = packet_case["export_root"]
+    detached = output_root.with_name("detached-mid-publication")
+    replacement = output_root.with_name("replacement-mid-publication")
+    real_write = exporter._write_exclusive_at
+    swapped = []
+
+    def replace_root_after_first_write(directory_fd, name, content):
+        identity = real_write(directory_fd, name, content)
+        if name == "packet.jsonl" and not swapped:
+            staging_root = _opened_directory(directory_fd)
+            staging_root.rename(detached)
+            replacement.mkdir()
+            shutil.copyfile(
+                detached / "packet.jsonl",
+                replacement / "packet.jsonl",
+            )
+            staging_root.symlink_to(replacement, target_is_directory=True)
+            swapped.append(True)
+        return identity
+
+    monkeypatch.setattr(
+        exporter,
+        "_write_exclusive_at",
+        replace_root_after_first_write,
+    )
+
+    with pytest.raises(ValueError, match="annotator bundle output root changed"):
+        _export(packet_case)
+
+    assert swapped == [True]
+    assert {path.name for path in replacement.iterdir()} == {"packet.jsonl"}
+    assert not output_root.exists()
+
+
+def test_export_rejects_semantically_equivalent_manifest_byte_replacement(
+    packet_case, monkeypatch
+):
+    real_snapshot = exporter._snapshot_annotator_bundle
+    replaced = []
+
+    def replace_manifest_before_snapshot(output_root, snapshot_root):
+        manifest = output_root / "annotator_manifest.json"
+        if not replaced:
+            manifest.write_bytes(manifest.read_bytes() + b"\n")
+            replaced.append(True)
+        return real_snapshot(output_root, snapshot_root)
+
+    monkeypatch.setattr(
+        exporter,
+        "_snapshot_annotator_bundle",
+        replace_manifest_before_snapshot,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="annotator manifest does not match the published candidate",
+    ):
+        _export(packet_case)
+
+    assert replaced == [True]
+
+
+def test_export_rejects_output_root_replacement_during_final_verification(
+    packet_case, monkeypatch
+):
+    output_root = packet_case["export_root"]
+    real_verify = exporter.verify_annotator_bundle
+    swapped = []
+
+    def replace_root_after_verification(snapshot_root):
+        receipt = real_verify(snapshot_root)
+        output_root.mkdir()
+        (output_root / "blinding_key.csv").write_text(
+            "blind_id,variant_id\nblind-001,A\n",
+            encoding="utf-8",
+        )
+        swapped.append(True)
+        return receipt
+
+    monkeypatch.setattr(
+        exporter,
+        "verify_annotator_bundle",
+        replace_root_after_verification,
+    )
+
+    with pytest.raises(ValueError, match="refusing to overwrite annotator bundle output"):
+        _export(packet_case)
+
+    assert swapped == [True]
+    assert {path.name for path in output_root.iterdir()} == {"blinding_key.csv"}
 
 
 def test_export_rejects_coordinator_artifact_inserted_before_capture(
     packet_case, monkeypatch
 ):
-    real_write = exporter._write_exclusive
+    real_write = exporter._write_exclusive_at
 
-    def add_blinding_key_after_publication(path, content):
-        real_write(path, content)
-        if Path(path).name == "annotator_manifest.json":
+    def add_blinding_key_after_publication(directory_fd, name, content):
+        identity = real_write(directory_fd, name, content)
+        if name == "annotator_manifest.json":
             source = packet_case["packet_root"] / "blinding_key.csv"
-            destination = packet_case["export_root"] / "blinding_key.csv"
+            destination = _opened_directory(directory_fd) / "blinding_key.csv"
             destination.write_bytes(source.read_bytes())
+        return identity
 
     monkeypatch.setattr(
-        exporter, "_write_exclusive", add_blinding_key_after_publication
+        exporter, "_write_exclusive_at", add_blinding_key_after_publication
     )
 
     with pytest.raises(ValueError, match="artifact set mismatch.*blinding_key.csv"):

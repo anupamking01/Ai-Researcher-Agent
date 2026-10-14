@@ -12,9 +12,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import ctypes
+import errno
 import hashlib
 import io
 import json
+import os
+import stat
 import tempfile
 from pathlib import Path
 
@@ -58,12 +62,93 @@ def _unique_json_object(label: str):
     return unique_object
 
 
-def _write_exclusive(path: Path, content: bytes) -> None:
+def _write_exclusive_at(directory_fd: int, name: str, content: bytes) -> None:
     try:
-        with Path(path).open("xb") as handle:
-            handle.write(content)
+        file_fd = os.open(
+            name,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o666,
+            dir_fd=directory_fd,
+        )
     except FileExistsError as exc:
-        raise ValueError(f"refusing to overwrite annotator-bundle artifact: {path}") from exc
+        raise ValueError(f"refusing to overwrite annotator-bundle artifact: {name}") from exc
+    with os.fdopen(file_fd, "wb") as handle:
+        handle.write(content)
+
+
+def _open_bound_directory(path: Path) -> int:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(
+        os, "O_NOFOLLOW", 0
+    )
+    try:
+        directory_fd = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(
+            f"annotator bundle output root must be a regular directory: {path}"
+        ) from exc
+    if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
+        os.close(directory_fd)
+        raise ValueError(
+            f"annotator bundle output root must be a regular directory: {path}"
+        )
+    return directory_fd
+
+
+def _require_directory_binding(path: Path, directory_fd: int) -> None:
+    try:
+        current = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError(f"annotator bundle output root changed during publication: {path}") from exc
+    opened = os.fstat(directory_fd)
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
+    ):
+        raise ValueError(f"annotator bundle output root changed during publication: {path}")
+
+
+def _publish_directory_noreplace(staging_root: Path, output_root: Path) -> None:
+    """Atomically install a staged directory without replacing any path."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        renameat2 = libc.renameat2
+    except AttributeError as exc:
+        raise ValueError(
+            "atomic no-replace directory publication is unavailable on this platform"
+        ) from exc
+    renameat2.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    at_fdcwd = -100
+    rename_noreplace = 1
+    if (
+        renameat2(
+            at_fdcwd,
+            os.fsencode(staging_root),
+            at_fdcwd,
+            os.fsencode(output_root),
+            rename_noreplace,
+        )
+        == 0
+    ):
+        return
+    error_number = ctypes.get_errno()
+    if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise ValueError(
+            f"refusing to overwrite annotator bundle output: {output_root}"
+        )
+    raise OSError(
+        error_number,
+        f"could not atomically publish annotator bundle: {output_root}",
+    )
 
 
 def _snapshot_coordinator_bundle(packet_root: Path, snapshot_root: Path) -> dict[str, bytes]:
@@ -366,49 +451,73 @@ def export_annotator_bundle(
         _read_jsonl_packet(packet_bytes)
         _read_ratings_template(template_bytes)
 
+        output_root.parent.mkdir(parents=True, exist_ok=True)
+        staging_root = Path(
+            tempfile.mkdtemp(
+            prefix=f".{output_root.name}.staging-",
+            dir=output_root.parent,
+            )
+        )
+        output_fd = _open_bound_directory(staging_root)
         try:
-            output_root.mkdir(parents=True, exist_ok=False)
-        except FileExistsError as exc:
-            raise ValueError(
-                f"refusing to overwrite annotator bundle output: {output_root}"
-            ) from exc
-
-        _write_exclusive(output_root / "packet.jsonl", packet_bytes)
-        _write_exclusive(output_root / "ratings_template.csv", template_bytes)
-        manifest = {
-            "schema_version": 1,
-            "study_id": "budget-main-v1",
-            "status": "human_eval_annotator_distribution",
-            "coordinator_artifacts_included": False,
-            "n_reports": len(_read_jsonl_packet(packet_bytes)),
-            "artifacts": {
-                "packet": {"path": "packet.jsonl", **_fingerprint(packet_bytes)},
-                "ratings_template": {
-                    "path": "ratings_template.csv",
-                    **_fingerprint(template_bytes),
+            _write_exclusive_at(output_fd, "packet.jsonl", packet_bytes)
+            _write_exclusive_at(output_fd, "ratings_template.csv", template_bytes)
+            manifest = {
+                "schema_version": 1,
+                "study_id": "budget-main-v1",
+                "status": "human_eval_annotator_distribution",
+                "coordinator_artifacts_included": False,
+                "n_reports": len(_read_jsonl_packet(packet_bytes)),
+                "artifacts": {
+                    "packet": {
+                        "path": "packet.jsonl",
+                        **_fingerprint(packet_bytes),
+                    },
+                    "ratings_template": {
+                        "path": "ratings_template.csv",
+                        **_fingerprint(template_bytes),
+                    },
                 },
-            },
-            "distribution_note": DISTRIBUTION_NOTE,
-        }
-        _write_exclusive(
-            output_root / "annotator_manifest.json",
-            (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),
-        )
-        # Verify one captured publication revision and prove that its two
-        # annotator-facing byte streams still equal the coordinator snapshot
-        # verified above. Local manifest consistency alone cannot establish
-        # source identity after a coherent packet+manifest replacement.
-        annotator_snapshot = Path(tmp_name) / "annotator"
-        annotator_snapshot.mkdir()
-        annotator_bytes = _snapshot_annotator_bundle(
-            output_root, annotator_snapshot
-        )
-        receipt = verify_annotator_bundle(annotator_snapshot)
-        return _source_bound_receipt(
-            receipt=receipt,
-            coordinator_bytes=captured,
-            annotator_bytes=annotator_bytes,
-        )
+                "distribution_note": DISTRIBUTION_NOTE,
+            }
+            manifest_bytes = (
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+            ).encode("utf-8")
+            _write_exclusive_at(
+                output_fd,
+                "annotator_manifest.json",
+                manifest_bytes,
+            )
+            # Verify one captured publication revision and prove that its two
+            # annotator-facing byte streams still equal the coordinator snapshot
+            # verified above. Local manifest consistency alone cannot establish
+            # source identity after a coherent packet+manifest replacement.
+            annotator_snapshot = Path(tmp_name) / "annotator"
+            annotator_snapshot.mkdir()
+            _require_directory_binding(staging_root, output_fd)
+            annotator_bytes = _snapshot_annotator_bundle(
+                staging_root, annotator_snapshot
+            )
+            _require_directory_binding(staging_root, output_fd)
+            if annotator_bytes["annotator_manifest.json"] != manifest_bytes:
+                raise ValueError(
+                    "annotator manifest does not match the published candidate"
+                )
+            receipt = verify_annotator_bundle(annotator_snapshot)
+            source_bound_receipt = _source_bound_receipt(
+                receipt=receipt,
+                coordinator_bytes=captured,
+                annotator_bytes=annotator_bytes,
+            )
+            _require_directory_binding(staging_root, output_fd)
+            _publish_directory_noreplace(staging_root, output_root)
+            _require_directory_binding(output_root, output_fd)
+            return source_bound_receipt
+        finally:
+            # A failed staging directory is retained deliberately. Deleting by
+            # pathname could remove a concurrent replacement after any identity
+            # check; successful publication has already moved this inode away.
+            os.close(output_fd)
 
 
 def main() -> int:

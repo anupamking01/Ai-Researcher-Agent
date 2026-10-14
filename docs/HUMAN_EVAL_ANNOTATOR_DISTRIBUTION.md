@@ -58,6 +58,24 @@ and the verified coordinator-manifest SHA-256. The verifier rejects extra files,
 including a coordinator blinding key copied into the distribution directory
 after export.
 
+Publication is built in a descriptor-bound staging directory. The exporter
+creates all three files relative to the opened staging inode rather than
+repeatedly resolving its path, checks that path-to-inode binding around
+snapshot verification, and requires the captured annotator manifest to equal
+the exact bytes it generated rather than a semantically equivalent JSON
+document. Only after those checks does Linux `renameat2(RENAME_NOREPLACE)`
+atomically install the staged directory at the requested output path. A
+competing file, directory, or symlink at that path is never replaced. The
+exporter then requires the published path to name the opened inode before it
+returns the receipt. Persistent staging replacement, a redirected write, a
+coherent manifest replacement, or a competing destination thus fails closed
+without a success receipt. Platforms without atomic no-replace directory
+publication are rejected rather than using a racy check-then-rename fallback.
+If publication fails after staging begins, the staging directory is retained:
+automatic pathname cleanup could delete data from a concurrent replacement.
+An operator may inspect and remove a failed `.annotator-bundle-v1.staging-*`
+directory only after confirming no other process owns it.
+
 Independent distribution verification also enforces a plain-text packet contract:
 all four packet fields must be nonempty strings, not nested JSON objects,
 numbers, or arrays that could conceal coordinator metadata. The manifest's
@@ -117,8 +135,9 @@ verified coordinator manifest; those details are not added to the annotator
 bundle.
 
 Both sides are snapshotted before verification, so a later change to either
-live directory cannot change the bytes that were compared. These snapshot
-checks are coordinator-side provenance checks, not filesystem locks: they do
-not detect a transient change restored before capture or prevent replacement
-after the check. Retain the verified bundle bytes or distribute them
+live directory cannot change the bytes that were compared. These snapshot and
+identity checks are coordinator-side provenance checks, not filesystem locks:
+they cannot detect every transient staging rename/replacement that is restored
+between point-in-time checks, or prevent replacement of the published path
+after the final check. Retain the verified bundle bytes or distribute them
 immediately through the controlled annotation workflow.
