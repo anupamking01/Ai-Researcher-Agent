@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import fingerprint_research_artifacts as fingerprints
 from scripts.fingerprint_research_artifacts import build_manifest, sha256_file
 
 
@@ -73,3 +74,73 @@ def test_manifest_rejects_artifacts_outside_root(tmp_path: Path) -> None:
 def test_missing_artifact_fails_closed(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="missing or not a file"):
         sha256_file(tmp_path / "missing.csv")
+
+
+def test_sha256_file_rejects_symlink(tmp_path: Path) -> None:
+    target = tmp_path / "target.csv"
+    target.write_text("x\n", encoding="utf-8")
+    alias = tmp_path / "alias.csv"
+    alias.symlink_to(target)
+
+    with pytest.raises(ValueError, match="regular file"):
+        sha256_file(alias)
+
+
+def test_manifest_rejects_symlinked_artifact(tmp_path: Path) -> None:
+    target = tmp_path / "target.csv"
+    target.write_text("x\n", encoding="utf-8")
+    alias = tmp_path / "alias.csv"
+    alias.symlink_to(target)
+
+    with pytest.raises(ValueError, match="regular file"):
+        build_manifest([alias], root=tmp_path)
+
+
+def test_manifest_rejects_artifact_through_symlinked_directory(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    artifact = real / "artifact.csv"
+    artifact.write_text("x\n", encoding="utf-8")
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="regular file"):
+        build_manifest([alias / "artifact.csv"], root=tmp_path)
+
+
+def test_fingerprint_rejects_parent_directory_swap_during_open(
+    tmp_path: Path, monkeypatch
+) -> None:
+    parent = tmp_path / "inputs"
+    parent.mkdir()
+    artifact = parent / "artifact.csv"
+    artifact.write_bytes(b"canonical")
+    moved = tmp_path / "moved-inputs"
+    substitute = tmp_path / "substitute"
+    substitute.mkdir()
+    (substitute / artifact.name).write_bytes(b"substituted")
+    real_open = fingerprints.os.open
+    swapped = False
+
+    def swap_parent_before_leaf_open(path, flags, *args, **kwargs):
+        nonlocal swapped
+        if not swapped and str(path) in {str(artifact), artifact.name}:
+            swapped = True
+            parent.rename(moved)
+            parent.symlink_to(substitute, target_is_directory=True)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(fingerprints.os, "open", swap_parent_before_leaf_open)
+
+    with pytest.raises(ValueError, match="changed|regular file"):
+        sha256_file(artifact)
+
+
+def test_portable_fallback_streams_without_descriptor_traversal(
+    tmp_path: Path, monkeypatch
+) -> None:
+    artifact = tmp_path / "artifact.csv"
+    artifact.write_bytes(b"portable")
+    monkeypatch.setattr(fingerprints, "SUPPORTS_DESCRIPTOR_TRAVERSAL", False)
+
+    assert sha256_file(artifact) == hashlib.sha256(b"portable").hexdigest()

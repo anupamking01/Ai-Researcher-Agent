@@ -556,3 +556,30 @@ def test_receipt_rejects_semantically_equivalent_post_publication_byte_drift(
         )
 
     assert not receipt.exists()
+
+
+def test_verified_analysis_cli_rejects_duplicate_manifest_fields(
+    tmp_path, monkeypatch
+):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        '{"schema_version": 2, "schema_version": 1}\n',
+        encoding="utf-8",
+    )
+    receipt = tmp_path / "receipt.json"
+    monkeypatch.setattr(verified, "verify_run_and_record", lambda payload, output: 0)
+    monkeypatch.setattr(
+        verified.sys,
+        "argv",
+        [
+            "run_verified_main_study_analysis.py",
+            str(manifest),
+            "--provenance-output",
+            str(receipt),
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="duplicate JSON field"):
+        verified.main()
+
+    assert not receipt.exists()

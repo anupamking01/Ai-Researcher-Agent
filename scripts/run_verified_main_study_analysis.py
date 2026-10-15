@@ -27,7 +27,11 @@ from scripts import analyze_main_study
 from scripts.build_analysis_provenance import build_receipt
 from scripts.validate_main_study_inputs import validate_rows
 from scripts.verify_main_study_outputs import DEFAULT_JSON, DEFAULT_MARKDOWN, verify_outputs
-from scripts.verify_research_artifact_manifest import REPO_ROOT, verify_manifest
+from scripts.verify_research_artifact_manifest import (
+    REPO_ROOT,
+    parse_manifest_json,
+    verify_manifest,
+)
 
 CANONICAL_MAIN = "outputs/main_study_runs.csv"
 CANONICAL_SUPPORT = "outputs/posthoc_support_runs.csv"
@@ -486,7 +490,7 @@ def main() -> int:
     args = parser.parse_args()
     manifest_path = args.manifest if args.manifest.is_absolute() else REPO_ROOT / args.manifest
     try:
-        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        payload = parse_manifest_json(manifest_path.read_text(encoding="utf-8"))
         result = verify_run_and_record(payload, output=args.provenance_output)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise SystemExit(f"VERIFIED MAIN-STUDY ANALYSIS: FAIL: {exc}") from exc

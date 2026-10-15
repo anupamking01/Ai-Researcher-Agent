@@ -48,17 +48,17 @@
   "input_manifest_aggregate_sha256": "4e94308472e87cc14b85e5911c40b5f72c63225862a347e624fc0725afd632aa",
   "provenance_builder": {
     "path": "scripts/build_analysis_provenance.py",
-    "sha256": "7fb0a58ab90a9d6de69c070dafa6ad210b6b2043e372de475f1f67fce731ace2"
+    "sha256": "2bf018c94893d5acf14069fe6e89b0ee0035bb7fac500267332673c194eefbf0"
   },
   "schema_version": 2,
   "verification_implementations": {
     "artifact_fingerprinter": {
       "path": "scripts/fingerprint_research_artifacts.py",
-      "sha256": "0f17915aca82ee455b438dc677cd9a0d25162cc0ca01e63b8cbec4ec886a09d1"
+      "sha256": "542530777ffa53b8aa3e36ea875e91adfe2fe7b0c771fa18bdf8b5394938285c"
     },
     "artifact_manifest": {
       "path": "scripts/verify_research_artifact_manifest.py",
-      "sha256": "db95b8e21fc4194a5d4c46fbc90eae00113f2204738f9ccda06d99fd7fb38889"
+      "sha256": "d1823a0cf5dafcfa5bc194952514033a431a02f0774ff0b0397c11f63b1c8e47"
     },
     "output_consistency": {
       "path": "scripts/verify_main_study_outputs.py",
@@ -76,7 +76,7 @@
     },
     "runner": {
       "path": "scripts/run_verified_main_study_analysis.py",
-      "sha256": "356463a2060b857ef7c5abcdb136ecb14fe35f7ff8b7ddebd272859dfa641619"
+      "sha256": "45f59e87f7ac25a8d843f4dc10d5ae93550bd0e2ea2df169d5aaa5fe837535f7"
     }
   },
   "verified_inputs": [

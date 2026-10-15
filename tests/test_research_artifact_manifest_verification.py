@@ -1,8 +1,11 @@
 """Tests for fail-closed verification of preserved research artifacts."""
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
 
+from scripts import verify_research_artifact_manifest as manifest_verifier
 from scripts.fingerprint_research_artifacts import build_manifest
 from scripts.verify_research_artifact_manifest import verify_manifest
 
@@ -71,3 +74,94 @@ def test_verifier_rejects_unsupported_schema_and_algorithm(tmp_path):
     bad_algorithm = dict(manifest, algorithm="md5")
     with pytest.raises(ValueError, match="unsupported.*algorithm"):
         verify_manifest(bad_algorithm, root=tmp_path)
+
+
+@pytest.mark.parametrize("schema_version", [True, "1", 1.0, [], {}])
+def test_verifier_rejects_noninteger_schema_types(tmp_path, schema_version):
+    manifest, _, _ = _manifest(tmp_path)
+    manifest["schema_version"] = schema_version
+
+    with pytest.raises(ValueError, match="unsupported.*schema"):
+        verify_manifest(manifest, root=tmp_path)
+
+
+def test_verifier_rejects_extra_root_field(tmp_path):
+    manifest, _, _ = _manifest(tmp_path)
+    manifest["unreviewed_extension"] = True
+
+    with pytest.raises(ValueError, match="exact root fields"):
+        verify_manifest(manifest, root=tmp_path)
+
+
+def test_verifier_rejects_extra_artifact_field(tmp_path):
+    manifest, _, _ = _manifest(tmp_path)
+    manifest["artifacts"][0]["unreviewed_extension"] = True
+
+    with pytest.raises(ValueError, match="exact fields"):
+        verify_manifest(manifest, root=tmp_path)
+
+
+def test_verifier_rejects_boolean_byte_count(tmp_path):
+    artifact = tmp_path / "one-byte.bin"
+    artifact.write_bytes(b"x")
+    manifest = build_manifest([artifact], root=tmp_path)
+    manifest["artifacts"][0]["bytes"] = True
+    canonical = json.dumps(
+        manifest["artifacts"], sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    manifest["aggregate_sha256"] = hashlib.sha256(canonical).hexdigest()
+
+    with pytest.raises(ValueError, match="invalid byte count"):
+        verify_manifest(manifest, root=tmp_path)
+
+
+def test_verifier_rejects_symlink_substitution_with_identical_bytes(tmp_path):
+    manifest, first, _ = _manifest(tmp_path)
+    replacement = tmp_path / "replacement.csv"
+    replacement.write_bytes(first.read_bytes())
+    first.unlink()
+    first.symlink_to(replacement)
+
+    with pytest.raises(ValueError, match="regular file"):
+        verify_manifest(manifest, root=tmp_path)
+
+
+def test_verifier_rejects_symlinked_parent_directory(tmp_path):
+    manifest, _, second = _manifest(tmp_path)
+    original_parent = second.parent
+    moved_parent = tmp_path / "moved"
+    original_parent.rename(moved_parent)
+    original_parent.symlink_to(moved_parent, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="regular file"):
+        verify_manifest(manifest, root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "ambiguous_json",
+    [
+        '{"schema_version":999,"schema_version":1}',
+        '{"entry":{"path":"first","path":"second"}}',
+    ],
+)
+def test_manifest_json_parser_rejects_duplicate_fields(ambiguous_json):
+    with pytest.raises(ValueError, match="duplicate JSON field"):
+        manifest_verifier.parse_manifest_json(ambiguous_json)
+
+
+@pytest.mark.parametrize(
+    "ambiguous_path",
+    [r"C:\\outside\\artifact.csv", r"nested\\artifact.csv"],
+)
+def test_verifier_rejects_platform_ambiguous_paths(tmp_path, ambiguous_path):
+    manifest, _, _ = _manifest(tmp_path)
+    manifest["artifacts"][0]["path"] = ambiguous_path
+    canonical = json.dumps(
+        sorted(manifest["artifacts"], key=lambda item: item["path"]),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    manifest["aggregate_sha256"] = hashlib.sha256(canonical).hexdigest()
+
+    with pytest.raises(ValueError, match="canonical"):
+        verify_manifest(manifest, root=tmp_path)

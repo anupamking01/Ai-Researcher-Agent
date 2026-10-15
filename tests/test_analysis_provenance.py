@@ -1,8 +1,10 @@
 """Regression tests for manuscript-facing analysis provenance receipts."""
+import sys
 from pathlib import Path
 
 import pytest
 
+from scripts import build_analysis_provenance as provenance_builder
 from scripts.build_analysis_provenance import build_receipt
 from scripts.fingerprint_research_artifacts import build_manifest
 
@@ -138,3 +140,23 @@ def test_receipt_refuses_mutated_input_manifest(tmp_path):
     main.write_text("variant_id,task_id\nD6,main-01\n", encoding="utf-8")
     with pytest.raises(ValueError, match="SHA-256 mismatch"):
         build_receipt(manifest, root=tmp_path)
+
+
+def test_provenance_cli_rejects_duplicate_manifest_fields(tmp_path, monkeypatch):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        '{"schema_version": 2, "schema_version": 1}\n',
+        encoding="utf-8",
+    )
+    output = tmp_path / "receipt.json"
+    monkeypatch.setattr(provenance_builder, "build_receipt", lambda payload: {})
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["build_analysis_provenance.py", str(manifest), "--output", str(output)],
+    )
+
+    with pytest.raises(SystemExit, match="duplicate JSON field"):
+        provenance_builder.main()
+
+    assert not output.exists()

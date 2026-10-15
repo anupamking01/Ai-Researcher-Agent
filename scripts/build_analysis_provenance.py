@@ -15,7 +15,11 @@ import json
 from pathlib import Path
 
 from scripts import analyze_main_study
-from scripts.verify_research_artifact_manifest import REPO_ROOT, verify_manifest
+from scripts.verify_research_artifact_manifest import (
+    REPO_ROOT,
+    parse_manifest_json,
+    verify_manifest,
+)
 
 ANALYSIS_SCRIPT = "scripts/analyze_main_study.py"
 ANALYSIS_PLAN = "paper/ANALYSIS_PLAN.md"
@@ -105,7 +109,7 @@ def main() -> int:
     manifest_path = args.manifest if args.manifest.is_absolute() else REPO_ROOT / args.manifest
     output = args.output if args.output.is_absolute() else REPO_ROOT / args.output
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = parse_manifest_json(manifest_path.read_text(encoding="utf-8"))
         receipt = build_receipt(manifest)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise SystemExit(f"ANALYSIS PROVENANCE: FAIL: {exc}") from exc
