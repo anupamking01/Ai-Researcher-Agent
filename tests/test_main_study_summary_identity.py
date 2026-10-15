@@ -155,6 +155,18 @@ def _configure_summary(tmp_path, monkeypatch, *, traces, evaluations):
     monkeypatch.setattr(summarize_budget_main_study, "VARIANTS", ("D3",))
     monkeypatch.setattr(
         summarize_budget_main_study,
+        "FROZEN_EVALUATOR_MODEL",
+        "gpt-test",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        summarize_budget_main_study,
+        "FROZEN_EVALUATOR_TEMPERATURE",
+        1.0,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        summarize_budget_main_study,
         "OUT_JSON",
         tmp_path / "outputs" / "main_study_summary.json",
     )
@@ -585,7 +597,48 @@ def test_summary_rejects_cross_cell_evaluator_configuration_drift(
         ],
     )
 
-    with pytest.raises(SystemExit, match="evaluator_model must equal gpt-test"):
+    with pytest.raises(
+        SystemExit,
+        match="evaluator_model must equal frozen evaluator model gpt-test",
+    ):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+def test_summary_rejects_coherently_nonfrozen_evaluator_configuration(
+    tmp_path, monkeypatch
+):
+    other_usage = {
+        "gpt-other": {
+            "model_calls": 1,
+            "unavailable_calls": 0,
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+        }
+    }
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[
+            (
+                "D3",
+                "main-01.json",
+                _evaluation_payload(
+                    evaluator_model="gpt-other",
+                    provider_usage_by_model=other_usage,
+                ),
+            )
+        ],
+    )
+
+    with pytest.raises(
+        SystemExit,
+        match="evaluator_model must equal frozen evaluator model gpt-test",
+    ):
         summarize_budget_main_study.main()
 
     assert not summarize_budget_main_study.OUT_JSON.exists()

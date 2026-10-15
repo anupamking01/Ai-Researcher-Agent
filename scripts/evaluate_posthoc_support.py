@@ -36,10 +36,26 @@ TASK_FILE = REPO_ROOT / "experiments" / "main_budget_tasks.json"
 VARIANTS = ("D3", "D6", "P6", "P6V")
 MAX_CLAIMS = 12
 STUDY_ID = "budget-main-v1"
+FROZEN_EVALUATOR_MODEL = "gpt-5.6-terra"
+FROZEN_EVALUATOR_TEMPERATURE = 1.0
 NO_EVIDENCE_SENTINEL = (
     "[NO RETRIEVED EVIDENCE WAS AVAILABLE FOR THIS TREATMENT RUN. "
     "The run recorded zero successful retrieved sources. Do not use outside knowledge.]"
 )
+
+
+def _validate_frozen_evaluator_config(model: str, temperature: float) -> None:
+    """Require the evaluator configuration frozen before main-study recovery."""
+    if model != FROZEN_EVALUATOR_MODEL:
+        raise SystemExit(
+            "SMART_LLM_MODEL must equal frozen evaluator model "
+            f"{FROZEN_EVALUATOR_MODEL}"
+        )
+    if temperature != FROZEN_EVALUATOR_TEMPERATURE:
+        raise SystemExit(
+            "TEMPERATURE must equal frozen evaluator temperature "
+            f"{FROZEN_EVALUATOR_TEMPERATURE}"
+        )
 
 
 def _require_regular_file(path: Path, *, label: str) -> None:
@@ -412,8 +428,8 @@ def _validated_cache_accounting(
 ) -> float:
     if payload.get("evaluator_model") != expected_evaluator_model:
         raise SystemExit(
-            f"Cached post-hoc evaluation {path} evaluator_model must equal "
-            f"{expected_evaluator_model}"
+            f"Cached post-hoc evaluation {path} evaluator_model must equal frozen "
+            f"evaluator model {expected_evaluator_model}"
         )
 
     temperature = payload.get("temperature")
@@ -676,6 +692,7 @@ def main() -> int:
     evaluator_temperature = float(os.environ["TEMPERATURE"])
     if not math.isfinite(evaluator_temperature):
         raise SystemExit("TEMPERATURE must be finite")
+    _validate_frozen_evaluator_config(evaluator_model, evaluator_temperature)
     expected = []
     for variant in VARIANTS:
         for trace_path in sorted((TRACE_ROOT / variant).glob("*.json")):
@@ -745,6 +762,7 @@ def main() -> int:
         raw = create_chat_completion(
             model=evaluator_model,
             messages=[{"role": "user", "content": prompt}],
+            temperature=evaluator_temperature,
             usage_tracker=tracker,
             request_timeout_seconds=120,
         )

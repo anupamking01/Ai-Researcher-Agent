@@ -137,6 +137,14 @@ is rejected before any evaluator model import/call and before summary outputs
 are published. This prevents a correctly shaped treatment/evaluator cell from
 being silently attributed to a changed research question.
 
+The common evaluator configuration is also an explicit frozen contract:
+`gpt-5.6-terra` at temperature `1.0`. Evaluator recovery rejects different
+runtime settings before importing or calling the model client, and offline
+summary generation validates every cache against those fixed values rather
+than inferring the expected configuration from the first cache. This prevents
+a coherently replaced cache set from silently redefining the measurement
+instrument.
+
 Representative operational failure categories include:
 
 - `planning_error`

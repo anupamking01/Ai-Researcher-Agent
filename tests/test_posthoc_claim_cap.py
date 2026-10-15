@@ -596,6 +596,45 @@ def test_resume_rejects_drifted_incomplete_trace_before_any_completed_cell(
     assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
 
 
+@pytest.mark.parametrize(
+    ("env_name", "env_value", "message"),
+    [
+        (
+            "SMART_LLM_MODEL",
+            "gpt-5.6-luna",
+            "SMART_LLM_MODEL must equal frozen evaluator model gpt-5.6-terra",
+        ),
+        (
+            "TEMPERATURE",
+            "0",
+            "TEMPERATURE must equal frozen evaluator temperature 1.0",
+        ),
+    ],
+)
+def test_resume_rejects_nonfrozen_evaluator_configuration_before_model_call(
+    tmp_path, monkeypatch, env_name, env_value, message
+):
+    eval_root = _configure_resume_main(
+        tmp_path, monkeypatch, task_ids=("main-01",)
+    )
+    monkeypatch.setenv(env_name, env_value)
+    model_calls = []
+
+    def fail_if_called(**kwargs):
+        model_calls.append(kwargs)
+        raise AssertionError("model call occurred before frozen config validation")
+
+    monkeypatch.setattr("agent.llm_utils.create_chat_completion", fail_if_called)
+
+    with pytest.raises(SystemExit, match=message):
+        evaluate_posthoc_support.main()
+
+    assert model_calls == []
+    assert list(eval_root.glob("*/*.json")) == []
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
 def test_resume_preflights_later_cached_identity_before_first_model_call(
     tmp_path, monkeypatch
 ):
@@ -822,7 +861,7 @@ def test_new_cache_binds_exact_evaluator_prompt_inputs(tmp_path, monkeypatch):
     captured = []
 
     def complete_evaluation(**kwargs):
-        captured.append(kwargs["messages"][0]["content"])
+        captured.append(kwargs)
         _record_evaluator_usage(kwargs)
         return _evaluator_result()
 
@@ -839,12 +878,13 @@ def test_new_cache_binds_exact_evaluator_prompt_inputs(tmp_path, monkeypatch):
     question = "Question for main-01"
     report = "Report for main-01\n"
     evidence = evaluate_posthoc_support.NO_EVIDENCE_SENTINEL
+    assert captured[0]["temperature"] == 1.0
     assert cache["schema_version"] == 2
     assert cache["input_fingerprints"] == _input_fingerprints(
         question=question,
         report=report,
         evidence=evidence,
-        prompt=captured[0],
+        prompt=captured[0]["messages"][0]["content"],
     )
 
 

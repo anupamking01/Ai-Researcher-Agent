@@ -17,6 +17,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+from scripts.evaluate_posthoc_support import (
+    FROZEN_EVALUATOR_MODEL,
+    FROZEN_EVALUATOR_TEMPERATURE,
+)
+
 TRACE_ROOT = REPO_ROOT / "outputs" / "experiment_traces"
 EVAL_ROOT = REPO_ROOT / "outputs" / "posthoc_evaluations"
 PRICING_FILE = REPO_ROOT / "experiments" / "openai_pricing_2026-09-08.json"
@@ -100,8 +105,6 @@ def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str],
             trace_by_key[key] = record
 
     eval_by_key = {}
-    evaluator_model = None
-    evaluator_temperature = None
     for path in sorted(EVAL_ROOT.glob("*/*.json")):
         row = _load_json(path)
         path_variant = path.parent.name
@@ -126,9 +129,6 @@ def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str],
             )
         if key in eval_by_key:
             raise SystemExit(f"Duplicate evaluator cell: {path_variant}/{path_task}")
-        if evaluator_model is None:
-            evaluator_model = row.get("evaluator_model")
-            evaluator_temperature = row.get("temperature")
         successful_sources = int(
             trace_record["trace"].get("successful_source_count", 0) or 0
         )
@@ -157,8 +157,8 @@ def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str],
             expected_variant=path_variant,
             expected_task_id=path_task,
             expected_run_id=trace_record["run_id"],
-            expected_evaluator_model=evaluator_model,
-            expected_temperature=evaluator_temperature,
+            expected_evaluator_model=FROZEN_EVALUATOR_MODEL,
+            expected_temperature=FROZEN_EVALUATOR_TEMPERATURE,
             expected_evidence_status=expected_evidence_status,
             pricing=pricing,
             expected_input_fingerprints=expected_input_fingerprints,
