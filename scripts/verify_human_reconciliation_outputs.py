@@ -9,9 +9,11 @@ rerun treatments/evaluators, or add inferential tests.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import json
 import os
 import re
+import stat
 import subprocess
 from pathlib import Path
 
@@ -24,6 +26,119 @@ def _regular_bytes(path: Path, *, label: str) -> bytes:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"{label} must be a regular file: {path}")
     return path.read_bytes()
+
+
+def _open_bound_directory(path: Path, *, label: str) -> int:
+    """Open *path* without following a final symlink and return its descriptor."""
+    flags = os.O_RDONLY | os.O_DIRECTORY
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(f"{label} must be a regular directory: {path}") from exc
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise ValueError(f"{label} must be a regular directory: {path}")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _require_directory_path_binding(path: Path, descriptor: int, *, label: str) -> None:
+    """Require the path to still identify the directory held by *descriptor*."""
+    try:
+        current = os.stat(path, follow_symlinks=False)
+        bound = os.fstat(descriptor)
+    except OSError as exc:
+        raise ValueError(f"{label} changed during independent recomputation: {path}") from exc
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or (current.st_dev, current.st_ino) != (bound.st_dev, bound.st_ino)
+    ):
+        raise ValueError(f"{label} changed during independent recomputation: {path}")
+
+
+def _regular_snapshot_from_descriptor(
+    descriptor: int,
+    *,
+    label: str,
+) -> tuple[bytes, tuple[int, int, int, int, int]]:
+    """Read a stable byte snapshot while retaining the original file descriptor."""
+    before = os.fstat(descriptor)
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError(f"{label} must be a regular file")
+    chunks = []
+    offset = 0
+    while True:
+        chunk = os.pread(descriptor, 1024 * 1024, offset)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        offset += len(chunk)
+    after = os.fstat(descriptor)
+    before_identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    after_identity = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    if before_identity != after_identity:
+        raise ValueError(f"{label} changed while it was being read")
+    return b"".join(chunks), after_identity
+
+
+def _open_regular_snapshot_at(
+    directory_descriptor: int,
+    name: str,
+    *,
+    label: str,
+) -> tuple[int, tuple[bytes, tuple[int, int, int, int, int]]]:
+    """Open and snapshot a regular entry without following a final symlink."""
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(name, flags, dir_fd=directory_descriptor)
+    except OSError as exc:
+        raise ValueError(f"{label} must be a regular file") from exc
+    try:
+        snapshot = _regular_snapshot_from_descriptor(descriptor, label=label)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor, snapshot
+
+
+def _require_regular_entry_binding(
+    directory_descriptor: int,
+    name: str,
+    file_descriptor: int,
+    *,
+    label: str,
+) -> None:
+    """Require a directory entry to still identify its retained regular file."""
+    try:
+        current = os.stat(
+            name,
+            dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+        bound = os.fstat(file_descriptor)
+    except OSError as exc:
+        raise ValueError(f"{label} changed during independent recomputation") from exc
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or (current.st_dev, current.st_ino) != (bound.st_dev, bound.st_ino)
+    ):
+        raise ValueError(f"{label} changed during independent recomputation")
 
 
 def _load_json(content: bytes, *, label: str) -> dict:
@@ -274,30 +389,29 @@ def _validate_identity(payload: dict) -> None:
     )
 
 
-def verify_bundle(
+def _verify_bound_bundle(
     output_root: Path = reconcile.OUTPUT_ROOT,
     *,
+    output_descriptor: int,
+    output_snapshots: dict[
+        str,
+        tuple[int, tuple[bytes, tuple[int, int, int, int, int]]],
+    ],
+    output_directory_identity: tuple[int, int, int, int],
     root: Path = reconcile.ROOT,
     human_root: Path | None = None,
     contract: Path | None = None,
 ) -> dict:
-    """Verify a saved bundle and independently recompute its canonical result."""
+    """Verify a bundle through an already-bound output directory descriptor."""
     output_root = Path(output_root)
-    if output_root.is_symlink() or not output_root.is_dir():
-        raise ValueError(f"reconciliation output root must be a regular directory: {output_root}")
-
-    json_bytes = _regular_bytes(
-        output_root / reconcile.RECONCILIATION_JSON,
-        label="canonical reconciliation JSON",
+    output_specs = (
+        (reconcile.RECONCILIATION_JSON, "canonical reconciliation JSON"),
+        (reconcile.RECONCILIATION_MARKDOWN, "reconciliation Markdown"),
+        (reconcile.RECONCILIATION_MANIFEST, "reconciliation output manifest"),
     )
-    markdown_bytes = _regular_bytes(
-        output_root / reconcile.RECONCILIATION_MARKDOWN,
-        label="reconciliation Markdown",
-    )
-    manifest_bytes = _regular_bytes(
-        output_root / reconcile.RECONCILIATION_MANIFEST,
-        label="reconciliation output manifest",
-    )
+    json_bytes = output_snapshots[reconcile.RECONCILIATION_JSON][1][0]
+    markdown_bytes = output_snapshots[reconcile.RECONCILIATION_MARKDOWN][1][0]
+    manifest_bytes = output_snapshots[reconcile.RECONCILIATION_MANIFEST][1][0]
 
     payload = _load_json(json_bytes, label="canonical reconciliation JSON")
     manifest = _load_json(manifest_bytes, label="reconciliation output manifest")
@@ -396,7 +510,7 @@ def verify_bundle(
     )
     _require_equal(recomputed, payload, label="independently recomputed reconciliation")
 
-    return {
+    receipt = {
         "schema_version": 1,
         "study_id": payload["study_id"],
         "status": "automated_human_reconciliation_bundle_verified",
@@ -410,10 +524,111 @@ def verify_bundle(
         "producer_commit_environment_bound": True,
         "producer_commit_implementation_bound": True,
         "independent_recomputation_verified": True,
+        "outputs_stable_during_independent_recomputation": True,
         "human_ratings_generated": False,
         "treatment_outputs_rerun": False,
         "hypothesis_tests_added": False,
     }
+
+    # Re-read every originally opened inode before checking that all names and
+    # the public root still resolve to those retained descriptors. The final
+    # directory metadata check catches a late entry replacement after an
+    # earlier per-entry binding check.
+    for name, label in output_specs:
+        file_descriptor, original = output_snapshots[name]
+        current = _regular_snapshot_from_descriptor(file_descriptor, label=label)
+        if current != original:
+            raise ValueError(f"{label} changed during independent recomputation")
+    for name, label in output_specs:
+        file_descriptor, original = output_snapshots[name]
+        current = os.fstat(file_descriptor)
+        current_identity = (
+            current.st_dev,
+            current.st_ino,
+            current.st_size,
+            current.st_mtime_ns,
+            current.st_ctime_ns,
+        )
+        if current_identity != original[1]:
+            raise ValueError(f"{label} changed during independent recomputation")
+    for name, label in output_specs:
+        file_descriptor, _ = output_snapshots[name]
+        _require_regular_entry_binding(
+            output_descriptor,
+            name,
+            file_descriptor,
+            label=label,
+        )
+    directory = os.fstat(output_descriptor)
+    current_directory_identity = (
+        directory.st_dev,
+        directory.st_ino,
+        directory.st_mtime_ns,
+        directory.st_ctime_ns,
+    )
+    if current_directory_identity != output_directory_identity:
+        raise ValueError(
+            "reconciliation output root changed during independent recomputation: "
+            f"{output_root}"
+        )
+    _require_directory_path_binding(
+        output_root,
+        output_descriptor,
+        label="reconciliation output root",
+    )
+    return receipt
+
+
+def verify_bundle(
+    output_root: Path = reconcile.OUTPUT_ROOT,
+    *,
+    root: Path = reconcile.ROOT,
+    human_root: Path | None = None,
+    contract: Path | None = None,
+) -> dict:
+    """Verify a saved bundle and independently recompute its canonical result."""
+    output_root = Path(output_root)
+    output_specs = (
+        (reconcile.RECONCILIATION_JSON, "canonical reconciliation JSON"),
+        (reconcile.RECONCILIATION_MARKDOWN, "reconciliation Markdown"),
+        (reconcile.RECONCILIATION_MANIFEST, "reconciliation output manifest"),
+    )
+    with ExitStack() as descriptors:
+        output_descriptor = _open_bound_directory(
+            output_root,
+            label="reconciliation output root",
+        )
+        descriptors.callback(os.close, output_descriptor)
+        _require_directory_path_binding(
+            output_root,
+            output_descriptor,
+            label="reconciliation output root",
+        )
+        output_snapshots = {}
+        for name, label in output_specs:
+            file_descriptor, snapshot = _open_regular_snapshot_at(
+                output_descriptor,
+                name,
+                label=label,
+            )
+            descriptors.callback(os.close, file_descriptor)
+            output_snapshots[name] = (file_descriptor, snapshot)
+        directory = os.fstat(output_descriptor)
+        output_directory_identity = (
+            directory.st_dev,
+            directory.st_ino,
+            directory.st_mtime_ns,
+            directory.st_ctime_ns,
+        )
+        return _verify_bound_bundle(
+            output_root,
+            output_descriptor=output_descriptor,
+            output_snapshots=output_snapshots,
+            output_directory_identity=output_directory_identity,
+            root=root,
+            human_root=human_root,
+            contract=contract,
+        )
 
 
 def main() -> int:

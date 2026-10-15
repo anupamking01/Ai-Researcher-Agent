@@ -4,6 +4,7 @@ These fixtures are not collected human ratings or study findings.
 """
 import json
 import platform
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -485,6 +486,7 @@ def test_write_bundle_is_create_only_and_independently_verified(tmp_path, monkey
     assert receipt["producer_commit_implementation_bound"] is True
     assert receipt["analysis_environment_bound"] is True
     assert receipt["producer_commit_environment_bound"] is True
+    assert receipt["outputs_stable_during_independent_recomputation"] is True
     manifest = json.loads(
         (output / reconcile.RECONCILIATION_MANIFEST).read_text(encoding="utf-8")
     )
@@ -502,6 +504,141 @@ def test_write_bundle_is_create_only_and_independently_verified(tmp_path, monkey
 
     with pytest.raises(ValueError, match="refusing to overwrite reconciliation output"):
         reconcile.write_bundle(payload, output, root=tmp_path)
+
+
+def test_rejects_output_bytes_changed_during_independent_recomputation(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+
+    def mutate_output(**kwargs):
+        (output / reconcile.RECONCILIATION_JSON).write_text(
+            '{"status":"replacement"}\n', encoding="utf-8"
+        )
+        return payload
+
+    monkeypatch.setattr(reconcile, "reconcile_verified", mutate_output)
+    with pytest.raises(ValueError, match="changed during independent recomputation"):
+        verify.verify_bundle(output, root=tmp_path)
+
+
+def test_rejects_output_symlinked_during_independent_recomputation(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+    json_path = output / reconcile.RECONCILIATION_JSON
+    replacement = tmp_path / "replacement.json"
+    replacement.write_bytes(json_path.read_bytes())
+
+    def replace_with_symlink(**kwargs):
+        json_path.unlink()
+        json_path.symlink_to(replacement)
+        return payload
+
+    monkeypatch.setattr(reconcile, "reconcile_verified", replace_with_symlink)
+    with pytest.raises(ValueError, match="regular file|changed during"):
+        verify.verify_bundle(output, root=tmp_path)
+
+
+def test_rejects_output_directory_replaced_during_independent_recomputation(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+    detached = tmp_path / "detached-reconciliation"
+
+    def replace_directory(**kwargs):
+        output.rename(detached)
+        shutil.copytree(detached, output)
+        return payload
+
+    monkeypatch.setattr(reconcile, "reconcile_verified", replace_directory)
+    with pytest.raises(ValueError, match="output root changed"):
+        verify.verify_bundle(output, root=tmp_path)
+
+
+def test_rejects_earlier_output_changed_during_final_snapshot_pass(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+    real_snapshot = verify._regular_snapshot_from_descriptor
+    calls = 0
+
+    def mutate_after_json_recheck(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 5:
+            (output / reconcile.RECONCILIATION_JSON).write_text(
+                '{"status":"late replacement"}\n', encoding="utf-8"
+            )
+        return real_snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(
+        verify,
+        "_regular_snapshot_from_descriptor",
+        mutate_after_json_recheck,
+    )
+    with pytest.raises(ValueError, match="changed during independent recomputation"):
+        verify.verify_bundle(output, root=tmp_path)
+
+
+def test_rejects_output_directory_replaced_during_final_snapshot_pass(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+    detached = tmp_path / "late-detached-reconciliation"
+    real_snapshot = verify._regular_snapshot_from_descriptor
+    calls = 0
+
+    def replace_after_root_recheck(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 5:
+            output.rename(detached)
+            shutil.copytree(detached, output)
+        return real_snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(
+        verify,
+        "_regular_snapshot_from_descriptor",
+        replace_after_root_recheck,
+    )
+    with pytest.raises(ValueError, match="output root changed"):
+        verify.verify_bundle(output, root=tmp_path)
+
+
+def test_recomputation_failure_closes_output_directory_descriptor(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+
+    def fail_recomputation(**kwargs):
+        raise ValueError("synthetic reconciliation recomputation failure")
+
+    monkeypatch.setattr(reconcile, "reconcile_verified", fail_recomputation)
+    before = len(list(Path("/proc/self/fd").iterdir()))
+    with pytest.raises(ValueError, match="synthetic reconciliation recomputation failure"):
+        verify.verify_bundle(output, root=tmp_path)
+    after = len(list(Path("/proc/self/fd").iterdir()))
+
+    assert after == before
 
 
 def test_rejects_missing_reconciliation_analysis_environment(tmp_path, monkeypatch):
