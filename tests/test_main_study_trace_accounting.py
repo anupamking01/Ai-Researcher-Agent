@@ -42,6 +42,18 @@ def _trace_payload(**trace_overrides) -> dict:
         "run_id": "run-1",
         "variant_id": "D3",
         "task_id": "main-01",
+        "completed": True,
+        "source_budget": 3,
+        "source_count": 2,
+        "successful_source_count": 1,
+        "failed_source_count": 1,
+        "query_count": 1,
+        "search_call_count": 1,
+        "scheduled_urls": ["https://example.test/a", "https://example.test/b"],
+        "successful_urls": ["https://example.test/a"],
+        "failed_urls": ["https://example.test/b"],
+        "latency_seconds": 1.25,
+        "report_words": 100,
         "model_call_count": 2,
         "unavailable_usage_call_count": 0,
         "prompt_tokens": 150,
@@ -53,7 +65,11 @@ def _trace_payload(**trace_overrides) -> dict:
     trace.update(trace_overrides)
     return {
         "schema_version": 2,
-        "experiment": {"variant_id": "D3", "task_id": "main-01"},
+        "experiment": {
+            "variant_id": "D3",
+            "task_id": "main-01",
+            "source_budget": 3,
+        },
         "trace": trace,
     }
 
@@ -67,6 +83,24 @@ def _write_trace(tmp_path, payload=None):
 
 def test_trace_cost_accepts_conserved_complete_provider_ledger(tmp_path):
     path = _write_trace(tmp_path)
+
+    cost = run_budget_main_study._trace_cost_usd(path, PRICING)
+
+    assert cost == pytest.approx(0.000175)
+
+
+def test_trace_cost_accepts_failed_run_with_unclassified_scheduled_urls(tmp_path):
+    payload = _trace_payload(
+        completed=False,
+        source_count=2,
+        successful_source_count=0,
+        failed_source_count=0,
+        scheduled_urls=["https://example.test/a", "https://example.test/b"],
+        successful_urls=[],
+        failed_urls=[],
+        report_words=0,
+    )
+    path = _write_trace(tmp_path, payload)
 
     cost = run_budget_main_study._trace_cost_usd(path, PRICING)
 
@@ -137,6 +171,61 @@ def test_trace_cost_accepts_conserved_complete_provider_ledger(tmp_path):
     ],
 )
 def test_trace_cost_rejects_malformed_or_contradictory_ledgers(
+    tmp_path, mutate, message
+):
+    payload = _trace_payload()
+    mutate(payload)
+    path = _write_trace(tmp_path, payload)
+
+    with pytest.raises(SystemExit, match=message):
+        run_budget_main_study._trace_cost_usd(path, PRICING)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda payload: payload["trace"].update(completed=1),
+            "completed must be a boolean",
+        ),
+        (
+            lambda payload: payload["trace"].update(source_budget=4),
+            "source_budget must match experiment",
+        ),
+        (
+            lambda payload: (
+                payload["experiment"].update(source_budget=6),
+                payload["trace"].update(source_budget=6),
+            ),
+            "source_budget must match frozen variant",
+        ),
+        (
+            lambda payload: payload["trace"].update(source_count=4),
+            "source_count must not exceed source_budget",
+        ),
+        (
+            lambda payload: payload["trace"].update(successful_source_count=2),
+            "source count ledger mismatch",
+        ),
+        (
+            lambda payload: payload["trace"].update(scheduled_urls=[]),
+            "source URL ledger mismatch",
+        ),
+        (
+            lambda payload: payload["trace"].update(search_call_count=2),
+            "search_call_count must not exceed query_count",
+        ),
+        (
+            lambda payload: payload["trace"].update(latency_seconds=float("nan")),
+            "latency_seconds must be a finite non-negative number",
+        ),
+        (
+            lambda payload: payload["trace"].update(report_words=0),
+            "completed trace must have positive report_words",
+        ),
+    ],
+)
+def test_trace_cost_rejects_invalid_operational_measurements(
     tmp_path, mutate, message
 ):
     payload = _trace_payload()

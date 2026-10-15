@@ -160,6 +160,15 @@ async def run_agent(
             cost_accounting_status="not_computed_without_frozen_pricing_table",
         )
         trace_payload = trace.to_dict()
+        # A run-level cancellation can leave scheduled browses unclassified.
+        # Persist the observed successes rather than treating every non-failure
+        # as successful, which is only valid after all browse tasks settle.
+        trace_payload["successful_source_count"] = assistant.browse_success_count
+        trace_payload["source_success_rate"] = (
+            assistant.browse_success_count / assistant.browse_attempt_count
+            if assistant.browse_attempt_count > 0
+            else 0.0
+        )
         trace_payload["started_at_utc"] = start_time.isoformat()
         trace_payload["verification_status"] = verification.get(
             "status", "not_requested"

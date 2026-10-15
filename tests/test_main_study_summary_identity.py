@@ -25,13 +25,27 @@ PRICING = {
 def _trace_payload(*, task_id="main-01", run_id="run-d3-main-01"):
     return {
         "schema_version": 2,
-        "experiment": {"variant_id": "D3", "task_id": task_id},
+        "experiment": {
+            "variant_id": "D3",
+            "task_id": task_id,
+            "source_budget": 3,
+        },
         "trace": {
             "completed": True,
             "variant_id": "D3",
             "task_id": task_id,
             "run_id": run_id,
+            "source_budget": 3,
+            "source_count": 1,
             "successful_source_count": 1,
+            "failed_source_count": 0,
+            "query_count": 1,
+            "search_call_count": 1,
+            "scheduled_urls": ["https://example.test/source"],
+            "successful_urls": ["https://example.test/source"],
+            "failed_urls": [],
+            "latency_seconds": 1.0,
+            "report_words": 100,
             "usage_accounting_status": "provider_usage_complete",
             "provider_usage_by_model": {
                 "gpt-test": {

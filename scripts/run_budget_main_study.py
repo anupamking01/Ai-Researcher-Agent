@@ -39,6 +39,7 @@ DEFAULT_TASK_FILE = REPO_ROOT / "experiments" / "main_budget_tasks.json"
 PRICING_FILE = REPO_ROOT / "experiments" / "openai_pricing_2026-09-08.json"
 TRACE_ROOT = REPO_ROOT / "outputs" / "experiment_traces"
 VARIANTS = ("D3", "D6", "P6", "P6V")
+VARIANT_SOURCE_BUDGETS = {"D3": 3, "D6": 6, "P6": 6, "P6V": 6}
 
 
 def _utc_now() -> str:
@@ -265,6 +266,116 @@ def _validated_trace_cost(payload: dict, *, path: Path, pricing: dict) -> float:
         raise SystemExit(
             f"Invalid treatment trace {path}: usage_accounting_status must equal "
             "provider_usage_complete"
+        )
+
+    completed = trace.get("completed")
+    if type(completed) is not bool:
+        raise SystemExit(
+            f"Invalid treatment trace {path}: completed must be a boolean"
+        )
+
+    experiment_source_budget = experiment.get("source_budget")
+    source_budget = trace.get("source_budget")
+    if (
+        type(experiment_source_budget) is not int
+        or experiment_source_budget <= 0
+        or type(source_budget) is not int
+        or source_budget != experiment_source_budget
+    ):
+        raise SystemExit(
+            f"Invalid treatment trace {path}: source_budget must match experiment"
+        )
+    if source_budget != VARIANT_SOURCE_BUDGETS[expected_variant]:
+        raise SystemExit(
+            f"Invalid treatment trace {path}: source_budget must match frozen variant"
+        )
+
+    count_fields = (
+        "source_count",
+        "successful_source_count",
+        "failed_source_count",
+        "query_count",
+        "search_call_count",
+        "report_words",
+    )
+    for field in count_fields:
+        value = trace.get(field)
+        if type(value) is not int or value < 0:
+            raise SystemExit(
+                f"Invalid treatment trace {path}: {field} must be a "
+                "non-negative integer"
+            )
+
+    source_count = trace["source_count"]
+    if source_count > source_budget:
+        raise SystemExit(
+            f"Invalid treatment trace {path}: source_count must not exceed "
+            "source_budget"
+        )
+    classified_source_count = (
+        trace["successful_source_count"] + trace["failed_source_count"]
+    )
+    if classified_source_count > source_count or (
+        completed and classified_source_count != source_count
+    ):
+        raise SystemExit(
+            f"Invalid treatment trace {path}: source count ledger mismatch"
+        )
+    if trace["search_call_count"] > trace["query_count"]:
+        raise SystemExit(
+            f"Invalid treatment trace {path}: search_call_count must not exceed "
+            "query_count"
+        )
+
+    url_fields = ("scheduled_urls", "successful_urls", "failed_urls")
+    url_ledgers = {}
+    for field in url_fields:
+        urls = trace.get(field)
+        if not isinstance(urls, list) or any(
+            not isinstance(url, str) or not url.strip() or url != url.strip()
+            for url in urls
+        ):
+            raise SystemExit(
+                f"Invalid treatment trace {path}: source URL ledger mismatch"
+            )
+        url_ledgers[field] = urls
+
+    scheduled_urls = url_ledgers["scheduled_urls"]
+    successful_urls = url_ledgers["successful_urls"]
+    failed_urls = url_ledgers["failed_urls"]
+    scheduled_set = set(scheduled_urls)
+    successful_set = set(successful_urls)
+    failed_set = set(failed_urls)
+    if (
+        len(scheduled_urls) != source_count
+        or len(successful_urls) != trace["successful_source_count"]
+        or len(failed_urls) != trace["failed_source_count"]
+        or len(scheduled_set) != len(scheduled_urls)
+        or len(successful_set) != len(successful_urls)
+        or len(failed_set) != len(failed_urls)
+        or successful_set & failed_set
+        or not (successful_set | failed_set) <= scheduled_set
+        or (completed and scheduled_set != successful_set | failed_set)
+    ):
+        raise SystemExit(
+            f"Invalid treatment trace {path}: source URL ledger mismatch"
+        )
+
+    latency_seconds = trace.get("latency_seconds")
+    if (
+        isinstance(latency_seconds, bool)
+        or not isinstance(latency_seconds, (int, float))
+        or not math.isfinite(latency_seconds)
+        or latency_seconds < 0
+    ):
+        raise SystemExit(
+            f"Invalid treatment trace {path}: latency_seconds must be a finite "
+            "non-negative number"
+        )
+    if completed and trace["report_words"] <= 0:
+        raise SystemExit(
+            f"Invalid treatment trace {path}: completed trace must have positive "
+            "report_words"
         )
 
     usage_by_model = trace.get("provider_usage_by_model")
