@@ -58,7 +58,7 @@
     },
     "provenance": {
       "path": "scripts/verify_analysis_provenance.py",
-      "sha256": "7662105feedf16cb823e885cd4556f4d3937a7fe7784abfa510110ce843f3bb0"
+      "sha256": "0f803ab960b3534bec71cc39849c53071fa171da09e52833d10eb554fa421345"
     }
   },
   "verified_execution": {

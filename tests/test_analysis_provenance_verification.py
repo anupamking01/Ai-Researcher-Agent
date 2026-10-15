@@ -279,3 +279,133 @@ def test_recomputation_ignores_inherited_python_startup_paths(
     )
 
     provenance.verify_recomputed_outputs(receipt, root=root)
+
+
+def _copy_recomputation_fixture(tmp_path: Path) -> tuple[Path, dict]:
+    root = Path(__file__).resolve().parents[1]
+    for relative in (
+        "scripts/analyze_main_study.py",
+        "outputs/main_study_runs.csv",
+        "outputs/posthoc_support_runs.csv",
+        "outputs/main_study_inference.json",
+        "paper/MAIN_STUDY_INFERENCE.md",
+    ):
+        source = root / relative
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+    receipt = json.loads(
+        (root / provenance.DEFAULT_RECEIPT).read_text(encoding="utf-8")
+    )
+    return tmp_path, receipt
+
+
+def test_recomputation_rejects_same_byte_published_output_inode_replacement(
+    tmp_path: Path,
+    monkeypatch,
+):
+    root, receipt = _copy_recomputation_fixture(tmp_path)
+    artifact = root / "outputs/main_study_inference.json"
+    detached = root / "outputs/detached-main-study-inference.json"
+    real_run = provenance.subprocess.run
+
+    def replace_after_recomputation(*args, **kwargs):
+        completed = real_run(*args, **kwargs)
+        content = artifact.read_bytes()
+        artifact.rename(detached)
+        artifact.write_bytes(content)
+        return completed
+
+    monkeypatch.setattr(provenance.subprocess, "run", replace_after_recomputation)
+
+    with pytest.raises(
+        ValueError,
+        match="published canonical inference JSON changed during independent recomputation",
+    ):
+        provenance.verify_recomputed_outputs(receipt, root=root)
+
+
+def test_recomputation_rejects_same_byte_input_inode_replacement(
+    tmp_path: Path,
+    monkeypatch,
+):
+    root, receipt = _copy_recomputation_fixture(tmp_path)
+    artifact = root / "outputs/main_study_runs.csv"
+    detached = root / "outputs/detached-main-study-runs.csv"
+    real_run = provenance.subprocess.run
+
+    def replace_after_recomputation(*args, **kwargs):
+        completed = real_run(*args, **kwargs)
+        content = artifact.read_bytes()
+        artifact.rename(detached)
+        artifact.write_bytes(content)
+        return completed
+
+    monkeypatch.setattr(provenance.subprocess, "run", replace_after_recomputation)
+
+    with pytest.raises(
+        ValueError,
+        match="analysis input changed during independent recomputation",
+    ):
+        provenance.verify_recomputed_outputs(receipt, root=root)
+
+
+def test_recomputation_rejects_directory_rename_during_snapshot_capture(
+    tmp_path: Path,
+    monkeypatch,
+):
+    root, receipt = _copy_recomputation_fixture(tmp_path)
+    real_open = provenance._open_regular_snapshot_at
+    renamed = False
+
+    def rename_outputs_before_first_file(*args, **kwargs):
+        nonlocal renamed
+        if not renamed:
+            renamed = True
+            outputs = root / "outputs"
+            detached = root / "detached-outputs"
+            outputs.rename(detached)
+            detached.rename(outputs)
+        return real_open(*args, **kwargs)
+
+    monkeypatch.setattr(
+        provenance,
+        "_open_regular_snapshot_at",
+        rename_outputs_before_first_file,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="repository (root|outputs directory) changed during independent recomputation",
+    ):
+        provenance.verify_recomputed_outputs(receipt, root=root)
+
+
+def test_recomputation_rejects_root_rename_after_initial_path_binding(
+    tmp_path: Path,
+    monkeypatch,
+):
+    root, receipt = _copy_recomputation_fixture(tmp_path / "repository")
+    real_require_binding = provenance._require_directory_path_binding
+    renamed = False
+
+    def rename_root_after_binding(*args, **kwargs):
+        nonlocal renamed
+        real_require_binding(*args, **kwargs)
+        if not renamed:
+            renamed = True
+            detached = root.with_name("detached-repository")
+            root.rename(detached)
+            detached.rename(root)
+
+    monkeypatch.setattr(
+        provenance,
+        "_require_directory_path_binding",
+        rename_root_after_binding,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="repository root changed during independent recomputation",
+    ):
+        provenance.verify_recomputed_outputs(receipt, root=root)

@@ -10,8 +10,11 @@ no network calls and never replaces published results.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import hashlib
 import json
+import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -36,6 +39,13 @@ from scripts.verify_research_artifact_manifest import REPO_ROOT, verify_manifest
 
 DEFAULT_RECEIPT = Path("outputs/main_study_analysis_provenance.json")
 CANONICAL_INPUTS = {"outputs/main_study_runs.csv", "outputs/posthoc_support_runs.csv"}
+SNAPSHOT_FILES = {
+    "outputs/main_study_runs.csv": "analysis input",
+    "outputs/posthoc_support_runs.csv": "analysis input",
+    "outputs/main_study_inference.json": "published canonical inference JSON",
+    "paper/MAIN_STUDY_INFERENCE.md": "published manuscript inference Markdown",
+    "scripts/analyze_main_study.py": "analysis implementation",
+}
 RECOMPUTE_DRIVER = """\
 import importlib.util
 from pathlib import Path
@@ -60,6 +70,248 @@ def _regular_bytes(path: Path, *, label: str) -> bytes:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"{label} must be a regular file: {path}")
     return path.read_bytes()
+
+
+def _directory_identity(descriptor: int) -> tuple[int, int, int, int]:
+    metadata = os.fstat(descriptor)
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _open_bound_directory(
+    path: Path | str,
+    *,
+    label: str,
+    parent_descriptor: int | None = None,
+) -> int:
+    flags = os.O_RDONLY | os.O_DIRECTORY
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags, dir_fd=parent_descriptor)
+    except OSError as exc:
+        raise ValueError(f"{label} must be a regular directory: {path}") from exc
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise ValueError(f"{label} must be a regular directory: {path}")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _require_directory_path_binding(
+    path: Path,
+    descriptor: int,
+    *,
+    label: str,
+) -> None:
+    try:
+        current = os.stat(path, follow_symlinks=False)
+        bound = os.fstat(descriptor)
+    except OSError as exc:
+        raise ValueError(f"{label} changed during independent recomputation") from exc
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or (current.st_dev, current.st_ino) != (bound.st_dev, bound.st_ino)
+    ):
+        raise ValueError(f"{label} changed during independent recomputation")
+
+
+def _require_directory_entry_binding(
+    parent_descriptor: int,
+    name: str,
+    descriptor: int,
+    *,
+    label: str,
+) -> None:
+    try:
+        current = os.stat(
+            name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        bound = os.fstat(descriptor)
+    except OSError as exc:
+        raise ValueError(f"{label} changed during independent recomputation") from exc
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or (current.st_dev, current.st_ino) != (bound.st_dev, bound.st_ino)
+    ):
+        raise ValueError(f"{label} changed during independent recomputation")
+
+
+def _regular_snapshot_from_descriptor(
+    descriptor: int,
+    *,
+    label: str,
+) -> tuple[bytes, tuple[int, int, int, int, int]]:
+    before = os.fstat(descriptor)
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError(f"{label} must be a regular file")
+    chunks = []
+    offset = 0
+    while True:
+        chunk = os.pread(descriptor, 1024 * 1024, offset)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        offset += len(chunk)
+    after = os.fstat(descriptor)
+    before_identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    after_identity = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    if before_identity != after_identity:
+        raise ValueError(f"{label} changed while it was being read")
+    return b"".join(chunks), after_identity
+
+
+def _open_regular_snapshot_at(
+    directory_descriptor: int,
+    name: str,
+    *,
+    label: str,
+) -> tuple[int, tuple[bytes, tuple[int, int, int, int, int]]]:
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(name, flags, dir_fd=directory_descriptor)
+    except OSError as exc:
+        raise ValueError(f"{label} must be a regular file") from exc
+    try:
+        snapshot = _regular_snapshot_from_descriptor(descriptor, label=label)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor, snapshot
+
+
+def _require_regular_entry_binding(
+    directory_descriptor: int,
+    name: str,
+    file_descriptor: int,
+    *,
+    label: str,
+) -> None:
+    try:
+        current = os.stat(
+            name,
+            dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+        bound = os.fstat(file_descriptor)
+    except OSError as exc:
+        raise ValueError(f"{label} changed during independent recomputation") from exc
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or (current.st_dev, current.st_ino) != (bound.st_dev, bound.st_ino)
+    ):
+        raise ValueError(f"{label} changed during independent recomputation")
+
+
+def _open_repository_snapshot(descriptors: ExitStack, root: Path):
+    root_descriptor = _open_bound_directory(root, label="repository root")
+    descriptors.callback(os.close, root_descriptor)
+    root_identity = _directory_identity(root_descriptor)
+    _require_directory_path_binding(
+        root,
+        root_descriptor,
+        label="repository root",
+    )
+
+    directories = {}
+    files = {}
+    for parent in sorted({Path(relative).parent.as_posix() for relative in SNAPSHOT_FILES}):
+        directory_descriptor = _open_bound_directory(
+            parent,
+            label=f"repository {parent} directory",
+            parent_descriptor=root_descriptor,
+        )
+        descriptors.callback(os.close, directory_descriptor)
+        _require_directory_entry_binding(
+            root_descriptor,
+            parent,
+            directory_descriptor,
+            label=f"repository {parent} directory",
+        )
+        directory_identity = _directory_identity(directory_descriptor)
+        for relative, label in SNAPSHOT_FILES.items():
+            path = Path(relative)
+            if path.parent.as_posix() != parent:
+                continue
+            file_descriptor, snapshot = _open_regular_snapshot_at(
+                directory_descriptor,
+                path.name,
+                label=label,
+            )
+            descriptors.callback(os.close, file_descriptor)
+            files[relative] = (
+                directory_descriptor,
+                file_descriptor,
+                snapshot,
+                label,
+            )
+        directories[parent] = (
+            directory_descriptor,
+            directory_identity,
+        )
+    return root_descriptor, root_identity, directories, files
+
+
+def _require_repository_snapshot_stable(
+    root: Path,
+    root_descriptor: int,
+    root_identity,
+    directories,
+    files,
+) -> None:
+    """Observe that every captured artifact stayed bound through recomputation."""
+    for relative, (
+        directory_descriptor,
+        file_descriptor,
+        original,
+        label,
+    ) in files.items():
+        current = _regular_snapshot_from_descriptor(file_descriptor, label=label)
+        if current != original:
+            raise ValueError(f"{label} changed during independent recomputation")
+        _require_regular_entry_binding(
+            directory_descriptor,
+            Path(relative).name,
+            file_descriptor,
+            label=label,
+        )
+    for parent, (directory_descriptor, identity) in directories.items():
+        label = f"repository {parent} directory"
+        if _directory_identity(directory_descriptor) != identity:
+            raise ValueError(f"{label} changed during independent recomputation")
+        _require_directory_entry_binding(
+            root_descriptor,
+            parent,
+            directory_descriptor,
+            label=label,
+        )
+    if _directory_identity(root_descriptor) != root_identity:
+        raise ValueError("repository root changed during independent recomputation")
+    _require_directory_path_binding(
+        root,
+        root_descriptor,
+        label="repository root",
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -179,9 +431,9 @@ def verify_receipt(receipt: dict, *, root: Path = REPO_ROOT) -> None:
 def _captured_input_snapshots(
     receipt: dict,
     *,
-    root: Path,
+    captured_files,
     snapshot_root: Path,
-) -> tuple[dict[str, Path], dict[str, bytes]]:
+) -> dict[str, Path]:
     """Capture the exact receipt-bound input bytes for isolated recomputation."""
     entries = receipt.get("verified_inputs")
     if not isinstance(entries, list):
@@ -195,32 +447,8 @@ def _captured_input_snapshots(
         raise ValueError("receipt must bind exactly the canonical analysis input paths")
 
     snapshots = {}
-    captured_bytes = {}
     for relative in sorted(CANONICAL_INPUTS):
-        source = root / relative
-        if source.is_symlink() or not source.is_file():
-            raise ValueError(f"analysis input must be a regular file: {relative}")
-        before = source.stat()
-        content = source.read_bytes()
-        after = source.stat()
-        identity_before = (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_ctime_ns,
-        )
-        identity_after = (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-            after.st_ctime_ns,
-        )
-        if identity_before != identity_after:
-            raise ValueError(
-                f"analysis input changed while capturing recomputation snapshot: {relative}"
-            )
+        content = captured_files[relative][2][0]
         expected = by_path[relative]
         if (
             type(expected.get("bytes")) is not int
@@ -234,41 +462,19 @@ def _captured_input_snapshots(
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(content)
         snapshots[relative] = destination
-        captured_bytes[relative] = content
-    return snapshots, captured_bytes
-
-
-def _require_inputs_unchanged(
-    captured_bytes: dict[str, bytes],
-    *,
-    root: Path,
-) -> None:
-    for relative, expected in captured_bytes.items():
-        source = root / relative
-        if (
-            source.is_symlink()
-            or not source.is_file()
-            or source.read_bytes() != expected
-        ):
-            raise ValueError(
-                f"analysis input changed during independent recomputation: {relative}"
-            )
+    return snapshots
 
 
 def _capture_analysis_implementation(
     receipt: dict,
     *,
-    root: Path,
+    content: bytes,
     runtime_root: Path,
 ) -> Path:
     """Copy the exact receipt-bound analyzer into the isolated runtime."""
     entry = receipt.get("analysis_implementation")
     if not isinstance(entry, dict) or entry.get("path") != ANALYSIS_SCRIPT:
         raise ValueError("receipt does not bind the canonical analysis implementation")
-    content = _regular_bytes(
-        root / ANALYSIS_SCRIPT,
-        label="analysis implementation",
-    )
     if hashlib.sha256(content).hexdigest() != entry.get("sha256"):
         raise ValueError(
             "analysis implementation does not match recomputation receipt"
@@ -286,88 +492,85 @@ def verify_recomputed_outputs(
 ) -> None:
     """Re-execute frozen inference from snapshots and compare exact result bytes."""
     root = Path(root)
-    published_json = _regular_bytes(
-        root / DEFAULT_JSON,
-        label="published canonical inference JSON",
-    )
-    published_markdown = _regular_bytes(
-        root / DEFAULT_MARKDOWN,
-        label="published manuscript inference Markdown",
-    )
-    with tempfile.TemporaryDirectory(prefix="vera-main-recompute-") as tmp_name:
-        recompute_root = Path(tmp_name)
-        runtime_root = recompute_root / "runtime"
-        implementation_snapshot = _capture_analysis_implementation(
-            receipt,
-            root=root,
-            runtime_root=runtime_root,
-        )
-        snapshots, captured_bytes = _captured_input_snapshots(
-            receipt,
-            root=root,
-            snapshot_root=recompute_root / "inputs",
-        )
-        recomputed_json = recompute_root / DEFAULT_JSON
-        recomputed_markdown = recompute_root / DEFAULT_MARKDOWN
-        recomputed_json.parent.mkdir(parents=True, exist_ok=True)
-        recomputed_markdown.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                        "-I",
-                    "-c",
-                    RECOMPUTE_DRIVER,
-                        str(implementation_snapshot),
-                    str(snapshots["outputs/main_study_runs.csv"]),
-                    str(snapshots["outputs/posthoc_support_runs.csv"]),
-                    str(recomputed_json),
-                    str(recomputed_markdown),
-                ],
-                cwd=runtime_root,
-                check=False,
-                timeout=300,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise ValueError("unable to independently recompute main-study analysis") from exc
-        if completed.returncode != 0:
-            detail = completed.stderr.strip()
-            suffix = f": {detail}" if detail else ""
-            raise ValueError(
-                f"independent main-study recomputation failed{suffix}"
-            )
+    with ExitStack() as descriptors:
+        (
+            root_descriptor,
+            root_identity,
+            directories,
+            captured_files,
+        ) = _open_repository_snapshot(descriptors, root)
+        published_json = captured_files[DEFAULT_JSON.as_posix()][2][0]
+        published_markdown = captured_files[DEFAULT_MARKDOWN.as_posix()][2][0]
+        implementation = captured_files[ANALYSIS_SCRIPT][2][0]
 
-        verify_outputs(
-            root=root,
-            json_path=recomputed_json,
-            markdown_path=recomputed_markdown,
-        )
-        if recomputed_json.read_bytes() != published_json:
-            raise ValueError(
-                "independently recomputed canonical JSON does not match published analysis"
+        with tempfile.TemporaryDirectory(prefix="vera-main-recompute-") as tmp_name:
+            recompute_root = Path(tmp_name)
+            runtime_root = recompute_root / "runtime"
+            implementation_snapshot = _capture_analysis_implementation(
+                receipt,
+                content=implementation,
+                runtime_root=runtime_root,
             )
-        if recomputed_markdown.read_bytes() != published_markdown:
-            raise ValueError(
-                "independently recomputed Markdown does not match published analysis"
+            snapshots = _captured_input_snapshots(
+                receipt,
+                captured_files=captured_files,
+                snapshot_root=recompute_root / "inputs",
             )
-        if _regular_bytes(
-            root / DEFAULT_JSON,
-            label="published canonical inference JSON",
-        ) != published_json:
-            raise ValueError(
-                "published canonical inference JSON changed during independent recomputation"
+            recomputed_json = recompute_root / DEFAULT_JSON
+            recomputed_markdown = recompute_root / DEFAULT_MARKDOWN
+            recomputed_json.parent.mkdir(parents=True, exist_ok=True)
+            recomputed_markdown.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        "-I",
+                        "-c",
+                        RECOMPUTE_DRIVER,
+                        str(implementation_snapshot),
+                        str(snapshots["outputs/main_study_runs.csv"]),
+                        str(snapshots["outputs/posthoc_support_runs.csv"]),
+                        str(recomputed_json),
+                        str(recomputed_markdown),
+                    ],
+                    cwd=runtime_root,
+                    check=False,
+                    timeout=300,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise ValueError(
+                    "unable to independently recompute main-study analysis"
+                ) from exc
+            if completed.returncode != 0:
+                detail = completed.stderr.strip()
+                suffix = f": {detail}" if detail else ""
+                raise ValueError(
+                    f"independent main-study recomputation failed{suffix}"
+                )
+
+            verify_outputs(
+                root=root,
+                json_path=recomputed_json,
+                markdown_path=recomputed_markdown,
             )
-        if _regular_bytes(
-            root / DEFAULT_MARKDOWN,
-            label="published manuscript inference Markdown",
-        ) != published_markdown:
-            raise ValueError(
-                "published manuscript inference Markdown changed during independent recomputation"
+            if recomputed_json.read_bytes() != published_json:
+                raise ValueError(
+                    "independently recomputed canonical JSON does not match published analysis"
+                )
+            if recomputed_markdown.read_bytes() != published_markdown:
+                raise ValueError(
+                    "independently recomputed Markdown does not match published analysis"
+                )
+            _require_repository_snapshot_stable(
+                root,
+                root_descriptor,
+                root_identity,
+                directories,
+                captured_files,
             )
-        _require_inputs_unchanged(captured_bytes, root=root)
 
 
 def main() -> int:
