@@ -4,6 +4,8 @@ import json
 
 import pytest
 
+from logic.prompts import generate_verification_prompt
+from scripts import evaluate_posthoc_support
 from scripts import summarize_budget_main_study
 
 
@@ -117,6 +119,7 @@ def _configure_summary(tmp_path, monkeypatch, *, traces, evaluations):
     pricing_file.write_text(json.dumps(PRICING), encoding="utf-8")
 
     monkeypatch.setattr(summarize_budget_main_study, "TRACE_ROOT", trace_root)
+    monkeypatch.setattr(summarize_budget_main_study, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(summarize_budget_main_study, "EVAL_ROOT", eval_root)
     monkeypatch.setattr(summarize_budget_main_study, "PRICING_FILE", pricing_file)
     monkeypatch.setattr(summarize_budget_main_study, "VARIANTS", ("D3",))
@@ -130,6 +133,54 @@ def _configure_summary(tmp_path, monkeypatch, *, traces, evaluations):
         "OUT_CSV",
         tmp_path / "outputs" / "main_study_runs.csv",
     )
+
+
+def test_summary_rejects_schema_v2_cache_for_changed_report_before_outputs(
+    tmp_path, monkeypatch
+):
+    question = "Question for main-01"
+    original_report = "Original report\n"
+    changed_report = "Changed report\n"
+    evidence = "Retrieved evidence\n"
+    prompt = generate_verification_prompt(
+        question,
+        original_report,
+        evidence,
+        max_claims=evaluate_posthoc_support.MAX_CLAIMS,
+    )
+    fingerprints = evaluate_posthoc_support._evaluator_input_fingerprints(
+        question=question,
+        report=original_report,
+        evidence=evidence,
+        prompt=prompt,
+    )
+    trace = _trace_payload()
+    trace["trace"]["question"] = question
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", trace)],
+        evaluations=[
+            (
+                "D3",
+                "main-01.json",
+                _evaluation_payload(
+                    schema_version=2,
+                    input_fingerprints=fingerprints,
+                ),
+            )
+        ],
+    )
+    run_dir = tmp_path / "outputs" / "run-d3-main-01"
+    run_dir.mkdir(parents=True)
+    (run_dir / "research-query-1.txt").write_text(evidence, encoding="utf-8")
+    (run_dir / "research_report.md").write_text(changed_report, encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="input_fingerprints must match"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
 
 
 @pytest.mark.parametrize(

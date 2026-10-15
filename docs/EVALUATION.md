@@ -120,6 +120,15 @@ Important rules:
 - saved evidence and trace provenance must agree before an evaluation cell is considered valid;
 - exclusions require an explicit pre-existing validity rule and must be reported.
 
+New post-hoc evaluator caches use schema version 2. Each cache binds the exact
+UTF-8 question, report, retrieved-evidence context, and final evaluator prompt
+with SHA-256 and byte-size fingerprints. Evaluator-only resume recomputes these
+fingerprints before any model call and rejects a stale schema-v2 cache if any
+prompt input changed. The already-frozen canonical recovery caches predate this
+field and remain readable as schema version 1 for historical reproducibility;
+their cell identity and accounting are validated, but they must not be described
+as carrying the newer byte-level evaluator-input binding.
+
 Representative operational failure categories include:
 
 - `planning_error`

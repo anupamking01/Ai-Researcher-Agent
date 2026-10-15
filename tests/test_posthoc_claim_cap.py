@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import pytest
@@ -47,6 +48,25 @@ def _cached_evaluation(**overrides):
     }
     payload.update(overrides)
     return payload
+
+
+def _fingerprint_text(text):
+    content = text.encode("utf-8")
+    return {
+        "byte_size": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
+def _input_fingerprints(*, question, report, evidence, prompt):
+    return {
+        "algorithm": "sha256",
+        "encoding": "utf-8",
+        "question": _fingerprint_text(question),
+        "report": _fingerprint_text(report),
+        "evidence": _fingerprint_text(evidence),
+        "prompt": _fingerprint_text(prompt),
+    }
 
 
 def _load_cached(path, **overrides):
@@ -134,10 +154,43 @@ def test_cached_posthoc_evaluation_derives_missing_legacy_evidence_status(tmp_pa
     assert loaded["evidence_status"] == "retrieved_evidence"
 
 
+def test_schema_v2_cache_requires_explicit_evidence_status(tmp_path):
+    question = "Question"
+    report = "Report\n"
+    evidence = "Evidence\n"
+    from logic.prompts import generate_verification_prompt
+
+    prompt = generate_verification_prompt(
+        question,
+        report,
+        evidence,
+        max_claims=evaluate_posthoc_support.MAX_CLAIMS,
+    )
+    path = tmp_path / "cached.json"
+    path.write_text(
+        json.dumps(
+            _cached_evaluation(
+                schema_version=2,
+                evidence_status=None,
+                input_fingerprints=_input_fingerprints(
+                    question=question,
+                    report=report,
+                    evidence=evidence,
+                    prompt=prompt,
+                ),
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="evidence_status must equal"):
+        _load_cached(path)
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("schema_version", 2, "schema_version must equal 1"),
+        ("schema_version", 3, "schema_version must equal 1 or 2"),
         ("schema_version", True, "schema_version must equal 1"),
         ("schema_version", 1.0, "schema_version must equal 1"),
         ("study_id", "other-study", "study_id must equal budget-main-v1"),
@@ -651,6 +704,86 @@ def _record_evaluator_usage(kwargs):
             }
         },
     )
+
+
+def test_new_cache_binds_exact_evaluator_prompt_inputs(tmp_path, monkeypatch):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    captured = []
+
+    def complete_evaluation(**kwargs):
+        captured.append(kwargs["messages"][0]["content"])
+        _record_evaluator_usage(kwargs)
+        return _evaluator_result()
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        complete_evaluation,
+    )
+
+    assert evaluate_posthoc_support.main() == 0
+
+    cache = json.loads(
+        (eval_root / "D3" / "main-01.json").read_text(encoding="utf-8")
+    )
+    question = "Question for main-01"
+    report = "Report for main-01\n"
+    evidence = evaluate_posthoc_support.NO_EVIDENCE_SENTINEL
+    assert cache["schema_version"] == 2
+    assert cache["input_fingerprints"] == _input_fingerprints(
+        question=question,
+        report=report,
+        evidence=evidence,
+        prompt=captured[0],
+    )
+
+
+def test_resume_rejects_cache_bound_to_different_report_before_model_call(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    question = "Question for main-01"
+    original_report = "Original report\n"
+    evidence = evaluate_posthoc_support.NO_EVIDENCE_SENTINEL
+    from logic.prompts import generate_verification_prompt
+
+    original_prompt = generate_verification_prompt(
+        question,
+        original_report,
+        evidence,
+        max_claims=evaluate_posthoc_support.MAX_CLAIMS,
+    )
+    cache_path = eval_root / "D3" / "main-01.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(
+        json.dumps(
+            _cached_evaluation(
+                schema_version=2,
+                input_fingerprints=_input_fingerprints(
+                    question=question,
+                    report=original_report,
+                    evidence=evidence,
+                    prompt=original_prompt,
+                ),
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    model_calls = []
+
+    def fail_if_called(**kwargs):
+        model_calls.append(kwargs)
+        raise AssertionError("model call occurred before cache input validation")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        fail_if_called,
+    )
+
+    with pytest.raises(SystemExit, match="input_fingerprints must match"):
+        evaluate_posthoc_support.main()
+
+    assert model_calls == []
 
 
 def _evaluator_result(supported=7):

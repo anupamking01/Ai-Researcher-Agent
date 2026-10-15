@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import os
@@ -68,6 +69,27 @@ def _read_regular_text(path: Path, *, label: str) -> str:
         return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise SystemExit(f"{label} must contain valid UTF-8: {path}") from exc
+
+
+def _text_fingerprint(text: str) -> dict:
+    content = text.encode("utf-8")
+    return {
+        "byte_size": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
+def _evaluator_input_fingerprints(
+    *, question: str, report: str, evidence: str, prompt: str
+) -> dict:
+    return {
+        "algorithm": "sha256",
+        "encoding": "utf-8",
+        "question": _text_fingerprint(question),
+        "report": _text_fingerprint(report),
+        "evidence": _text_fingerprint(evidence),
+        "prompt": _text_fingerprint(prompt),
+    }
 
 
 def _load_json(path: Path) -> dict:
@@ -134,6 +156,7 @@ def _load_cached_evaluation(
     expected_temperature: float,
     expected_evidence_status: str,
     pricing: dict,
+    expected_input_fingerprints: dict | None = None,
 ) -> dict:
     payload = _load_json(path)
     return _validate_cached_evaluation(
@@ -146,6 +169,7 @@ def _load_cached_evaluation(
         expected_temperature=expected_temperature,
         expected_evidence_status=expected_evidence_status,
         pricing=pricing,
+        expected_input_fingerprints=expected_input_fingerprints,
     )
 
 
@@ -160,13 +184,55 @@ def _validate_cached_evaluation(
     expected_temperature: float,
     expected_evidence_status: str,
     pricing: dict,
+    expected_input_fingerprints: dict | None = None,
 ) -> dict:
     """Validate one already-captured evaluator record against its bound cell."""
     schema_version = payload.get("schema_version")
-    if type(schema_version) is not int or schema_version != 1:
+    if type(schema_version) is not int or schema_version not in (1, 2):
         raise SystemExit(
-            f"Cached post-hoc evaluation {path} schema_version must equal 1"
+            f"Cached post-hoc evaluation {path} schema_version must equal 1 or 2"
         )
+    if schema_version == 1:
+        if "input_fingerprints" in payload:
+            raise SystemExit(
+                f"Cached post-hoc evaluation {path} schema_version 1 must not "
+                "declare input_fingerprints"
+            )
+    else:
+        fingerprints = payload.get("input_fingerprints")
+        valid_fingerprints = (
+            isinstance(fingerprints, dict)
+            and set(fingerprints)
+            == {"algorithm", "encoding", "question", "report", "evidence", "prompt"}
+            and fingerprints.get("algorithm") == "sha256"
+            and fingerprints.get("encoding") == "utf-8"
+        )
+        if valid_fingerprints:
+            for name in ("question", "report", "evidence", "prompt"):
+                entry = fingerprints.get(name)
+                if not (
+                    isinstance(entry, dict)
+                    and set(entry) == {"byte_size", "sha256"}
+                    and type(entry.get("byte_size")) is int
+                    and entry["byte_size"] >= 0
+                    and isinstance(entry.get("sha256"), str)
+                    and len(entry["sha256"]) == 64
+                    and all(char in "0123456789abcdef" for char in entry["sha256"])
+                ):
+                    valid_fingerprints = False
+                    break
+        if not valid_fingerprints:
+            raise SystemExit(
+                f"Cached post-hoc evaluation {path} input_fingerprints are invalid"
+            )
+        if (
+            expected_input_fingerprints is not None
+            and fingerprints != expected_input_fingerprints
+        ):
+            raise SystemExit(
+                f"Cached post-hoc evaluation {path} input_fingerprints must match "
+                "the current evaluator prompt inputs"
+            )
     expected_identity = {
         "study_id": STUDY_ID,
         "variant_id": expected_variant,
@@ -181,7 +247,10 @@ def _validate_cached_evaluation(
             )
 
     recorded_evidence_status = payload.get("evidence_status")
-    if recorded_evidence_status not in (None, expected_evidence_status):
+    if (
+        recorded_evidence_status != expected_evidence_status
+        and not (schema_version == 1 and recorded_evidence_status is None)
+    ):
         raise SystemExit(
             f"Cached post-hoc evaluation {path} evidence_status must equal "
             f"{expected_evidence_status}"
@@ -375,8 +444,9 @@ def _validated_cache_accounting(
     return recomputed_cost
 
 
-def _research_context(run_id: str) -> str:
-    run_dir = REPO_ROOT / "outputs" / run_id
+def _research_context(run_id: str, *, root: Path | None = None) -> str:
+    root = REPO_ROOT if root is None else Path(root)
+    run_dir = root / "outputs" / run_id
     if run_dir.is_symlink() or not run_dir.is_dir():
         raise SystemExit(
             "Evaluator run directory must be a regular non-symlink directory: "
@@ -390,8 +460,9 @@ def _research_context(run_id: str) -> str:
     return "\n\n".join(parts)
 
 
-def _report_text(run_id: str) -> str:
-    path = REPO_ROOT / "outputs" / run_id / "research_report.md"
+def _report_text(run_id: str, *, root: Path | None = None) -> str:
+    root = REPO_ROOT if root is None else Path(root)
+    path = root / "outputs" / run_id / "research_report.md"
     return _read_regular_text(path, label="Evaluator report")
 
 
@@ -416,8 +487,15 @@ def _existing_evaluator_cost(
     return total
 
 
-def _evidence_for_trace(trace: dict, variant: str, task_id: str, run_id: str) -> tuple[str, str]:
-    evidence = _research_context(run_id)
+def _evidence_for_trace(
+    trace: dict,
+    variant: str,
+    task_id: str,
+    run_id: str,
+    *,
+    root: Path | None = None,
+) -> tuple[str, str]:
+    evidence = _research_context(run_id, root=root)
     if evidence.strip():
         return evidence, "retrieved_evidence"
 
@@ -429,6 +507,40 @@ def _evidence_for_trace(trace: dict, variant: str, task_id: str, run_id: str) ->
         f"Saved evidence missing for {variant}/{task_id} despite "
         f"successful_source_count={successful_sources}"
     )
+
+
+def _prepare_evaluator_input(
+    trace: dict,
+    variant: str,
+    task_id: str,
+    run_id: str,
+    *,
+    root: Path | None = None,
+) -> dict:
+    from logic.prompts import generate_verification_prompt
+
+    evidence, evidence_status = _evidence_for_trace(
+        trace,
+        variant,
+        task_id,
+        run_id,
+        root=root,
+    )
+    report = _report_text(run_id, root=root)
+    question = str(trace.get("question", ""))
+    prompt = generate_verification_prompt(
+        question, report, evidence, max_claims=MAX_CLAIMS
+    )
+    return {
+        "evidence_status": evidence_status,
+        "prompt": prompt,
+        "input_fingerprints": _evaluator_input_fingerprints(
+            question=question,
+            report=report,
+            evidence=evidence,
+            prompt=prompt,
+        ),
+    }
 
 
 def _preflight_evaluator_resume(
@@ -459,10 +571,10 @@ def _preflight_evaluator_resume(
     rows: list[dict] = []
     pending: list[dict] = []
     for variant, _trace_path, trace, task_id, run_id in expected:
-        evidence, evidence_status = _evidence_for_trace(
-            trace, variant, task_id, run_id
-        )
-        report = _report_text(run_id)
+        prepared = _prepare_evaluator_input(trace, variant, task_id, run_id)
+        evidence_status = prepared["evidence_status"]
+        prompt = prepared["prompt"]
+        input_fingerprints = prepared["input_fingerprints"]
         out_path = EVAL_ROOT / variant / f"{task_id}.json"
         if out_path.exists() or out_path.is_symlink():
             _require_regular_file(out_path, label="Evaluator cache")
@@ -476,19 +588,19 @@ def _preflight_evaluator_resume(
                     expected_temperature=evaluator_temperature,
                     expected_evidence_status=evidence_status,
                     pricing=pricing,
+                    expected_input_fingerprints=input_fingerprints,
                 )
             )
             continue
         pending.append(
             {
                 "variant": variant,
-                "trace": trace,
                 "task_id": task_id,
                 "run_id": run_id,
                 "out_path": out_path,
-                "evidence": evidence,
                 "evidence_status": evidence_status,
-                "report": report,
+                "prompt": prompt,
+                "input_fingerprints": input_fingerprints,
             }
         )
     return rows, pending
@@ -553,11 +665,8 @@ def main() -> int:
     spent = sum(float(row["estimated_cost_usd"]) for row in rows)
 
     from agent.llm_utils import UsageTracker, create_chat_completion
-    from logic.prompts import generate_verification_prompt
-
     for item in pending:
         variant = item["variant"]
-        trace = item["trace"]
         task_id = item["task_id"]
         run_id = item["run_id"]
         out_path = item["out_path"]
@@ -573,14 +682,10 @@ def main() -> int:
                 f"cap=${args.max_evaluator_cost_usd:.2f}"
             )
 
-        evidence = item["evidence"]
         evidence_status = item["evidence_status"]
-        report = item["report"]
 
         tracker = UsageTracker()
-        prompt = generate_verification_prompt(
-            str(trace.get("question", "")), report, evidence, max_claims=MAX_CLAIMS
-        )
+        prompt = item["prompt"]
         raw = create_chat_completion(
             model=evaluator_model,
             messages=[{"role": "user", "content": prompt}],
@@ -596,7 +701,7 @@ def main() -> int:
 
         cost = _cost_usage(usage.get("by_model", {}), pricing)
         record = {
-            "schema_version": 1,
+            "schema_version": 2,
             "study_id": STUDY_ID,
             "variant_id": variant,
             "task_id": task_id,
@@ -605,6 +710,7 @@ def main() -> int:
             "temperature": evaluator_temperature,
             "max_claims": MAX_CLAIMS,
             "evidence_status": evidence_status,
+            "input_fingerprints": item["input_fingerprints"],
             "claims_checked": result["claims_checked"],
             "supported": result["supported"],
             "partially_supported": result["partially_supported"],

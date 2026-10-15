@@ -31,7 +31,11 @@ def _mean(values):
 
 
 def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str], dict]]:
-    from scripts.evaluate_posthoc_support import _load_json, _validate_cached_evaluation
+    from scripts.evaluate_posthoc_support import (
+        _load_json,
+        _prepare_evaluator_input,
+        _validate_cached_evaluation,
+    )
     from scripts.run_budget_main_study import _validated_trace_cost
 
     traces = []
@@ -123,6 +127,20 @@ def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str],
             if successful_sources == 0
             else "retrieved_evidence"
         )
+        expected_input_fingerprints = None
+        if row.get("schema_version") == 2:
+            prepared = _prepare_evaluator_input(
+                trace_record["trace"],
+                path_variant,
+                path_task,
+                trace_record["run_id"],
+                root=REPO_ROOT,
+            )
+            if prepared["evidence_status"] != expected_evidence_status:
+                raise SystemExit(
+                    f"Evaluator cache {path} evidence status disagrees with inputs"
+                )
+            expected_input_fingerprints = prepared["input_fingerprints"]
         eval_by_key[key] = _validate_cached_evaluation(
             row,
             path=path,
@@ -133,6 +151,7 @@ def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str],
             expected_temperature=evaluator_temperature,
             expected_evidence_status=expected_evidence_status,
             pricing=pricing,
+            expected_input_fingerprints=expected_input_fingerprints,
         )
 
     for record in traces:
