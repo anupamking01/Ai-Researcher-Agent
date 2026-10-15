@@ -129,6 +129,14 @@ field and remain readable as schema version 1 for historical reproducibility;
 their cell identity and accounting are validated, but they must not be described
 as carrying the newer byte-level evaluator-input binding.
 
+Evaluator resume and offline summary generation also load the frozen task file
+and require every treatment trace to carry its exact task-set ID and question
+text. A trace whose task ID is absent from the frozen task set, whose task-set
+metadata drifts, or whose recorded question differs from the frozen definition
+is rejected before any evaluator model import/call and before summary outputs
+are published. This prevents a correctly shaped treatment/evaluator cell from
+being silently attributed to a changed research question.
+
 Representative operational failure categories include:
 
 - `planning_error`

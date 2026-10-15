@@ -29,13 +29,16 @@ def _trace_payload(*, task_id="main-01", run_id="run-d3-main-01"):
         "schema_version": 2,
         "experiment": {
             "variant_id": "D3",
+            "task_set_id": "main-budget-v1-test",
             "task_id": task_id,
             "source_budget": 3,
         },
         "trace": {
             "completed": True,
             "variant_id": "D3",
+            "task_set_id": "main-budget-v1-test",
             "task_id": task_id,
+            "question": f"Question for {task_id}",
             "run_id": run_id,
             "source_budget": 3,
             "source_count": 1,
@@ -117,11 +120,38 @@ def _configure_summary(tmp_path, monkeypatch, *, traces, evaluations):
     pricing_file = tmp_path / "experiments" / "pricing.json"
     pricing_file.parent.mkdir(parents=True)
     pricing_file.write_text(json.dumps(PRICING), encoding="utf-8")
+    task_file = tmp_path / "experiments" / "tasks.json"
+    task_ids = sorted(
+        {
+            payload["trace"]["task_id"]
+            for _filename, payload in traces
+            if isinstance(payload.get("trace"), dict)
+            and isinstance(payload["trace"].get("task_id"), str)
+        }
+        or {"main-01"}
+    )
+    task_file.write_text(
+        json.dumps(
+            {
+                "task_set_id": "main-budget-v1-test",
+                "tasks": [
+                    {
+                        "id": task_id,
+                        "category": "synthetic",
+                        "question": f"Question for {task_id}",
+                    }
+                    for task_id in task_ids
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     monkeypatch.setattr(summarize_budget_main_study, "TRACE_ROOT", trace_root)
     monkeypatch.setattr(summarize_budget_main_study, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(summarize_budget_main_study, "EVAL_ROOT", eval_root)
     monkeypatch.setattr(summarize_budget_main_study, "PRICING_FILE", pricing_file)
+    monkeypatch.setattr(summarize_budget_main_study, "TASK_FILE", task_file)
     monkeypatch.setattr(summarize_budget_main_study, "VARIANTS", ("D3",))
     monkeypatch.setattr(
         summarize_budget_main_study,
@@ -133,6 +163,38 @@ def _configure_summary(tmp_path, monkeypatch, *, traces, evaluations):
         "OUT_CSV",
         tmp_path / "outputs" / "main_study_runs.csv",
     )
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda payload: payload["trace"].update(question="Changed question"),
+            "question must match frozen task definition",
+        ),
+        (
+            lambda payload: payload["trace"].update(task_set_id="other-set"),
+            "task_set_id must match frozen task set",
+        ),
+    ],
+)
+def test_summary_rejects_trace_task_definition_drift_before_outputs(
+    tmp_path, monkeypatch, mutate, message
+):
+    trace = _trace_payload()
+    mutate(trace)
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", trace)],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+
+    with pytest.raises(SystemExit, match=message):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
 
 
 def test_summary_rejects_schema_v2_cache_for_changed_report_before_outputs(

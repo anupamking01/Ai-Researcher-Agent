@@ -20,6 +20,7 @@ if str(REPO_ROOT) not in sys.path:
 TRACE_ROOT = REPO_ROOT / "outputs" / "experiment_traces"
 EVAL_ROOT = REPO_ROOT / "outputs" / "posthoc_evaluations"
 PRICING_FILE = REPO_ROOT / "experiments" / "openai_pricing_2026-09-08.json"
+TASK_FILE = REPO_ROOT / "experiments" / "main_budget_tasks.json"
 OUT_JSON = REPO_ROOT / "outputs" / "main_study_summary.json"
 OUT_CSV = REPO_ROOT / "outputs" / "main_study_runs.csv"
 VARIANTS = ("D3", "D6", "P6", "P6V")
@@ -32,12 +33,15 @@ def _mean(values):
 
 def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str], dict]]:
     from scripts.evaluate_posthoc_support import (
+        _load_frozen_task_contract,
         _load_json,
         _prepare_evaluator_input,
+        _validate_trace_task_contract,
         _validate_cached_evaluation,
     )
     from scripts.run_budget_main_study import _validated_trace_cost
 
+    task_set_id, expected_questions = _load_frozen_task_contract(TASK_FILE)
     traces = []
     trace_by_key = {}
     for variant in VARIANTS:
@@ -78,6 +82,12 @@ def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str],
                 payload,
                 path=path,
                 pricing=pricing,
+            )
+            _validate_trace_task_contract(
+                payload,
+                path=path,
+                expected_task_set_id=task_set_id,
+                expected_questions=expected_questions,
             )
             record = {
                 "variant": variant,

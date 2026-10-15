@@ -32,6 +32,7 @@ if str(REPO_ROOT) not in sys.path:
 TRACE_ROOT = REPO_ROOT / "outputs" / "experiment_traces"
 EVAL_ROOT = REPO_ROOT / "outputs" / "posthoc_evaluations"
 PRICING_FILE = REPO_ROOT / "experiments" / "openai_pricing_2026-09-08.json"
+TASK_FILE = REPO_ROOT / "experiments" / "main_budget_tasks.json"
 VARIANTS = ("D3", "D6", "P6", "P6V")
 MAX_CLAIMS = 12
 STUDY_ID = "budget-main-v1"
@@ -106,6 +107,54 @@ def _load_json(path: Path) -> dict:
     if not isinstance(payload, dict):
         raise SystemExit(f"Invalid JSON file {path}: top level must be an object")
     return payload
+
+
+def _load_frozen_task_contract(
+    path: Path | None = None,
+) -> tuple[str, dict[str, str]]:
+    """Load the exact task-set identity and question bound to each task ID."""
+    from scripts.run_budget_main_study import _load_task_file
+
+    task_set_id, tasks, _snapshot = _load_task_file(
+        TASK_FILE if path is None else Path(path)
+    )
+    return task_set_id, {task["id"]: task["question"] for task in tasks}
+
+
+def _validate_trace_task_contract(
+    payload: dict,
+    *,
+    path: Path,
+    expected_task_set_id: str,
+    expected_questions: dict[str, str],
+) -> None:
+    """Bind a captured trace to the frozen task set and exact question text."""
+    experiment = payload.get("experiment")
+    trace = payload.get("trace")
+    if not isinstance(experiment, dict) or not isinstance(trace, dict):
+        raise SystemExit(f"Treatment trace must contain object metadata: {path}")
+
+    if (
+        experiment.get("task_set_id") != expected_task_set_id
+        or trace.get("task_set_id") != expected_task_set_id
+    ):
+        raise SystemExit(
+            f"Treatment trace {path} task_set_id must match frozen task set "
+            f"{expected_task_set_id}"
+        )
+
+    task_id = trace.get("task_id")
+    expected_question = expected_questions.get(task_id)
+    if expected_question is None:
+        raise SystemExit(
+            f"Treatment trace {path} task_id is absent from frozen task set: "
+            f"{task_id}"
+        )
+    if trace.get("question") != expected_question:
+        raise SystemExit(
+            f"Treatment trace {path} question must match frozen task definition "
+            f"for {task_id}"
+        )
 
 
 def _publish_evaluation_cache(path: Path, record: dict) -> None:
@@ -622,6 +671,7 @@ def main() -> int:
     from scripts.run_budget_main_study import _load_pricing, _validated_trace_cost
 
     pricing, _pricing_snapshot = _load_pricing(PRICING_FILE)
+    task_set_id, expected_questions = _load_frozen_task_contract()
     evaluator_model = os.environ["SMART_LLM_MODEL"]
     evaluator_temperature = float(os.environ["TEMPERATURE"])
     if not math.isfinite(evaluator_temperature):
@@ -639,6 +689,12 @@ def main() -> int:
                     f"Invalid treatment trace {trace_path}: completed must be a "
                     "boolean"
                 )
+            _validate_trace_task_contract(
+                payload,
+                path=trace_path,
+                expected_task_set_id=task_set_id,
+                expected_questions=expected_questions,
+            )
             if not completed:
                 continue
             _validated_trace_cost(

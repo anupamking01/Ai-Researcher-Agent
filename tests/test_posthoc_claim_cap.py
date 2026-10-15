@@ -232,7 +232,9 @@ def _completed_trace_payload(**trace_overrides):
     trace = {
         "completed": True,
         "variant_id": "D3",
+        "task_set_id": "main-budget-v1-test",
         "task_id": "main-01",
+        "question": "Question for main-01",
         "run_id": "run-d3-main-01",
         "source_budget": 3,
         "source_count": 0,
@@ -266,6 +268,7 @@ def _completed_trace_payload(**trace_overrides):
         "schema_version": 2,
         "experiment": {
             "variant_id": "D3",
+            "task_set_id": "main-budget-v1-test",
             "task_id": "main-01",
             "source_budget": 3,
         },
@@ -449,6 +452,23 @@ def _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01", "main-02"
     pricing_file = tmp_path / "experiments" / "pricing.json"
     pricing_file.parent.mkdir(parents=True)
     pricing_file.write_text(json.dumps(PRICING), encoding="utf-8")
+    task_file = tmp_path / "experiments" / "tasks.json"
+    task_file.write_text(
+        json.dumps(
+            {
+                "task_set_id": "main-budget-v1-test",
+                "tasks": [
+                    {
+                        "id": task_id,
+                        "category": "synthetic",
+                        "question": f"Question for {task_id}",
+                    }
+                    for task_id in task_ids
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     for task_id in task_ids:
         run_id = f"run-d3-{task_id}"
@@ -473,6 +493,7 @@ def _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01", "main-02"
     monkeypatch.setattr(evaluate_posthoc_support, "TRACE_ROOT", trace_root)
     monkeypatch.setattr(evaluate_posthoc_support, "EVAL_ROOT", eval_root)
     monkeypatch.setattr(evaluate_posthoc_support, "PRICING_FILE", pricing_file)
+    monkeypatch.setattr(evaluate_posthoc_support, "TASK_FILE", task_file)
     monkeypatch.setattr(evaluate_posthoc_support, "VARIANTS", ("D3",))
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("SMART_LLM_MODEL", "gpt-5.6-terra")
@@ -483,6 +504,96 @@ def _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01", "main-02"
         ["evaluate_posthoc_support.py", "--max-evaluator-cost-usd", "1.25"],
     )
     return eval_root
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda payload: payload["trace"].update(question="Changed question"),
+            "question must match frozen task definition",
+        ),
+        (
+            lambda payload: payload["experiment"].update(task_set_id="other-set"),
+            "task_set_id must match frozen task set",
+        ),
+    ],
+)
+def test_resume_rejects_trace_task_definition_drift_before_first_model_call(
+    tmp_path, monkeypatch, mutate, message
+):
+    eval_root = _configure_resume_main(
+        tmp_path, monkeypatch, task_ids=("main-01",)
+    )
+    trace_path = (
+        tmp_path
+        / "outputs"
+        / "experiment_traces"
+        / "D3"
+        / "run-d3-main-01.json"
+    )
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    mutate(payload)
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    model_calls = []
+
+    def fail_if_called(**kwargs):
+        model_calls.append(kwargs)
+        raise AssertionError("model call occurred before task binding was validated")
+
+    monkeypatch.setattr("agent.llm_utils.create_chat_completion", fail_if_called)
+
+    with pytest.raises(SystemExit, match=message):
+        evaluate_posthoc_support.main()
+
+    assert model_calls == []
+    assert list(eval_root.glob("*/*.json")) == []
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
+def test_resume_rejects_drifted_incomplete_trace_before_any_completed_cell(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(
+        tmp_path, monkeypatch, task_ids=("main-01",)
+    )
+    invalid_path = (
+        tmp_path
+        / "outputs"
+        / "experiment_traces"
+        / "D3"
+        / "run-d3-main-99.json"
+    )
+    invalid = _completed_trace_payload(
+        completed=False,
+        task_set_id="other-set",
+        task_id="main-99",
+        question="Changed question",
+        run_id="run-d3-main-99",
+    )
+    invalid["experiment"].update(
+        task_set_id="other-set",
+        task_id="main-99",
+    )
+    invalid_path.write_text(json.dumps(invalid), encoding="utf-8")
+
+    model_calls = []
+
+    def fail_if_called(**kwargs):
+        model_calls.append(kwargs)
+        raise AssertionError("model call occurred before task binding was validated")
+
+    monkeypatch.setattr("agent.llm_utils.create_chat_completion", fail_if_called)
+
+    with pytest.raises(SystemExit, match="task_set_id must match frozen task set"):
+        evaluate_posthoc_support.main()
+
+    assert model_calls == []
+    assert list(eval_root.glob("*/*.json")) == []
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
 
 
 def test_resume_preflights_later_cached_identity_before_first_model_call(
