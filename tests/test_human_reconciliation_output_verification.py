@@ -3,6 +3,7 @@
 These fixtures are not collected human ratings or study findings.
 """
 import json
+import platform
 import subprocess
 from pathlib import Path
 
@@ -98,6 +99,12 @@ def _patch_recomputation(monkeypatch, payload):
         "_verify_producer_commit_implementation",
         lambda producer, implementation, *, root: None,
     )
+    monkeypatch.setattr(
+        verify,
+        "_verify_producer_commit_environment",
+        lambda producer, environment, *, root: None,
+        raising=False,
+    )
 
 
 def _producer_repo(tmp_path):
@@ -113,6 +120,8 @@ def _producer_repo(tmp_path):
     (scripts / "verify_human_reconciliation_outputs.py").write_bytes(
         Path(verify.__file__).read_bytes()
     )
+    (root / "requirements.txt").write_bytes((reconcile.ROOT / "requirements.txt").read_bytes())
+    (root / ".python-version").write_bytes((reconcile.ROOT / ".python-version").read_bytes())
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
     subprocess.run(["git", "config", "user.name", "Synthetic Test"], cwd=root, check=True)
     subprocess.run(
@@ -120,7 +129,11 @@ def _producer_repo(tmp_path):
         cwd=root,
         check=True,
     )
-    subprocess.run(["git", "add", "scripts"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "add", "scripts", "requirements.txt", ".python-version"],
+        cwd=root,
+        check=True,
+    )
     subprocess.run(["git", "commit", "-qm", "bound implementation"], cwd=root, check=True)
     return root
 
@@ -138,6 +151,26 @@ def _implementation_manifest():
         "reconciliation_verifier": {
             "path": "scripts/verify_human_reconciliation_outputs.py",
             **reconcile._fingerprint_bytes(Path(verify.__file__).read_bytes()),
+        },
+    }
+
+
+def _expected_analysis_environment():
+    requirements = (reconcile.ROOT / "requirements.txt").read_bytes()
+    python_version = (reconcile.ROOT / ".python-version").read_bytes()
+    return {
+        "requirements": {
+            "path": "requirements.txt",
+            **reconcile._fingerprint_bytes(requirements),
+        },
+        "python_version": {
+            "path": ".python-version",
+            **reconcile._fingerprint_bytes(python_version),
+        },
+        "runtime": {
+            "schema_version": 1,
+            "python_implementation": platform.python_implementation(),
+            "python_version": platform.python_version(),
         },
     }
 
@@ -261,6 +294,40 @@ def test_git_replacement_ref_cannot_substitute_producer_commit(tmp_path, monkeyp
         verify.verify_bundle(output, root=root)
 
 
+def test_git_replacement_ref_cannot_substitute_producer_environment(tmp_path):
+    root = _producer_repo(tmp_path)
+    good_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    requirements = root / "requirements.txt"
+    requirements.write_text("substituted==0.0.0\n", encoding="utf-8")
+    subprocess.run(["git", "add", "requirements.txt"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "substitute environment"], cwd=root, check=True
+    )
+    substituted_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "replace", substituted_commit, good_commit], cwd=root, check=True
+    )
+
+    with pytest.raises(ValueError, match="producer requirements fingerprint mismatch"):
+        verify._verify_producer_commit_environment(
+            substituted_commit,
+            _expected_analysis_environment(),
+            root=root,
+        )
+
+
 def test_partial_clone_does_not_fetch_missing_producer_blobs(tmp_path):
     source = _producer_repo(tmp_path)
     producer = subprocess.run(
@@ -301,6 +368,44 @@ def test_partial_clone_does_not_fetch_missing_producer_blobs(tmp_path):
         verify._verify_producer_commit_implementation(
             producer,
             _implementation_manifest(),
+            root=partial,
+        )
+
+    assert {path.name for path in pack_root.iterdir()} == before
+
+
+def test_partial_clone_does_not_fetch_missing_environment_blobs(tmp_path):
+    source = _producer_repo(tmp_path)
+    producer = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=source,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "config", "uploadpack.allowFilter", "true"], cwd=source, check=True
+    )
+    partial = tmp_path / "partial-environment-clone"
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "-q",
+            "--no-checkout",
+            "--filter=blob:none",
+            source.resolve().as_uri(),
+            str(partial),
+        ],
+        check=True,
+    )
+    pack_root = partial / ".git" / "objects" / "pack"
+    before = {path.name for path in pack_root.iterdir()}
+
+    with pytest.raises(ValueError, match="producer requirements cannot be read"):
+        verify._verify_producer_commit_environment(
+            producer,
+            _expected_analysis_environment(),
             root=partial,
         )
 
@@ -348,6 +453,26 @@ def test_mismatched_producer_does_not_reserve_publication_path(tmp_path, monkeyp
     assert not output.exists()
 
 
+def test_mismatched_producer_environment_does_not_reserve_publication_path(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    root = _producer_repo(tmp_path)
+    requirements = root / "requirements.txt"
+    requirements.write_text("substituted==0.0.0\n", encoding="utf-8")
+    subprocess.run(["git", "add", "requirements.txt"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "substitute environment"], cwd=root, check=True
+    )
+    monkeypatch.setattr(reconcile, "reconcile_verified", lambda **kwargs: payload)
+    output = tmp_path / "reconciliation"
+
+    with pytest.raises(ValueError, match="producer requirements fingerprint mismatch"):
+        reconcile.write_bundle(payload, output, root=root)
+
+    assert not output.exists()
+
+
 def test_write_bundle_is_create_only_and_independently_verified(tmp_path, monkeypatch):
     payload = _payload()
     _patch_recomputation(monkeypatch, payload)
@@ -358,6 +483,8 @@ def test_write_bundle_is_create_only_and_independently_verified(tmp_path, monkey
     assert receipt["status"] == "automated_human_reconciliation_bundle_verified"
     assert receipt["independent_recomputation_verified"] is True
     assert receipt["producer_commit_implementation_bound"] is True
+    assert receipt["analysis_environment_bound"] is True
+    assert receipt["producer_commit_environment_bound"] is True
     manifest = json.loads(
         (output / reconcile.RECONCILIATION_MANIFEST).read_text(encoding="utf-8")
     )
@@ -371,9 +498,136 @@ def test_write_bundle_is_create_only_and_independently_verified(tmp_path, monkey
         "path": "scripts/verify_human_reconciliation_outputs.py",
         **reconcile._fingerprint_bytes(Path(verify.__file__).read_bytes()),
     }
+    assert manifest["analysis_environment"] == _expected_analysis_environment()
 
     with pytest.raises(ValueError, match="refusing to overwrite reconciliation output"):
         reconcile.write_bundle(payload, output, root=tmp_path)
+
+
+def test_rejects_missing_reconciliation_analysis_environment(tmp_path, monkeypatch):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+    manifest_path = output / reconcile.RECONCILIATION_MANIFEST
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("analysis_environment", None)
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="analysis environment"):
+        verify.verify_bundle(output, root=tmp_path)
+
+
+def test_rejects_tampered_reconciliation_environment_pin(tmp_path, monkeypatch):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+    manifest_path = output / reconcile.RECONCILIATION_MANIFEST
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["analysis_environment"]["requirements"]["sha256"] = "0" * 64
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="analysis requirements fingerprint"):
+        verify.verify_bundle(output, root=tmp_path)
+
+
+def test_rejects_nonregular_current_reconciliation_environment_pin(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+    target = tmp_path / "requirements-target.txt"
+    target.write_bytes((reconcile.ROOT / "requirements.txt").read_bytes())
+    symlink = tmp_path / "requirements.txt"
+    symlink.symlink_to(target)
+    monkeypatch.setattr(reconcile, "ANALYSIS_REQUIREMENTS", symlink)
+
+    with pytest.raises(ValueError, match="current analysis requirements must be a regular file"):
+        verify.verify_bundle(output, root=tmp_path)
+
+
+def test_rejects_reconciliation_runtime_drift(tmp_path, monkeypatch):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+    expected = _expected_analysis_environment()["runtime"]
+    monkeypatch.setattr(
+        reconcile,
+        "analysis_runtime_contract",
+        lambda: {**expected, "python_version": "0.0.0-drifted"},
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="analysis runtime contract"):
+        verify.verify_bundle(output, root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("target", "field", "malformed"),
+    [
+        ("runtime", "schema_version", True),
+        ("requirements", "bytes", "matching_float"),
+        ("requirements", "unexpected", "undeclared"),
+    ],
+)
+def test_rejects_non_exact_reconciliation_environment_schema(
+    tmp_path, monkeypatch, target, field, malformed
+):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+    manifest_path = output / reconcile.RECONCILIATION_MANIFEST
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entry = manifest["analysis_environment"][target]
+    if malformed == "matching_float":
+        malformed = float(entry[field])
+    entry[field] = malformed
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="analysis (runtime contract|requirements manifest entry)"):
+        verify.verify_bundle(output, root=tmp_path)
+
+
+def test_rejects_producer_commit_with_different_environment_bytes(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    root = _producer_repo(tmp_path)
+    monkeypatch.setattr(reconcile, "reconcile_verified", lambda **kwargs: payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=root)
+
+    requirements = root / "requirements.txt"
+    requirements.write_text("substituted==0.0.0\n", encoding="utf-8")
+    subprocess.run(["git", "add", "requirements.txt"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "substitute environment"], cwd=root, check=True
+    )
+    substituted_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    _rewrite_producer_commit(output, substituted_commit)
+
+    with pytest.raises(ValueError, match="producer requirements fingerprint mismatch"):
+        verify.verify_bundle(output, root=root)
 
 
 def test_invalid_payload_does_not_reserve_publication_path(tmp_path):

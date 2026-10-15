@@ -232,6 +232,11 @@ outputs. Independent verification rejects source, pinned-environment, or runtime
 drift before recomputing the analysis. This records reproducibility metadata; it
 does not create ratings or convert pending human validation into a result.
 
+The downstream descriptive reconciliation bundle applies the same fail-closed
+environment binding and additionally proves that both pinned files are the exact
+bytes recorded in its producing Git commit. This remains a provenance check, not
+an inferential extension or a substitute for real blinded ratings.
+
 Full instructions are in `paper/HUMAN_EVAL_PROTOCOL.md`.
 
 ## 12. Reproducibility map

@@ -42,6 +42,15 @@ def _require_equal(actual, expected, *, label: str) -> None:
         raise ValueError(f"{label} mismatch: expected {expected!r}, got {actual!r}")
 
 
+def _canonical_json_bytes(value) -> bytes:
+    return json.dumps(
+        value,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
 def _verify_entry(entry, *, expected_path: str, content: bytes, label: str) -> None:
     if not isinstance(entry, dict):
         raise ValueError(f"{label} manifest entry must be an object")
@@ -50,6 +59,29 @@ def _verify_entry(entry, *, expected_path: str, content: bytes, label: str) -> N
         {"bytes": entry.get("bytes"), "sha256": entry.get("sha256")},
         reconcile._fingerprint_bytes(content),
         label=f"{label} fingerprint",
+    )
+
+
+def _verify_exact_entry(entry, *, expected_path: str, content: bytes, label: str) -> None:
+    """Verify a fingerprint entry without JSON numeric coercion or extra keys."""
+    if not isinstance(entry, dict) or set(entry) != {"path", "bytes", "sha256"}:
+        raise ValueError(
+            f"{label} manifest entry must contain exactly path, bytes, and sha256"
+        )
+    if (
+        not isinstance(entry["path"], str)
+        or not isinstance(entry["bytes"], int)
+        or isinstance(entry["bytes"], bool)
+        or not isinstance(entry["sha256"], str)
+    ):
+        raise ValueError(
+            f"{label} manifest entry must use string path/sha256 and integer bytes"
+        )
+    _verify_entry(
+        entry,
+        expected_path=expected_path,
+        content=content,
+        label=label,
     )
 
 
@@ -104,6 +136,101 @@ def _verify_producer_commit_implementation(
             {"bytes": entry.get("bytes"), "sha256": entry.get("sha256")},
             label=f"producer {name} fingerprint",
         )
+
+
+def _verify_producer_commit_environment(
+    producer: str,
+    environment: dict,
+    *,
+    root: Path,
+) -> None:
+    """Bind pinned environment bytes to the recorded producer commit."""
+    root = Path(root)
+    git_env = {
+        **os.environ,
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+    }
+    try:
+        object_type = subprocess.run(
+            ["git", "-C", str(root), "cat-file", "-t", producer],
+            check=True,
+            capture_output=True,
+            env=git_env,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise ValueError(
+            f"producer Git commit cannot be resolved: {producer}"
+        ) from exc
+    if object_type != "commit":
+        raise ValueError(
+            f"producer Git SHA must identify a commit object, got {object_type!r}"
+        )
+
+    for name, path in (
+        ("requirements", "requirements.txt"),
+        ("python_version", ".python-version"),
+    ):
+        entry = environment[name]
+        try:
+            content = subprocess.run(
+                ["git", "-C", str(root), "show", f"{producer}:{path}"],
+                check=True,
+                capture_output=True,
+                env=git_env,
+                timeout=10,
+            ).stdout
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            raise ValueError(
+                f"producer {name} cannot be read from commit {producer}: {path}"
+            ) from exc
+        _require_equal(
+            reconcile._fingerprint_bytes(content),
+            {"bytes": entry.get("bytes"), "sha256": entry.get("sha256")},
+            label=f"producer {name} fingerprint",
+        )
+
+
+def _verify_analysis_environment(manifest: dict) -> dict:
+    """Verify current pins and the exact runtime contract before result trust."""
+    environment = manifest.get("analysis_environment")
+    if not isinstance(environment, dict) or set(environment) != {
+        "requirements",
+        "python_version",
+        "runtime",
+    }:
+        raise ValueError(
+            "analysis environment must bind requirements, Python version, and runtime"
+        )
+    _verify_exact_entry(
+        environment["requirements"],
+        expected_path="requirements.txt",
+        content=_regular_bytes(
+            reconcile.ANALYSIS_REQUIREMENTS,
+            label="current analysis requirements",
+        ),
+        label="analysis requirements",
+    )
+    _verify_exact_entry(
+        environment["python_version"],
+        expected_path=".python-version",
+        content=_regular_bytes(
+            reconcile.ANALYSIS_PYTHON_VERSION,
+            label="current analysis Python version contract",
+        ),
+        label="analysis Python version contract",
+    )
+    expected_runtime = reconcile.analysis_runtime_contract()
+    if _canonical_json_bytes(environment["runtime"]) != _canonical_json_bytes(
+        expected_runtime
+    ):
+        raise ValueError(
+            "analysis runtime contract mismatch: "
+            f"expected {expected_runtime!r}, got {environment['runtime']!r}"
+        )
+    return environment
 
 
 def _validate_identity(payload: dict) -> None:
@@ -174,6 +301,7 @@ def verify_bundle(
 
     payload = _load_json(json_bytes, label="canonical reconciliation JSON")
     manifest = _load_json(manifest_bytes, label="reconciliation output manifest")
+    analysis_environment = _verify_analysis_environment(manifest)
     _validate_identity(payload)
 
     expected_markdown = reconcile.render_markdown(payload).encode("utf-8")
@@ -255,6 +383,11 @@ def verify_bundle(
         implementation,
         root=Path(root),
     )
+    _verify_producer_commit_environment(
+        producer,
+        analysis_environment,
+        root=Path(root),
+    )
 
     recomputed = reconcile.reconcile_verified(
         root=Path(root),
@@ -272,7 +405,9 @@ def verify_bundle(
         "canonical_reconciliation_sha256": reconcile._fingerprint_bytes(json_bytes)["sha256"],
         "manuscript_rendering_sha256": reconcile._fingerprint_bytes(markdown_bytes)["sha256"],
         "verified_input_fingerprints_bound": True,
+        "analysis_environment_bound": True,
         "implementation_bound": True,
+        "producer_commit_environment_bound": True,
         "producer_commit_implementation_bound": True,
         "independent_recomputation_verified": True,
         "human_ratings_generated": False,

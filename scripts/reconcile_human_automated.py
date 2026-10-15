@@ -17,6 +17,7 @@ import errno
 import hashlib
 import json
 import os
+import platform
 import re
 import stat
 import statistics
@@ -32,6 +33,8 @@ OUTPUT_ROOT = ROOT / "outputs" / "human_eval" / "reconciliation-v1"
 RECONCILIATION_JSON = "reconciliation.json"
 RECONCILIATION_MARKDOWN = "reconciliation.md"
 RECONCILIATION_MANIFEST = "reconciliation_manifest.json"
+ANALYSIS_REQUIREMENTS = ROOT / "requirements.txt"
+ANALYSIS_PYTHON_VERSION = ROOT / ".python-version"
 
 CATEGORIES = (
     "concordant_positive",
@@ -41,6 +44,15 @@ CATEGORIES = (
     "human_tie",
     "both_tie",
 )
+
+
+def analysis_runtime_contract() -> dict:
+    """Describe the interpreter contract for descriptive numeric outputs."""
+    return {
+        "schema_version": 1,
+        "python_implementation": platform.python_implementation(),
+        "python_version": platform.python_version(),
+    }
 
 
 def _category(automated_difference: float, human_difference: float) -> str:
@@ -415,6 +427,17 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
             logical_path="scripts/verify_human_reconciliation_outputs.py",
         ),
     }
+    analysis_environment = {
+        "requirements": _implementation_fingerprint(
+            ANALYSIS_REQUIREMENTS,
+            logical_path="requirements.txt",
+        ),
+        "python_version": _implementation_fingerprint(
+            ANALYSIS_PYTHON_VERSION,
+            logical_path=".python-version",
+        ),
+        "runtime": analysis_runtime_contract(),
+    }
     manifest = {
         "schema_version": 1,
         "study_id": payload.get("study_id"),
@@ -432,11 +455,13 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
             },
         },
         "implementation": implementation,
+        "analysis_environment": analysis_environment,
         "integrity_note": (
             "Canonical JSON is the source of truth. The deterministic Markdown, "
             "upstream verified-input fingerprints, producing Git commit, and exact "
-            "implementation source bytes are bound here. The verifier independently "
-            "recomputes the frozen descriptive reconciliation before success."
+            "implementation source bytes, pinned environment files, and actual Python "
+            "runtime are bound here. The verifier independently recomputes the frozen "
+            "descriptive reconciliation before success."
         ),
     }
     manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
@@ -444,6 +469,11 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
     output_verifier._verify_producer_commit_implementation(
         producer_git_commit,
         implementation,
+        root=Path(root),
+    )
+    output_verifier._verify_producer_commit_environment(
+        producer_git_commit,
+        analysis_environment,
         root=Path(root),
     )
 
