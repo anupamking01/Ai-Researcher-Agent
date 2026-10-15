@@ -41,7 +41,19 @@ NO_EVIDENCE_SENTINEL = (
 
 
 def _load_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+    from scripts.run_budget_main_study import _reject_duplicate_json_keys
+
+    try:
+        raw = path.read_bytes()
+        payload = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise SystemExit(f"Invalid JSON file {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise SystemExit(f"Invalid JSON file {path}: top level must be an object")
+    return payload
 
 
 def _publish_evaluation_cache(path: Path, record: dict) -> None:
@@ -461,10 +473,9 @@ def main() -> int:
         if not os.getenv(name):
             raise SystemExit(f"Missing required environment variable: {name}")
 
-    from agent.llm_utils import UsageTracker, create_chat_completion
-    from logic.prompts import generate_verification_prompt
+    from scripts.run_budget_main_study import _load_pricing, _validated_trace_cost
 
-    pricing = _load_json(PRICING_FILE)
+    pricing, _pricing_snapshot = _load_pricing(PRICING_FILE)
     evaluator_model = os.environ["SMART_LLM_MODEL"]
     evaluator_temperature = float(os.environ["TEMPERATURE"])
     if not math.isfinite(evaluator_temperature):
@@ -476,8 +487,19 @@ def main() -> int:
             raw_trace = payload.get("trace")
             if not isinstance(raw_trace, dict):
                 raise SystemExit(f"Trace metadata must be an object: {trace_path}")
-            if raw_trace.get("completed") is not True:
+            completed = raw_trace.get("completed")
+            if type(completed) is not bool:
+                raise SystemExit(
+                    f"Invalid treatment trace {trace_path}: completed must be a "
+                    "boolean"
+                )
+            if not completed:
                 continue
+            _validated_trace_cost(
+                payload,
+                path=trace_path,
+                pricing=pricing,
+            )
             trace, task_id, run_id = _validated_completed_trace(
                 trace_path,
                 payload,
@@ -495,6 +517,9 @@ def main() -> int:
         evaluator_temperature=evaluator_temperature,
     )
     spent = sum(float(row["estimated_cost_usd"]) for row in rows)
+
+    from agent.llm_utils import UsageTracker, create_chat_completion
+    from logic.prompts import generate_verification_prompt
 
     for item in pending:
         variant = item["variant"]

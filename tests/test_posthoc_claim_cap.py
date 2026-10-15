@@ -6,6 +6,7 @@ from scripts import evaluate_posthoc_support
 
 
 PRICING = {
+    "unit": "per_1m_text_tokens",
     "models": {
         "gpt-5.6-terra": {"input": 2.0, "output": 12.0},
     }
@@ -170,12 +171,57 @@ def _completed_trace_payload(**trace_overrides):
         "variant_id": "D3",
         "task_id": "main-01",
         "run_id": "run-d3-main-01",
+        "source_budget": 3,
+        "source_count": 0,
+        "successful_source_count": 0,
+        "failed_source_count": 0,
+        "query_count": 1,
+        "search_call_count": 1,
+        "scheduled_urls": [],
+        "successful_urls": [],
+        "failed_urls": [],
+        "latency_seconds": 1.0,
+        "report_words": 100,
+        "usage_accounting_status": "provider_usage_complete",
+        "provider_usage_by_model": {
+            "gpt-5.6-terra": {
+                "model_calls": 1,
+                "unavailable_calls": 0,
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+            }
+        },
+        "model_call_count": 1,
+        "unavailable_usage_call_count": 0,
+        "prompt_tokens": 100,
+        "completion_tokens": 20,
+        "total_tokens": 120,
     }
     trace.update(trace_overrides)
     return {
-        "experiment": {"variant_id": "D3", "task_id": "main-01"},
+        "schema_version": 2,
+        "experiment": {
+            "variant_id": "D3",
+            "task_id": "main-01",
+            "source_budget": 3,
+        },
         "trace": trace,
     }
+
+
+def test_cached_posthoc_evaluation_rejects_duplicate_json_keys(tmp_path):
+    path = tmp_path / "cached.json"
+    raw = json.dumps(_cached_evaluation())
+    raw = raw.replace(
+        '"task_id": "main-01"',
+        '"task_id": "main-99", "task_id": "main-01"',
+        1,
+    )
+    path.write_text(raw, encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="duplicate JSON key: task_id"):
+        _load_cached(path)
 
 
 def test_completed_trace_identity_is_bound_to_directory_filename_and_metadata(
@@ -404,6 +450,51 @@ def test_resume_preflights_later_cached_identity_before_first_model_call(
     )
 
     with pytest.raises(SystemExit, match="task_id must equal main-02"):
+        evaluate_posthoc_support.main()
+
+    assert model_calls == []
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda trace: trace.update(source_count=1),
+            "source count ledger mismatch",
+        ),
+        (
+            lambda trace: trace.update(completed=1),
+            "completed must be a boolean",
+        ),
+    ],
+)
+def test_resume_preflights_treatment_ledgers_before_first_model_call(
+    tmp_path, monkeypatch, mutate, message
+):
+    _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    trace_path = (
+        tmp_path
+        / "outputs"
+        / "experiment_traces"
+        / "D3"
+        / "run-d3-main-01.json"
+    )
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    mutate(payload["trace"])
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    model_calls = []
+
+    def fail_if_called(**kwargs):
+        model_calls.append(kwargs)
+        raise AssertionError("model call occurred before trace preflight completed")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        fail_if_called,
+    )
+
+    with pytest.raises(SystemExit, match=message):
         evaluate_posthoc_support.main()
 
     assert model_calls == []

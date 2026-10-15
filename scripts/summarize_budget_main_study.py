@@ -31,7 +31,7 @@ def _mean(values):
 
 
 def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str], dict]]:
-    from scripts.evaluate_posthoc_support import _validate_cached_evaluation
+    from scripts.evaluate_posthoc_support import _load_json, _validate_cached_evaluation
     from scripts.run_budget_main_study import (
         _reject_duplicate_json_keys,
         _validated_trace_cost,
@@ -98,9 +98,7 @@ def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str],
     evaluator_model = None
     evaluator_temperature = None
     for path in sorted(EVAL_ROOT.glob("*/*.json")):
-        row = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(row, dict):
-            raise SystemExit(f"Evaluator cache must contain an object: {path}")
+        row = _load_json(path)
         path_variant = path.parent.name
         path_task = path.stem
         if row.get("variant_id") != path_variant:

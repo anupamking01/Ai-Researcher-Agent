@@ -159,6 +159,31 @@ def test_summary_rejects_misbound_evaluator_cache_before_outputs(
     assert not summarize_budget_main_study.OUT_CSV.exists()
 
 
+def test_summary_rejects_duplicate_evaluator_cache_keys_before_outputs(
+    tmp_path, monkeypatch
+):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    cache_path = summarize_budget_main_study.EVAL_ROOT / "D3" / "main-01.json"
+    raw = cache_path.read_text(encoding="utf-8")
+    raw = raw.replace(
+        '"supported": 2',
+        '"supported": 0, "supported": 2',
+        1,
+    )
+    cache_path.write_text(raw, encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="duplicate JSON key: supported"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
