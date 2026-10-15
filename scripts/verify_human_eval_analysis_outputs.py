@@ -5,14 +5,20 @@ only a deterministic rendering of that JSON. The manifest must bind both output
 byte streams and the exact analysis implementation source files used to produce
 them. The command-line verifier additionally recomputes the complete payload
 from retained frozen ratings and exact governing inputs. It makes no model/API
-calls, generates no ratings, and reruns no treatments.
+calls, generates no ratings, and reruns no treatments. Its stability receipt
+attests that the retained output inodes were unchanged from capture through the
+end-of-recomputation observation; storage immutability after that observation
+remains an external publication control.
 """
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import hashlib
 import json
 import math
+import os
+import stat
 from pathlib import Path
 
 from scripts import analyze_human_eval
@@ -39,6 +45,204 @@ def _regular_bytes(path: Path, *, label: str) -> bytes:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"{label} must be a regular file: {path}")
     return path.read_bytes()
+
+
+OUTPUT_SPECS = (
+    (analyze_human_eval.ANALYSIS_JSON, "canonical human-analysis JSON"),
+    (analyze_human_eval.ANALYSIS_MARKDOWN, "human-analysis Markdown"),
+    (analyze_human_eval.ANALYSIS_MANIFEST, "human-analysis output manifest"),
+)
+
+
+def _open_bound_directory(path: Path, *, label: str) -> int:
+    flags = os.O_RDONLY | os.O_DIRECTORY
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(f"{label} must be a regular directory: {path}") from exc
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise ValueError(f"{label} must be a regular directory: {path}")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _require_directory_path_binding(path: Path, descriptor: int, *, label: str) -> None:
+    try:
+        current = os.stat(path, follow_symlinks=False)
+        bound = os.fstat(descriptor)
+    except OSError as exc:
+        raise ValueError(f"{label} changed during independent recomputation: {path}") from exc
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or (current.st_dev, current.st_ino) != (bound.st_dev, bound.st_ino)
+    ):
+        raise ValueError(f"{label} changed during independent recomputation: {path}")
+
+
+def _regular_snapshot_from_descriptor(
+    descriptor: int,
+    *,
+    label: str,
+) -> tuple[bytes, tuple[int, int, int, int, int]]:
+    before = os.fstat(descriptor)
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError(f"{label} must be a regular file")
+    chunks = []
+    offset = 0
+    while True:
+        chunk = os.pread(descriptor, 1024 * 1024, offset)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        offset += len(chunk)
+    after = os.fstat(descriptor)
+    before_identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    after_identity = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    if before_identity != after_identity:
+        raise ValueError(f"{label} changed while it was being read")
+    return b"".join(chunks), after_identity
+
+
+def _open_regular_snapshot_at(
+    directory_descriptor: int,
+    name: str,
+    *,
+    label: str,
+) -> tuple[int, tuple[bytes, tuple[int, int, int, int, int]]]:
+    # O_NOFOLLOW rejects final symlinks. O_NONBLOCK ensures that a substituted
+    # FIFO or device reaches the fstat regular-file check instead of hanging the
+    # verifier before its type can be rejected.
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(name, flags, dir_fd=directory_descriptor)
+    except OSError as exc:
+        raise ValueError(f"{label} must be a regular file") from exc
+    try:
+        snapshot = _regular_snapshot_from_descriptor(descriptor, label=label)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor, snapshot
+
+
+def _require_regular_entry_binding(
+    directory_descriptor: int,
+    name: str,
+    file_descriptor: int,
+    *,
+    label: str,
+) -> None:
+    try:
+        current = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+        bound = os.fstat(file_descriptor)
+    except OSError as exc:
+        raise ValueError(f"{label} changed during independent recomputation") from exc
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or (current.st_dev, current.st_ino) != (bound.st_dev, bound.st_ino)
+    ):
+        raise ValueError(f"{label} changed during independent recomputation")
+
+
+def _open_output_snapshot(descriptors: ExitStack, output_root: Path):
+    output_descriptor = _open_bound_directory(
+        output_root,
+        label="human-analysis output root",
+    )
+    descriptors.callback(os.close, output_descriptor)
+    _require_directory_path_binding(
+        output_root,
+        output_descriptor,
+        label="human-analysis output root",
+    )
+    snapshots = {}
+    for name, label in OUTPUT_SPECS:
+        file_descriptor, snapshot = _open_regular_snapshot_at(
+            output_descriptor,
+            name,
+            label=label,
+        )
+        descriptors.callback(os.close, file_descriptor)
+        snapshots[name] = (file_descriptor, snapshot)
+    directory = os.fstat(output_descriptor)
+    directory_identity = (
+        directory.st_dev,
+        directory.st_ino,
+        directory.st_mtime_ns,
+        directory.st_ctime_ns,
+    )
+    return output_descriptor, snapshots, directory_identity
+
+
+def _require_output_snapshot_stable(
+    output_root: Path,
+    output_descriptor: int,
+    snapshots,
+    directory_identity,
+) -> None:
+    """Observe that captured inodes stayed bound and unchanged through recomputation.
+
+    This is an end-of-recomputation observation, not a filesystem lock. A finite
+    verifier cannot prevent an uncooperative process from changing a regular file
+    after its final syscall; immutable publication storage is a separate control.
+    """
+    for name, label in OUTPUT_SPECS:
+        file_descriptor, original = snapshots[name]
+        current = _regular_snapshot_from_descriptor(file_descriptor, label=label)
+        if current != original:
+            raise ValueError(f"{label} changed during independent recomputation")
+    for name, label in OUTPUT_SPECS:
+        file_descriptor, original = snapshots[name]
+        current = os.fstat(file_descriptor)
+        current_identity = (
+            current.st_dev,
+            current.st_ino,
+            current.st_size,
+            current.st_mtime_ns,
+            current.st_ctime_ns,
+        )
+        if current_identity != original[1]:
+            raise ValueError(f"{label} changed during independent recomputation")
+        _require_regular_entry_binding(
+            output_descriptor,
+            name,
+            file_descriptor,
+            label=label,
+        )
+    directory = os.fstat(output_descriptor)
+    current_directory_identity = (
+        directory.st_dev,
+        directory.st_ino,
+        directory.st_mtime_ns,
+        directory.st_ctime_ns,
+    )
+    if current_directory_identity != directory_identity:
+        raise ValueError(
+            "human-analysis output root changed during independent recomputation: "
+            f"{output_root}"
+        )
+    _require_directory_path_binding(
+        output_root,
+        output_descriptor,
+        label="human-analysis output root",
+    )
 
 
 def _load_json(content: bytes, *, label: str) -> dict:
@@ -335,19 +539,11 @@ def _verify_analysis_environment(manifest: dict) -> None:
         )
 
 
-def verify_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
-    """Verify exact outputs, deterministic rendering, and implementation hashes."""
-    output_root = Path(output_root)
-    if output_root.is_symlink() or not output_root.is_dir():
-        raise ValueError(f"human-analysis output root must be a regular directory: {output_root}")
-
-    json_path = output_root / analyze_human_eval.ANALYSIS_JSON
-    markdown_path = output_root / analyze_human_eval.ANALYSIS_MARKDOWN
-    manifest_path = output_root / analyze_human_eval.ANALYSIS_MANIFEST
-
-    json_bytes = _regular_bytes(json_path, label="canonical human-analysis JSON")
-    markdown_bytes = _regular_bytes(markdown_path, label="human-analysis Markdown")
-    manifest_bytes = _regular_bytes(manifest_path, label="human-analysis output manifest")
+def _verify_captured_bundle(snapshots) -> dict:
+    """Verify one descriptor-bound snapshot of the complete output bundle."""
+    json_bytes = snapshots[analyze_human_eval.ANALYSIS_JSON][1][0]
+    markdown_bytes = snapshots[analyze_human_eval.ANALYSIS_MARKDOWN][1][0]
+    manifest_bytes = snapshots[analyze_human_eval.ANALYSIS_MANIFEST][1][0]
 
     payload = _load_json(json_bytes, label="canonical human-analysis JSON")
     manifest = _load_json(manifest_bytes, label="human-analysis output manifest")
@@ -407,6 +603,24 @@ def verify_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
     }
 
 
+def verify_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
+    """Verify exact outputs, deterministic rendering, and implementation hashes."""
+    output_root = Path(output_root)
+    with ExitStack() as descriptors:
+        output_descriptor, snapshots, directory_identity = _open_output_snapshot(
+            descriptors,
+            output_root,
+        )
+        receipt = _verify_captured_bundle(snapshots)
+        _require_output_snapshot_stable(
+            output_root,
+            output_descriptor,
+            snapshots,
+            directory_identity,
+        )
+        return receipt
+
+
 def verify_bundle_against_inputs(
     output_root: Path = DEFAULT_OUTPUT_ROOT,
     *,
@@ -421,81 +635,67 @@ def verify_bundle_against_inputs(
     task_manifest_path: Path = core.TASKS,
     repo_root: Path = core.ROOT,
 ) -> dict:
-    """Verify bundle integrity, then independently recompute its full payload."""
+    """Verify a captured bundle, then independently recompute its full payload.
+
+    The returned stability flag binds the captured output inodes through the
+    end-of-recomputation observation. It does not claim to lock the publication
+    directory against writes after verification.
+    """
     output_root = Path(output_root)
-    receipt = verify_bundle(output_root)
-
-    # Capture the complete published bundle only after ordinary manifest and
-    # rendering checks pass, and bind every captured stream to that receipt.
-    # These are the exact bytes that must remain in place while the slower
-    # independent recomputation runs.
-    output_specs = {
-        "canonical human-analysis JSON": (
-            output_root / analyze_human_eval.ANALYSIS_JSON,
-            "canonical_analysis_sha256",
-        ),
-        "human-analysis Markdown": (
-            output_root / analyze_human_eval.ANALYSIS_MARKDOWN,
-            "manuscript_rendering_sha256",
-        ),
-        "human-analysis output manifest": (
-            output_root / analyze_human_eval.ANALYSIS_MANIFEST,
-            "output_manifest_sha256",
-        ),
-    }
-    captured_outputs = {}
-    for label, (path, receipt_key) in output_specs.items():
-        content = _regular_bytes(path, label=label)
-        _require_equal(
-            _fingerprint(content)["sha256"],
-            receipt[receipt_key],
-            label=f"{label} stability",
+    with ExitStack() as descriptors:
+        output_descriptor, snapshots, directory_identity = _open_output_snapshot(
+            descriptors,
+            output_root,
         )
-        captured_outputs[label] = content
-    payload = _load_json(
-        captured_outputs["canonical human-analysis JSON"],
-        label="canonical human-analysis JSON",
-    )
-
-    from_retained_archive = rating_paths is None
-    if from_retained_archive:
-        # Validate the retained archive layout here, but let the blinded freeze
-        # verifier consume its declared archive paths. Passing those numbered
-        # archive names as if they were external inputs would incorrectly compare
-        # them with the original source filenames recorded in the manifest.
-        _retained_rating_paths(freeze_root)
-        analysis_rating_paths = []
-    else:
-        analysis_rating_paths = [Path(path) for path in rating_paths]
-        if not analysis_rating_paths:
-            raise ValueError("independent recomputation requires at least one rating file")
-
-    recomputed = core.analyze(
-        analysis_rating_paths,
-        freeze_root=freeze_root,
-        packet_root=packet_root,
-        packet_path=packet_path,
-        protocol_path=protocol_path,
-        assignment_plan_path=assignment_plan_path,
-        annotator_guide_path=annotator_guide_path,
-        analysis_plan_path=analysis_plan_path,
-        task_manifest_path=task_manifest_path,
-        repo_root=repo_root,
-    )
-
-    for label, (path, _receipt_key) in output_specs.items():
-        if _regular_bytes(path, label=label) != captured_outputs[label]:
-            raise ValueError(f"{label} changed during independent recomputation")
-
-    if _canonical_json_bytes(payload) != _canonical_json_bytes(recomputed):
-        raise ValueError(
-            "canonical result does not match independently recomputed human analysis"
+        receipt = _verify_captured_bundle(snapshots)
+        payload = _load_json(
+            snapshots[analyze_human_eval.ANALYSIS_JSON][1][0],
+            label="canonical human-analysis JSON",
         )
 
-    receipt["independent_recomputation_verified"] = True
-    receipt["recomputed_from_retained_ratings"] = from_retained_archive
-    receipt["outputs_stable_during_independent_recomputation"] = True
-    return receipt
+        from_retained_archive = rating_paths is None
+        if from_retained_archive:
+            # Validate the retained archive layout here, but let the blinded freeze
+            # verifier consume its declared archive paths. Passing those numbered
+            # archive names as if they were external inputs would incorrectly compare
+            # them with the original source filenames recorded in the manifest.
+            _retained_rating_paths(freeze_root)
+            analysis_rating_paths = []
+        else:
+            analysis_rating_paths = [Path(path) for path in rating_paths]
+            if not analysis_rating_paths:
+                raise ValueError(
+                    "independent recomputation requires at least one rating file"
+                )
+
+        recomputed = core.analyze(
+            analysis_rating_paths,
+            freeze_root=freeze_root,
+            packet_root=packet_root,
+            packet_path=packet_path,
+            protocol_path=protocol_path,
+            assignment_plan_path=assignment_plan_path,
+            annotator_guide_path=annotator_guide_path,
+            analysis_plan_path=analysis_plan_path,
+            task_manifest_path=task_manifest_path,
+            repo_root=repo_root,
+        )
+
+        if _canonical_json_bytes(payload) != _canonical_json_bytes(recomputed):
+            raise ValueError(
+                "canonical result does not match independently recomputed human analysis"
+            )
+
+        _require_output_snapshot_stable(
+            output_root,
+            output_descriptor,
+            snapshots,
+            directory_identity,
+        )
+        receipt["independent_recomputation_verified"] = True
+        receipt["recomputed_from_retained_ratings"] = from_retained_archive
+        receipt["outputs_stable_during_independent_recomputation"] = True
+        return receipt
 
 
 def main() -> int:

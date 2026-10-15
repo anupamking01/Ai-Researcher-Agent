@@ -4,7 +4,9 @@ These fixtures are not collected human ratings or study findings.
 """
 import hashlib
 import json
+import os
 import platform
+import shutil
 from pathlib import Path
 
 import pytest
@@ -598,6 +600,7 @@ def test_independent_verifier_recomputes_from_retained_ratings(tmp_path, monkeyp
 
     assert receipt["independent_recomputation_verified"] is True
     assert receipt["recomputed_from_retained_ratings"] is True
+    assert receipt["outputs_stable_during_independent_recomputation"] is True
     assert observed["rating_paths"] == []
     assert observed["freeze_root"] == freeze_root
 
@@ -632,6 +635,147 @@ def test_independent_verifier_rejects_output_drift_during_recomputation(
             output,
             rating_paths=[tmp_path / "retained.csv"],
         )
+
+
+def test_independent_verifier_rejects_identical_output_inode_replacement(
+    tmp_path, monkeypatch
+):
+    output = tmp_path / "analysis"
+    expected = _payload()
+    analyze_human_eval.write_bundle(expected, output)
+    artifact = output / analyze_human_eval.ANALYSIS_JSON
+    detached = tmp_path / "detached-analysis.json"
+
+    def replace_output_inode(*_args, **_kwargs):
+        original = artifact.read_bytes()
+        artifact.rename(detached)
+        artifact.write_bytes(original)
+        return expected
+
+    monkeypatch.setattr(core, "analyze", replace_output_inode)
+
+    with pytest.raises(ValueError, match="changed during independent recomputation"):
+        verify.verify_bundle_against_inputs(
+            output,
+            rating_paths=[tmp_path / "retained.csv"],
+        )
+
+
+def test_independent_verifier_rejects_identical_output_directory_replacement(
+    tmp_path, monkeypatch
+):
+    output = tmp_path / "analysis"
+    expected = _payload()
+    analyze_human_eval.write_bundle(expected, output)
+    detached = tmp_path / "detached-analysis"
+
+    def replace_output_directory(*_args, **_kwargs):
+        output.rename(detached)
+        shutil.copytree(detached, output)
+        return expected
+
+    monkeypatch.setattr(core, "analyze", replace_output_directory)
+
+    with pytest.raises(ValueError, match="output root changed"):
+        verify.verify_bundle_against_inputs(
+            output,
+            rating_paths=[tmp_path / "retained.csv"],
+        )
+
+
+def test_independent_verifier_rejects_change_after_output_content_recheck(
+    tmp_path, monkeypatch
+):
+    output = tmp_path / "analysis"
+    expected = _payload()
+    analyze_human_eval.write_bundle(expected, output)
+    artifact = output / analyze_human_eval.ANALYSIS_JSON
+    real_snapshot = verify._regular_snapshot_from_descriptor
+    calls = 0
+
+    def change_after_json_final_read(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 5:
+            artifact.write_bytes(artifact.read_bytes() + b"\n")
+        return real_snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(core, "analyze", lambda *_args, **_kwargs: expected)
+    monkeypatch.setattr(
+        verify,
+        "_regular_snapshot_from_descriptor",
+        change_after_json_final_read,
+    )
+
+    with pytest.raises(ValueError, match="changed during independent recomputation"):
+        verify.verify_bundle_against_inputs(
+            output,
+            rating_paths=[tmp_path / "retained.csv"],
+        )
+
+
+def test_independent_verifier_rejects_directory_replacement_during_final_observation(
+    tmp_path, monkeypatch
+):
+    output = tmp_path / "analysis"
+    expected = _payload()
+    analyze_human_eval.write_bundle(expected, output)
+    detached = tmp_path / "detached-analysis"
+    real_snapshot = verify._regular_snapshot_from_descriptor
+    calls = 0
+
+    def replace_after_first_final_read(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 5:
+            output.rename(detached)
+            shutil.copytree(detached, output)
+        return real_snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(core, "analyze", lambda *_args, **_kwargs: expected)
+    monkeypatch.setattr(
+        verify,
+        "_regular_snapshot_from_descriptor",
+        replace_after_first_final_read,
+    )
+
+    with pytest.raises(ValueError, match="output root changed"):
+        verify.verify_bundle_against_inputs(
+            output,
+            rating_paths=[tmp_path / "retained.csv"],
+        )
+
+
+def test_independent_verifier_closes_output_descriptors_on_analysis_failure(
+    tmp_path, monkeypatch
+):
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    descriptor_root = Path("/proc/self/fd")
+    before = len(list(descriptor_root.iterdir()))
+
+    def fail_analysis(*_args, **_kwargs):
+        raise ValueError("synthetic analysis failure")
+
+    monkeypatch.setattr(core, "analyze", fail_analysis)
+    with pytest.raises(ValueError, match="synthetic analysis failure"):
+        verify.verify_bundle_against_inputs(
+            output,
+            rating_paths=[tmp_path / "retained.csv"],
+        )
+
+    assert len(list(descriptor_root.iterdir())) == before
+
+
+def test_verifier_rejects_fifo_output_without_blocking(tmp_path):
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    artifact = output / analyze_human_eval.ANALYSIS_JSON
+    artifact.unlink()
+    os.mkfifo(artifact)
+
+    with pytest.raises(ValueError, match="must be a regular file"):
+        verify.verify_bundle(output)
 
 
 def test_independent_verifier_rejects_rehashed_outcome_tampering(
