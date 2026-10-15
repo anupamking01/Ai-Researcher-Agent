@@ -1,5 +1,6 @@
 """Checks for provenance binding of the verified analysis execution layer."""
 import hashlib
+import sys
 from pathlib import Path
 
 import pytest
@@ -61,6 +62,18 @@ def test_execution_receipt_requires_complete_exact_binding(tmp_path, monkeypatch
 
     with pytest.raises(ValueError, match="complete execution provenance"):
         execution.verify_execution_receipt(receipt, root=tmp_path)
+
+
+def test_execution_cli_rejects_duplicate_receipt_fields(tmp_path, monkeypatch):
+    receipt = tmp_path / "duplicate.json"
+    receipt.write_text(
+        '{"schema_version": 1, "schema_version": 2}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys, "argv", ["verify_main_study_execution", str(receipt)])
+
+    with pytest.raises(SystemExit, match="duplicate JSON field: schema_version"):
+        execution.main()
 
 
 def test_execution_receipt_rejects_matching_tools_through_symlinked_parent(

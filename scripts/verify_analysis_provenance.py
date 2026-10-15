@@ -42,6 +42,25 @@ from scripts.verify_research_artifact_manifest import REPO_ROOT, verify_manifest
 
 DEFAULT_RECEIPT = Path("outputs/main_study_analysis_provenance.json")
 CANONICAL_INPUTS = {"outputs/main_study_runs.csv", "outputs/posthoc_support_runs.csv"}
+RECEIPT_FIELDS = {
+    "schema_version",
+    "input_manifest_aggregate_sha256",
+    "verified_inputs",
+    "analysis_implementation",
+    "analysis_plan",
+    "analysis_environment",
+    "provenance_builder",
+    "verification_implementations",
+    "frozen_configuration",
+    "verified_outputs",
+}
+OPTIONAL_RECEIPT_FIELDS = {"verified_execution"}
+BOUND_FILE_FIELDS = {"path", "sha256"}
+EXECUTION_FIELDS = {"runner", "execution_verifier"}
+EXECUTION_PATHS = {
+    "runner": Path("scripts/run_verified_main_study_analysis.py"),
+    "execution_verifier": Path("scripts/verify_main_study_execution.py"),
+}
 SNAPSHOT_FILES = {
     "outputs/main_study_runs.csv": "analysis input",
     "outputs/posthoc_support_runs.csv": "analysis input",
@@ -66,6 +85,20 @@ analyze_main_study.OUT_JSON = Path(sys.argv[4])
 analyze_main_study.OUT_MD = Path(sys.argv[5])
 raise SystemExit(analyze_main_study.main())
 """
+
+
+def parse_receipt_json(content: str) -> object:
+    """Parse a receipt without silently resolving duplicate object fields."""
+
+    def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON field: {key}")
+            result[key] = value
+        return result
+
+    return json.loads(content, object_pairs_hook=unique_object)
 
 
 def _regular_bytes(path: Path, *, label: str) -> bytes:
@@ -325,6 +358,10 @@ def _sha256(path: Path) -> str:
 def _require_hash(entry: object, *, label: str, root: Path) -> None:
     if not isinstance(entry, dict):
         raise ValueError(f"{label} provenance entry must be an object")
+    if set(entry) != BOUND_FILE_FIELDS:
+        raise ValueError(
+            f"{label} provenance entry must contain exactly path and SHA-256"
+        )
     path = entry.get("path")
     digest = entry.get("sha256")
     if not isinstance(path, str) or not path or not isinstance(digest, str) or len(digest) != 64:
@@ -374,9 +411,30 @@ def verify_receipt(receipt: dict, *, root: Path = REPO_ROOT) -> None:
     """Fail closed unless the receipt matches every current bound artifact/knob."""
     if not isinstance(receipt, dict):
         raise ValueError("unsupported or malformed analysis provenance receipt")
+    unexpected = set(receipt) - RECEIPT_FIELDS - OPTIONAL_RECEIPT_FIELDS
+    if unexpected:
+        raise ValueError(f"receipt contains unexpected root fields: {sorted(unexpected)}")
     schema_version = receipt.get("schema_version")
     if type(schema_version) is not int or schema_version not in (1, 2):
         raise ValueError("unsupported or malformed analysis provenance receipt")
+    if "verified_execution" in receipt:
+        execution = receipt["verified_execution"]
+        if not isinstance(execution, dict) or set(execution) != EXECUTION_FIELDS:
+            raise ValueError(
+                "verified execution must contain exact execution provenance fields"
+            )
+        _require_canonical_hash(
+            execution["runner"],
+            label="execution runner",
+            expected_path=EXECUTION_PATHS["runner"],
+            root=root,
+        )
+        _require_canonical_hash(
+            execution["execution_verifier"],
+            label="execution verifier",
+            expected_path=EXECUTION_PATHS["execution_verifier"],
+            root=root,
+        )
     _verify_inputs(receipt, root=root)
 
     implementation = receipt.get("analysis_implementation")
@@ -619,7 +677,7 @@ def main() -> int:
     args = parser.parse_args()
     path = args.receipt if args.receipt.is_absolute() else REPO_ROOT / args.receipt
     try:
-        receipt = json.loads(path.read_text(encoding="utf-8"))
+        receipt = parse_receipt_json(path.read_text(encoding="utf-8"))
         verify_receipt(receipt)
         verify_recomputed_outputs(receipt)
     except (OSError, json.JSONDecodeError, ValueError) as exc:

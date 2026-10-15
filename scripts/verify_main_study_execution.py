@@ -11,7 +11,11 @@ import json
 from pathlib import Path
 
 from scripts.fingerprint_research_artifacts import fingerprint_regular_file
-from scripts.verify_analysis_provenance import DEFAULT_RECEIPT, verify_receipt
+from scripts.verify_analysis_provenance import (
+    DEFAULT_RECEIPT,
+    parse_receipt_json,
+    verify_receipt,
+)
 from scripts.verify_research_artifact_manifest import REPO_ROOT
 
 RUNNER_PATH = "scripts/run_verified_main_study_analysis.py"
@@ -64,7 +68,7 @@ def main() -> int:
     args = parser.parse_args()
     path = args.receipt if args.receipt.is_absolute() else REPO_ROOT / args.receipt
     try:
-        receipt = json.loads(path.read_text(encoding="utf-8"))
+        receipt = parse_receipt_json(path.read_text(encoding="utf-8"))
         verify_execution_receipt(receipt)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise SystemExit(f"MAIN-STUDY EXECUTION VERIFICATION: FAIL: {exc}") from exc

@@ -2,6 +2,7 @@
 import hashlib
 import json
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -81,6 +82,104 @@ def _fixture(tmp_path: Path) -> dict:
 
 def test_complete_current_receipt_verifies(tmp_path: Path):
     verify_receipt(_fixture(tmp_path), root=tmp_path)
+
+
+def test_receipt_rejects_unexpected_root_field(tmp_path: Path):
+    receipt = _fixture(tmp_path)
+    receipt["unexpected"] = "ambiguous extension"
+
+    with pytest.raises(ValueError, match="unexpected root fields"):
+        verify_receipt(receipt, root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "entry_path",
+    [
+        ("analysis_implementation",),
+        ("analysis_plan",),
+        ("analysis_environment", "requirements"),
+        ("analysis_environment", "python_version"),
+        ("provenance_builder",),
+        ("verification_implementations", "provenance"),
+        ("verification_implementations", "output_consistency"),
+        ("verified_outputs", "canonical_inference"),
+        ("verified_outputs", "manuscript_rendering"),
+    ],
+)
+def test_receipt_rejects_extra_bound_file_fields(tmp_path: Path, entry_path):
+    receipt = _fixture(tmp_path)
+    entry = receipt
+    for key in entry_path:
+        entry = entry[key]
+    entry["unexpected"] = "ambiguous extension"
+
+    with pytest.raises(ValueError, match="exactly path and SHA-256"):
+        verify_receipt(receipt, root=tmp_path)
+
+
+def test_provenance_cli_rejects_duplicate_receipt_fields(
+    tmp_path: Path, monkeypatch
+):
+    receipt = tmp_path / "duplicate.json"
+    receipt.write_text(
+        '{"schema_version": 1, "schema_version": 2}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys, "argv", ["verify_analysis_provenance", str(receipt)])
+
+    with pytest.raises(SystemExit, match="duplicate JSON field: schema_version"):
+        provenance.main()
+
+
+def _add_verified_execution(receipt: dict, tmp_path: Path) -> dict:
+    execution = {}
+    for key, relative in {
+        "runner": "scripts/run_verified_main_study_analysis.py",
+        "execution_verifier": "scripts/verify_main_study_execution.py",
+    }.items():
+        path = tmp_path / relative
+        path.write_text(f"# frozen {key}\n", encoding="utf-8")
+        execution[key] = {"path": relative, "sha256": _digest(path)}
+    receipt["verified_execution"] = execution
+    return receipt
+
+
+def test_receipt_verifies_optional_execution_binding(tmp_path: Path):
+    verify_receipt(_add_verified_execution(_fixture(tmp_path), tmp_path), root=tmp_path)
+
+
+def test_receipt_rejects_extra_execution_root_field(tmp_path: Path):
+    receipt = _add_verified_execution(_fixture(tmp_path), tmp_path)
+    receipt["verified_execution"]["unexpected"] = {}
+
+    with pytest.raises(ValueError, match="exact execution provenance fields"):
+        verify_receipt(receipt, root=tmp_path)
+
+
+def test_receipt_rejects_extra_execution_bound_file_field(tmp_path: Path):
+    receipt = _add_verified_execution(_fixture(tmp_path), tmp_path)
+    receipt["verified_execution"]["runner"]["unexpected"] = "ambiguous extension"
+
+    with pytest.raises(ValueError, match="exactly path and SHA-256"):
+        verify_receipt(receipt, root=tmp_path)
+
+
+def test_receipt_rejects_execution_binding_drift(tmp_path: Path):
+    receipt = _add_verified_execution(_fixture(tmp_path), tmp_path)
+    receipt["verified_execution"]["runner"]["sha256"] = "0" * 64
+
+    with pytest.raises(ValueError, match="execution runner SHA-256 mismatch"):
+        verify_receipt(receipt, root=tmp_path)
+
+
+def test_receipt_rejects_execution_path_substitution(tmp_path: Path):
+    receipt = _add_verified_execution(_fixture(tmp_path), tmp_path)
+    receipt["verified_execution"]["runner"] = dict(
+        receipt["analysis_implementation"]
+    )
+
+    with pytest.raises(ValueError, match="execution runner provenance must bind canonical path"):
+        verify_receipt(receipt, root=tmp_path)
 
 
 @pytest.mark.parametrize("schema_version", [True, [], {}, "1", 3])
