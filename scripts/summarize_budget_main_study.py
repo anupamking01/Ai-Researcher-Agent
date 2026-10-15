@@ -30,7 +30,9 @@ def _mean(values):
     return statistics.mean(values) if values else None
 
 
-def _load_bound_inputs() -> tuple[list[dict], dict[tuple[str, str], dict]]:
+def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str], dict]]:
+    from scripts.evaluate_posthoc_support import _validate_cached_evaluation
+
     traces = []
     trace_by_key = {}
     for variant in VARIANTS:
@@ -77,6 +79,8 @@ def _load_bound_inputs() -> tuple[list[dict], dict[tuple[str, str], dict]]:
             trace_by_key[key] = record
 
     eval_by_key = {}
+    evaluator_model = None
+    evaluator_temperature = None
     for path in sorted(EVAL_ROOT.glob("*/*.json")):
         row = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(row, dict):
@@ -103,7 +107,28 @@ def _load_bound_inputs() -> tuple[list[dict], dict[tuple[str, str], dict]]:
             )
         if key in eval_by_key:
             raise SystemExit(f"Duplicate evaluator cell: {path_variant}/{path_task}")
-        eval_by_key[key] = row
+        if evaluator_model is None:
+            evaluator_model = row.get("evaluator_model")
+            evaluator_temperature = row.get("temperature")
+        successful_sources = int(
+            trace_record["trace"].get("successful_source_count", 0) or 0
+        )
+        expected_evidence_status = (
+            "zero_successful_sources"
+            if successful_sources == 0
+            else "retrieved_evidence"
+        )
+        eval_by_key[key] = _validate_cached_evaluation(
+            row,
+            path=path,
+            expected_variant=path_variant,
+            expected_task_id=path_task,
+            expected_run_id=trace_record["run_id"],
+            expected_evaluator_model=evaluator_model,
+            expected_temperature=evaluator_temperature,
+            expected_evidence_status=expected_evidence_status,
+            pricing=pricing,
+        )
 
     for record in traces:
         key = (record["variant"], record["task_id"])
@@ -119,7 +144,7 @@ def main() -> int:
     from scripts.summarize_pilot import _estimate_reported_token_cost
 
     pricing = json.loads(PRICING_FILE.read_text(encoding="utf-8"))
-    traces, eval_by_key = _load_bound_inputs()
+    traces, eval_by_key = _load_bound_inputs(pricing)
 
     rows = []
     for record in traces:

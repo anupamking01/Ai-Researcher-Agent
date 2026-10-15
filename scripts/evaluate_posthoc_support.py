@@ -94,6 +94,32 @@ def _load_cached_evaluation(
     pricing: dict,
 ) -> dict:
     payload = _load_json(path)
+    return _validate_cached_evaluation(
+        payload,
+        path=path,
+        expected_variant=expected_variant,
+        expected_task_id=expected_task_id,
+        expected_run_id=expected_run_id,
+        expected_evaluator_model=expected_evaluator_model,
+        expected_temperature=expected_temperature,
+        expected_evidence_status=expected_evidence_status,
+        pricing=pricing,
+    )
+
+
+def _validate_cached_evaluation(
+    payload: dict,
+    *,
+    path: Path,
+    expected_variant: str,
+    expected_task_id: str,
+    expected_run_id: str,
+    expected_evaluator_model: str,
+    expected_temperature: float,
+    expected_evidence_status: str,
+    pricing: dict,
+) -> dict:
+    """Validate one already-captured evaluator record against its bound cell."""
     schema_version = payload.get("schema_version")
     if type(schema_version) is not int or schema_version != 1:
         raise SystemExit(

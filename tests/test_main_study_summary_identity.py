@@ -5,6 +5,17 @@ import pytest
 from scripts import summarize_budget_main_study
 
 
+EXPECTED_EVALUATOR_COST = (
+    (100 / 1_000_000) * 2.0 + (20 / 1_000_000) * 12.0
+)
+PRICING = {
+    "models": {
+        "gpt-test": {"input": 2.0, "output": 12.0},
+        "gpt-other": {"input": 2.0, "output": 12.0},
+    }
+}
+
+
 def _trace_payload(*, task_id="main-01", run_id="run-d3-main-01"):
     return {
         "experiment": {"variant_id": "D3", "task_id": task_id},
@@ -13,6 +24,7 @@ def _trace_payload(*, task_id="main-01", run_id="run-d3-main-01"):
             "variant_id": "D3",
             "task_id": task_id,
             "run_id": run_id,
+            "successful_source_count": 1,
             "provider_usage_by_model": {},
         },
     }
@@ -23,9 +35,31 @@ def _evaluation_payload(**overrides):
         "variant_id": "D3",
         "task_id": "main-01",
         "run_id": "run-d3-main-01",
+        "schema_version": 1,
+        "study_id": "budget-main-v1",
+        "max_claims": 12,
         "claims_checked": 4,
+        "supported": 2,
+        "partially_supported": 1,
+        "unsupported": 1,
+        "contradicted": 0,
         "strict_support_rate": 0.5,
-        "estimated_cost_usd": 0.001,
+        "examples": [],
+        "evaluator_model": "gpt-test",
+        "temperature": 1.0,
+        "evidence_status": "retrieved_evidence",
+        "provider_usage_by_model": {
+            "gpt-test": {
+                "model_calls": 1,
+                "unavailable_calls": 0,
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+            }
+        },
+        "total_tokens": 120,
+        "estimated_cost_usd": EXPECTED_EVALUATOR_COST,
+        "cost_method": "frozen uncached rates",
     }
     payload.update(overrides)
     return payload
@@ -45,7 +79,7 @@ def _configure_summary(tmp_path, monkeypatch, *, traces, evaluations):
 
     pricing_file = tmp_path / "experiments" / "pricing.json"
     pricing_file.parent.mkdir(parents=True)
-    pricing_file.write_text(json.dumps({"models": {}}), encoding="utf-8")
+    pricing_file.write_text(json.dumps(PRICING), encoding="utf-8")
 
     monkeypatch.setattr(summarize_budget_main_study, "TRACE_ROOT", trace_root)
     monkeypatch.setattr(summarize_budget_main_study, "EVAL_ROOT", eval_root)
@@ -208,3 +242,70 @@ def test_summary_accepts_one_fully_bound_treatment_evaluator_cell(
     )
     assert summary["n_runs"] == 1
     assert summary["n_posthoc_evaluations"] == 1
+
+
+def test_summary_rejects_internally_inconsistent_evaluator_measurements(
+    tmp_path, monkeypatch
+):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[
+            (
+                "D3",
+                "main-01.json",
+                _evaluation_payload(supported=3),
+            ),
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="Verifier label counts must sum"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+def test_summary_rejects_cross_cell_evaluator_configuration_drift(
+    tmp_path, monkeypatch
+):
+    other_usage = {
+        "gpt-other": {
+            "model_calls": 1,
+            "unavailable_calls": 0,
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+        }
+    }
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[
+            ("run-d3-main-01.json", _trace_payload()),
+            (
+                "run-d3-main-02.json",
+                _trace_payload(task_id="main-02", run_id="run-d3-main-02"),
+            ),
+        ],
+        evaluations=[
+            ("D3", "main-01.json", _evaluation_payload()),
+            (
+                "D3",
+                "main-02.json",
+                _evaluation_payload(
+                    task_id="main-02",
+                    run_id="run-d3-main-02",
+                    evaluator_model="gpt-other",
+                    provider_usage_by_model=other_usage,
+                ),
+            ),
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="evaluator_model must equal gpt-test"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
