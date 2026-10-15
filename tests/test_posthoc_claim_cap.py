@@ -570,6 +570,34 @@ def test_resume_never_overwrites_cache_published_during_model_call(
     assert json.loads(concurrent_cache.read_text(encoding="utf-8"))["supported"] == 8
 
 
+def test_overspend_preserves_cell_cache_without_publishing_aggregate_outputs(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    monkeypatch.setattr(
+        evaluate_posthoc_support.sys,
+        "argv",
+        ["evaluate_posthoc_support.py", "--max-evaluator-cost-usd", "0.0001"],
+    )
+
+    def complete_evaluation(**kwargs):
+        _record_evaluator_usage(kwargs)
+        return _evaluator_result()
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        complete_evaluation,
+    )
+
+    with pytest.raises(SystemExit, match="Evaluator completed but exceeded cap"):
+        evaluate_posthoc_support.main()
+
+    cached = eval_root / "D3" / "main-01.json"
+    assert json.loads(cached.read_text(encoding="utf-8"))["task_id"] == "main-01"
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
 def test_cache_publication_is_invisible_until_atomic_commit(tmp_path, monkeypatch):
     path = tmp_path / "posthoc_evaluations" / "D3" / "main-01.json"
     expected = _cached_evaluation()

@@ -575,6 +575,14 @@ def main() -> int:
             ),
         }
 
+    if len(rows) != len(expected):
+        raise SystemExit(f"Post-hoc evaluator incomplete: {len(rows)}/{len(expected)}")
+    if summary["estimated_evaluator_cost_usd"] > args.max_evaluator_cost_usd:
+        raise SystemExit(
+            f"Evaluator completed but exceeded cap: ${summary['estimated_evaluator_cost_usd']:.4f} "
+            f"> ${args.max_evaluator_cost_usd:.2f}"
+        )
+
     summary_path = REPO_ROOT / "outputs" / "posthoc_support_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
     csv_path = REPO_ROOT / "outputs" / "posthoc_support_runs.csv"
@@ -588,14 +596,6 @@ def main() -> int:
         writer.writeheader()
         for row in rows:
             writer.writerow({key: row.get(key) for key in fieldnames})
-
-    if len(rows) != len(expected):
-        raise SystemExit(f"Post-hoc evaluator incomplete: {len(rows)}/{len(expected)}")
-    if summary["estimated_evaluator_cost_usd"] > args.max_evaluator_cost_usd:
-        raise SystemExit(
-            f"Evaluator completed but exceeded cap: ${summary['estimated_evaluator_cost_usd']:.4f} "
-            f"> ${args.max_evaluator_cost_usd:.2f}"
-        )
     print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
     return 0
 
