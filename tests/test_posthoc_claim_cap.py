@@ -1039,6 +1039,157 @@ def test_overspend_preserves_cell_cache_without_publishing_aggregate_outputs(
     assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
 
 
+def test_aggregate_summary_binds_exact_published_csv_bytes(tmp_path, monkeypatch):
+    eval_root = _configure_resume_main(
+        tmp_path, monkeypatch, task_ids=("main-01",)
+    )
+    cache_path = eval_root / "D3" / "main-01.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(
+        json.dumps(
+            _cached_evaluation(evidence_status="zero_successful_sources")
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_if_called(**_kwargs):
+        raise AssertionError("cached evaluation should avoid a model call")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        fail_if_called,
+    )
+
+    assert evaluate_posthoc_support.main() == 0
+
+    outputs = tmp_path / "outputs"
+    summary = json.loads(
+        (outputs / "posthoc_support_summary.json").read_text(encoding="utf-8")
+    )
+    csv_bytes = (outputs / "posthoc_support_runs.csv").read_bytes()
+    assert summary["posthoc_support_runs_sha256"] == hashlib.sha256(
+        csv_bytes
+    ).hexdigest()
+
+
+def test_aggregate_publication_stages_every_file_before_replacing_existing_outputs(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(
+        tmp_path, monkeypatch, task_ids=("main-01",)
+    )
+    cache_path = eval_root / "D3" / "main-01.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(
+        json.dumps(
+            _cached_evaluation(evidence_status="zero_successful_sources")
+        ),
+        encoding="utf-8",
+    )
+
+    outputs = tmp_path / "outputs"
+    summary_path = outputs / "posthoc_support_summary.json"
+    csv_path = outputs / "posthoc_support_runs.csv"
+    previous_summary = b'{"generation":"previous"}'
+    previous_csv = b"generation\nprevious\n"
+    summary_path.write_bytes(previous_summary)
+    csv_path.write_bytes(previous_csv)
+
+    def fail_if_called(**_kwargs):
+        raise AssertionError("cached evaluation should avoid a model call")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        fail_if_called,
+    )
+    real_mkstemp = evaluate_posthoc_support.tempfile.mkstemp
+    staging_attempts = []
+
+    def fail_second_staging(*args, **kwargs):
+        staging_attempts.append(kwargs.get("prefix"))
+        if len(staging_attempts) == 2:
+            raise OSError("synthetic aggregate staging failure")
+        return real_mkstemp(*args, **kwargs)
+
+    monkeypatch.setattr(
+        evaluate_posthoc_support.tempfile,
+        "mkstemp",
+        fail_second_staging,
+    )
+
+    with pytest.raises(OSError, match="synthetic aggregate staging failure"):
+        evaluate_posthoc_support.main()
+
+    assert summary_path.read_bytes() == previous_summary
+    assert csv_path.read_bytes() == previous_csv
+    assert list(outputs.glob(".posthoc_support_*.*.tmp")) == []
+
+
+def test_interrupted_second_replacement_leaves_detectable_mixed_generation(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(
+        tmp_path, monkeypatch, task_ids=("main-01",)
+    )
+    cache_path = eval_root / "D3" / "main-01.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(
+        json.dumps(
+            _cached_evaluation(evidence_status="zero_successful_sources")
+        ),
+        encoding="utf-8",
+    )
+
+    outputs = tmp_path / "outputs"
+    summary_path = outputs / "posthoc_support_summary.json"
+    csv_path = outputs / "posthoc_support_runs.csv"
+    previous_csv = b"generation\nprevious\n"
+    csv_path.write_bytes(previous_csv)
+    summary_path.write_text(
+        json.dumps(
+            {
+                "posthoc_support_runs_sha256": hashlib.sha256(
+                    previous_csv
+                ).hexdigest()
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_if_called(**_kwargs):
+        raise AssertionError("cached evaluation should avoid a model call")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        fail_if_called,
+    )
+    real_replace = evaluate_posthoc_support.os.replace
+    replacements = []
+
+    def fail_second_replacement(source, destination):
+        replacements.append((source, destination))
+        if len(replacements) == 2:
+            raise OSError("synthetic second replacement failure")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(
+        evaluate_posthoc_support.os,
+        "replace",
+        fail_second_replacement,
+    )
+
+    with pytest.raises(OSError, match="synthetic second replacement failure"):
+        evaluate_posthoc_support.main()
+
+    assert csv_path.read_bytes() == previous_csv
+    with pytest.raises(SystemExit, match="post-hoc aggregate generation mismatch"):
+        evaluate_posthoc_support._verify_aggregate_outputs(
+            summary_path,
+            csv_path,
+        )
+    assert list(outputs.glob(".posthoc_support_*.*.tmp")) == []
+
+
 def test_cache_publication_is_invisible_until_atomic_commit(tmp_path, monkeypatch):
     path = tmp_path / "posthoc_evaluations" / "D3" / "main-01.json"
     expected = _cached_evaluation()

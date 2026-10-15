@@ -20,6 +20,7 @@ if str(REPO_ROOT) not in sys.path:
 from scripts.evaluate_posthoc_support import (
     FROZEN_EVALUATOR_MODEL,
     FROZEN_EVALUATOR_TEMPERATURE,
+    _verify_aggregate_outputs,
 )
 
 TRACE_ROOT = REPO_ROOT / "outputs" / "experiment_traces"
@@ -176,6 +177,13 @@ def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str],
 
 def main() -> int:
     from scripts.run_budget_main_study import _load_pricing
+
+    posthoc_summary = REPO_ROOT / "outputs" / "posthoc_support_summary.json"
+    if posthoc_summary.exists():
+        _verify_aggregate_outputs(
+            posthoc_summary,
+            REPO_ROOT / "outputs" / "posthoc_support_runs.csv",
+        )
 
     pricing, pricing_snapshot = _load_pricing(PRICING_FILE)
     traces, eval_by_key = _load_bound_inputs(pricing)

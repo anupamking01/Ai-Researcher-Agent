@@ -477,6 +477,36 @@ def test_summary_accepts_one_fully_bound_treatment_evaluator_cell(
     assert summary["n_posthoc_evaluations"] == 1
 
 
+def test_summary_rejects_mixed_posthoc_aggregate_generation_before_outputs(
+    tmp_path, monkeypatch
+):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    outputs = tmp_path / "outputs"
+    support_csv = outputs / "posthoc_support_runs.csv"
+    support_csv.write_bytes(b"generation\nprevious\n")
+    (outputs / "posthoc_support_summary.json").write_text(
+        json.dumps(
+            {
+                "posthoc_support_runs_sha256": hashlib.sha256(
+                    b"generation\nnext\n"
+                ).hexdigest()
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="post-hoc aggregate generation mismatch"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
 def test_summary_binds_costs_to_validated_pricing_snapshot(tmp_path, monkeypatch):
     _configure_summary(
         tmp_path,

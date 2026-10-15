@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import io
 import json
 import math
 import os
@@ -203,6 +204,109 @@ def _publish_evaluation_cache(path: Path, record: dict) -> None:
             os.close(directory_descriptor)
     finally:
         staging_path.unlink(missing_ok=True)
+
+
+def _stage_durable_output(path: Path, content: bytes) -> Path:
+    """Write and sync one complete output beside its final destination."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, staging_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    staging_path = Path(staging_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            os.fchmod(handle.fileno(), 0o644)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        staging_path.unlink(missing_ok=True)
+        raise
+    return staging_path
+
+
+def _publish_aggregate_outputs(
+    summary_path: Path,
+    csv_path: Path,
+    summary: dict,
+    rows: list[dict],
+) -> None:
+    """Stage every aggregate artifact before replacing either final file."""
+    fieldnames = [
+        "variant_id",
+        "task_id",
+        "run_id",
+        "evidence_status",
+        "claims_checked",
+        "supported",
+        "partially_supported",
+        "unsupported",
+        "contradicted",
+        "strict_support_rate",
+        "total_tokens",
+        "estimated_cost_usd",
+    ]
+    csv_buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(csv_buffer, fieldnames=fieldnames)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({key: row.get(key) for key in fieldnames})
+    csv_content = csv_buffer.getvalue().encode("utf-8")
+    summary["posthoc_support_runs_sha256"] = hashlib.sha256(
+        csv_content
+    ).hexdigest()
+
+    outputs = [
+        (
+            Path(summary_path),
+            json.dumps(summary, indent=2, sort_keys=True).encode("utf-8"),
+        ),
+        (Path(csv_path), csv_content),
+    ]
+    staged: list[tuple[Path, Path]] = []
+    try:
+        for final_path, content in outputs:
+            staged.append((final_path, _stage_durable_output(final_path, content)))
+        for final_path, staging_path in staged:
+            os.replace(staging_path, final_path)
+
+        for directory in {path.parent for path, _staging in staged}:
+            directory_descriptor = os.open(
+                directory,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            )
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+    finally:
+        for _final_path, staging_path in staged:
+            staging_path.unlink(missing_ok=True)
+
+
+def _verify_aggregate_outputs(summary_path: Path, csv_path: Path) -> None:
+    """Require the aggregate summary to bind the exact run-level CSV bytes."""
+    summary = _load_json(Path(summary_path))
+    expected = summary.get("posthoc_support_runs_sha256")
+    if (
+        not isinstance(expected, str)
+        or len(expected) != 64
+        or any(character not in "0123456789abcdef" for character in expected)
+    ):
+        raise SystemExit(
+            "Post-hoc aggregate summary lacks a valid CSV generation fingerprint"
+        )
+    observed = hashlib.sha256(
+        _read_regular_bytes(Path(csv_path), label="post-hoc aggregate CSV")
+    ).hexdigest()
+    if observed != expected:
+        raise SystemExit(
+            "post-hoc aggregate generation mismatch: summary binds CSV "
+            f"{expected}, observed {observed}"
+        )
 
 
 def _normalize_evaluator_output(raw_result: str) -> dict:
@@ -849,18 +953,9 @@ def main() -> int:
         )
 
     summary_path = REPO_ROOT / "outputs" / "posthoc_support_summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
     csv_path = REPO_ROOT / "outputs" / "posthoc_support_runs.csv"
-    fieldnames = [
-        "variant_id", "task_id", "run_id", "evidence_status", "claims_checked", "supported",
-        "partially_supported", "unsupported", "contradicted", "strict_support_rate",
-        "total_tokens", "estimated_cost_usd",
-    ]
-    with csv_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({key: row.get(key) for key in fieldnames})
+    _publish_aggregate_outputs(summary_path, csv_path, summary, rows)
+    _verify_aggregate_outputs(summary_path, csv_path)
     print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
     return 0
 

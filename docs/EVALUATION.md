@@ -145,6 +145,18 @@ than inferring the expected configuration from the first cache. This prevents
 a coherently replaced cache set from silently redefining the measurement
 instrument.
 
+The evaluator renders both canonical aggregate artifacts completely before it
+publishes either one. Each staged file is flushed and synchronized, then moved
+over its destination with an atomic replacement; the output directory is
+synchronized after both replacements. A failure while rendering or staging
+therefore leaves the previous JSON summary and run-level CSV untouched and
+removes temporary files. The two final path replacements cannot form one
+filesystem transaction, so an interruption between them may leave generations
+temporarily mismatched. To make that state detectable, the JSON summary binds
+the exact run-level CSV bytes with SHA-256; the evaluator verifies that binding
+after publication, and the downstream offline summarizer rejects a missing or
+mismatched binding before it writes study-summary outputs.
+
 Representative operational failure categories include:
 
 - `planning_error`
