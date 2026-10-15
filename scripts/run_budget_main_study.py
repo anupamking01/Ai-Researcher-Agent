@@ -22,6 +22,7 @@ import json
 import math
 import os
 import re
+import secrets
 import stat
 import subprocess
 import sys
@@ -439,47 +440,64 @@ def _write_json(name: str, payload: dict, *, create_only: bool = False) -> Path:
     encoded = json.dumps(payload, indent=2, sort_keys=True)
     directory_fd = _open_outputs_root_fd()
     nofollow = getattr(os, "O_NOFOLLOW", 0)
+    tmp_name = None
     try:
-        if create_only:
+        for _ in range(100):
+            candidate = f".{name}.{secrets.token_hex(8)}.tmp"
             try:
                 file_fd = os.open(
-                    name,
+                    candidate,
                     os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow,
                     0o666,
                     dir_fd=directory_fd,
                 )
-            except FileExistsError as exc:
-                raise SystemExit(
-                    f"Refusing to overwrite existing main-study state: {path}"
-                ) from exc
-            with os.fdopen(file_fd, "w", encoding="utf-8") as handle:
-                handle.write(encoded)
-            return path
+            except FileExistsError:
+                continue
+            tmp_name = candidate
+            break
+        else:
+            raise SystemExit(f"Cannot allocate staging file for main-study state {path}")
 
-        tmp_name = f"{name}.tmp"
         try:
-            file_fd = os.open(
-                tmp_name,
-                os.O_WRONLY | os.O_CREAT | os.O_TRUNC | nofollow,
-                0o666,
-                dir_fd=directory_fd,
-            )
             with os.fdopen(file_fd, "w", encoding="utf-8") as handle:
                 handle.write(encoded)
-            os.replace(
-                tmp_name,
-                name,
-                src_dir_fd=directory_fd,
-                dst_dir_fd=directory_fd,
-            )
+                handle.flush()
+                os.fsync(handle.fileno())
+
+            if create_only:
+                try:
+                    os.link(
+                        tmp_name,
+                        name,
+                        src_dir_fd=directory_fd,
+                        dst_dir_fd=directory_fd,
+                        follow_symlinks=False,
+                    )
+                except FileExistsError as exc:
+                    raise SystemExit(
+                        f"Refusing to overwrite existing main-study state: {path}"
+                    ) from exc
+                os.fsync(directory_fd)
+                os.unlink(tmp_name, dir_fd=directory_fd)
+                tmp_name = None
+            else:
+                os.replace(
+                    tmp_name,
+                    name,
+                    src_dir_fd=directory_fd,
+                    dst_dir_fd=directory_fd,
+                )
+                tmp_name = None
+            os.fsync(directory_fd)
         except OSError as exc:
+            raise SystemExit(f"Cannot write main-study state {path}: {exc}") from exc
+        return path
+    finally:
+        if tmp_name is not None:
             try:
                 os.unlink(tmp_name, dir_fd=directory_fd)
             except OSError:
                 pass
-            raise SystemExit(f"Cannot write main-study state {path}: {exc}") from exc
-        return path
-    finally:
         os.close(directory_fd)
 
 

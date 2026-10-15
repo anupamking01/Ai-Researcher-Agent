@@ -1,6 +1,8 @@
 import asyncio
 import builtins
 import json
+import os
+import stat
 
 import pytest
 
@@ -357,6 +359,119 @@ def test_create_only_json_write_preserves_state_published_after_preflight(
         )
 
     assert path.read_bytes() == original
+
+
+def test_create_only_json_write_is_staged_and_durably_published(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(run_budget_main_study, "REPO_ROOT", tmp_path)
+    path = tmp_path / "outputs" / "main_study_manifest.json"
+    fsync_targets = []
+    real_fsync = os.fsync
+
+    def observe_fsync(file_fd):
+        mode = os.fstat(file_fd).st_mode
+        fsync_targets.append("directory" if stat.S_ISDIR(mode) else "file")
+        if stat.S_ISREG(mode):
+            assert not path.exists()
+        return real_fsync(file_fd)
+
+    monkeypatch.setattr(run_budget_main_study.os, "fsync", observe_fsync)
+
+    run_budget_main_study._write_json(
+        "main_study_manifest.json",
+        {"study": "main"},
+        create_only=True,
+    )
+
+    assert fsync_targets == ["file", "directory", "directory"]
+    assert json.loads(path.read_text(encoding="utf-8")) == {"study": "main"}
+    assert list(path.parent.iterdir()) == [path]
+
+
+def test_progress_json_write_uses_unique_staging_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_budget_main_study, "REPO_ROOT", tmp_path)
+    path = tmp_path / "outputs" / "main_study_progress.json"
+    replaced_sources = []
+    real_replace = os.replace
+
+    def observe_replace(src, dst, **kwargs):
+        replaced_sources.append(src)
+        assert src != "main_study_progress.json.tmp"
+        return real_replace(src, dst, **kwargs)
+
+    monkeypatch.setattr(run_budget_main_study.os, "replace", observe_replace)
+
+    run_budget_main_study._write_json(
+        "main_study_progress.json",
+        {"completed_runs": 1},
+    )
+
+    assert len(replaced_sources) == 1
+    assert replaced_sources[0].startswith(".main_study_progress.json.")
+    assert json.loads(path.read_text(encoding="utf-8")) == {"completed_runs": 1}
+
+
+def test_create_only_json_write_cleans_staging_after_sync_failure(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(run_budget_main_study, "REPO_ROOT", tmp_path)
+    path = tmp_path / "outputs" / "main_study_manifest.json"
+
+    def fail_file_fsync(file_fd):
+        if stat.S_ISREG(os.fstat(file_fd).st_mode):
+            raise OSError("simulated file sync failure")
+
+    monkeypatch.setattr(run_budget_main_study.os, "fsync", fail_file_fsync)
+
+    with pytest.raises(SystemExit, match="Cannot write main-study state"):
+        run_budget_main_study._write_json(
+            "main_study_manifest.json",
+            {"study": "main"},
+            create_only=True,
+        )
+
+    assert not path.exists()
+    assert list(path.parent.iterdir()) == []
+
+
+def test_create_only_json_write_syncs_publication_before_staging_cleanup(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(run_budget_main_study, "REPO_ROOT", tmp_path)
+    path = tmp_path / "outputs" / "main_study_manifest.json"
+    directory_synced = False
+    unlink_attempts = 0
+    real_fsync = os.fsync
+    real_unlink = os.unlink
+
+    def observe_fsync(file_fd):
+        nonlocal directory_synced
+        if stat.S_ISDIR(os.fstat(file_fd).st_mode):
+            directory_synced = True
+        return real_fsync(file_fd)
+
+    def fail_first_unlink(*args, **kwargs):
+        nonlocal unlink_attempts
+        unlink_attempts += 1
+        if unlink_attempts == 1:
+            assert directory_synced
+            raise OSError("simulated staging cleanup failure")
+        return real_unlink(*args, **kwargs)
+
+    monkeypatch.setattr(run_budget_main_study.os, "fsync", observe_fsync)
+    monkeypatch.setattr(run_budget_main_study.os, "unlink", fail_first_unlink)
+
+    with pytest.raises(SystemExit, match="Cannot write main-study state"):
+        run_budget_main_study._write_json(
+            "main_study_manifest.json",
+            {"study": "main"},
+            create_only=True,
+        )
+
+    assert path.exists()
+    assert unlink_attempts == 2
+    assert list(path.parent.iterdir()) == [path]
 
 
 @pytest.mark.parametrize(
