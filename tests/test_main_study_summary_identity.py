@@ -1,3 +1,5 @@
+import csv
+import hashlib
 import json
 
 import pytest
@@ -9,6 +11,10 @@ EXPECTED_EVALUATOR_COST = (
     (100 / 1_000_000) * 2.0 + (20 / 1_000_000) * 12.0
 )
 PRICING = {
+    "effective_date": "2026-09-08",
+    "currency": "USD",
+    "unit": "per_1m_text_tokens",
+    "source": "Test pricing snapshot",
     "models": {
         "gpt-test": {"input": 2.0, "output": 12.0},
         "gpt-other": {"input": 2.0, "output": 12.0},
@@ -257,6 +263,66 @@ def test_summary_accepts_one_fully_bound_treatment_evaluator_cell(
     )
     assert summary["n_runs"] == 1
     assert summary["n_posthoc_evaluations"] == 1
+
+
+def test_summary_binds_costs_to_validated_pricing_snapshot(tmp_path, monkeypatch):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    pricing_raw = summarize_budget_main_study.PRICING_FILE.read_bytes()
+
+    assert summarize_budget_main_study.main() == 0
+
+    summary = json.loads(
+        summarize_budget_main_study.OUT_JSON.read_text(encoding="utf-8")
+    )
+    assert summary["pricing_reference"] == {
+        "currency": "USD",
+        "effective_date": "2026-09-08",
+        "file": str(summarize_budget_main_study.PRICING_FILE.resolve()),
+        "method": (
+            "provider-reported prompt/output tokens multiplied by frozen "
+            "uncached text-token rates"
+        ),
+        "sha256": hashlib.sha256(pricing_raw).hexdigest(),
+        "size_bytes": len(pricing_raw),
+        "source": "Test pricing snapshot",
+        "unit": "per_1m_text_tokens",
+    }
+    with summarize_budget_main_study.OUT_CSV.open(
+        encoding="utf-8", newline=""
+    ) as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 1
+    assert rows[0]["pricing_file"] == str(
+        summarize_budget_main_study.PRICING_FILE.resolve()
+    )
+    assert rows[0]["pricing_file_size_bytes"] == str(len(pricing_raw))
+    assert rows[0]["pricing_file_sha256"] == hashlib.sha256(pricing_raw).hexdigest()
+    assert rows[0]["pricing_unit"] == "per_1m_text_tokens"
+
+
+def test_summary_rejects_invalid_pricing_before_outputs(tmp_path, monkeypatch):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    invalid_pricing = dict(PRICING, unit="per_token")
+    summarize_budget_main_study.PRICING_FILE.write_text(
+        json.dumps(invalid_pricing),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="unit must equal per_1m_text_tokens"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
 
 
 def test_summary_rejects_internally_inconsistent_evaluator_measurements(

@@ -157,7 +157,9 @@ def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str],
 
 
 def main() -> int:
-    pricing = json.loads(PRICING_FILE.read_text(encoding="utf-8"))
+    from scripts.run_budget_main_study import _load_pricing
+
+    pricing, pricing_snapshot = _load_pricing(PRICING_FILE)
     traces, eval_by_key = _load_bound_inputs(pricing)
 
     rows = []
@@ -180,6 +182,10 @@ def main() -> int:
                 "total_tokens": int(trace.get("total_tokens", 0) or 0),
                 "treatment_cost_usd": cost,
                 "cost_status": "estimated_from_frozen_uncached_rates",
+                "pricing_file": pricing_snapshot["path"],
+                "pricing_file_size_bytes": pricing_snapshot["size_bytes"],
+                "pricing_file_sha256": pricing_snapshot["sha256"],
+                "pricing_unit": pricing["unit"],
                 "latency_seconds": float(trace.get("latency_seconds", 0.0) or 0.0),
                 "report_words": int(trace.get("report_words", 0) or 0),
                 "posthoc_claims_checked": int(evaluator.get("claims_checked", 0) or 0),
@@ -268,6 +274,19 @@ def main() -> int:
         "estimated_treatment_cost_usd": treatment_cost,
         "estimated_common_evaluator_cost_usd": evaluator_cost,
         "estimated_total_cost_usd": treatment_cost + evaluator_cost,
+        "pricing_reference": {
+            "file": pricing_snapshot["path"],
+            "size_bytes": pricing_snapshot["size_bytes"],
+            "sha256": pricing_snapshot["sha256"],
+            "effective_date": pricing.get("effective_date"),
+            "currency": pricing.get("currency"),
+            "unit": pricing["unit"],
+            "source": pricing.get("source"),
+            "method": (
+                "provider-reported prompt/output tokens multiplied by frozen "
+                "uncached text-token rates"
+            ),
+        },
         "variant_summary": variant_summary,
         "paired_descriptive_comparisons": comparisons,
         "limitations": [
