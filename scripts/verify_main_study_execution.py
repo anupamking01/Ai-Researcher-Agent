@@ -7,10 +7,10 @@ add ``verified_execution`` and can be checked here.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 
+from scripts.fingerprint_research_artifacts import fingerprint_regular_file
 from scripts.verify_analysis_provenance import DEFAULT_RECEIPT, verify_receipt
 from scripts.verify_research_artifact_manifest import REPO_ROOT
 
@@ -26,9 +26,10 @@ def _require_bound_file(entry: object, *, label: str, expected_path: str, root: 
     ):
         raise ValueError(f"{label} must bind canonical path {expected_path}")
     path = root / expected_path
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"{label} must be a regular file: {path}")
-    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    try:
+        actual, _ = fingerprint_regular_file(path)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a stable regular file: {path}") from exc
     if entry.get("sha256") != actual:
         raise ValueError(f"{label} SHA-256 mismatch: {expected_path}")
 

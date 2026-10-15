@@ -66,13 +66,13 @@
     },
     "provenance": {
       "path": "scripts/verify_analysis_provenance.py",
-      "sha256": "b77bba516fe41d31729d248a0dfb3a2eb970c699e7d9f42db17f9aa8da495e9a"
+      "sha256": "3076264f2c33211d9f3dcfb90335eeade9ff3d4c1f6888f73fe34a292476a836"
     }
   },
   "verified_execution": {
     "execution_verifier": {
       "path": "scripts/verify_main_study_execution.py",
-      "sha256": "d132eaec00fd0f368bb82c385e907866653f986dd6cd16a09d406f321950cb4a"
+      "sha256": "3158ad9ff744bfd40d2ea81f4539427cebc6a48b8525a8f2ef3a6cf519bf800a"
     },
     "runner": {
       "path": "scripts/run_verified_main_study_analysis.py",

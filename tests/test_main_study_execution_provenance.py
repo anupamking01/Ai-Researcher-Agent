@@ -61,3 +61,17 @@ def test_execution_receipt_requires_complete_exact_binding(tmp_path, monkeypatch
 
     with pytest.raises(ValueError, match="complete execution provenance"):
         execution.verify_execution_receipt(receipt, root=tmp_path)
+
+
+def test_execution_receipt_rejects_matching_tools_through_symlinked_parent(
+    tmp_path, monkeypatch
+):
+    receipt = _receipt(tmp_path)
+    monkeypatch.setattr(execution, "verify_receipt", lambda payload, root: None)
+    scripts = tmp_path / "scripts"
+    retained = tmp_path / "retained-scripts"
+    scripts.rename(retained)
+    scripts.symlink_to(retained, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="regular file"):
+        execution.verify_execution_receipt(receipt, root=tmp_path)

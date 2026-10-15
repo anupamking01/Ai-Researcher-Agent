@@ -174,6 +174,30 @@ def test_mutating_any_bound_artifact_invalidates_receipt(tmp_path: Path, relativ
         verify_receipt(receipt, root=tmp_path)
 
 
+def test_matching_bound_artifact_symlink_is_not_accepted(tmp_path: Path):
+    receipt = _fixture(tmp_path)
+    requirements = tmp_path / ANALYSIS_REQUIREMENTS
+    retained = tmp_path / "retained-requirements.txt"
+    requirements.rename(retained)
+    requirements.symlink_to(retained)
+
+    with pytest.raises(ValueError, match="regular file"):
+        verify_receipt(receipt, root=tmp_path)
+
+
+def test_matching_bound_artifacts_through_symlinked_parent_are_not_accepted(
+    tmp_path: Path,
+):
+    receipt = _fixture(tmp_path)
+    paper = tmp_path / "paper"
+    retained = tmp_path / "retained-paper"
+    paper.rename(retained)
+    paper.symlink_to(retained, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="regular file"):
+        verify_receipt(receipt, root=tmp_path)
+
+
 def test_configuration_drift_invalidates_receipt(tmp_path: Path):
     receipt = _fixture(tmp_path); receipt["frozen_configuration"]["bootstrap_draws"] += 1
     with pytest.raises(ValueError, match="frozen configuration"):

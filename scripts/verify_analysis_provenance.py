@@ -32,6 +32,7 @@ from scripts.build_analysis_provenance import (
     ARTIFACT_FINGERPRINTER,
     ARTIFACT_MANIFEST_VERIFIER,
 )
+from scripts.fingerprint_research_artifacts import fingerprint_regular_file
 from scripts.verify_main_study_outputs import (
     DEFAULT_JSON,
     DEFAULT_MARKDOWN,
@@ -317,9 +318,8 @@ def _require_repository_snapshot_stable(
 
 
 def _sha256(path: Path) -> str:
-    if not path.is_file():
-        raise ValueError(f"provenance-bound artifact is missing: {path}")
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    digest, _ = fingerprint_regular_file(path)
+    return digest
 
 
 def _require_hash(entry: object, *, label: str, root: Path) -> None:
@@ -329,7 +329,12 @@ def _require_hash(entry: object, *, label: str, root: Path) -> None:
     digest = entry.get("sha256")
     if not isinstance(path, str) or not path or not isinstance(digest, str) or len(digest) != 64:
         raise ValueError(f"{label} provenance entry must contain path and SHA-256")
-    actual = _sha256(root / path)
+    try:
+        actual = _sha256(root / path)
+    except ValueError as exc:
+        raise ValueError(
+            f"{label} must bind a stable regular file: {root / path}"
+        ) from exc
     if actual != digest:
         raise ValueError(f"{label} SHA-256 mismatch: {path}")
 
