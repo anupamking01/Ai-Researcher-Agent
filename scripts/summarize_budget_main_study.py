@@ -30,46 +30,126 @@ def _mean(values):
     return statistics.mean(values) if values else None
 
 
+def _load_bound_inputs() -> tuple[list[dict], dict[tuple[str, str], dict]]:
+    traces = []
+    trace_by_key = {}
+    for variant in VARIANTS:
+        for path in sorted((TRACE_ROOT / variant).glob("*.json")):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            experiment = payload.get("experiment")
+            trace = payload.get("trace")
+            if not isinstance(experiment, dict) or not isinstance(trace, dict):
+                raise SystemExit(
+                    f"Treatment trace must contain object metadata: {path}"
+                )
+            if (
+                experiment.get("variant_id") != variant
+                or trace.get("variant_id") != variant
+            ):
+                raise SystemExit(
+                    f"Treatment trace {path} variant_id does not match trace path"
+                )
+            experiment_task = experiment.get("task_id")
+            task_id = trace.get("task_id")
+            if (
+                not isinstance(task_id, str)
+                or not task_id.strip()
+                or experiment_task != task_id
+            ):
+                raise SystemExit(
+                    f"Treatment trace {path} task_id differs between experiment and trace"
+                )
+            run_id = trace.get("run_id")
+            if not isinstance(run_id, str) or run_id != path.stem:
+                raise SystemExit(
+                    f"Treatment trace {path} run_id does not match trace filename"
+                )
+            key = (variant, task_id)
+            if key in trace_by_key:
+                raise SystemExit(f"duplicate treatment cell: {variant}/{task_id}")
+            record = {
+                "variant": variant,
+                "task_id": task_id,
+                "run_id": run_id,
+                "trace": trace,
+            }
+            traces.append(record)
+            trace_by_key[key] = record
+
+    eval_by_key = {}
+    for path in sorted(EVAL_ROOT.glob("*/*.json")):
+        row = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(row, dict):
+            raise SystemExit(f"Evaluator cache must contain an object: {path}")
+        path_variant = path.parent.name
+        path_task = path.stem
+        if row.get("variant_id") != path_variant:
+            raise SystemExit(
+                f"Evaluator cache {path} variant_id does not match cache path"
+            )
+        if row.get("task_id") != path_task:
+            raise SystemExit(
+                f"Evaluator cache {path} task_id does not match cache path"
+            )
+        key = (path_variant, path_task)
+        trace_record = trace_by_key.get(key)
+        if trace_record is None:
+            raise SystemExit(
+                f"Evaluator cache {path} has no matching treatment trace"
+            )
+        if row.get("run_id") != trace_record["run_id"]:
+            raise SystemExit(
+                f"Evaluator cache {path} run_id does not match treatment trace"
+            )
+        if key in eval_by_key:
+            raise SystemExit(f"Duplicate evaluator cell: {path_variant}/{path_task}")
+        eval_by_key[key] = row
+
+    for record in traces:
+        key = (record["variant"], record["task_id"])
+        if record["trace"].get("completed") is True and key not in eval_by_key:
+            raise SystemExit(
+                "missing evaluator cache for completed trace: "
+                f"{record['variant']}/{record['task_id']}"
+            )
+    return traces, eval_by_key
+
+
 def main() -> int:
     from scripts.summarize_pilot import _estimate_reported_token_cost
 
     pricing = json.loads(PRICING_FILE.read_text(encoding="utf-8"))
-    eval_by_key = {}
-    for path in EVAL_ROOT.glob("*/*.json"):
-        row = json.loads(path.read_text(encoding="utf-8"))
-        eval_by_key[(row["variant_id"], row["task_id"])] = row
+    traces, eval_by_key = _load_bound_inputs()
 
     rows = []
-    for variant in VARIANTS:
-        for path in sorted((TRACE_ROOT / variant).glob("*.json")):
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            trace = payload.get("trace", {})
-            experiment = payload.get("experiment", {})
-            task_id = str(trace.get("task_id") or experiment.get("task_id") or "")
-            cost, status = _estimate_reported_token_cost(
-                trace.get("provider_usage_by_model", {}), pricing
-            )
-            evaluator = eval_by_key.get((variant, task_id), {})
-            rows.append(
-                {
-                    "variant_id": variant,
-                    "task_id": task_id,
-                    "completed": bool(trace.get("completed")),
-                    "source_budget": int(trace.get("source_budget", 0) or 0),
-                    "successful_sources": int(trace.get("successful_source_count", 0) or 0),
-                    "failed_sources": int(trace.get("failed_source_count", 0) or 0),
-                    "search_calls": int(trace.get("search_call_count", 0) or 0),
-                    "model_calls": int(trace.get("model_call_count", 0) or 0),
-                    "total_tokens": int(trace.get("total_tokens", 0) or 0),
-                    "treatment_cost_usd": cost,
-                    "cost_status": status,
-                    "latency_seconds": float(trace.get("latency_seconds", 0.0) or 0.0),
-                    "report_words": int(trace.get("report_words", 0) or 0),
-                    "posthoc_claims_checked": int(evaluator.get("claims_checked", 0) or 0),
-                    "posthoc_strict_support_rate": evaluator.get("strict_support_rate"),
-                    "posthoc_evaluator_cost_usd": evaluator.get("estimated_cost_usd"),
-                }
-            )
+    for record in traces:
+        variant = record["variant"]
+        task_id = record["task_id"]
+        trace = record["trace"]
+        cost, status = _estimate_reported_token_cost(
+            trace.get("provider_usage_by_model", {}), pricing
+        )
+        evaluator = eval_by_key.get((variant, task_id), {})
+        rows.append(
+            {
+                "variant_id": variant,
+                "task_id": task_id,
+                "completed": bool(trace.get("completed")),
+                "source_budget": int(trace.get("source_budget", 0) or 0),
+                "successful_sources": int(trace.get("successful_source_count", 0) or 0),
+                "failed_sources": int(trace.get("failed_source_count", 0) or 0),
+                "search_calls": int(trace.get("search_call_count", 0) or 0),
+                "model_calls": int(trace.get("model_call_count", 0) or 0),
+                "total_tokens": int(trace.get("total_tokens", 0) or 0),
+                "treatment_cost_usd": cost,
+                "cost_status": status,
+                "latency_seconds": float(trace.get("latency_seconds", 0.0) or 0.0),
+                "report_words": int(trace.get("report_words", 0) or 0),
+                "posthoc_claims_checked": int(evaluator.get("claims_checked", 0) or 0),
+                "posthoc_strict_support_rate": evaluator.get("strict_support_rate"),
+                "posthoc_evaluator_cost_usd": evaluator.get("estimated_cost_usd"),
+            }
+        )
 
     if not rows:
         raise SystemExit("No main-study traces found")
