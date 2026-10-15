@@ -18,6 +18,7 @@ PRICING = {
 
 def _trace_payload(*, task_id="main-01", run_id="run-d3-main-01"):
     return {
+        "schema_version": 2,
         "experiment": {"variant_id": "D3", "task_id": task_id},
         "trace": {
             "completed": True,
@@ -25,7 +26,21 @@ def _trace_payload(*, task_id="main-01", run_id="run-d3-main-01"):
             "task_id": task_id,
             "run_id": run_id,
             "successful_source_count": 1,
-            "provider_usage_by_model": {},
+            "usage_accounting_status": "provider_usage_complete",
+            "provider_usage_by_model": {
+                "gpt-test": {
+                    "model_calls": 1,
+                    "unavailable_calls": 0,
+                    "prompt_tokens": 100,
+                    "completion_tokens": 20,
+                    "total_tokens": 120,
+                }
+            },
+            "model_call_count": 1,
+            "unavailable_usage_call_count": 0,
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
         },
     }
 
@@ -305,6 +320,32 @@ def test_summary_rejects_cross_cell_evaluator_configuration_drift(
     )
 
     with pytest.raises(SystemExit, match="evaluator_model must equal gpt-test"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("total_tokens", 121, "aggregate token ledger mismatch"),
+        ("model_call_count", 2, "aggregate call ledger mismatch"),
+    ],
+)
+def test_summary_rejects_inconsistent_treatment_usage_ledger_before_outputs(
+    tmp_path, monkeypatch, field, value, message
+):
+    trace = _trace_payload()
+    trace["trace"][field] = value
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", trace)],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+
+    with pytest.raises(SystemExit, match=message):
         summarize_budget_main_study.main()
 
     assert not summarize_budget_main_study.OUT_JSON.exists()

@@ -32,12 +32,22 @@ def _mean(values):
 
 def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str], dict]]:
     from scripts.evaluate_posthoc_support import _validate_cached_evaluation
+    from scripts.run_budget_main_study import (
+        _reject_duplicate_json_keys,
+        _validated_trace_cost,
+    )
 
     traces = []
     trace_by_key = {}
     for variant in VARIANTS:
         for path in sorted((TRACE_ROOT / variant).glob("*.json")):
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            try:
+                payload = json.loads(
+                    path.read_text(encoding="utf-8"),
+                    object_pairs_hook=_reject_duplicate_json_keys,
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+                raise SystemExit(f"Invalid treatment trace {path}: {exc}") from exc
             experiment = payload.get("experiment")
             trace = payload.get("trace")
             if not isinstance(experiment, dict) or not isinstance(trace, dict):
@@ -69,11 +79,17 @@ def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str],
             key = (variant, task_id)
             if key in trace_by_key:
                 raise SystemExit(f"duplicate treatment cell: {variant}/{task_id}")
+            treatment_cost = _validated_trace_cost(
+                payload,
+                path=path,
+                pricing=pricing,
+            )
             record = {
                 "variant": variant,
                 "task_id": task_id,
                 "run_id": run_id,
                 "trace": trace,
+                "treatment_cost_usd": treatment_cost,
             }
             traces.append(record)
             trace_by_key[key] = record
@@ -141,8 +157,6 @@ def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str],
 
 
 def main() -> int:
-    from scripts.summarize_pilot import _estimate_reported_token_cost
-
     pricing = json.loads(PRICING_FILE.read_text(encoding="utf-8"))
     traces, eval_by_key = _load_bound_inputs(pricing)
 
@@ -151,9 +165,7 @@ def main() -> int:
         variant = record["variant"]
         task_id = record["task_id"]
         trace = record["trace"]
-        cost, status = _estimate_reported_token_cost(
-            trace.get("provider_usage_by_model", {}), pricing
-        )
+        cost = record["treatment_cost_usd"]
         evaluator = eval_by_key.get((variant, task_id), {})
         rows.append(
             {
@@ -167,7 +179,7 @@ def main() -> int:
                 "model_calls": int(trace.get("model_call_count", 0) or 0),
                 "total_tokens": int(trace.get("total_tokens", 0) or 0),
                 "treatment_cost_usd": cost,
-                "cost_status": status,
+                "cost_status": "estimated_from_frozen_uncached_rates",
                 "latency_seconds": float(trace.get("latency_seconds", 0.0) or 0.0),
                 "report_words": int(trace.get("report_words", 0) or 0),
                 "posthoc_claims_checked": int(evaluator.get("claims_checked", 0) or 0),

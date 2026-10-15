@@ -217,6 +217,12 @@ def _trace_cost_usd(path: Path, pricing: dict) -> float:
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise SystemExit(f"Invalid treatment trace {path}: {exc}") from exc
 
+    return _validated_trace_cost(payload, path=path, pricing=pricing)
+
+
+def _validated_trace_cost(payload: dict, *, path: Path, pricing: dict) -> float:
+    """Validate one captured treatment trace and recompute its frozen cost."""
+
     if not isinstance(payload, dict):
         raise SystemExit(f"Invalid treatment trace {path}: top level must be an object")
     if type(payload.get("schema_version")) is not int or payload["schema_version"] != 2:
