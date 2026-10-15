@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 from scripts import analyze_main_study
@@ -17,6 +18,42 @@ from scripts import analyze_main_study
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_JSON = Path("outputs/main_study_inference.json")
 DEFAULT_MARKDOWN = Path("paper/MAIN_STUDY_INFERENCE.md")
+
+
+def _parse_canonical_json(content: str) -> dict:
+    """Parse canonical results without ambiguous or non-standard JSON values."""
+
+    def unique_object(pairs):
+        value = {}
+        for key, child in pairs:
+            if key in value:
+                raise ValueError(f"duplicate JSON field: {key}")
+            value[key] = child
+        return value
+
+    def reject_non_finite(token: str):
+        raise ValueError(f"non-finite JSON number: {token}")
+
+    payload = json.loads(
+        content,
+        object_pairs_hook=unique_object,
+        parse_constant=reject_non_finite,
+    )
+    if not isinstance(payload, dict):
+        raise ValueError("canonical inference JSON must contain an object")
+
+    def require_finite(value, path: str = "$") -> None:
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError(f"non-finite JSON number at {path}")
+        if isinstance(value, dict):
+            for key, child in value.items():
+                require_finite(child, f"{path}.{key}")
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                require_finite(child, f"{path}[{index}]")
+
+    require_finite(payload)
+    return payload
 
 
 def verify_outputs(
@@ -35,11 +72,9 @@ def verify_outputs(
         raise ValueError(f"manuscript inference Markdown is missing: {markdown_file}")
 
     try:
-        payload = json.loads(json_file.read_text(encoding="utf-8"))
+        payload = _parse_canonical_json(json_file.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ValueError(f"canonical inference JSON is malformed: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("canonical inference JSON must contain an object")
 
     try:
         expected = analyze_main_study._markdown(payload)

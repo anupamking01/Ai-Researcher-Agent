@@ -251,6 +251,24 @@ def _verify_preserved_legacy_receipt(receipt: dict, *, root: Path) -> None:
         "analysis_provenance_verifier",
     )
     provenance["sha256"] = hashlib.sha256(verifier_content).hexdigest()
+    output_consistency = (
+        implementations.get("output_consistency")
+        if isinstance(implementations, dict)
+        else None
+    )
+    if (
+        not isinstance(output_consistency, dict)
+        or output_consistency.get("path")
+        != "scripts/verify_main_study_outputs.py"
+    ):
+        raise ValueError("legacy receipt has invalid output-verifier binding")
+    output_verifier_content = _regular_bytes(
+        root / output_consistency["path"],
+        "analysis_output_consistency_verifier",
+    )
+    output_consistency["sha256"] = hashlib.sha256(
+        output_verifier_content
+    ).hexdigest()
     verify_analysis_provenance.verify_receipt(adapted, root=root)
     verify_analysis_provenance.verify_recomputed_outputs(receipt, root=root)
 

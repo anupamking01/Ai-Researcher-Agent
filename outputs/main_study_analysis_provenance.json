@@ -62,7 +62,7 @@
     },
     "output_consistency": {
       "path": "scripts/verify_main_study_outputs.py",
-      "sha256": "126a86eeb88a99d22f6e6689eeff387d75a4027534acd01fb75332aca1b77d87"
+      "sha256": "9125ed60bf3d2ef991e3fb975de17c076a0e357af5edd996041f2e0b880b5c4b"
     },
     "provenance": {
       "path": "scripts/verify_analysis_provenance.py",

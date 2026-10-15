@@ -51,6 +51,18 @@ def _write_pair(tmp_path: Path, payload: dict) -> tuple[Path, Path]:
     return json_path, md_path
 
 
+def _write_raw_pair(tmp_path: Path, raw_json: str) -> tuple[Path, Path]:
+    """Write a renderer-consistent pair using Python's permissive JSON parser."""
+    json_path = tmp_path / "result.json"
+    md_path = tmp_path / "result.md"
+    json_path.write_text(raw_json, encoding="utf-8")
+    md_path.write_text(
+        analyze_main_study._markdown(json.loads(raw_json)),
+        encoding="utf-8",
+    )
+    return json_path, md_path
+
+
 def test_accepts_exact_deterministic_rendering(tmp_path):
     payload = _payload()
     json_path, md_path = _write_pair(tmp_path, payload)
@@ -106,6 +118,39 @@ def test_rejects_malformed_json(tmp_path):
     json_path.write_text("{not-json", encoding="utf-8")
     md_path.write_text("anything", encoding="utf-8")
     with pytest.raises(ValueError, match="malformed"):
+        verify_outputs(root=tmp_path, json_path=json_path, markdown_path=md_path)
+
+
+@pytest.mark.parametrize(
+    "duplicate_name",
+    ["strict_support_rate", r"\u0073trict_support_rate"],
+)
+def test_rejects_renderer_consistent_duplicate_json_members(
+    tmp_path, duplicate_name
+):
+    raw = json.dumps(_payload())
+    field = '"strict_support_rate": 0.5'
+    assert raw.count(field) == len(analyze_main_study.VARIANTS)
+    raw = raw.replace(
+        field,
+        f'"strict_support_rate": 0.25, "{duplicate_name}": 0.5',
+        1,
+    )
+    json_path, md_path = _write_raw_pair(tmp_path, raw)
+
+    with pytest.raises(ValueError, match="duplicate JSON field: strict_support_rate"):
+        verify_outputs(root=tmp_path, json_path=json_path, markdown_path=md_path)
+
+
+@pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity", "1e999"])
+def test_rejects_renderer_consistent_non_finite_json_numbers(tmp_path, token):
+    raw = json.dumps(_payload())
+    field = '"strict_support_rate": 0.5'
+    assert raw.count(field) == len(analyze_main_study.VARIANTS)
+    raw = raw.replace(field, f'"strict_support_rate": {token}', 1)
+    json_path, md_path = _write_raw_pair(tmp_path, raw)
+
+    with pytest.raises(ValueError, match="non-finite JSON number"):
         verify_outputs(root=tmp_path, json_path=json_path, markdown_path=md_path)
 
 

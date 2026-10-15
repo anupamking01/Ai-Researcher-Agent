@@ -175,6 +175,9 @@ def test_exact_pinned_legacy_receipt_remains_verifiable_after_verifier_evolution
     receipt["verification_implementations"]["provenance"]["sha256"] = (
         "100383c008923e4a4a4f9d433cfb556198b9bb4d6d381793283b84c8bcc6be4e"
     )
+    receipt["verification_implementations"]["output_consistency"]["sha256"] = (
+        "126a86eeb88a99d22f6e6689eeff387d75a4027534acd01fb75332aca1b77d87"
+    )
     content = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
     assert hashlib.sha256(content).hexdigest() == (
         readiness.FROZEN_LEGACY_AUTOMATED_PROVENANCE_SHA256
