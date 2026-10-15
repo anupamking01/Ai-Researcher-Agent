@@ -34,6 +34,8 @@ def _fixture(tmp_path: Path) -> dict:
         ANALYSIS_PROVENANCE_BUILDER: "# frozen provenance builder\n",
         ANALYSIS_VERIFIER: "# frozen provenance verifier\n",
         ANALYSIS_OUTPUT_VERIFIER: "# frozen output verifier\n",
+        "scripts/verify_research_artifact_manifest.py": "# frozen artifact manifest verifier\n",
+        "scripts/fingerprint_research_artifacts.py": "# frozen artifact fingerprinter\n",
         "outputs/main_study_runs.csv": "variant_id,task_id\nD3,main-01\n",
         "outputs/posthoc_support_runs.csv": "variant_id,task_id\nD3,main-01\n",
         "outputs/main_study_inference.json": "{}\n",
@@ -79,6 +81,84 @@ def _fixture(tmp_path: Path) -> dict:
 
 def test_complete_current_receipt_verifies(tmp_path: Path):
     verify_receipt(_fixture(tmp_path), root=tmp_path)
+
+
+@pytest.mark.parametrize("schema_version", [True, [], {}, "1", 3])
+def test_malformed_receipt_schema_fails_with_validation_error(
+    tmp_path: Path,
+    schema_version,
+):
+    receipt = _fixture(tmp_path)
+    receipt["schema_version"] = schema_version
+
+    with pytest.raises(
+        ValueError,
+        match="unsupported or malformed analysis provenance receipt",
+    ):
+        verify_receipt(receipt, root=tmp_path)
+
+
+def _schema_two_receipt(tmp_path: Path) -> dict:
+    receipt = _fixture(tmp_path)
+    receipt["schema_version"] = 2
+    receipt["verification_implementations"].update(
+        {
+            "artifact_manifest": {
+                "path": "scripts/verify_research_artifact_manifest.py",
+                "sha256": _digest(
+                    tmp_path / "scripts/verify_research_artifact_manifest.py"
+                ),
+            },
+            "artifact_fingerprinter": {
+                "path": "scripts/fingerprint_research_artifacts.py",
+                "sha256": _digest(
+                    tmp_path / "scripts/fingerprint_research_artifacts.py"
+                ),
+            },
+        }
+    )
+    return receipt
+
+
+def test_schema_two_receipt_verifies_transitive_manifest_chain(tmp_path: Path):
+    verify_receipt(_schema_two_receipt(tmp_path), root=tmp_path)
+
+
+def test_schema_two_receipt_requires_complete_transitive_manifest_chain(tmp_path: Path):
+    receipt = _schema_two_receipt(tmp_path)
+    receipt["verification_implementations"].pop("artifact_manifest")
+
+    with pytest.raises(ValueError, match="complete canonical verification chain"):
+        verify_receipt(receipt, root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("key", "relative", "label"),
+    [
+        (
+            "artifact_manifest",
+            "scripts/verify_research_artifact_manifest.py",
+            "artifact manifest verifier",
+        ),
+        (
+            "artifact_fingerprinter",
+            "scripts/fingerprint_research_artifacts.py",
+            "artifact fingerprinter",
+        ),
+    ],
+)
+def test_schema_two_receipt_rejects_transitive_manifest_chain_drift(
+    tmp_path: Path,
+    key: str,
+    relative: str,
+    label: str,
+):
+    receipt = _schema_two_receipt(tmp_path)
+    assert receipt["verification_implementations"][key]["path"] == relative
+    (tmp_path / relative).write_text("# drift\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=rf"{label} SHA-256 mismatch"):
+        verify_receipt(receipt, root=tmp_path)
 
 
 @pytest.mark.parametrize("relative", [

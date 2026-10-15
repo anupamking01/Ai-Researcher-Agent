@@ -48,17 +48,25 @@
   "input_manifest_aggregate_sha256": "4e94308472e87cc14b85e5911c40b5f72c63225862a347e624fc0725afd632aa",
   "provenance_builder": {
     "path": "scripts/build_analysis_provenance.py",
-    "sha256": "19e012858767073dad0e9e2ae36f6dc659bcd85983d1e31f14f8099df224b28f"
+    "sha256": "7fb0a58ab90a9d6de69c070dafa6ad210b6b2043e372de475f1f67fce731ace2"
   },
-  "schema_version": 1,
+  "schema_version": 2,
   "verification_implementations": {
+    "artifact_fingerprinter": {
+      "path": "scripts/fingerprint_research_artifacts.py",
+      "sha256": "0f17915aca82ee455b438dc677cd9a0d25162cc0ca01e63b8cbec4ec886a09d1"
+    },
+    "artifact_manifest": {
+      "path": "scripts/verify_research_artifact_manifest.py",
+      "sha256": "db95b8e21fc4194a5d4c46fbc90eae00113f2204738f9ccda06d99fd7fb38889"
+    },
     "output_consistency": {
       "path": "scripts/verify_main_study_outputs.py",
       "sha256": "126a86eeb88a99d22f6e6689eeff387d75a4027534acd01fb75332aca1b77d87"
     },
     "provenance": {
       "path": "scripts/verify_analysis_provenance.py",
-      "sha256": "0f803ab960b3534bec71cc39849c53071fa171da09e52833d10eb554fa421345"
+      "sha256": "b77bba516fe41d31729d248a0dfb3a2eb970c699e7d9f42db17f9aa8da495e9a"
     }
   },
   "verified_execution": {

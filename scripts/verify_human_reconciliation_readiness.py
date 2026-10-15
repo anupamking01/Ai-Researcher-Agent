@@ -224,6 +224,17 @@ def _verify_human_analysis_bundle(human_root, *, root):
 def _verify_preserved_legacy_receipt(receipt: dict, *, root: Path) -> None:
     """Validate a hash-pinned legacy receipt after its verifier has evolved."""
     adapted = copy.deepcopy(receipt)
+    builder = adapted.get("provenance_builder")
+    if (
+        not isinstance(builder, dict)
+        or builder.get("path") != "scripts/build_analysis_provenance.py"
+    ):
+        raise ValueError("legacy receipt has invalid provenance-builder binding")
+    builder_content = _regular_bytes(
+        root / builder["path"],
+        "analysis_provenance_builder",
+    )
+    builder["sha256"] = hashlib.sha256(builder_content).hexdigest()
     implementations = adapted.get("verification_implementations")
     provenance = (
         implementations.get("provenance")

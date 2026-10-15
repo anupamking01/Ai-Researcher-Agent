@@ -166,6 +166,12 @@ def test_exact_pinned_legacy_receipt_remains_verifiable_after_verifier_evolution
         "automated provenance",
     )
     receipt.pop("verified_execution")
+    receipt["schema_version"] = 1
+    receipt["provenance_builder"]["sha256"] = (
+        "19e012858767073dad0e9e2ae36f6dc659bcd85983d1e31f14f8099df224b28f"
+    )
+    receipt["verification_implementations"].pop("artifact_manifest")
+    receipt["verification_implementations"].pop("artifact_fingerprinter")
     receipt["verification_implementations"]["provenance"]["sha256"] = (
         "100383c008923e4a4a4f9d433cfb556198b9bb4d6d381793283b84c8bcc6be4e"
     )

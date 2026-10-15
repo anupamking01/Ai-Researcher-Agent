@@ -24,6 +24,8 @@ ANALYSIS_PYTHON_VERSION = ".python-version"
 ANALYSIS_PROVENANCE_BUILDER = "scripts/build_analysis_provenance.py"
 ANALYSIS_VERIFIER = "scripts/verify_analysis_provenance.py"
 ANALYSIS_OUTPUT_VERIFIER = "scripts/verify_main_study_outputs.py"
+ARTIFACT_MANIFEST_VERIFIER = "scripts/verify_research_artifact_manifest.py"
+ARTIFACT_FINGERPRINTER = "scripts/fingerprint_research_artifacts.py"
 
 
 def _sha256(path: Path) -> str:
@@ -42,7 +44,7 @@ def build_receipt(manifest: dict, *, root: Path = REPO_ROOT) -> dict:
     """
     verified_inputs = verify_manifest(manifest, root=root)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "input_manifest_aggregate_sha256": manifest["aggregate_sha256"],
         "verified_inputs": verified_inputs,
         "analysis_implementation": {
@@ -75,6 +77,14 @@ def build_receipt(manifest: dict, *, root: Path = REPO_ROOT) -> dict:
             "output_consistency": {
                 "path": ANALYSIS_OUTPUT_VERIFIER,
                 "sha256": _sha256(root / ANALYSIS_OUTPUT_VERIFIER),
+            },
+            "artifact_manifest": {
+                "path": ARTIFACT_MANIFEST_VERIFIER,
+                "sha256": _sha256(root / ARTIFACT_MANIFEST_VERIFIER),
+            },
+            "artifact_fingerprinter": {
+                "path": ARTIFACT_FINGERPRINTER,
+                "sha256": _sha256(root / ARTIFACT_FINGERPRINTER),
             },
         },
         "frozen_configuration": {

@@ -29,6 +29,8 @@ from scripts.build_analysis_provenance import (
     ANALYSIS_REQUIREMENTS,
     ANALYSIS_SCRIPT,
     ANALYSIS_VERIFIER,
+    ARTIFACT_FINGERPRINTER,
+    ARTIFACT_MANIFEST_VERIFIER,
 )
 from scripts.verify_main_study_outputs import (
     DEFAULT_JSON,
@@ -365,7 +367,10 @@ def _verify_inputs(receipt: dict, *, root: Path) -> None:
 
 def verify_receipt(receipt: dict, *, root: Path = REPO_ROOT) -> None:
     """Fail closed unless the receipt matches every current bound artifact/knob."""
-    if not isinstance(receipt, dict) or receipt.get("schema_version") != 1:
+    if not isinstance(receipt, dict):
+        raise ValueError("unsupported or malformed analysis provenance receipt")
+    schema_version = receipt.get("schema_version")
+    if type(schema_version) is not int or schema_version not in (1, 2):
         raise ValueError("unsupported or malformed analysis provenance receipt")
     _verify_inputs(receipt, root=root)
 
@@ -396,7 +401,10 @@ def verify_receipt(receipt: dict, *, root: Path = REPO_ROOT) -> None:
     _require_hash(builder, label="analysis provenance builder", root=root)
 
     verifiers = receipt.get("verification_implementations")
-    if not isinstance(verifiers, dict) or set(verifiers) != {"provenance", "output_consistency"}:
+    expected_verifiers = {"provenance", "output_consistency"}
+    if schema_version == 2:
+        expected_verifiers |= {"artifact_manifest", "artifact_fingerprinter"}
+    if not isinstance(verifiers, dict) or set(verifiers) != expected_verifiers:
         raise ValueError("receipt must bind the complete canonical verification chain")
     provenance_verifier = verifiers["provenance"]
     if not isinstance(provenance_verifier, dict) or provenance_verifier.get("path") != ANALYSIS_VERIFIER:
@@ -406,6 +414,33 @@ def verify_receipt(receipt: dict, *, root: Path = REPO_ROOT) -> None:
     if not isinstance(output_verifier, dict) or output_verifier.get("path") != ANALYSIS_OUTPUT_VERIFIER:
         raise ValueError("receipt does not bind the canonical output-consistency verifier")
     _require_hash(output_verifier, label="analysis output-consistency verifier", root=root)
+    if schema_version == 2:
+        artifact_manifest = verifiers["artifact_manifest"]
+        if (
+            not isinstance(artifact_manifest, dict)
+            or artifact_manifest.get("path") != ARTIFACT_MANIFEST_VERIFIER
+        ):
+            raise ValueError(
+                "receipt does not bind the canonical artifact manifest verifier"
+            )
+        _require_hash(
+            artifact_manifest,
+            label="artifact manifest verifier",
+            root=root,
+        )
+        artifact_fingerprinter = verifiers["artifact_fingerprinter"]
+        if (
+            not isinstance(artifact_fingerprinter, dict)
+            or artifact_fingerprinter.get("path") != ARTIFACT_FINGERPRINTER
+        ):
+            raise ValueError(
+                "receipt does not bind the canonical artifact fingerprinter"
+            )
+        _require_hash(
+            artifact_fingerprinter,
+            label="artifact fingerprinter",
+            root=root,
+        )
 
     expected_configuration = {
         "variants": list(analyze_main_study.VARIANTS),

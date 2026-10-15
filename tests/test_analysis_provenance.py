@@ -19,6 +19,12 @@ def _repo_fixture(tmp_path: Path):
     (tmp_path / "scripts" / "build_analysis_provenance.py").write_text("# provenance builder\n", encoding="utf-8")
     (tmp_path / "scripts" / "verify_analysis_provenance.py").write_text("# provenance verifier\n", encoding="utf-8")
     (tmp_path / "scripts" / "verify_main_study_outputs.py").write_text("# output verifier\n", encoding="utf-8")
+    (tmp_path / "scripts" / "verify_research_artifact_manifest.py").write_text(
+        "# artifact manifest verifier\n", encoding="utf-8"
+    )
+    (tmp_path / "scripts" / "fingerprint_research_artifacts.py").write_text(
+        "# artifact fingerprinter\n", encoding="utf-8"
+    )
     (tmp_path / "paper" / "ANALYSIS_PLAN.md").write_text("# Frozen plan\n", encoding="utf-8")
     (tmp_path / "requirements.txt").write_text("numpy==1.26.4\n", encoding="utf-8")
     (tmp_path / ".python-version").write_text("3.11\n", encoding="utf-8")
@@ -29,6 +35,7 @@ def test_receipt_binds_inputs_code_plan_environment_builder_verifiers_and_config
     main, support = _repo_fixture(tmp_path)
     manifest = build_manifest([main, support], root=tmp_path)
     receipt = build_receipt(manifest, root=tmp_path)
+    assert receipt["schema_version"] == 2
     assert receipt["input_manifest_aggregate_sha256"] == manifest["aggregate_sha256"]
     assert receipt["verified_inputs"] == manifest["artifacts"]
     assert {entry["path"] for entry in receipt["verified_inputs"]} == {
@@ -47,6 +54,10 @@ def test_receipt_binds_inputs_code_plan_environment_builder_verifiers_and_config
     assert len(receipt["verification_implementations"]["provenance"]["sha256"]) == 64
     assert receipt["verification_implementations"]["output_consistency"]["path"] == "scripts/verify_main_study_outputs.py"
     assert len(receipt["verification_implementations"]["output_consistency"]["sha256"]) == 64
+    assert receipt["verification_implementations"]["artifact_manifest"]["path"] == "scripts/verify_research_artifact_manifest.py"
+    assert len(receipt["verification_implementations"]["artifact_manifest"]["sha256"]) == 64
+    assert receipt["verification_implementations"]["artifact_fingerprinter"]["path"] == "scripts/fingerprint_research_artifacts.py"
+    assert len(receipt["verification_implementations"]["artifact_fingerprinter"]["sha256"]) == 64
     assert receipt["frozen_configuration"]["bootstrap_draws"] == 20_000
     assert receipt["frozen_configuration"]["expected_tasks"] == 10
     assert receipt["frozen_configuration"]["variants"] == ["D3", "D6", "P6", "P6V"]
@@ -98,6 +109,28 @@ def test_receipt_changes_when_output_verifier_changes(tmp_path):
     (tmp_path / "scripts" / "verify_main_study_outputs.py").write_text("# changed output verifier\n", encoding="utf-8")
     after = build_receipt(manifest, root=tmp_path)
     assert before["verification_implementations"]["output_consistency"]["sha256"] != after["verification_implementations"]["output_consistency"]["sha256"]
+
+
+@pytest.mark.parametrize(
+    ("key", "relative"),
+    [
+        ("artifact_manifest", "scripts/verify_research_artifact_manifest.py"),
+        ("artifact_fingerprinter", "scripts/fingerprint_research_artifacts.py"),
+    ],
+)
+def test_receipt_changes_when_transitive_manifest_verification_changes(
+    tmp_path, key, relative
+):
+    main, support = _repo_fixture(tmp_path)
+    manifest = build_manifest([main, support], root=tmp_path)
+    before = build_receipt(manifest, root=tmp_path)
+    (tmp_path / relative).write_text("# changed transitive dependency\n", encoding="utf-8")
+    after = build_receipt(manifest, root=tmp_path)
+
+    assert (
+        before["verification_implementations"][key]["sha256"]
+        != after["verification_implementations"][key]["sha256"]
+    )
 
 
 def test_receipt_refuses_mutated_input_manifest(tmp_path):
