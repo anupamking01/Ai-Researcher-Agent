@@ -6,6 +6,7 @@ treatments/evaluators, and adds no human-validation hypothesis tests.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -220,18 +221,42 @@ def _verify_human_analysis_bundle(human_root, *, root):
     )
 
 
+def _verify_preserved_legacy_receipt(receipt: dict, *, root: Path) -> None:
+    """Validate a hash-pinned legacy receipt after its verifier has evolved."""
+    adapted = copy.deepcopy(receipt)
+    implementations = adapted.get("verification_implementations")
+    provenance = (
+        implementations.get("provenance")
+        if isinstance(implementations, dict)
+        else None
+    )
+    if (
+        not isinstance(provenance, dict)
+        or provenance.get("path") != "scripts/verify_analysis_provenance.py"
+    ):
+        raise ValueError("legacy receipt has invalid provenance-verifier binding")
+    verifier_content = _regular_bytes(
+        root / provenance["path"],
+        "analysis_provenance_verifier",
+    )
+    provenance["sha256"] = hashlib.sha256(verifier_content).hexdigest()
+    verify_analysis_provenance.verify_receipt(adapted, root=root)
+    verify_analysis_provenance.verify_recomputed_outputs(receipt, root=root)
+
+
 def _verify_automated_provenance(content: bytes, *, root: Path) -> None:
-    """Require execution binding when present; retain the preserved legacy path."""
+    """Verify execution-bound receipts and retain the preserved legacy path."""
     receipt = _load(content, "automated provenance")
     if "verified_execution" in receipt:
         verify_main_study_execution.verify_execution_receipt(receipt, root=root)
+        verify_analysis_provenance.verify_recomputed_outputs(receipt, root=root)
         return
     if hashlib.sha256(content).hexdigest() != FROZEN_LEGACY_AUTOMATED_PROVENANCE_SHA256:
         raise ValueError(
             "automated provenance is missing verified_execution and does not match "
             "the pinned preserved legacy receipt"
         )
-    verify_analysis_provenance.verify_receipt(receipt, root=root)
+    _verify_preserved_legacy_receipt(receipt, root=root)
 
 
 def verify_readiness(root=ROOT, human_root=None, contract=None):

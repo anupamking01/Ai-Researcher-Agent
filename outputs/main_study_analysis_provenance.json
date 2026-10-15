@@ -58,7 +58,17 @@
     },
     "provenance": {
       "path": "scripts/verify_analysis_provenance.py",
-      "sha256": "100383c008923e4a4a4f9d433cfb556198b9bb4d6d381793283b84c8bcc6be4e"
+      "sha256": "7662105feedf16cb823e885cd4556f4d3937a7fe7784abfa510110ce843f3bb0"
+    }
+  },
+  "verified_execution": {
+    "execution_verifier": {
+      "path": "scripts/verify_main_study_execution.py",
+      "sha256": "d132eaec00fd0f368bb82c385e907866653f986dd6cd16a09d406f321950cb4a"
+    },
+    "runner": {
+      "path": "scripts/run_verified_main_study_analysis.py",
+      "sha256": "356463a2060b857ef7c5abcdb136ecb14fe35f7ff8b7ddebd272859dfa641619"
     }
   },
   "verified_inputs": [

@@ -19,13 +19,15 @@ def test_repository_reconciliation_contract_matches_frozen_anchor():
     )
 
 
-def test_preserved_legacy_automated_receipt_matches_frozen_anchor():
+def test_repository_automated_receipt_uses_execution_bound_verification():
     content = (readiness.ROOT / readiness.AUTO_PROV).read_bytes()
-    assert hashlib.sha256(content).hexdigest() == getattr(
+    assert hashlib.sha256(content).hexdigest() != getattr(
         readiness,
         "FROZEN_LEGACY_AUTOMATED_PROVENANCE_SHA256",
         None,
     )
+    payload = readiness._load(content, "automated provenance")
+    assert set(payload["verified_execution"]) == {"runner", "execution_verifier"}
 
 
 @pytest.mark.parametrize(
@@ -100,7 +102,7 @@ def test_future_automated_receipt_requires_execution_layer_verification(
     tmp_path, monkeypatch
 ):
     payload = {"schema_version": 1, "verified_execution": {"runner": {}}}
-    calls = []
+    calls = {"execution": [], "recomputation": []}
     monkeypatch.setattr(
         readiness.verify_analysis_provenance,
         "verify_receipt",
@@ -109,14 +111,22 @@ def test_future_automated_receipt_requires_execution_layer_verification(
     monkeypatch.setattr(
         readiness.verify_main_study_execution,
         "verify_execution_receipt",
-        lambda receipt, root: calls.append((receipt, root)),
+        lambda receipt, root: calls["execution"].append((receipt, root)),
+    )
+    monkeypatch.setattr(
+        readiness.verify_analysis_provenance,
+        "verify_recomputed_outputs",
+        lambda receipt, root: calls["recomputation"].append((receipt, root)),
     )
 
     readiness._verify_automated_provenance(
         json.dumps(payload).encode("utf-8"), root=tmp_path
     )
 
-    assert calls == [(payload, tmp_path)]
+    assert calls == {
+        "execution": [(payload, tmp_path)],
+        "recomputation": [(payload, tmp_path)],
+    }
 
 
 def test_preserved_legacy_receipt_keeps_legacy_verification_path(tmp_path, monkeypatch):
@@ -131,6 +141,11 @@ def test_preserved_legacy_receipt_keeps_legacy_verification_path(tmp_path, monke
     monkeypatch.setattr(
         readiness.verify_analysis_provenance,
         "verify_receipt",
+        lambda receipt, root: pytest.fail("legacy receipt bypass helper was not used"),
+    )
+    monkeypatch.setattr(
+        readiness,
+        "_verify_preserved_legacy_receipt",
         lambda receipt, root: calls.append((receipt, root)),
     )
     monkeypatch.setattr(
@@ -142,6 +157,24 @@ def test_preserved_legacy_receipt_keeps_legacy_verification_path(tmp_path, monke
     readiness._verify_automated_provenance(content, root=tmp_path)
 
     assert calls == [(payload, tmp_path)]
+
+
+def test_exact_pinned_legacy_receipt_remains_verifiable_after_verifier_evolution():
+    root = readiness.ROOT
+    receipt = readiness._load(
+        (root / readiness.AUTO_PROV).read_bytes(),
+        "automated provenance",
+    )
+    receipt.pop("verified_execution")
+    receipt["verification_implementations"]["provenance"]["sha256"] = (
+        "100383c008923e4a4a4f9d433cfb556198b9bb4d6d381793283b84c8bcc6be4e"
+    )
+    content = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    assert hashlib.sha256(content).hexdigest() == (
+        readiness.FROZEN_LEGACY_AUTOMATED_PROVENANCE_SHA256
+    )
+
+    readiness._verify_automated_provenance(content, root=root)
 
 
 def test_stripped_future_execution_binding_cannot_downgrade_to_legacy(

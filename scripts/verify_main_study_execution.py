@@ -1,8 +1,8 @@
-"""Verify the snapshot runner recorded by a future main-study receipt.
+"""Verify the snapshot runner recorded by an execution-bound main-study receipt.
 
-The preserved canonical receipt predates this execution-layer binding and stays
-verifiable with ``verify_analysis_provenance.py``. Receipts produced by the
-updated verified runner add ``verified_execution`` and can be checked here.
+Historical receipts that predate this execution-layer binding remain verifiable
+with ``verify_analysis_provenance.py``. Receipts produced by the verified runner
+add ``verified_execution`` and can be checked here.
 """
 from __future__ import annotations
 

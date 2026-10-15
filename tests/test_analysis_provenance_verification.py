@@ -1,5 +1,7 @@
 """Tests for independent verification of manuscript-facing provenance receipts."""
 import hashlib
+import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,7 @@ from scripts.build_analysis_provenance import (
     ANALYSIS_VERIFIER,
 )
 from scripts.fingerprint_research_artifacts import build_manifest
+from scripts import verify_analysis_provenance as provenance
 from scripts.verify_analysis_provenance import verify_receipt
 
 
@@ -157,3 +160,122 @@ def test_verified_output_path_substitution_fails_closed(tmp_path: Path, key: str
     receipt["verified_outputs"][key] = {"path": alternate, "sha256": _digest(alternate_path)}
     with pytest.raises(ValueError, match="must bind canonical path"):
         verify_receipt(receipt, root=tmp_path)
+
+
+def test_current_canonical_receipt_independently_recomputes_exact_outputs():
+    root = Path(__file__).resolve().parents[1]
+    receipt = json.loads(
+        (root / provenance.DEFAULT_RECEIPT).read_text(encoding="utf-8")
+    )
+
+    provenance.verify_recomputed_outputs(receipt, root=root)
+
+
+def test_rehashed_renderer_consistent_outcome_forgery_fails_recomputation(
+    tmp_path: Path,
+):
+    root = Path(__file__).resolve().parents[1]
+    for relative in (
+        "scripts/analyze_main_study.py",
+        "outputs/main_study_runs.csv",
+        "outputs/posthoc_support_runs.csv",
+        "outputs/main_study_inference.json",
+        "paper/MAIN_STUDY_INFERENCE.md",
+    ):
+        source = root / relative
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+
+    receipt = json.loads(
+        (root / provenance.DEFAULT_RECEIPT).read_text(encoding="utf-8")
+    )
+    forged = json.loads(
+        (tmp_path / "outputs/main_study_inference.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    forged["variant_summary"]["D3"]["means"]["strict_support_rate"] = 0.999
+    forged_json = json.dumps(forged, indent=2, sort_keys=True).encode("utf-8")
+    forged_markdown = analyze_main_study._markdown(forged).encode("utf-8")
+    (tmp_path / "outputs/main_study_inference.json").write_bytes(forged_json)
+    (tmp_path / "paper/MAIN_STUDY_INFERENCE.md").write_bytes(forged_markdown)
+    receipt["verified_outputs"]["canonical_inference"]["sha256"] = (
+        hashlib.sha256(forged_json).hexdigest()
+    )
+    receipt["verified_outputs"]["manuscript_rendering"]["sha256"] = (
+        hashlib.sha256(forged_markdown).hexdigest()
+    )
+
+    with pytest.raises(ValueError, match="independently recomputed canonical JSON"):
+        provenance.verify_recomputed_outputs(receipt, root=tmp_path)
+
+
+def test_recomputation_rejects_symlinked_published_output(tmp_path: Path):
+    root = Path(__file__).resolve().parents[1]
+    for relative in (
+        "scripts/analyze_main_study.py",
+        "outputs/main_study_runs.csv",
+        "outputs/posthoc_support_runs.csv",
+        "outputs/main_study_inference.json",
+        "paper/MAIN_STUDY_INFERENCE.md",
+    ):
+        source = root / relative
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+    receipt = json.loads(
+        (root / provenance.DEFAULT_RECEIPT).read_text(encoding="utf-8")
+    )
+    canonical = tmp_path / "outputs/main_study_inference.json"
+    replacement = tmp_path / "replacement.json"
+    canonical.rename(replacement)
+    canonical.symlink_to(replacement)
+
+    with pytest.raises(ValueError, match="published canonical inference.*regular file"):
+        provenance.verify_recomputed_outputs(receipt, root=tmp_path)
+
+
+def test_recomputation_rejects_analysis_implementation_drift(tmp_path: Path):
+    root = Path(__file__).resolve().parents[1]
+    for relative in (
+        "scripts/analyze_main_study.py",
+        "outputs/main_study_runs.csv",
+        "outputs/posthoc_support_runs.csv",
+        "outputs/main_study_inference.json",
+        "paper/MAIN_STUDY_INFERENCE.md",
+    ):
+        source = root / relative
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+    receipt = json.loads(
+        (root / provenance.DEFAULT_RECEIPT).read_text(encoding="utf-8")
+    )
+    implementation = tmp_path / "scripts/analyze_main_study.py"
+    implementation.write_bytes(implementation.read_bytes() + b"\n# drift\n")
+
+    with pytest.raises(
+        ValueError,
+        match="analysis implementation does not match recomputation receipt",
+    ):
+        provenance.verify_recomputed_outputs(receipt, root=tmp_path)
+
+
+def test_recomputation_ignores_inherited_python_startup_paths(
+    tmp_path: Path,
+    monkeypatch,
+):
+    poison = tmp_path / "poison"
+    poison.mkdir()
+    (poison / "sitecustomize.py").write_text(
+        "import os\nos._exit(91)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PYTHONPATH", str(poison))
+    root = Path(__file__).resolve().parents[1]
+    receipt = json.loads(
+        (root / provenance.DEFAULT_RECEIPT).read_text(encoding="utf-8")
+    )
+
+    provenance.verify_recomputed_outputs(receipt, root=root)
