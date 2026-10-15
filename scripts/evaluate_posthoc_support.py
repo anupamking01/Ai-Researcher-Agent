@@ -21,6 +21,7 @@ import json
 import math
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +42,38 @@ NO_EVIDENCE_SENTINEL = (
 
 def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _publish_evaluation_cache(path: Path, record: dict) -> None:
+    """Durably publish one evaluator result without exposing partial bytes."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = (
+        json.dumps(record, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    descriptor, staging_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    staging_path = Path(staging_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            os.fchmod(handle.fileno(), 0o644)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(staging_path, path)
+        directory_descriptor = os.open(
+            path.parent,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+        )
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        staging_path.unlink(missing_ok=True)
 
 
 def _normalize_evaluator_output(raw_result: str) -> dict:
@@ -500,8 +533,7 @@ def main() -> int:
             "cost_method": "frozen uncached rates",
         }
         try:
-            with out_path.open("x", encoding="utf-8") as handle:
-                handle.write(json.dumps(record, indent=2, sort_keys=True))
+            _publish_evaluation_cache(out_path, record)
         except FileExistsError as exc:
             raise SystemExit(
                 "Evaluator cache appeared during model call; refusing to overwrite "

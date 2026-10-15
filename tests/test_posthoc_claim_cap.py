@@ -568,3 +568,73 @@ def test_resume_never_overwrites_cache_published_during_model_call(
         evaluate_posthoc_support.main()
 
     assert json.loads(concurrent_cache.read_text(encoding="utf-8"))["supported"] == 8
+
+
+def test_cache_publication_is_invisible_until_atomic_commit(tmp_path, monkeypatch):
+    path = tmp_path / "posthoc_evaluations" / "D3" / "main-01.json"
+    expected = _cached_evaluation()
+    real_link = evaluate_posthoc_support.os.link
+    observed = []
+
+    def inspect_then_link(source, destination):
+        observed.append(
+            {
+                "destination_absent": not path.exists(),
+                "staged_payload": json.loads(source.read_text(encoding="utf-8")),
+            }
+        )
+        real_link(source, destination)
+
+    monkeypatch.setattr(evaluate_posthoc_support.os, "link", inspect_then_link)
+
+    evaluate_posthoc_support._publish_evaluation_cache(path, expected)
+
+    assert observed == [
+        {"destination_absent": True, "staged_payload": expected}
+    ]
+    assert json.loads(path.read_text(encoding="utf-8")) == expected
+    assert list(path.parent.glob(".main-01.json.*.tmp")) == []
+
+
+def test_cache_publication_preserves_concurrent_winner(tmp_path, monkeypatch):
+    path = tmp_path / "posthoc_evaluations" / "D3" / "main-01.json"
+    winner = b'{"owner":"concurrent evaluator"}\n'
+
+    def publish_winner_then_collide(_source, destination):
+        destination.write_bytes(winner)
+        raise FileExistsError(destination)
+
+    monkeypatch.setattr(
+        evaluate_posthoc_support.os,
+        "link",
+        publish_winner_then_collide,
+    )
+
+    with pytest.raises(FileExistsError):
+        evaluate_posthoc_support._publish_evaluation_cache(
+            path,
+            _cached_evaluation(),
+        )
+
+    assert path.read_bytes() == winner
+    assert list(path.parent.glob(".main-01.json.*.tmp")) == []
+
+
+def test_cache_publication_cleans_staging_after_write_sync_failure(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "posthoc_evaluations" / "D3" / "main-01.json"
+
+    def fail_sync(_descriptor):
+        raise OSError("synthetic fsync failure")
+
+    monkeypatch.setattr(evaluate_posthoc_support.os, "fsync", fail_sync)
+
+    with pytest.raises(OSError, match="synthetic fsync failure"):
+        evaluate_posthoc_support._publish_evaluation_cache(
+            path,
+            _cached_evaluation(),
+        )
+
+    assert not path.exists()
+    assert list(path.parent.glob(".main-01.json.*.tmp")) == []
