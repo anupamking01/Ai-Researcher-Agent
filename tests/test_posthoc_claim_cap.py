@@ -113,6 +113,16 @@ def test_cached_posthoc_evaluation_accepts_valid_record(tmp_path):
     assert _load_cached(path) == expected
 
 
+def test_cached_posthoc_evaluation_rejects_symlinked_input(tmp_path):
+    target = tmp_path / "outside-cache.json"
+    target.write_text(json.dumps(_cached_evaluation()), encoding="utf-8")
+    path = tmp_path / "cached.json"
+    path.symlink_to(target)
+
+    with pytest.raises(SystemExit, match="must be a regular non-symlink file"):
+        _load_cached(path)
+
+
 def test_cached_posthoc_evaluation_derives_missing_legacy_evidence_status(tmp_path):
     expected = _cached_evaluation()
     expected.pop("evidence_status")
@@ -455,6 +465,30 @@ def test_resume_preflights_later_cached_identity_before_first_model_call(
     assert model_calls == []
 
 
+def test_resume_preflights_nonregular_later_cache_before_first_model_call(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch)
+    invalid_cache = eval_root / "D3" / "main-02.json"
+    invalid_cache.mkdir(parents=True)
+
+    model_calls = []
+
+    def fail_if_called(**kwargs):
+        model_calls.append(kwargs)
+        raise AssertionError("model call occurred before cache preflight completed")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        fail_if_called,
+    )
+
+    with pytest.raises(SystemExit, match="must be a regular non-symlink file"):
+        evaluate_posthoc_support.main()
+
+    assert model_calls == []
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
@@ -495,6 +529,38 @@ def test_resume_preflights_treatment_ledgers_before_first_model_call(
     )
 
     with pytest.raises(SystemExit, match=message):
+        evaluate_posthoc_support.main()
+
+    assert model_calls == []
+
+
+def test_resume_rejects_symlinked_report_before_first_model_call(
+    tmp_path, monkeypatch
+):
+    _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    report_path = (
+        tmp_path
+        / "outputs"
+        / "run-d3-main-01"
+        / "research_report.md"
+    )
+    outside_report = tmp_path / "outside-report.md"
+    outside_report.write_text(report_path.read_text(encoding="utf-8"), encoding="utf-8")
+    report_path.unlink()
+    report_path.symlink_to(outside_report)
+
+    model_calls = []
+
+    def fail_if_called(**kwargs):
+        model_calls.append(kwargs)
+        raise AssertionError("model call occurred before report preflight completed")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        fail_if_called,
+    )
+
+    with pytest.raises(SystemExit, match="report must be a regular non-symlink file"):
         evaluate_posthoc_support.main()
 
     assert model_calls == []

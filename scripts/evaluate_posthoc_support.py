@@ -40,16 +40,46 @@ NO_EVIDENCE_SENTINEL = (
 )
 
 
+def _require_regular_file(path: Path, *, label: str) -> None:
+    path = Path(path)
+    if path.parent.is_symlink() or not path.parent.is_dir():
+        raise SystemExit(
+            f"{label} directory must be a regular non-symlink directory: "
+            f"{path.parent}"
+        )
+    if path.is_symlink() or not path.is_file():
+        raise SystemExit(
+            f"{label} must be a regular non-symlink file: {path}"
+        )
+
+
+def _read_regular_bytes(path: Path, *, label: str) -> bytes:
+    path = Path(path)
+    _require_regular_file(path, label=label)
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        raise SystemExit(f"Cannot read {label} {path}: {exc}") from exc
+
+
+def _read_regular_text(path: Path, *, label: str) -> str:
+    raw = _read_regular_bytes(path, label=label)
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SystemExit(f"{label} must contain valid UTF-8: {path}") from exc
+
+
 def _load_json(path: Path) -> dict:
     from scripts.run_budget_main_study import _reject_duplicate_json_keys
 
     try:
-        raw = path.read_bytes()
+        raw = _read_regular_bytes(path, label="JSON input")
         payload = json.loads(
             raw.decode("utf-8"),
             object_pairs_hook=_reject_duplicate_json_keys,
         )
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise SystemExit(f"Invalid JSON file {path}: {exc}") from exc
     if not isinstance(payload, dict):
         raise SystemExit(f"Invalid JSON file {path}: top level must be an object")
@@ -347,9 +377,14 @@ def _validated_cache_accounting(
 
 def _research_context(run_id: str) -> str:
     run_dir = REPO_ROOT / "outputs" / run_id
+    if run_dir.is_symlink() or not run_dir.is_dir():
+        raise SystemExit(
+            "Evaluator run directory must be a regular non-symlink directory: "
+            f"{run_dir}"
+        )
     parts = []
     for path in sorted(run_dir.glob("research-query-*.txt")):
-        text = path.read_text(encoding="utf-8").strip()
+        text = _read_regular_text(path, label="Evaluator evidence").strip()
         if text:
             parts.append(text)
     return "\n\n".join(parts)
@@ -357,9 +392,7 @@ def _research_context(run_id: str) -> str:
 
 def _report_text(run_id: str) -> str:
     path = REPO_ROOT / "outputs" / run_id / "research_report.md"
-    if not path.is_file():
-        raise FileNotFoundError(f"Missing report markdown for run {run_id}: {path}")
-    return path.read_text(encoding="utf-8")
+    return _read_regular_text(path, label="Evaluator report")
 
 
 def _existing_evaluator_cost(
@@ -431,7 +464,8 @@ def _preflight_evaluator_resume(
         )
         report = _report_text(run_id)
         out_path = EVAL_ROOT / variant / f"{task_id}.json"
-        if out_path.is_file():
+        if out_path.exists() or out_path.is_symlink():
+            _require_regular_file(out_path, label="Evaluator cache")
             rows.append(
                 _load_cached_evaluation(
                     out_path,

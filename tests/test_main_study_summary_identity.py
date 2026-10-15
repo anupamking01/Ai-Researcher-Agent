@@ -184,6 +184,54 @@ def test_summary_rejects_duplicate_evaluator_cache_keys_before_outputs(
     assert not summarize_budget_main_study.OUT_CSV.exists()
 
 
+def test_summary_rejects_symlinked_evaluator_cache_before_outputs(
+    tmp_path, monkeypatch
+):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    cache_path = summarize_budget_main_study.EVAL_ROOT / "D3" / "main-01.json"
+    outside_cache = tmp_path / "outside-cache.json"
+    outside_cache.write_bytes(cache_path.read_bytes())
+    cache_path.unlink()
+    cache_path.symlink_to(outside_cache)
+
+    with pytest.raises(SystemExit, match="must be a regular non-symlink file"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+def test_summary_rejects_symlinked_treatment_trace_before_outputs(
+    tmp_path, monkeypatch
+):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    trace_path = (
+        summarize_budget_main_study.TRACE_ROOT
+        / "D3"
+        / "run-d3-main-01.json"
+    )
+    outside_trace = tmp_path / "outside-trace.json"
+    outside_trace.write_bytes(trace_path.read_bytes())
+    trace_path.unlink()
+    trace_path.symlink_to(outside_trace)
+
+    with pytest.raises(SystemExit, match="must be a regular non-symlink file"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [

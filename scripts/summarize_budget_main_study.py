@@ -32,22 +32,13 @@ def _mean(values):
 
 def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str], dict]]:
     from scripts.evaluate_posthoc_support import _load_json, _validate_cached_evaluation
-    from scripts.run_budget_main_study import (
-        _reject_duplicate_json_keys,
-        _validated_trace_cost,
-    )
+    from scripts.run_budget_main_study import _validated_trace_cost
 
     traces = []
     trace_by_key = {}
     for variant in VARIANTS:
         for path in sorted((TRACE_ROOT / variant).glob("*.json")):
-            try:
-                payload = json.loads(
-                    path.read_text(encoding="utf-8"),
-                    object_pairs_hook=_reject_duplicate_json_keys,
-                )
-            except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-                raise SystemExit(f"Invalid treatment trace {path}: {exc}") from exc
+            payload = _load_json(path)
             experiment = payload.get("experiment")
             trace = payload.get("trace")
             if not isinstance(experiment, dict) or not isinstance(trace, dict):
