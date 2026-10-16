@@ -296,6 +296,13 @@ environment binding and additionally proves that both pinned files are the exact
 bytes recorded in its producing Git commit. This remains a provenance check, not
 an inferential extension or a substitute for real blinded ratings.
 
+The reconciliation readiness gate holds every contract, automated-analysis,
+provenance, human-analysis, and human-manifest input open by descriptor for the
+full verification phase. It rejects symlinked input parents and detects entry,
+inode, metadata, or byte changes before emitting a readiness receipt. The
+reconciler repeats that descriptor-bound capture while consuming the verified
+analysis inputs, closing the gap between readiness and result computation.
+
 Full instructions are in `paper/HUMAN_EVAL_PROTOCOL.md`.
 
 ## 12. Reproducibility map

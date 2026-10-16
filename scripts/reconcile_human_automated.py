@@ -184,28 +184,26 @@ def reconcile_verified(root=ROOT, human_root=None, contract=None) -> dict:
         "automated_analysis": root / readiness.AUTO_JSON,
         "human_analysis": human_root / "analysis.json",
     }
-    captured = {
-        name: readiness._regular_bytes(path, name)
-        for name, path in paths.items()
-    }
-    verified = receipt["verified_input_fingerprints"]
-    for name, content in captured.items():
-        current = readiness._fingerprint(content)
-        readiness._require(
-            current == verified.get(name),
-            f"{name} changed after readiness verification",
-        )
+    with readiness._capture_regular_inputs(paths) as captured:
+        verified = receipt["verified_input_fingerprints"]
+        for name, content in captured.items():
+            current = readiness._fingerprint(content)
+            readiness._require(
+                current == verified.get(name),
+                f"{name} changed after readiness verification",
+            )
 
-    result = reconcile_payloads(
-        readiness._load(captured["automated_analysis"], "automated analysis"),
-        readiness._load(captured["human_analysis"], "human analysis"),
-    )
-    result["verified_input_fingerprints"] = verified
-    result["verification"] = {
-        **receipt["verification"],
-        "reconciliation_inputs_bound_to_readiness_receipt": True,
-    }
-    return result
+        result = reconcile_payloads(
+            readiness._load(captured["automated_analysis"], "automated analysis"),
+            readiness._load(captured["human_analysis"], "human analysis"),
+        )
+        result["verified_input_fingerprints"] = verified
+        result["verification"] = {
+            **receipt["verification"],
+            "reconciliation_inputs_bound_to_readiness_receipt": True,
+            "reconciliation_inputs_descriptor_bound": True,
+        }
+        return result
 
 
 def render_markdown(payload: dict) -> str:

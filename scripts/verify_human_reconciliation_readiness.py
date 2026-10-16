@@ -10,7 +10,10 @@ import copy
 import hashlib
 import json
 import math
+import os
 import statistics
+import stat
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 from scripts import analyze_main_study
@@ -46,6 +49,117 @@ def _regular_bytes(path, label):
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"{label} must be a regular file: {path}")
     return path.read_bytes()
+
+
+def _snapshot_regular_descriptor(descriptor: int, *, label: str):
+    before = os.fstat(descriptor)
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError(f"{label} must be a regular file")
+    chunks = []
+    offset = 0
+    while True:
+        chunk = os.pread(descriptor, 1024 * 1024, offset)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        offset += len(chunk)
+    after = os.fstat(descriptor)
+    before_identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    after_identity = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    if before_identity != after_identity:
+        raise ValueError(f"{label} changed while it was being read")
+    return b"".join(chunks), after_identity
+
+
+def _open_bound_input(stack: ExitStack, path: Path, *, label: str):
+    path = Path(path)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        parent_descriptor = os.open(path.parent, directory_flags)
+    except OSError as exc:
+        raise ValueError(
+            f"{label} parent must be a regular directory: {path.parent}"
+        ) from exc
+    stack.callback(os.close, parent_descriptor)
+    parent = os.fstat(parent_descriptor)
+    if not stat.S_ISDIR(parent.st_mode):
+        raise ValueError(
+            f"{label} parent must be a regular directory: {path.parent}"
+        )
+
+    file_flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    file_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path.name, file_flags, dir_fd=parent_descriptor)
+    except OSError as exc:
+        raise ValueError(f"{label} must be a regular file: {path}") from exc
+    stack.callback(os.close, descriptor)
+    content, identity = _snapshot_regular_descriptor(descriptor, label=label)
+    return {
+        "path": path,
+        "parent_descriptor": parent_descriptor,
+        "parent_identity": (parent.st_dev, parent.st_ino),
+        "descriptor": descriptor,
+        "content": content,
+        "identity": identity,
+    }
+
+
+def _require_bound_input_stable(snapshot, *, label: str):
+    path = snapshot["path"]
+    content, identity = _snapshot_regular_descriptor(
+        snapshot["descriptor"],
+        label=label,
+    )
+    if content != snapshot["content"] or identity != snapshot["identity"]:
+        raise ValueError(f"{label} changed during verification")
+    try:
+        current = os.stat(
+            path.name,
+            dir_fd=snapshot["parent_descriptor"],
+            follow_symlinks=False,
+        )
+        parent_current = os.stat(path.parent, follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError(f"{label} changed during verification") from exc
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or (current.st_dev, current.st_ino) != identity[:2]
+        or not stat.S_ISDIR(parent_current.st_mode)
+        or (parent_current.st_dev, parent_current.st_ino)
+        != snapshot["parent_identity"]
+    ):
+        raise ValueError(f"{label} changed during verification")
+
+
+@contextmanager
+def _capture_regular_inputs(paths):
+    """Hold stable, path-bound snapshots for the complete verification phase."""
+    with ExitStack() as descriptors:
+        snapshots = {
+            label: _open_bound_input(descriptors, path, label=label)
+            for label, path in paths.items()
+        }
+        try:
+            yield {label: item["content"] for label, item in snapshots.items()}
+        except BaseException:
+            raise
+        else:
+            for label, snapshot in snapshots.items():
+                _require_bound_input_stable(snapshot, label=label)
 
 
 def _load(content, label):
@@ -293,56 +407,49 @@ def verify_readiness(root=ROOT, human_root=None, contract=None):
     root = Path(root)
     human_root = Path(human_root) if human_root else root / HUMAN_ROOT
     contract = Path(contract) if contract else root / CONTRACT
-    contract_content = _regular_bytes(contract, "reconciliation_contract")
-    contract_sha256 = hashlib.sha256(contract_content).hexdigest()
-    if contract_sha256 != FROZEN_RECONCILIATION_CONTRACT_SHA256:
-        raise ValueError(
-            "frozen reconciliation contract fingerprint mismatch: "
-            f"expected {FROZEN_RECONCILIATION_CONTRACT_SHA256}, got {contract_sha256}"
-        )
-    paths = {
-        "reconciliation_contract": contract,
-        "automated_analysis": root / AUTO_JSON,
-        "automated_provenance": root / AUTO_PROV,
-        "human_analysis": human_root / "analysis.json",
-        "human_manifest": human_root / "analysis_manifest.json",
-    }
-    before = {"reconciliation_contract": contract_content}
-    before.update(
-        {
-            name: _regular_bytes(path, name)
-            for name, path in paths.items()
-            if name != "reconciliation_contract"
+    with _capture_regular_inputs(
+        {"reconciliation_contract": contract}
+    ) as contract_snapshot:
+        contract_content = contract_snapshot["reconciliation_contract"]
+        contract_sha256 = hashlib.sha256(contract_content).hexdigest()
+        if contract_sha256 != FROZEN_RECONCILIATION_CONTRACT_SHA256:
+            raise ValueError(
+                "frozen reconciliation contract fingerprint mismatch: "
+                f"expected {FROZEN_RECONCILIATION_CONTRACT_SHA256}, got {contract_sha256}"
+            )
+        paths = {
+            "automated_analysis": root / AUTO_JSON,
+            "automated_provenance": root / AUTO_PROV,
+            "human_analysis": human_root / "analysis.json",
+            "human_manifest": human_root / "analysis_manifest.json",
         }
-    )
+        with _capture_regular_inputs(paths) as captured:
+            before = {"reconciliation_contract": contract_content, **captured}
 
-    _verify_automated_provenance(before["automated_provenance"], root=root)
-    verify_main_study_outputs.verify_outputs(root=root)
-    human_verification = _verify_human_analysis_bundle(human_root, root=root)
+            _verify_automated_provenance(before["automated_provenance"], root=root)
+            verify_main_study_outputs.verify_outputs(root=root)
+            human_verification = _verify_human_analysis_bundle(human_root, root=root)
 
-    after = {name: _regular_bytes(path, name) for name, path in paths.items()}
-    for name in paths:
-        _require(before[name] == after[name], f"{name} changed during verification")
-
-    receipt = validate_payloads(
-        _load(before["automated_analysis"], "automated analysis"),
-        _load(before["human_analysis"], "human analysis"),
-    )
-    receipt["verified_input_fingerprints"] = {
-        name: _fingerprint(data) for name, data in before.items()
-    }
-    receipt["verification"] = {
-        "automated_provenance_verified": True,
-        "automated_output_consistency_verified": True,
-        "human_analysis_bundle_verified": True,
-        "human_analysis_independently_recomputed": human_verification.get(
-            "independent_recomputation_verified"
-        )
-        is True,
-        "cross_analysis_identity_verified": True,
-        "inputs_stable_during_verification": True,
-    }
-    return receipt
+            receipt = validate_payloads(
+                _load(before["automated_analysis"], "automated analysis"),
+                _load(before["human_analysis"], "human analysis"),
+            )
+            receipt["verified_input_fingerprints"] = {
+                name: _fingerprint(data) for name, data in before.items()
+            }
+            receipt["verification"] = {
+                "automated_provenance_verified": True,
+                "automated_output_consistency_verified": True,
+                "human_analysis_bundle_verified": True,
+                "human_analysis_independently_recomputed": human_verification.get(
+                    "independent_recomputation_verified"
+                )
+                is True,
+                "cross_analysis_identity_verified": True,
+                "inputs_stable_during_verification": True,
+                "inputs_descriptor_bound_during_verification": True,
+            }
+            return receipt
 
 
 def main():

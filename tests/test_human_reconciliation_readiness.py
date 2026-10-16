@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import json
+import os
 import statistics
 
 import pytest
@@ -48,28 +49,17 @@ def test_readiness_loader_rejects_recursive_duplicate_json_members(raw):
         readiness._load(raw, "synthetic analysis")
 
 
-def test_changed_contract_is_rejected_before_human_analysis_is_read(
-    tmp_path, monkeypatch
-):
-    observed = []
-
-    def fake_regular_bytes(path, label):
-        observed.append(label)
-        if label == "reconciliation_contract":
-            return b"post-freeze contract substitution\n"
-        if label == "human_analysis":
-            pytest.fail("human analysis was read before the contract anchor passed")
-        return b"{}"
-
-    monkeypatch.setattr(readiness, "_regular_bytes", fake_regular_bytes)
+def test_changed_contract_is_rejected_before_human_analysis_is_read(tmp_path):
+    contract = tmp_path / "changed-contract.md"
+    contract.write_bytes(b"post-freeze contract substitution\n")
+    # The human root intentionally does not exist. Reaching it before the
+    # contract anchor would therefore produce a regular-file error instead.
     with pytest.raises(ValueError, match="frozen reconciliation contract fingerprint"):
         readiness.verify_readiness(
             root=tmp_path,
             human_root=tmp_path / "human",
-            contract=tmp_path / "changed-contract.md",
+            contract=contract,
         )
-
-    assert observed == ["reconciliation_contract"]
 
 
 def test_human_recomputation_uses_requested_checkout_paths(tmp_path, monkeypatch):
@@ -258,6 +248,98 @@ def _payloads():
                 "task_differences": diffs,
             }
     return automated, human
+
+
+def _readiness_case(tmp_path, monkeypatch, *, redirected_human_root=False):
+    root = tmp_path / "checkout"
+    contract = root / readiness.CONTRACT
+    contract.parent.mkdir(parents=True)
+    contract.write_bytes(b"frozen reconciliation contract\n")
+
+    automated, human = _payloads()
+    automated_path = root / readiness.AUTO_JSON
+    provenance_path = root / readiness.AUTO_PROV
+    automated_path.parent.mkdir(parents=True)
+    automated_path.write_text(json.dumps(automated), encoding="utf-8")
+    provenance_path.write_text("{}", encoding="utf-8")
+
+    human_root = root / readiness.HUMAN_ROOT
+    actual_human_root = tmp_path / "external-human" if redirected_human_root else human_root
+    actual_human_root.mkdir(parents=True)
+    (actual_human_root / "analysis.json").write_text(
+        json.dumps(human), encoding="utf-8"
+    )
+    (actual_human_root / "analysis_manifest.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    if redirected_human_root:
+        human_root.parent.mkdir(parents=True)
+        human_root.symlink_to(actual_human_root, target_is_directory=True)
+
+    monkeypatch.setattr(
+        readiness,
+        "FROZEN_RECONCILIATION_CONTRACT_SHA256",
+        hashlib.sha256(contract.read_bytes()).hexdigest(),
+    )
+    monkeypatch.setattr(readiness, "_verify_automated_provenance", lambda *a, **k: None)
+    monkeypatch.setattr(
+        readiness.verify_main_study_outputs,
+        "verify_outputs",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        readiness,
+        "_verify_human_analysis_bundle",
+        lambda *a, **k: {"independent_recomputation_verified": True},
+    )
+    return root, human_root, actual_human_root, contract
+
+
+def test_readiness_rejects_same_byte_input_replacement_during_verification(
+    tmp_path, monkeypatch
+):
+    root, human_root, actual_human_root, contract = _readiness_case(
+        tmp_path, monkeypatch
+    )
+    analysis = actual_human_root / "analysis.json"
+    original = analysis.read_bytes()
+
+    def replace_after_capture(*args, **kwargs):
+        replacement = actual_human_root / "replacement.json"
+        replacement.write_bytes(original)
+        os.replace(replacement, analysis)
+        return {"independent_recomputation_verified": True}
+
+    monkeypatch.setattr(
+        readiness,
+        "_verify_human_analysis_bundle",
+        replace_after_capture,
+    )
+
+    with pytest.raises(ValueError, match="human_analysis changed during verification"):
+        readiness.verify_readiness(
+            root=root,
+            human_root=human_root,
+            contract=contract,
+        )
+
+
+def test_readiness_rejects_redirected_human_analysis_parent(tmp_path, monkeypatch):
+    root, human_root, _, contract = _readiness_case(
+        tmp_path,
+        monkeypatch,
+        redirected_human_root=True,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="human_analysis parent must be a regular directory",
+    ):
+        readiness.verify_readiness(
+            root=root,
+            human_root=human_root,
+            contract=contract,
+        )
 
 
 def test_valid_synthetic_inputs_pass_without_computing_reconciliation_results():
