@@ -307,6 +307,11 @@ full verification phase. It rejects symlinked input parents and detects entry,
 inode, metadata, or byte changes before emitting a readiness receipt. The
 reconciler repeats that descriptor-bound capture while consuming the verified
 analysis inputs, closing the gap between readiness and result computation.
+Before reconciliation, it also validates the mathematical support of the
+pre-frozen measures: strict-support-rate task contrasts must be in `[-1, 1]`,
+1–5 rubric task contrasts must be in `[-4, 4]`, and all declared task/pair/sign
+counts must be non-negative integers. Impossible values and JSON booleans that
+would otherwise compare equal to `0` or `1` fail closed.
 
 Full instructions are in `paper/HUMAN_EVAL_PROTOCOL.md`.
 

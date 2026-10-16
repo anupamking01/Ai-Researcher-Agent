@@ -191,20 +191,42 @@ def _number(value, label):
     return float(value)
 
 
+def _bounded_number(value, label, *, minimum, maximum):
+    number = _number(value, label)
+    if not minimum <= number <= maximum:
+        raise ValueError(f"{label} outside [{minimum}, {maximum}]")
+    return number
+
+
+def _nonnegative_integer(value, label):
+    if type(value) is not int or value < 0:
+        raise ValueError(f"{label} must be a non-negative integer")
+    return value
+
+
 def _task_ids(payload, label):
     tasks = payload.get("task_ids")
     _require(isinstance(tasks, list) and tasks, f"{label} task_ids must be non-empty")
     _require(all(isinstance(x, str) and x for x in tasks), f"{label} task_ids invalid")
     _require(len(tasks) == len(set(tasks)), f"{label} task_ids must be unique")
-    _require(payload.get("n_tasks") == len(tasks), f"{label} n_tasks mismatch")
+    n_tasks = _nonnegative_integer(payload.get("n_tasks"), f"{label} n_tasks")
+    _require(n_tasks == len(tasks), f"{label} n_tasks mismatch")
     return tasks
 
 
 def _validate_summary(result, diffs, label):
-    _require(result.get("n_pairs") == len(diffs), f"{label} n_pairs mismatch")
-    _require(result.get("positive_tasks") == sum(x > 0 for x in diffs), f"{label} positive count mismatch")
-    _require(result.get("negative_tasks") == sum(x < 0 for x in diffs), f"{label} negative count mismatch")
-    _require(result.get("tied_tasks") == sum(x == 0 for x in diffs), f"{label} tie count mismatch")
+    n_pairs = _nonnegative_integer(result.get("n_pairs"), f"{label} n_pairs")
+    positive = _nonnegative_integer(
+        result.get("positive_tasks"), f"{label} positive_tasks"
+    )
+    negative = _nonnegative_integer(
+        result.get("negative_tasks"), f"{label} negative_tasks"
+    )
+    tied = _nonnegative_integer(result.get("tied_tasks"), f"{label} tied_tasks")
+    _require(n_pairs == len(diffs), f"{label} n_pairs mismatch")
+    _require(positive == sum(x > 0 for x in diffs), f"{label} positive count mismatch")
+    _require(negative == sum(x < 0 for x in diffs), f"{label} negative count mismatch")
+    _require(tied == sum(x == 0 for x in diffs), f"{label} tie count mismatch")
     if diffs:
         actual = _number(result.get("mean_difference"), f"{label} mean_difference")
         _require(
@@ -240,7 +262,15 @@ def validate_payloads(automated, human):
             isinstance(raw, list) and len(raw) == len(tasks),
             f"automated {name} task differences mismatch",
         )
-        diffs = [_number(x, f"automated {name} difference") for x in raw]
+        diffs = [
+            _bounded_number(
+                x,
+                f"automated {name} difference",
+                minimum=-1.0,
+                maximum=1.0,
+            )
+            for x in raw
+        ]
         _validate_summary(result, diffs, f"automated {name}")
 
     expected = {
@@ -298,7 +328,12 @@ def validate_payloads(automated, human):
                 f"human {name}/{dimension} task differences mismatch",
             )
             diffs = [
-                _number(task_diffs[task], f"human {name}/{dimension}/{task}")
+                _bounded_number(
+                    task_diffs[task],
+                    f"human {name}/{dimension}/{task}",
+                    minimum=-4.0,
+                    maximum=4.0,
+                )
                 for task in included
             ]
             _validate_summary(result, diffs, f"human {name}/{dimension}")

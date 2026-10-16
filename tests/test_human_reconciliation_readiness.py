@@ -396,6 +396,43 @@ def test_human_task_difference_summary_drift_is_rejected():
         readiness.validate_payloads(automated, human)
 
 
+def test_automated_difference_outside_strict_support_domain_is_rejected():
+    automated, human = _payloads()
+    result = automated["primary_contrasts"][readiness.CONTRASTS[0]]
+    result["task_differences"][0] = 1.01
+    result.update(_summary(result["task_differences"]))
+
+    with pytest.raises(ValueError, match=r"outside \[-1\.0, 1\.0\]"):
+        readiness.validate_payloads(automated, human)
+
+
+def test_human_difference_outside_five_point_rubric_domain_is_rejected():
+    automated, human = _payloads()
+    result = human["paired_contrasts"][readiness.CONTRASTS[0]][readiness.DIMS[0]]
+    task = human["task_ids"][0]
+    result["task_differences"][task] = 4.01
+    result.update(_summary(list(result["task_differences"].values())))
+
+    with pytest.raises(ValueError, match=r"outside \[-4\.0, 4\.0\]"):
+        readiness.validate_payloads(automated, human)
+
+
+def test_boolean_summary_count_is_rejected_even_when_numerically_equal():
+    automated, human = _payloads()
+    result = human["paired_contrasts"][readiness.CONTRASTS[0]][readiness.DIMS[0]]
+    included = human["task_ids"][:1]
+    result["task_ids_included"] = included
+    result["missing_pair_tasks"] = human["task_ids"][1:]
+    result["task_differences"] = {
+        task: result["task_differences"][task] for task in included
+    }
+    result.update(_summary(list(result["task_differences"].values())))
+    result["n_pairs"] = True
+
+    with pytest.raises(ValueError, match="n_pairs must be a non-negative integer"):
+        readiness.validate_payloads(automated, human)
+
+
 def test_posthoc_dimension_or_contrast_selection_is_rejected():
     automated, human = _payloads()
     name = readiness.CONTRASTS[0]
