@@ -7,6 +7,7 @@ experimental results.
 import csv
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,53 @@ from scripts import verify_human_eval_analysis_outputs as output_verify
 
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def test_snapshot_rejects_redirected_source_parent(tmp_path: Path):
+    actual_parent = tmp_path / "actual-inputs"
+    actual_parent.mkdir()
+    (actual_parent / "analysis.json").write_text(
+        '{"synthetic": true}\n', encoding="utf-8"
+    )
+    redirected_parent = tmp_path / "redirected-inputs"
+    redirected_parent.symlink_to(actual_parent, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="parent must be a regular directory"):
+        core._snapshot_file(
+            redirected_parent / "analysis.json",
+            tmp_path / "snapshot" / "analysis.json",
+            label="synthetic human-analysis input",
+        )
+
+
+def test_snapshot_rejects_same_byte_source_replacement(
+    tmp_path: Path, monkeypatch
+):
+    source_parent = tmp_path / "inputs"
+    source_parent.mkdir()
+    source = source_parent / "analysis.json"
+    original = b'{"synthetic": true}\n'
+    source.write_bytes(original)
+    real_pread = core.os.pread
+    replaced = False
+
+    def replace_after_read(descriptor, length, offset):
+        nonlocal replaced
+        chunk = real_pread(descriptor, length, offset)
+        if not chunk and not replaced:
+            replacement = source_parent / "replacement.json"
+            replacement.write_bytes(original)
+            os.replace(replacement, source)
+            replaced = True
+        return chunk
+
+    monkeypatch.setattr(core.os, "pread", replace_after_read)
+    with pytest.raises(ValueError, match="changed while it was being"):
+        core._snapshot_file(
+            source,
+            tmp_path / "snapshot" / "analysis.json",
+            label="synthetic human-analysis input",
+        )
 
 
 def _write_csv(path: Path, fields, rows):

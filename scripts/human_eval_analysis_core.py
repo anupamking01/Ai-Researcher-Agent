@@ -8,7 +8,9 @@ so an editor save cannot change the analyzed revision after it was verified.
 import hashlib
 import json
 import math
+import os
 import random
+import stat
 import statistics
 import tempfile
 from pathlib import Path
@@ -50,12 +52,89 @@ def fingerprint(path, *, logical_path=None):
 
 
 def _snapshot_file(source, destination, *, label):
-    """Read one regular file once and persist exactly those bytes in scratch space."""
+    """Capture one path-bound regular-file generation into scratch space."""
     source = Path(source)
     destination = Path(destination)
-    if source.is_symlink() or not source.is_file():
-        raise ValueError(f"{label} must be a regular file: {source}")
-    content = source.read_bytes()
+
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        parent_descriptor = os.open(source.parent, directory_flags)
+    except OSError as exc:
+        raise ValueError(
+            f"{label} parent must be a regular directory: {source.parent}"
+        ) from exc
+
+    try:
+        parent = os.fstat(parent_descriptor)
+        if not stat.S_ISDIR(parent.st_mode):
+            raise ValueError(
+                f"{label} parent must be a regular directory: {source.parent}"
+            )
+
+        file_flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+        file_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(source.name, file_flags, dir_fd=parent_descriptor)
+        except OSError as exc:
+            raise ValueError(f"{label} must be a regular file: {source}") from exc
+
+        try:
+            before = os.fstat(descriptor)
+            if not stat.S_ISREG(before.st_mode):
+                raise ValueError(f"{label} must be a regular file: {source}")
+
+            chunks = []
+            offset = 0
+            while True:
+                chunk = os.pread(descriptor, 1024 * 1024, offset)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                offset += len(chunk)
+            after = os.fstat(descriptor)
+            before_identity = (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+                before.st_ctime_ns,
+            )
+            after_identity = (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+            )
+            if before_identity != after_identity:
+                raise ValueError(f"{label} changed while it was being read")
+
+            try:
+                current = os.stat(
+                    source.name,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+                current_parent = os.stat(source.parent, follow_symlinks=False)
+            except OSError as exc:
+                raise ValueError(
+                    f"{label} changed while it was being snapshotted"
+                ) from exc
+            if (
+                not stat.S_ISREG(current.st_mode)
+                or (current.st_dev, current.st_ino) != after_identity[:2]
+                or not stat.S_ISDIR(current_parent.st_mode)
+                or (current_parent.st_dev, current_parent.st_ino)
+                != (parent.st_dev, parent.st_ino)
+            ):
+                raise ValueError(f"{label} changed while it was being snapshotted")
+            content = b"".join(chunks)
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(parent_descriptor)
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(content)
     return destination

@@ -288,8 +288,13 @@ a create-only result bundle whose manifest binds the exact analysis and verifier
 sources, `requirements.txt`, `.python-version`, and the Python implementation,
 version, and standard-library PRNG state contract that produced the numeric
 outputs. Independent verification rejects source, pinned-environment, or runtime
-drift before recomputing the analysis. This records reproducibility metadata; it
-does not create ratings or convert pending human validation into a result.
+drift before recomputing the analysis. Before either blinded verification or
+unblinding, every analysis input is copied from an open regular-file descriptor
+under a non-symlink parent and checked for stable path, inode, metadata, and byte
+identity. Redirected parents and same-byte path replacement therefore fail
+closed instead of being laundered into the retained analysis snapshot. This
+records reproducibility metadata; it does not create ratings or convert pending
+human validation into a result.
 
 The downstream descriptive reconciliation bundle applies the same fail-closed
 environment binding and additionally proves that both pinned files are the exact
