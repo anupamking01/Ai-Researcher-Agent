@@ -7,6 +7,8 @@ import pytest
 
 from scripts import verify_main_study_execution as execution
 
+INPUT_VALIDATOR_PATH = "scripts/validate_main_study_inputs.py"
+
 
 def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -15,9 +17,11 @@ def _sha(path: Path) -> str:
 def _receipt(root: Path) -> dict:
     runner = root / execution.RUNNER_PATH
     verifier = root / execution.EXECUTION_VERIFIER_PATH
+    validator = root / INPUT_VALIDATOR_PATH
     runner.parent.mkdir(parents=True, exist_ok=True)
     runner.write_text("# synthetic snapshot runner\n", encoding="utf-8")
     verifier.write_text("# synthetic execution verifier\n", encoding="utf-8")
+    validator.write_text("# synthetic input validator\n", encoding="utf-8")
     return {
         "schema_version": 1,
         "verified_execution": {
@@ -26,11 +30,15 @@ def _receipt(root: Path) -> dict:
                 "path": execution.EXECUTION_VERIFIER_PATH,
                 "sha256": _sha(verifier),
             },
+            "input_validator": {
+                "path": INPUT_VALIDATOR_PATH,
+                "sha256": _sha(validator),
+            },
         },
     }
 
 
-def test_execution_receipt_binds_runner_and_independent_verifier(tmp_path, monkeypatch):
+def test_execution_receipt_binds_runner_verifier_and_input_validator(tmp_path, monkeypatch):
     receipt = _receipt(tmp_path)
     legacy_calls = []
     monkeypatch.setattr(
@@ -52,6 +60,17 @@ def test_execution_receipt_rejects_runner_drift(tmp_path, monkeypatch):
     )
 
     with pytest.raises(ValueError, match="runner SHA-256 mismatch"):
+        execution.verify_execution_receipt(receipt, root=tmp_path)
+
+
+def test_execution_receipt_rejects_input_validator_drift(tmp_path, monkeypatch):
+    receipt = _receipt(tmp_path)
+    monkeypatch.setattr(execution, "verify_receipt", lambda payload, root: None)
+    (tmp_path / INPUT_VALIDATOR_PATH).write_text(
+        "# changed input validator\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="input validator SHA-256 mismatch"):
         execution.verify_execution_receipt(receipt, root=tmp_path)
 
 

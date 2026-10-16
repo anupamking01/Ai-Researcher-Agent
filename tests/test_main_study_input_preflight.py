@@ -1,6 +1,6 @@
 import pytest
 
-from scripts.validate_main_study_inputs import EXPECTED_CELLS, validate_rows
+from scripts.validate_main_study_inputs import EXPECTED_CELLS, read_csv_rows, validate_rows
 
 
 def _main_row(**overrides):
@@ -30,6 +30,26 @@ def _support_row(**overrides):
 
 def test_preflight_accepts_well_formed_rows():
     validate_rows([_main_row()], [_support_row()])
+
+
+@pytest.mark.parametrize(
+    ("contents", "message"),
+    [
+        ("variant_id,task_id,task_id\nD3,main-01,shadow\n", "duplicate CSV header"),
+        ("variant_id,,task_id\nD3,ignored,main-01\n", "blank CSV header"),
+        ("variant_id,task_id\nD3,main-01,extra\n", "too many fields"),
+        ("variant_id,task_id\nD3\n", "too few fields"),
+        ('variant_id,task_id\nD3,"unterminated\n', "malformed CSV"),
+        ('variant_id,task_id\nD3,main-"01\n', "malformed CSV"),
+        ("variant_id,task_id\nD3,main-01\n\nD6,main-02\n", "blank CSV record"),
+    ],
+)
+def test_preflight_csv_reader_rejects_ambiguous_structure(tmp_path, contents, message):
+    path = tmp_path / "study.csv"
+    path.write_text(contents, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        read_csv_rows(path)
 
 
 @pytest.mark.parametrize("value", ["nan", "inf", "-inf", "-1"])

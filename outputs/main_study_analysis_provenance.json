@@ -66,17 +66,21 @@
     },
     "provenance": {
       "path": "scripts/verify_analysis_provenance.py",
-      "sha256": "ba4c0240967bb55c8af2d074336b761f2411675213d426ee998fe58a7bb40b09"
+      "sha256": "ca7a9ebabbb9af354599e1303dda8421ead6aebb9fe40068c2cff73868195f7e"
     }
   },
   "verified_execution": {
     "execution_verifier": {
       "path": "scripts/verify_main_study_execution.py",
-      "sha256": "85f5e72221a65fb16680999c378f75e895cdd5f9ee721882906af9f3b8c5718f"
+      "sha256": "3009c8ea841c1895007fd8343a0d933ca7576ae33dabef48505c24c9e588e751"
+    },
+    "input_validator": {
+      "path": "scripts/validate_main_study_inputs.py",
+      "sha256": "5cb9d5887548623cccd847cacbb52fc39cdbc6257d2c943205ab88f7bf22548b"
     },
     "runner": {
       "path": "scripts/run_verified_main_study_analysis.py",
-      "sha256": "45f59e87f7ac25a8d843f4dc10d5ae93550bd0e2ea2df169d5aaa5fe837535f7"
+      "sha256": "e13d336535d41c78801ab69519c1998ec61c5575d530c3467f217b79493de2a3"
     }
   },
   "verified_inputs": [

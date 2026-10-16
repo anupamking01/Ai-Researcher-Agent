@@ -56,10 +56,11 @@ RECEIPT_FIELDS = {
 }
 OPTIONAL_RECEIPT_FIELDS = {"verified_execution"}
 BOUND_FILE_FIELDS = {"path", "sha256"}
-EXECUTION_FIELDS = {"runner", "execution_verifier"}
+EXECUTION_FIELDS = {"runner", "execution_verifier", "input_validator"}
 EXECUTION_PATHS = {
     "runner": Path("scripts/run_verified_main_study_analysis.py"),
     "execution_verifier": Path("scripts/verify_main_study_execution.py"),
+    "input_validator": Path("scripts/validate_main_study_inputs.py"),
 }
 SNAPSHOT_FILES = {
     "outputs/main_study_runs.csv": "analysis input",
@@ -433,6 +434,12 @@ def verify_receipt(receipt: dict, *, root: Path = REPO_ROOT) -> None:
             execution["execution_verifier"],
             label="execution verifier",
             expected_path=EXECUTION_PATHS["execution_verifier"],
+            root=root,
+        )
+        _require_canonical_hash(
+            execution["input_validator"],
+            label="input validator",
+            expected_path=EXECUTION_PATHS["input_validator"],
             root=root,
         )
     _verify_inputs(receipt, root=root)

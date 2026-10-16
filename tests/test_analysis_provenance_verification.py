@@ -136,6 +136,7 @@ def _add_verified_execution(receipt: dict, tmp_path: Path) -> dict:
     for key, relative in {
         "runner": "scripts/run_verified_main_study_analysis.py",
         "execution_verifier": "scripts/verify_main_study_execution.py",
+        "input_validator": "scripts/validate_main_study_inputs.py",
     }.items():
         path = tmp_path / relative
         path.write_text(f"# frozen {key}\n", encoding="utf-8")

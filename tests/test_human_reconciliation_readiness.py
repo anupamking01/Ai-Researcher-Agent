@@ -27,7 +27,11 @@ def test_repository_automated_receipt_uses_execution_bound_verification():
         None,
     )
     payload = readiness._load(content, "automated provenance")
-    assert set(payload["verified_execution"]) == {"runner", "execution_verifier"}
+    assert set(payload["verified_execution"]) == {
+        "runner",
+        "execution_verifier",
+        "input_validator",
+    }
 
 
 @pytest.mark.parametrize(

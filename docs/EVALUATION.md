@@ -199,6 +199,21 @@ canonical CSV inputs, re-checks the captured byte counts and SHA-256 digests
 against the recorded manifest, validates that snapshot, and points the frozen
 analyzer at the same snapshot. A concurrent edit therefore cannot make a
 successful provenance receipt describe different bytes from those analyzed.
+Before numeric or inferential validation, the shared study-input reader also
+requires an unambiguous CSV table: headers must exist, be nonblank, and be
+unique; every row must have exactly the declared number of fields; and malformed
+CSV quoting is rejected. Canonical inputs are restricted to one CSV record per
+physical line, and blank physical records are errors rather than silently
+ignored data. The standalone preflight and verified snapshot gate use this same
+reader, so a byte-fingerprinted but ambiguously parsed artifact cannot proceed
+through the manuscript-facing analysis entry point.
+New execution receipts bind the exact shared input-validator source alongside
+the verified runner and independent execution verifier. The runner fingerprints
+the validator source before validation, executes that exact captured byte stream
+rather than a previously cached import, rechecks the canonical source after
+analysis, and records the captured digest. This makes validator drift during or
+after a run detectable without altering the frozen analyzer used by the
+preserved legacy receipt.
 The analyzer runs in an isolated subprocess so concurrent in-process callers
 cannot redirect one another through module-global paths. Future receipts emitted
 by this updated entry point also bind the exact runner and independent

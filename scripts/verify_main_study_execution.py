@@ -20,6 +20,7 @@ from scripts.verify_research_artifact_manifest import REPO_ROOT
 
 RUNNER_PATH = "scripts/run_verified_main_study_analysis.py"
 EXECUTION_VERIFIER_PATH = "scripts/verify_main_study_execution.py"
+INPUT_VALIDATOR_PATH = "scripts/validate_main_study_inputs.py"
 
 
 def _require_bound_file(entry: object, *, label: str, expected_path: str, root: Path) -> None:
@@ -46,6 +47,7 @@ def verify_execution_receipt(receipt: dict, *, root: Path = REPO_ROOT) -> None:
     if not isinstance(execution, dict) or set(execution) != {
         "runner",
         "execution_verifier",
+        "input_validator",
     }:
         raise ValueError("receipt must bind the complete execution provenance")
     _require_bound_file(
@@ -58,6 +60,12 @@ def verify_execution_receipt(receipt: dict, *, root: Path = REPO_ROOT) -> None:
         execution["execution_verifier"],
         label="execution verifier",
         expected_path=EXECUTION_VERIFIER_PATH,
+        root=root,
+    )
+    _require_bound_file(
+        execution["input_validator"],
+        label="input validator",
+        expected_path=INPUT_VALIDATOR_PATH,
         root=root,
     )
 

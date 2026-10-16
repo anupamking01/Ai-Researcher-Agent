@@ -1,5 +1,6 @@
 """Tests for the provenance-gated main-study analysis entry point."""
 import json
+import hashlib
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -125,6 +126,117 @@ def test_verified_gate_blocks_invalid_scientific_counts(tmp_path):
     with pytest.raises(ValueError, match="non-integer value"):
         verify_and_run(manifest, root=tmp_path, analyze=lambda: calls.append("ran") or 0)
     assert calls == []
+
+
+def test_verified_gate_blocks_duplicate_csv_headers_before_analysis(tmp_path):
+    main, support = _study(tmp_path)
+    main.write_text(
+        "successful_sources,total_tokens,treatment_cost_usd,latency_seconds,"
+        "model_calls,report_words,successful_sources\n"
+        "2,100,0.05,1.2,3,250,2\n",
+        encoding="utf-8",
+    )
+    manifest = build_manifest([main, support], root=tmp_path)
+    calls = []
+
+    with pytest.raises(ValueError, match="duplicate CSV header"):
+        verify_and_run(manifest, root=tmp_path, analyze=lambda: calls.append("ran") or 0)
+
+    assert calls == []
+
+
+def test_input_validator_binding_detects_drift_after_capture(tmp_path):
+    validator = tmp_path / verified.INPUT_VALIDATOR
+    validator.parent.mkdir(parents=True)
+    validator.write_text("# validator revision one\n", encoding="utf-8")
+
+    binding = verified._capture_input_validator_binding(root=tmp_path)
+    validator.write_text("# validator revision two\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="changed during verified analysis"):
+        verified._require_input_validator_unchanged(binding)
+
+
+def test_input_validator_binding_executes_the_exact_captured_source(tmp_path):
+    validator = tmp_path / verified.INPUT_VALIDATOR
+    validator.parent.mkdir(parents=True)
+    validator.write_text("REVISION = 'captured'\n", encoding="utf-8")
+
+    binding = verified._capture_input_validator_binding(root=tmp_path)
+    validator.write_text("REVISION = 'replacement'\n", encoding="utf-8")
+
+    assert binding.module.REVISION == "captured"
+
+
+def test_input_validator_binding_rejects_missing_source(tmp_path):
+    with pytest.raises(ValueError, match="stable regular file"):
+        verified._capture_input_validator_binding(root=tmp_path)
+
+
+def test_execution_receipt_uses_prevalidated_input_validator_digest(tmp_path):
+    runner = tmp_path / verified.VERIFIED_RUNNER
+    verifier = tmp_path / verified.EXECUTION_VERIFIER
+    validator = tmp_path / verified.INPUT_VALIDATOR
+    runner.parent.mkdir(parents=True)
+    runner.write_text("# runner\n", encoding="utf-8")
+    verifier.write_text("# verifier\n", encoding="utf-8")
+    validator.write_text("# validator used\n", encoding="utf-8")
+    captured = hashlib.sha256(validator.read_bytes()).hexdigest()
+    validator.write_text("# later replacement\n", encoding="utf-8")
+
+    receipt = verified._bind_verified_execution(
+        {"schema_version": 1},
+        root=tmp_path,
+        input_validator_sha256=captured,
+    )
+
+    assert receipt["verified_execution"]["input_validator"]["sha256"] == captured
+
+
+def test_verified_run_refuses_receipt_when_validator_changes_during_analysis(
+    tmp_path, monkeypatch
+):
+    main, support = _study(tmp_path)
+    manifest = build_manifest([main, support], root=tmp_path)
+    validator = tmp_path / verified.INPUT_VALIDATOR
+    validator.parent.mkdir(parents=True, exist_ok=True)
+    validator.write_text(
+        "import csv\n"
+        "def read_csv_rows(path):\n"
+        "    with path.open(newline='') as handle:\n"
+        "        return list(csv.DictReader(handle))\n"
+        "def validate_rows(main_rows, support_rows):\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+    verifier_calls = []
+
+    def fake_builder(payload, *, root):
+        return {"schema_version": 1}
+
+    def fake_verifier(*, root):
+        verifier_calls.append(root)
+
+    monkeypatch.setattr(verified, "build_receipt", fake_builder)
+    monkeypatch.setattr(verified, "verify_outputs", fake_verifier)
+
+    def mutate_validator():
+        validator.write_text("# validator revision two\n", encoding="utf-8")
+        return 0
+
+    receipt = tmp_path / "outputs" / "main_study_analysis_provenance.json"
+    with pytest.raises(ValueError, match="changed during verified analysis"):
+        verify_run_and_record(
+            manifest,
+            root=tmp_path,
+            analyze=mutate_validator,
+            receipt_builder=fake_builder,
+            output_verifier=fake_verifier,
+            output=receipt,
+        )
+
+    assert verifier_calls == []
+    assert not receipt.exists()
 
 
 def test_default_analysis_consumes_manifest_bound_input_snapshots(tmp_path, monkeypatch):

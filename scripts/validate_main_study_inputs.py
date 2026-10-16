@@ -24,11 +24,107 @@ EXPECTED_TASKS = frozenset(f"main-{index:02d}" for index in range(1, 11))
 EXPECTED_CELLS = frozenset((variant, task) for variant in EXPECTED_VARIANTS for task in EXPECTED_TASKS)
 
 
-def _rows(path: Path) -> list[dict[str, str]]:
+def _validate_csv_record(record: str, *, path: Path, line_number: int) -> None:
+    """Reject lexically ambiguous CSV before ``csv`` can normalize it.
+
+    Canonical study inputs deliberately use one record per physical line.  The
+    standard-library reader is permissive about quotes inside unquoted fields
+    and silently skips blank records, so validate those two cases explicitly.
+    """
+    if record.endswith("\r\n"):
+        record = record[:-2]
+    elif record.endswith(("\r", "\n")):
+        record = record[:-1]
+    if not record:
+        raise ValueError(f"blank CSV record at line {line_number} in {path}")
+
+    in_quotes = False
+    at_field_start = True
+    just_closed_quote = False
+    index = 0
+    while index < len(record):
+        character = record[index]
+        if in_quotes:
+            if character == '"':
+                if index + 1 < len(record) and record[index + 1] == '"':
+                    index += 2
+                    continue
+                in_quotes = False
+                just_closed_quote = True
+            index += 1
+            continue
+
+        if just_closed_quote:
+            if character != ",":
+                raise ValueError(
+                    f"malformed CSV in {path} at line {line_number}: "
+                    "characters follow a closing quote"
+                )
+            just_closed_quote = False
+            at_field_start = True
+            index += 1
+            continue
+
+        if character == '"':
+            if not at_field_start:
+                raise ValueError(
+                    f"malformed CSV in {path} at line {line_number}: "
+                    "quote inside an unquoted field"
+                )
+            in_quotes = True
+            at_field_start = False
+        elif character == ",":
+            at_field_start = True
+        else:
+            at_field_start = False
+        index += 1
+
+    if in_quotes:
+        raise ValueError(
+            f"malformed CSV in {path} at line {line_number}: unterminated quote"
+        )
+
+
+def read_csv_rows(path: Path) -> list[dict[str, str]]:
+    """Read one study CSV only when its table structure is unambiguous."""
     if not path.is_file():
         raise ValueError(f"missing required CSV: {path}")
-    with path.open("r", encoding="utf-8", newline="") as handle:
-        return list(csv.DictReader(handle))
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            for line_number, record in enumerate(handle, start=1):
+                _validate_csv_record(record, path=path, line_number=line_number)
+            handle.seek(0)
+            reader = csv.DictReader(handle, strict=True)
+            headers = reader.fieldnames
+            if not headers:
+                raise ValueError(f"missing CSV header: {path}")
+            if any(not str(header).strip() for header in headers):
+                raise ValueError(f"blank CSV header in {path}")
+            duplicates = sorted(
+                {header for header in headers if headers.count(header) > 1}
+            )
+            if duplicates:
+                raise ValueError(f"duplicate CSV header in {path}: {duplicates}")
+
+            rows = []
+            for row in reader:
+                if None in row:
+                    raise ValueError(
+                        f"CSV row {reader.line_num} has too many fields in {path}"
+                    )
+                missing = sorted(header for header, value in row.items() if value is None)
+                if missing:
+                    raise ValueError(
+                        f"CSV row {reader.line_num} has too few fields in {path}: {missing}"
+                    )
+                rows.append(row)
+            return rows
+    except csv.Error as exc:
+        raise ValueError(f"malformed CSV in {path}: {exc}") from exc
+
+
+def _rows(path: Path) -> list[dict[str, str]]:
+    return read_csv_rows(path)
 
 
 def _identity_keys(rows: list[dict[str, str]], *, label: str) -> set[tuple[str, str]] | None:

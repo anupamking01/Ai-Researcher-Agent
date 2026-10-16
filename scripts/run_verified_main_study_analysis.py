@@ -12,7 +12,6 @@ or rewritten.
 from __future__ import annotations
 
 import argparse
-import csv
 import hashlib
 import json
 import os
@@ -20,12 +19,14 @@ import stat
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 from typing import Callable
 
 from scripts import analyze_main_study
 from scripts.build_analysis_provenance import build_receipt
-from scripts.validate_main_study_inputs import validate_rows
+from scripts.fingerprint_research_artifacts import fingerprint_regular_file
 from scripts.verify_main_study_outputs import DEFAULT_JSON, DEFAULT_MARKDOWN, verify_outputs
 from scripts.verify_research_artifact_manifest import (
     REPO_ROOT,
@@ -39,6 +40,7 @@ REQUIRED_INPUTS = {CANONICAL_MAIN, CANONICAL_SUPPORT}
 DEFAULT_PROVENANCE_OUTPUT = "outputs/main_study_analysis_provenance.json"
 VERIFIED_RUNNER = "scripts/run_verified_main_study_analysis.py"
 EXECUTION_VERIFIER = "scripts/verify_main_study_execution.py"
+INPUT_VALIDATOR = "scripts/validate_main_study_inputs.py"
 SNAPSHOT_ANALYSIS_DRIVER = """\
 from pathlib import Path
 import sys
@@ -52,9 +54,11 @@ raise SystemExit(analyze_main_study.main())
 """
 
 
-def _read_rows(path: Path) -> list[dict[str, str]]:
-    with path.open("r", encoding="utf-8", newline="") as handle:
-        return list(csv.DictReader(handle))
+@dataclass(frozen=True)
+class InputValidatorBinding:
+    path: Path
+    sha256: str
+    module: ModuleType
 
 
 def _capture_verified_inputs(
@@ -278,7 +282,55 @@ def _publish_verified_outputs(
         os.close(json_fd)
 
 
-def _bind_verified_execution(receipt: dict, *, root: Path) -> dict:
+def _capture_input_validator_binding(*, root: Path) -> InputValidatorBinding:
+    """Load the validator from the exact stable source bytes being recorded."""
+    path = Path(os.path.abspath(Path(root) / INPUT_VALIDATOR))
+    try:
+        before_sha256, before_size = fingerprint_regular_file(path)
+        source = path.read_bytes()
+        after_sha256, after_size = fingerprint_regular_file(path)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"input validator must be a stable regular file: {path}") from exc
+    captured_sha256 = hashlib.sha256(source).hexdigest()
+    if (
+        before_sha256 != captured_sha256
+        or after_sha256 != captured_sha256
+        or before_size != len(source)
+        or after_size != len(source)
+    ):
+        raise ValueError(f"input validator changed while it was captured: {path}")
+
+    module = ModuleType("_vera_captured_main_study_input_validator")
+    module.__file__ = str(path)
+    module.__package__ = "scripts"
+    try:
+        code = compile(source, str(path), "exec")
+        exec(code, module.__dict__)
+    except Exception as exc:
+        raise ValueError(f"unable to load captured input validator: {path}") from exc
+    return InputValidatorBinding(path=path, sha256=captured_sha256, module=module)
+
+
+def _require_input_validator_unchanged(binding: InputValidatorBinding) -> None:
+    """Fail if the captured validator source changed during this run."""
+    try:
+        observed_sha256, _ = fingerprint_regular_file(binding.path)
+    except ValueError as exc:
+        raise ValueError(
+            f"input validator changed during verified analysis: {binding.path}"
+        ) from exc
+    if observed_sha256 != binding.sha256:
+        raise ValueError(
+            f"input validator changed during verified analysis: {binding.path}"
+        )
+
+
+def _bind_verified_execution(
+    receipt: dict,
+    *,
+    root: Path,
+    input_validator_sha256: str,
+) -> dict:
     """Bind the orchestration layer and its independent verifier for future runs."""
     bound = dict(receipt)
     bound["verified_execution"] = {
@@ -286,6 +338,10 @@ def _bind_verified_execution(receipt: dict, *, root: Path) -> dict:
         "execution_verifier": {
             "path": EXECUTION_VERIFIER,
             "sha256": _sha256(root / EXECUTION_VERIFIER),
+        },
+        "input_validator": {
+            "path": INPUT_VALIDATOR,
+            "sha256": input_validator_sha256,
         },
     }
     return bound
@@ -351,6 +407,7 @@ def verify_and_run(
     analyze: Callable[[], int] | None = None,
     output_json: Path | None = None,
     output_markdown: Path | None = None,
+    input_validator: ModuleType | None = None,
 ) -> int:
     """Verify provenance/integrity before invoking the frozen analysis.
 
@@ -375,9 +432,12 @@ def verify_and_run(
             root=root,
             snapshot_root=Path(tmp_name),
         )
-        main_rows = _read_rows(snapshots[CANONICAL_MAIN])
-        support_rows = _read_rows(snapshots[CANONICAL_SUPPORT])
-        validate_rows(main_rows, support_rows)
+        if input_validator is None:
+            from scripts import validate_main_study_inputs as input_validator
+
+        main_rows = input_validator.read_csv_rows(snapshots[CANONICAL_MAIN])
+        support_rows = input_validator.read_csv_rows(snapshots[CANONICAL_SUPPORT])
+        input_validator.validate_rows(main_rows, support_rows)
         if analyze is not None:
             return analyze()
         return _run_analysis_from_snapshots(
@@ -416,8 +476,17 @@ def verify_run_and_record(
 
     destination.unlink(missing_ok=True)
 
+    production_receipt = output_verifier is verify_outputs and receipt_builder is build_receipt
+    validator_binding = (
+        _capture_input_validator_binding(root=root) if production_receipt else None
+    )
     receipt = receipt_builder(manifest, root=root)
     expected_output_sha256 = None
+    validator_options = (
+        {"input_validator": validator_binding.module}
+        if validator_binding is not None
+        else {}
+    )
     if analyze is None:
         with tempfile.TemporaryDirectory(
             prefix="vera-main-analysis-candidate-"
@@ -430,9 +499,12 @@ def verify_run_and_record(
                 root=root,
                 output_json=candidate_json,
                 output_markdown=candidate_markdown,
+                **validator_options,
             )
             if result != 0:
                 return result
+            if validator_binding is not None:
+                _require_input_validator_unchanged(validator_binding)
             output_verifier(
                 root=root,
                 json_path=candidate_json,
@@ -452,9 +524,16 @@ def verify_run_and_record(
                 ).hexdigest(),
             }
     else:
-        result = verify_and_run(manifest, root=root, analyze=analyze)
+        result = verify_and_run(
+            manifest,
+            root=root,
+            analyze=analyze,
+            **validator_options,
+        )
         if result != 0:
             return result
+        if validator_binding is not None:
+            _require_input_validator_unchanged(validator_binding)
         output_verifier(root=root)
 
     # Re-read the published pair after the candidate-to-canonical boundary.
@@ -467,8 +546,14 @@ def verify_run_and_record(
             root=root,
             expected_sha256=expected_output_sha256,
         )
-    if output_verifier is verify_outputs and receipt_builder is build_receipt:
-        receipt = _bind_verified_execution(receipt, root=root)
+    if production_receipt:
+        assert validator_binding is not None
+        _require_input_validator_unchanged(validator_binding)
+        receipt = _bind_verified_execution(
+            receipt,
+            root=root,
+            input_validator_sha256=validator_binding.sha256,
+        )
         from scripts.verify_main_study_execution import verify_execution_receipt
 
         verify_execution_receipt(receipt, root=root)
