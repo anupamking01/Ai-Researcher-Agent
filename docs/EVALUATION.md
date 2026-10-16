@@ -214,6 +214,13 @@ rather than a previously cached import, rechecks the canonical source after
 analysis, and records the captured digest. This makes validator drift during or
 after a run detectable without altering the frozen analyzer used by the
 preserved legacy receipt.
+The final success receipt is serialized completely into a same-directory
+staging file, flushed, and synchronized before an atomic no-replace link makes
+it visible. The receipt parent is opened without following a leaf symlink and
+its inode is rechecked during invalidation and publication. A concurrent
+publisher is therefore preserved and reported rather than overwritten, while
+an interruption before the publication boundary cannot expose truncated JSON
+at the canonical receipt path.
 The analyzer runs in an isolated subprocess so concurrent in-process callers
 cannot redirect one another through module-global paths. Future receipts emitted
 by this updated entry point also bind the exact runner and independent

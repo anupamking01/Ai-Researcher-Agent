@@ -80,7 +80,7 @@
     },
     "runner": {
       "path": "scripts/run_verified_main_study_analysis.py",
-      "sha256": "e13d336535d41c78801ab69519c1998ec61c5575d530c3467f217b79493de2a3"
+      "sha256": "a5c82d8f95f74a0b4777b243d301969c75172d34d14b6b5bab8d25706d3d561f"
     }
   },
   "verified_inputs": [

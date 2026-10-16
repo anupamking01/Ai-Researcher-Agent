@@ -15,6 +15,7 @@ import argparse
 import hashlib
 import json
 import os
+import secrets
 import stat
 import subprocess
 import sys
@@ -198,6 +199,155 @@ def _create_output_at(directory_fd: int, name: str, content: bytes) -> None:
     )
     with os.fdopen(file_fd, "wb") as handle:
         handle.write(content)
+
+
+def _open_receipt_directory(path: Path, *, create: bool) -> int | None:
+    """Open and bind the provenance-receipt parent without following its leaf."""
+    path = Path(path)
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        raise ValueError(
+            f"provenance receipt parent must be a regular directory: {path}"
+        )
+    if not path.exists():
+        if not create:
+            return None
+        path.mkdir(parents=True, exist_ok=True)
+        if path.is_symlink() or not path.is_dir():
+            raise ValueError(
+                f"provenance receipt parent must be a regular directory: {path}"
+            )
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(
+        os, "O_NOFOLLOW", 0
+    )
+    try:
+        directory_fd = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(
+            f"provenance receipt parent must be a regular directory: {path}"
+        ) from exc
+    if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
+        os.close(directory_fd)
+        raise ValueError(
+            f"provenance receipt parent must be a regular directory: {path}"
+        )
+    return directory_fd
+
+
+def _require_receipt_directory_binding(path: Path, directory_fd: int) -> None:
+    try:
+        current = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError(
+            f"provenance receipt parent changed during publication: {path}"
+        ) from exc
+    opened = os.fstat(directory_fd)
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
+    ):
+        raise ValueError(
+            f"provenance receipt parent changed during publication: {path}"
+        )
+
+
+def _invalidate_receipt(destination: Path) -> None:
+    """Remove a stale receipt through a bound parent, never through a redirect."""
+    destination = Path(destination)
+    directory_fd = _open_receipt_directory(destination.parent, create=False)
+    if directory_fd is None:
+        return
+    try:
+        _require_receipt_directory_binding(destination.parent, directory_fd)
+        try:
+            metadata = os.stat(
+                destination.name,
+                dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(
+                f"existing provenance receipt must be a regular file: {destination}"
+            )
+        os.unlink(destination.name, dir_fd=directory_fd)
+        os.fsync(directory_fd)
+        _require_receipt_directory_binding(destination.parent, directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _publish_receipt(destination: Path, content: bytes) -> None:
+    """Durably publish complete receipt bytes without replacing a concurrent writer."""
+    destination = Path(destination)
+    directory_fd = _open_receipt_directory(destination.parent, create=True)
+    assert directory_fd is not None
+    staging_name = None
+    try:
+        _require_receipt_directory_binding(destination.parent, directory_fd)
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        for _ in range(100):
+            candidate = f".{destination.name}.{secrets.token_hex(8)}.tmp"
+            try:
+                file_fd = os.open(
+                    candidate,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow,
+                    0o644,
+                    dir_fd=directory_fd,
+                )
+            except FileExistsError:
+                continue
+            staging_name = candidate
+            break
+        else:
+            raise ValueError(
+                f"unable to allocate provenance receipt staging file: {destination}"
+            )
+
+        with os.fdopen(file_fd, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _require_receipt_directory_binding(destination.parent, directory_fd)
+        try:
+            os.link(
+                staging_name,
+                destination.name,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+        except FileExistsError as exc:
+            raise ValueError(
+                f"concurrent provenance receipt publication detected: {destination}"
+            ) from exc
+        except OSError as exc:
+            raise ValueError(
+                f"unable to publish provenance receipt atomically: {destination}"
+            ) from exc
+        os.fsync(directory_fd)
+        os.unlink(staging_name, dir_fd=directory_fd)
+        staging_name = None
+        os.fsync(directory_fd)
+        if (
+            _read_output_at(
+                directory_fd,
+                destination.name,
+                label="provenance receipt",
+            )
+            != content
+        ):
+            raise ValueError(
+                f"published provenance receipt changed during publication: {destination}"
+            )
+        _require_receipt_directory_binding(destination.parent, directory_fd)
+    finally:
+        if staging_name is not None:
+            try:
+                os.unlink(staging_name, dir_fd=directory_fd)
+            except OSError:
+                pass
+        os.close(directory_fd)
 
 
 def _publish_verified_outputs(
@@ -474,7 +624,7 @@ def verify_run_and_record(
     if not destination.is_absolute():
         destination = root / destination
 
-    destination.unlink(missing_ok=True)
+    _invalidate_receipt(destination)
 
     production_receipt = output_verifier is verify_outputs and receipt_builder is build_receipt
     validator_binding = (
@@ -558,8 +708,10 @@ def verify_run_and_record(
 
         verify_execution_receipt(receipt, root=root)
 
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    receipt_bytes = (
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    _publish_receipt(destination, receipt_bytes)
     return result
 
 

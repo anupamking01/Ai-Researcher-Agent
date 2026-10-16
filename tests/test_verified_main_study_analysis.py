@@ -1,6 +1,8 @@
 """Tests for the provenance-gated main-study analysis entry point."""
 import json
 import hashlib
+import os
+import stat
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -561,6 +563,103 @@ def test_identical_verified_candidate_reuses_published_outputs_and_records_recei
         "canonical_inference",
         "manuscript_rendering",
     }
+
+
+def test_receipt_publication_stages_complete_bytes_before_atomic_link(
+    tmp_path, monkeypatch
+):
+    destination = tmp_path / "outputs" / "receipt.json"
+    content = b'{"status":"verified"}\n'
+    real_link = os.link
+    observed = []
+
+    def inspect_link(
+        source,
+        target,
+        *,
+        src_dir_fd=None,
+        dst_dir_fd=None,
+        follow_symlinks=True,
+    ):
+        assert src_dir_fd == dst_dir_fd
+        metadata = os.stat(source, dir_fd=src_dir_fd, follow_symlinks=False)
+        assert stat.S_ISREG(metadata.st_mode)
+        source_fd = os.open(source, os.O_RDONLY, dir_fd=src_dir_fd)
+        try:
+            observed.append(os.read(source_fd, len(content) + 1))
+        finally:
+            os.close(source_fd)
+        with pytest.raises(FileNotFoundError):
+            os.stat(target, dir_fd=dst_dir_fd, follow_symlinks=False)
+        return real_link(
+            source,
+            target,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+            follow_symlinks=follow_symlinks,
+        )
+
+    monkeypatch.setattr(verified.os, "link", inspect_link)
+
+    verified._publish_receipt(destination, content)
+
+    assert observed == [content]
+    assert destination.read_bytes() == content
+    assert list(destination.parent.glob(".receipt.json.*.tmp")) == []
+
+
+def test_receipt_publication_refuses_concurrent_destination(tmp_path):
+    destination = tmp_path / "outputs" / "receipt.json"
+    destination.parent.mkdir()
+    destination.write_bytes(b'{"publisher":"concurrent"}\n')
+
+    with pytest.raises(ValueError, match="concurrent provenance receipt publication"):
+        verified._publish_receipt(destination, b'{"status":"verified"}\n')
+
+    assert destination.read_bytes() == b'{"publisher":"concurrent"}\n'
+    assert list(destination.parent.glob(".receipt.json.*.tmp")) == []
+
+
+def test_receipt_publication_rejects_symlink_parent(tmp_path):
+    external = tmp_path / "external"
+    external.mkdir()
+    parent = tmp_path / "outputs"
+    parent.symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="provenance receipt parent must be a regular directory"):
+        verified._publish_receipt(
+            parent / "receipt.json",
+            b'{"status":"verified"}\n',
+        )
+
+    assert list(external.iterdir()) == []
+
+
+def test_verified_run_does_not_invalidate_receipt_through_symlink_parent(tmp_path):
+    main, support = _study(tmp_path)
+    manifest = build_manifest([main, support], root=tmp_path)
+    external = tmp_path / "external"
+    external.mkdir()
+    external_receipt = external / "receipt.json"
+    original = b'{"publisher":"external"}\n'
+    external_receipt.write_bytes(original)
+    redirected_parent = tmp_path / "redirected"
+    redirected_parent.symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(
+        ValueError,
+        match="provenance receipt parent must be a regular directory",
+    ):
+        verify_run_and_record(
+            manifest,
+            root=tmp_path,
+            analyze=lambda: 0,
+            receipt_builder=lambda payload, root: {"schema_version": 1},
+            output_verifier=lambda root: None,
+            output=redirected_parent / "receipt.json",
+        )
+
+    assert external_receipt.read_bytes() == original
 
 
 def test_first_publication_rollback_never_deletes_a_concurrent_replacement(
