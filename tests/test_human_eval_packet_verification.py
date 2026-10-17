@@ -389,6 +389,48 @@ def test_packet_verifier_rejects_conflicting_persisted_trace_identity(
         _verify(packet_case)
 
 
+def test_packet_verifier_rejects_coherently_rehashed_conflicting_task_set_identity(
+    packet_case,
+):
+    trace_path = (
+        packet_case["repo_root"]
+        / "outputs"
+        / "experiment_traces"
+        / "D3"
+        / "d3-main-01.json"
+    )
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    payload["trace"]["task_set_id"] = "other-task-set"
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    manifest_path = packet_case["output_root"] / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    with (packet_case["output_root"] / "blinding_key.csv").open(
+        encoding="utf-8", newline=""
+    ) as handle:
+        source_path_by_blind = {
+            row["blind_id"]: row["trace_path"] for row in csv.DictReader(handle)
+        }
+    source_entry = next(
+        entry
+        for entry in manifest["source_artifacts"]
+        if source_path_by_blind[entry["blind_id"]]
+        == trace_path.relative_to(packet_case["repo_root"]).as_posix()
+    )
+    content = trace_path.read_bytes()
+    source_entry["trace"] = {
+        "bytes": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Conflicting task_set_id"):
+        _verify(packet_case)
+
+
 def test_packet_verifier_accepts_experiment_only_identity_for_legacy_traces(packet_case):
     trace_path = (
         packet_case["repo_root"]

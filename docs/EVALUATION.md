@@ -279,7 +279,7 @@ The script creates:
 - `outputs/human_eval/blinding_key.csv` — coordinator-only treatment mapping;
 - `outputs/human_eval/manifest.json` — packet metadata.
 
-The packet is deterministic under a fixed seed and fails closed on duplicate treatment/task cells, incomplete runs, missing Markdown reports, unexpected variants, or incomplete task matrices.
+The packet is deterministic under a fixed seed and fails closed on duplicate treatment/task cells, incomplete runs, missing Markdown reports, unexpected variants, or incomplete task matrices. When a persisted trace carries task-set identity in both its experiment configuration and run-trace payload, those copies must agree and match the frozen task manifest; neither packet generation nor later packet verification silently prefers one conflicting identity.
 
 Annotators must not receive `blinding_key.csv` until ratings are frozen. At least a predeclared subset should be independently double-scored and inter-annotator agreement should be reported before adjudication.
 

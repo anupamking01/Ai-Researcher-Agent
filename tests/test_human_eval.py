@@ -328,6 +328,20 @@ def test_build_packet_rejects_task_set_identity_drift(tmp_path):
         _build_packet(trace_root, tmp_path / "human-eval", tmp_path)
 
 
+def test_build_packet_rejects_conflicting_task_set_identity(tmp_path):
+    trace_root = _write_complete_matrix(tmp_path)
+    trace_path = trace_root / "D3" / "d3-main-01.json"
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    payload["trace"]["task_set_id"] = "other-task-set"
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+    output_root = tmp_path / "human-eval"
+
+    with pytest.raises(ValueError, match="Conflicting task_set_id"):
+        _build_packet(trace_root, output_root, tmp_path)
+
+    assert not output_root.exists()
+
+
 def test_build_packet_rejects_unfrozen_task_manifest(tmp_path):
     trace_root = _write_complete_matrix(tmp_path)
     task_manifest = _write_task_manifest(tmp_path)

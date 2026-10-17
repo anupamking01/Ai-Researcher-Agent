@@ -359,7 +359,12 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
         if trace_path.parent.name != variant_id or trace_path.stem != run_id or trace_path.is_symlink():
             raise ValueError(f"Trace file identity does not match variant/run: {trace_path}")
         question = str(trace.get("question") or "").strip()
-        trace_task_set_id = str(experiment.get("task_set_id") or "").strip()
+        trace_task_set_id = _consistent_trace_identity(
+            experiment,
+            trace,
+            "task_set_id",
+            trace_path=trace_path,
+        )
 
         if not variant_id or not task_id:
             raise ValueError(f"Trace missing variant/task identity: {trace_path}")
