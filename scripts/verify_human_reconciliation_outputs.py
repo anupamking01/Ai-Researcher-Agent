@@ -635,6 +635,31 @@ def verify_bundle(
             output_descriptor,
             label="reconciliation output root",
         )
+        directory = os.fstat(output_descriptor)
+        output_directory_identity = (
+            directory.st_dev,
+            directory.st_ino,
+            directory.st_mtime_ns,
+            directory.st_ctime_ns,
+        )
+        expected_entries = {name for name, _ in output_specs}
+        try:
+            actual_entries = set(os.listdir(output_descriptor))
+        except OSError as exc:
+            raise ValueError(
+                f"reconciliation bundle layout cannot be read: {output_root}"
+            ) from exc
+        if actual_entries != expected_entries:
+            details = []
+            missing = expected_entries - actual_entries
+            undeclared = actual_entries - expected_entries
+            if missing:
+                details.append("missing " + ", ".join(sorted(missing)))
+            if undeclared:
+                details.append("undeclared " + ", ".join(sorted(undeclared)))
+            raise ValueError(
+                "reconciliation bundle layout mismatch: " + "; ".join(details)
+            )
         output_snapshots = {}
         for name, label in output_specs:
             file_descriptor, snapshot = _open_regular_snapshot_at(
@@ -645,12 +670,16 @@ def verify_bundle(
             descriptors.callback(os.close, file_descriptor)
             output_snapshots[name] = (file_descriptor, snapshot)
         directory = os.fstat(output_descriptor)
-        output_directory_identity = (
+        if (
             directory.st_dev,
             directory.st_ino,
             directory.st_mtime_ns,
             directory.st_ctime_ns,
-        )
+        ) != output_directory_identity:
+            raise ValueError(
+                "reconciliation output root changed during initial capture: "
+                f"{output_root}"
+            )
         return _verify_bound_bundle(
             output_root,
             output_descriptor=output_descriptor,

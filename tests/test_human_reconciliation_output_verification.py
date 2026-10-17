@@ -506,6 +506,43 @@ def test_write_bundle_is_create_only_and_independently_verified(tmp_path, monkey
         reconcile.write_bundle(payload, output, root=tmp_path)
 
 
+def test_rejects_undeclared_reconciliation_bundle_entry(tmp_path, monkeypatch):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+    (output / "unreviewed_conclusions.md").write_text(
+        "This undeclared file is not part of the verified bundle.\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="bundle layout"):
+        verify.verify_bundle(output, root=tmp_path)
+
+
+def test_rejects_bundle_entry_added_during_initial_capture(tmp_path, monkeypatch):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+    original_open = verify._open_regular_snapshot_at
+    inserted = False
+
+    def insert_undeclared_entry(*args, **kwargs):
+        nonlocal inserted
+        if not inserted:
+            inserted = True
+            (output / "late_conclusions.md").write_text(
+                "This entry appeared after the bundle layout check.\n",
+                encoding="utf-8",
+            )
+        return original_open(*args, **kwargs)
+
+    monkeypatch.setattr(verify, "_open_regular_snapshot_at", insert_undeclared_entry)
+    with pytest.raises(ValueError, match="changed during initial capture"):
+        verify.verify_bundle(output, root=tmp_path)
+
+
 def test_rejects_output_bytes_changed_during_independent_recomputation(
     tmp_path, monkeypatch
 ):
