@@ -299,7 +299,10 @@ human validation into a result.
 The downstream descriptive reconciliation bundle applies the same fail-closed
 environment binding and additionally proves that both pinned files are the exact
 bytes recorded in its producing Git commit. This remains a provenance check, not
-an inferential extension or a substitute for real blinded ratings.
+an inferential extension or a substitute for real blinded ratings. Its manifest
+is a closed schema: undeclared fields, an altered integrity statement, extra
+fingerprint members, and non-integer byte counts are rejected rather than being
+accepted through permissive JSON or numeric equality.
 
 The reconciliation readiness gate holds every contract, automated-analysis,
 provenance, human-analysis, and human-manifest input open by descriptor for the

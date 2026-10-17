@@ -658,6 +658,81 @@ def test_rejects_missing_reconciliation_analysis_environment(tmp_path, monkeypat
         verify.verify_bundle(output, root=tmp_path)
 
 
+def test_rejects_undeclared_reconciliation_manifest_field(tmp_path, monkeypatch):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+    manifest_path = output / reconcile.RECONCILIATION_MANIFEST
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["posthoc_interpretation"] = "undeclared"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="manifest schema"):
+        verify.verify_bundle(output, root=tmp_path)
+
+
+def test_rejects_falsified_reconciliation_integrity_note(tmp_path, monkeypatch):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+    manifest_path = output / reconcile.RECONCILIATION_MANIFEST
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["integrity_note"] = "Results may be edited after publication."
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="integrity note"):
+        verify.verify_bundle(output, root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("section", "entry", "field", "replacement", "error_match"),
+    [
+        (
+            "artifacts",
+            "canonical_reconciliation",
+            "bytes",
+            "matching_float",
+            "integer bytes",
+        ),
+        (
+            "implementation",
+            "reconciler",
+            "unexpected",
+            "undeclared",
+            "manifest entry must contain exactly",
+        ),
+    ],
+)
+def test_rejects_non_exact_reconciliation_provenance_entry_schema(
+    tmp_path, monkeypatch, section, entry, field, replacement, error_match
+):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+    manifest_path = output / reconcile.RECONCILIATION_MANIFEST
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    provenance_entry = manifest[section][entry]
+    if replacement == "matching_float":
+        replacement = float(provenance_entry[field])
+    provenance_entry[field] = replacement
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=error_match):
+        verify.verify_bundle(output, root=tmp_path)
+
+
 def test_rejects_tampered_reconciliation_environment_pin(tmp_path, monkeypatch):
     payload = _payload()
     _patch_recomputation(monkeypatch, payload)

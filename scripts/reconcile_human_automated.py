@@ -35,6 +35,13 @@ RECONCILIATION_MARKDOWN = "reconciliation.md"
 RECONCILIATION_MANIFEST = "reconciliation_manifest.json"
 ANALYSIS_REQUIREMENTS = ROOT / "requirements.txt"
 ANALYSIS_PYTHON_VERSION = ROOT / ".python-version"
+MANIFEST_INTEGRITY_NOTE = (
+    "Canonical JSON is the source of truth. The deterministic Markdown, "
+    "upstream verified-input fingerprints, producing Git commit, and exact "
+    "implementation source bytes, pinned environment files, and actual Python "
+    "runtime are bound here. The verifier independently recomputes the frozen "
+    "descriptive reconciliation before success."
+)
 
 CATEGORIES = (
     "concordant_positive",
@@ -454,13 +461,7 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
         },
         "implementation": implementation,
         "analysis_environment": analysis_environment,
-        "integrity_note": (
-            "Canonical JSON is the source of truth. The deterministic Markdown, "
-            "upstream verified-input fingerprints, producing Git commit, and exact "
-            "implementation source bytes, pinned environment files, and actual Python "
-            "runtime are bound here. The verifier independently recomputes the frozen "
-            "descriptive reconciliation before success."
-        ),
+        "integrity_note": MANIFEST_INTEGRITY_NOTE,
     }
     manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
 

@@ -20,6 +20,18 @@ from pathlib import Path
 from scripts import reconcile_human_automated as reconcile
 from scripts import verify_human_reconciliation_readiness as readiness
 
+MANIFEST_FIELDS = {
+    "schema_version",
+    "study_id",
+    "status",
+    "producer_git_commit",
+    "verified_input_fingerprints",
+    "artifacts",
+    "implementation",
+    "analysis_environment",
+    "integrity_note",
+}
+
 
 def _regular_bytes(path: Path, *, label: str) -> bytes:
     path = Path(path)
@@ -415,6 +427,25 @@ def _verify_bound_bundle(
 
     payload = _load_json(json_bytes, label="canonical reconciliation JSON")
     manifest = _load_json(manifest_bytes, label="reconciliation output manifest")
+    manifest_fields = set(manifest)
+    if manifest_fields != MANIFEST_FIELDS:
+        details = []
+        missing = MANIFEST_FIELDS - manifest_fields
+        undeclared = manifest_fields - MANIFEST_FIELDS
+        if missing:
+            details.append(
+                "missing " + ", ".join(sorted(field.replace("_", " ") for field in missing))
+            )
+        if undeclared:
+            details.append("undeclared " + ", ".join(sorted(undeclared)))
+        raise ValueError(
+            "reconciliation manifest schema mismatch: " + "; ".join(details)
+        )
+    _require_equal(
+        manifest["integrity_note"],
+        reconcile.MANIFEST_INTEGRITY_NOTE,
+        label="reconciliation integrity note",
+    )
     analysis_environment = _verify_analysis_environment(manifest)
     _validate_identity(payload)
 
@@ -444,13 +475,13 @@ def _verify_bound_bundle(
         {"canonical_reconciliation", "manuscript_rendering"},
         label="reconciliation manifest artifact set",
     )
-    _verify_entry(
+    _verify_exact_entry(
         artifacts["canonical_reconciliation"],
         expected_path=reconcile.RECONCILIATION_JSON,
         content=json_bytes,
         label="canonical reconciliation",
     )
-    _verify_entry(
+    _verify_exact_entry(
         artifacts["manuscript_rendering"],
         expected_path=reconcile.RECONCILIATION_MARKDOWN,
         content=markdown_bytes,
@@ -474,19 +505,19 @@ def _verify_bound_bundle(
         {"reconciler", "readiness_gate", "reconciliation_verifier"},
         label="reconciliation manifest implementation set",
     )
-    _verify_entry(
+    _verify_exact_entry(
         implementation["reconciler"],
         expected_path="scripts/reconcile_human_automated.py",
         content=_regular_bytes(Path(reconcile.__file__), label="current reconciler"),
         label="reconciler implementation",
     )
-    _verify_entry(
+    _verify_exact_entry(
         implementation["readiness_gate"],
         expected_path="scripts/verify_human_reconciliation_readiness.py",
         content=_regular_bytes(Path(readiness.__file__), label="current readiness gate"),
         label="readiness-gate implementation",
     )
-    _verify_entry(
+    _verify_exact_entry(
         implementation["reconciliation_verifier"],
         expected_path="scripts/verify_human_reconciliation_outputs.py",
         content=_regular_bytes(Path(__file__), label="current reconciliation verifier"),
