@@ -1,0 +1,39 @@
+# Human-evaluation analysis snapshot integrity
+
+`scripts/human_eval_analysis_core.py` now binds verification and analysis to the
+same captured bytes.
+
+Before any treatment identity is opened, the analyzer snapshots the archived raw
+rating inputs, blinded packet, frozen ratings, agreement artifact, freeze
+manifest, protocol, assignment plan, treatment-blind annotator guide, and
+human-analysis plan into private temporary scratch space. The pre-unblinding
+freeze verifier runs against those snapshots. If that gate passes and the
+frozen two-rater requirement is satisfied, the analyzer then reads the
+coordinator-only mapping artifacts.
+
+The captured human-analysis plan must also match the literal SHA-256 anchor in
+the analysis implementation before any coordinator mapping is read. Merely
+fingerprinting an arbitrary supplied plan in the eventual result is not enough:
+plan drift or substitution now stops the analysis while ratings remain blinded.
+Updating the frozen plan therefore requires an explicit reviewed source change,
+not only a different `--analysis-plan` file.
+
+The packet manifest, blinding key, ratings template, and frozen task manifest are
+captured only after the blinded gate. The packet verifier runs against that
+second snapshot, using the already captured blinded packet. All report-level
+aggregation, treatment mapping, agreement inclusion, and provenance hashes are
+computed from the verified snapshots rather than reopening the live source paths.
+The canonical analysis provenance records the exact captured protocol,
+assignment plan, and annotator guide under stable repository-logical paths, so a
+published result remains directly attributable to the instructions that governed
+collection even when the freeze archive is stored separately.
+
+This closes a time-of-check/time-of-use gap where an editor save after a verifier
+returned could previously change the scores, task universe, treatment mapping,
+agreement payload, or provenance that the analysis actually consumed.
+
+The scratch copies are ephemeral and are deleted when analysis exits. They are
+not a replacement for retaining the original archived ratings, packet bundle,
+freeze bundle, or Git-tracked analysis plan. Source trace and report provenance
+continues to be checked by the packet verifier against the repository; treatment
+and evaluator runs are not regenerated.

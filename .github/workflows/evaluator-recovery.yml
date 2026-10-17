@@ -1,0 +1,165 @@
+name: evaluator-recovery
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: evaluator-recovery-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  recover-evaluator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      actions: read
+      contents: read
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      SMART_LLM_MODEL: gpt-5.6-terra
+      FAST_LLM_MODEL: gpt-5.6-luna
+      TEMPERATURE: "1"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout research branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Validate API secret
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "OPENAI_API_KEY repository secret is not configured."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Download preserved main-study artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: budget-main-study-34620917346
+          path: outputs
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: anupamking01/Ai-Researcher-Agent
+          run-id: 34620917346
+
+      - name: Validate preserved treatment and partial evaluator state
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('outputs')
+          progress = json.loads((root / 'main_study_progress.json').read_text())
+          if progress.get('completed_runs') != 40:
+              raise SystemExit(f"Expected 40 completed treatment runs, got {progress.get('completed_runs')}")
+          if progress.get('failed_runs') != 0 or progress.get('timeout_runs') != 0:
+              raise SystemExit('Preserved treatment artifact contains failures/timeouts')
+
+          traces = list((root / 'experiment_traces').glob('*/*.json'))
+          evals = list((root / 'posthoc_evaluations').glob('*/*.json'))
+          if len(traces) != 40:
+              raise SystemExit(f'Expected 40 treatment traces, got {len(traces)}')
+          if len(evals) != 37:
+              raise SystemExit(f'Expected 37 preserved evaluator outputs, got {len(evals)}')
+
+          spent = 0.0
+          keys = set()
+          for path in evals:
+              payload = json.loads(path.read_text())
+              spent += float(payload.get('estimated_cost_usd', 0.0) or 0.0)
+              keys.add((payload.get('variant_id'), payload.get('task_id')))
+          expected = {(v, f'main-{i:02d}') for v in ('D3','D6','P6','P6V') for i in range(1,11)}
+          missing = sorted(expected - keys)
+          expected_missing = [('P6V','main-02'), ('P6V','main-08'), ('P6V','main-10')]
+          if missing != expected_missing:
+              raise SystemExit(f'Unexpected missing evaluator set: {missing}')
+          if spent >= 1.25:
+              raise SystemExit(f'Existing evaluator spend ${spent:.6f} already reaches cap')
+          print(f'PRESERVED STATE OK: 40 treatment traces, 37 evaluator outputs, cumulative evaluator cost=${spent:.6f}')
+          print('Missing evaluator outputs:', missing)
+          PY
+
+      - name: Resume common post-hoc evaluator only
+        timeout-minutes: 35
+        run: python scripts/evaluate_posthoc_support.py --max-evaluator-cost-usd 1.25
+
+      - name: Summarize recovered main study
+        run: python scripts/summarize_budget_main_study.py
+
+      - name: Validate recovered study cardinality and budget
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('outputs')
+          manifest = json.loads((root / 'main_study_manifest.json').read_text())
+          progress = json.loads((root / 'main_study_progress.json').read_text())
+          summary = json.loads((root / 'main_study_summary.json').read_text())
+          support = json.loads((root / 'posthoc_support_summary.json').read_text())
+
+          errors = []
+          if manifest.get('expected_runs') != 40:
+              errors.append(f"manifest expected_runs={manifest.get('expected_runs')}")
+          if progress.get('completed_runs') != 40:
+              errors.append(f"completed_runs={progress.get('completed_runs')}")
+          if progress.get('failed_runs') != 0 or progress.get('timeout_runs') != 0:
+              errors.append('treatment failures/timeouts are nonzero')
+          if summary.get('n_runs') != 40:
+              errors.append(f"summary n_runs={summary.get('n_runs')}")
+          if summary.get('n_posthoc_evaluations') != 40:
+              errors.append(f"posthoc evaluations={summary.get('n_posthoc_evaluations')}")
+          if support.get('n_evaluations') != 40:
+              errors.append(f"support n_evaluations={support.get('n_evaluations')}")
+          if float(summary.get('estimated_treatment_cost_usd', 999)) > 3.10:
+              errors.append('treatment cost exceeded hard guard allowance')
+          if float(summary.get('estimated_common_evaluator_cost_usd', 999)) > 1.25:
+              errors.append('evaluator cost exceeded cap')
+          if float(summary.get('estimated_total_cost_usd', 999)) > 4.35:
+              errors.append('combined estimated study cost exceeded $4.35')
+          for variant in ('D3', 'D6', 'P6', 'P6V'):
+              stats = summary.get('variant_summary', {}).get(variant, {})
+              if stats.get('n') != 10 or stats.get('posthoc_evaluated_runs') != 10:
+                  errors.append(f"{variant} incomplete: {stats}")
+
+          if errors:
+              print('RECOVERED MAIN STUDY VALIDATION: FAIL')
+              for error in errors:
+                  print(' -', error)
+              raise SystemExit(1)
+          print('RECOVERED MAIN STUDY VALIDATION: PASS')
+          print(f"Treatment cost: ${summary['estimated_treatment_cost_usd']:.6f}")
+          print(f"Evaluator cost: ${summary['estimated_common_evaluator_cost_usd']:.6f}")
+          print(f"Total estimated cost: ${summary['estimated_total_cost_usd']:.6f}")
+          PY
+
+      - name: Upload recovered canonical study artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: budget-main-study-recovered-${{ github.run_id }}
+          path: |
+            outputs/main_study_manifest.json
+            outputs/main_study_progress.json
+            outputs/main_study_summary.json
+            outputs/main_study_runs.csv
+            outputs/posthoc_support_summary.json
+            outputs/posthoc_support_runs.csv
+            outputs/posthoc_evaluations/**
+            outputs/experiment_traces/**
+            outputs/*/research_report.md
+            outputs/*/research-query-*.txt
+            outputs/*/verification.json
+          if-no-files-found: warn
+          retention-days: 30

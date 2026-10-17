@@ -1,0 +1,128 @@
+"""Synthetic-only checks that hashed and parsed frozen ratings cannot diverge.
+
+File edits are injected at a deterministic read boundary, not with timing or
+threads. No values here are collected human annotations or study results.
+"""
+import csv
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+from scripts import freeze_human_eval_ratings as freeze
+from scripts import verify_human_eval_freeze as verify
+
+
+@pytest.fixture
+def frozen_case(tmp_path):
+    packet = tmp_path / "packet.jsonl"
+    packet.write_text(
+        json.dumps({
+            "blind_id": "H001", "task_id": "synthetic-01",
+            "question": "Synthetic question", "report_markdown": "Synthetic report",
+        }) + "\n", encoding="utf-8",
+    )
+    ratings = []
+    for annotator in ("synthetic-a", "synthetic-b"):
+        path = tmp_path / f"{annotator}.csv"
+        with path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(freeze.RATING_FIELDS)
+            writer.writerow([annotator, "H001", "3", "3", "4", "4", "3", ""])
+        ratings.append(path)
+    root = tmp_path / "frozen"
+    freeze.freeze_ratings(ratings, packet_path=packet, output_root=root)
+    return root, packet
+
+
+def _verify(case, retained):
+    root, packet = case
+    options = {"use_retained_inputs": True} if retained else {"packet_path": packet}
+    return verify.verify_frozen_snapshot(freeze_root=root, **options)
+
+
+def _snapshot(root):
+    return {path.relative_to(root): path.read_bytes()
+            for path in root.rglob("*") if path.is_file()}
+
+
+def _inject_edit(case, monkeypatch, kind):
+    root, _ = case
+    path = root / "frozen_ratings.csv"
+    original = path.read_bytes()
+    if kind == "line_endings":
+        assert b"\r\n" in original
+        first, second = original, original.replace(b"\r\n", b"\n")
+    else:
+        # Hash a substituted score, then restore the genuine rows for parsing.
+        # Both revisions have the same length, so checking byte count alone fails.
+        needle = b"synthetic-a,H001,3,"
+        assert needle in original
+        first, second = original.replace(needle, b"synthetic-a,H001,4,", 1), original
+        assert len(first) == len(second)
+        path.write_bytes(first)
+        manifest_path = root / "freeze_manifest.json"
+        manifest = json.loads(manifest_path.read_bytes())
+        manifest["frozen_ratings"].update(
+            bytes=len(first), sha256=hashlib.sha256(first).hexdigest(),
+        )
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    before = _snapshot(root)
+    real_read = Path.read_bytes
+    reads = []
+    agreement_reads = []
+
+    def edit_after_read(source):
+        content = real_read(source)
+        if source == path:
+            reads.append(content)
+            if len(reads) == 1:
+                source.write_bytes(second)
+        if source == root / "agreement.json":
+            agreement_reads.append(content)
+        return content
+
+    monkeypatch.setattr(Path, "read_bytes", edit_after_read)
+    return first, second, before, reads, agreement_reads
+
+
+@pytest.mark.parametrize("retained", [False, True], ids=["external", "retained"])
+@pytest.mark.parametrize("kind", ["line_endings", "substituted_score"])
+def test_edit_between_hash_and_parse_is_rejected(frozen_case, monkeypatch, retained, kind):
+    root, _ = frozen_case
+    with monkeypatch.context() as context:
+        first, second, before, reads, agreement_reads = _inject_edit(
+            frozen_case, context, kind,
+        )
+        with pytest.raises(ValueError, match="frozen-ratings parsed fingerprint"):
+            _verify(frozen_case, retained)
+    assert reads == [first, second]
+    assert not agreement_reads  # Reject before recomputing/reporting agreement.
+    before[Path("frozen_ratings.csv")] = second
+    assert _snapshot(root) == before  # The verifier did not repair or rewrite files.
+
+
+@pytest.mark.parametrize("retained", [False, True], ids=["external", "retained"])
+def test_unchanged_freeze_still_verifies_without_writes(frozen_case, retained):
+    root, _ = frozen_case
+    before = _snapshot(root)
+    receipt = _verify(frozen_case, retained)
+    assert receipt["status"] == "blinded_human_ratings_verified"
+    assert receipt["blinding_key_used"] is False
+    assert receipt["n_rows"] == 2
+    assert _snapshot(root) == before
+
+
+def test_cli_read_drift_has_no_success_receipt(frozen_case, monkeypatch, capsys):
+    root, _ = frozen_case
+    _inject_edit(frozen_case, monkeypatch, "line_endings")
+    monkeypatch.setattr(sys, "argv", [
+        "verify_human_eval_freeze", "--freeze-root", str(root), "--retained-inputs",
+    ])
+    with pytest.raises(SystemExit, match="HUMAN EVAL VERIFY: FAIL:.*parsed fingerprint"):
+        verify.main()
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "HUMAN EVAL VERIFY: PASS" not in captured.err

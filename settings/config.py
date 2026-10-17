@@ -7,16 +7,16 @@ from dotenv import load_dotenv
 
 from settings.singleton import Singleton
 
-load_dotenv(override=True,verbose=True)
+# Explicit process environment variables must win over values in a local .env.
+# This is especially important for reproducible experiments that pin model IDs
+# and temperature on the command line.
+load_dotenv(override=False, verbose=True)
 
 
 class Config(metaclass=Singleton):
-    """
-    Configuration class to store the state of bools for different scripts access.
-    """
+    """Configuration shared by the application and research runner."""
 
     def __init__(self) -> None:
-        """Initialize the Config class"""
         self.debug_mode = False
         self.allow_downloads = False
 
@@ -37,40 +37,32 @@ class Config(metaclass=Singleton):
         )
 
         self.memory_backend = os.getenv("MEMORY_BACKEND", "local")
-        # Initialize the OpenAI API client
         openai.api_key = self.openai_api_key
 
     def set_fast_llm_model(self, value: str) -> None:
-        """Set the fast LLM model value."""
         self.fast_llm_model = value
 
     def set_smart_llm_model(self, value: str) -> None:
-        """Set the smart LLM model value."""
         self.smart_llm_model = value
 
     def set_fast_token_limit(self, value: int) -> None:
-        """Set the fast token limit value."""
         self.fast_token_limit = value
 
     def set_smart_token_limit(self, value: int) -> None:
-        """Set the smart token limit value."""
         self.smart_token_limit = value
 
     def set_browse_chunk_max_length(self, value: int) -> None:
-        """Set the browse_website command chunk max length value."""
         self.browse_chunk_max_length = value
 
     def set_openai_api_key(self, value: str) -> None:
-        """Set the OpenAI API key value."""
         self.openai_api_key = value
 
     def set_debug_mode(self, value: bool) -> None:
-        """Set the debug mode value."""
         self.debug_mode = value
 
 
 def check_openai_api_key() -> None:
-    """Check if the OpenAI API key is set in config.py or as an environment variable."""
+    """Check if the OpenAI API key is configured."""
     cfg = Config()
     if not cfg.openai_api_key:
         print(

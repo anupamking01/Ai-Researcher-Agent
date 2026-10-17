@@ -1,0 +1,170 @@
+"""Synthetic-only regressions for finite canonical human-analysis JSON.
+
+No human ratings, treatments, evaluator calls, or research results are created.
+"""
+import hashlib
+import json
+
+import pytest
+
+from scripts import analyze_human_eval as publisher
+from scripts import freeze_human_eval_ratings as freeze
+from scripts import human_eval_analysis_core as core
+from scripts import verify_human_eval_analysis_outputs as verifier
+
+
+def _synthetic_payload():
+    plan_bytes = core.PLAN.read_bytes()
+    provenance = {
+        "analysis_plan": {
+            "path": core.PLAN.name,
+            "bytes": len(plan_bytes),
+            "sha256": hashlib.sha256(plan_bytes).hexdigest(),
+        }
+    }
+    for key, path, logical_path in (
+        ("protocol", freeze.DEFAULT_PROTOCOL, "paper/HUMAN_EVAL_PROTOCOL.md"),
+        (
+            "assignment_plan",
+            freeze.DEFAULT_ASSIGNMENT_PLAN,
+            "paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md",
+        ),
+        (
+            "annotator_guide",
+            freeze.DEFAULT_ANNOTATOR_GUIDE,
+            "paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md",
+        ),
+    ):
+        content = path.read_bytes()
+        provenance[key] = {
+            "path": logical_path,
+            "bytes": len(content),
+            "sha256": hashlib.sha256(content).hexdigest(),
+        }
+    summary_block = {
+        "n_reports_total": 1,
+        "n_reports_scored": 1,
+        "n_raw_scores": 2,
+        "mean_report_score": 3.0,
+        "median_report_score": 3.0,
+        "raw_score_distribution": {"1": 0, "2": 0, "3": 2, "4": 0, "5": 0},
+    }
+    pair_block = {
+        "n_pairs": 1,
+        "left_mean": 3.0,
+        "right_mean": 3.0,
+        "mean_difference": 0.0,
+        "median_difference": 0.0,
+        "bootstrap_95pct_ci_mean_difference": [0.0, 0.0],
+        "paired_dz": None,
+        "positive_tasks": 0,
+        "negative_tasks": 0,
+        "tied_tasks": 1,
+        "task_differences": {"task-a": 0.0},
+        "task_ids_included": ["task-a"],
+        "missing_pair_tasks": [],
+    }
+    agreement_dimension = {
+        "n_double_rated": 1,
+        "raw_exact_agreement": 1.0,
+        "mean_absolute_difference": 0.0,
+        "quadratic_weighted_cohen_kappa": None,
+    }
+    return {
+        "schema_version": 1,
+        "study_id": "budget-main-v1",
+        "status": "human_validation_analysis",
+        "analysis_scope": "complementary_not_main_confirmatory",
+        "human_ratings_generated": False,
+        "treatment_outputs_rerun": False,
+        "hypothesis_tests": "none_predeclared_for_human_validation",
+        "variants": list(core.VARIANTS),
+        "dimensions": list(core.DIMS),
+        "report_score_aggregation": "mean_observed_rater_scores_per_report_dimension",
+        "bootstrap_seed": core.SEED,
+        "bootstrap_draws": core.BOOTSTRAP_DRAWS,
+        "n_tasks": 1,
+        "task_ids": ["task-a"],
+        "verification": {"analysis_inputs_snapshot_bound": True},
+        "provenance": provenance,
+        "pre_unblinding_agreement": {
+            "status": "pre-unblinding_pairwise_agreement",
+            "n_annotators": 2,
+            "pairwise": [{
+                "annotator_a": "annotator-a",
+                "annotator_b": "annotator-b",
+                "dimensions": {
+                    field: dict(agreement_dimension) for field in core.DIMS
+                },
+            }],
+        },
+        "variant_summary": {
+            variant: {field: dict(summary_block) for field in core.DIMS}
+            for variant in core.VARIANTS
+        },
+        "paired_contrasts": {
+            name: {field: dict(pair_block) for field in core.DIMS}
+            for _, _, name in core.CONTRASTS
+        },
+    }
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
+def test_cannot_publish_nonfinite_human_analysis(tmp_path, invalid):
+    payload = _synthetic_payload()
+    payload["variant_summary"]["D3"][core.DIMS[0]]["mean_report_score"] = invalid
+    output_root = tmp_path / "human-analysis"
+    with pytest.raises(ValueError, match="non-finite human-analysis values"):
+        publisher.write_bundle(payload, output_root)
+    assert not output_root.exists()
+
+
+def _rewrite_and_rehash(output_root, canonical, markdown):
+    (output_root / publisher.ANALYSIS_JSON).write_bytes(canonical)
+    (output_root / publisher.ANALYSIS_MARKDOWN).write_bytes(markdown)
+    path = output_root / publisher.ANALYSIS_MANIFEST
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["artifacts"]["canonical_analysis"].update(
+        publisher._fingerprint_bytes(canonical)
+    )
+    manifest["artifacts"]["manuscript_rendering"].update(
+        publisher._fingerprint_bytes(markdown)
+    )
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
+def test_rehashed_nonfinite_bundle_fails_independent_verification(tmp_path, invalid):
+    output_root = tmp_path / "human-analysis"
+    publisher.write_bundle(_synthetic_payload(), output_root)
+    payload = _synthetic_payload()
+    payload["variant_summary"]["D3"][core.DIMS[0]]["mean_report_score"] = invalid
+    canonical = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    markdown = publisher.render_markdown(payload).encode("utf-8")
+    _rewrite_and_rehash(output_root, canonical, markdown)
+    with pytest.raises(ValueError, match="non-finite numeric value"):
+        verifier.verify_bundle(output_root)
+
+
+def test_json_exponent_overflow_is_rejected_even_after_rehash(tmp_path):
+    output_root = tmp_path / "human-analysis"
+    publisher.write_bundle(_synthetic_payload(), output_root)
+    payload = _synthetic_payload()
+    payload["variant_summary"]["D3"][core.DIMS[0]]["mean_report_score"] = float("inf")
+    canonical = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    assert b"Infinity" in canonical
+    canonical = canonical.replace(b"Infinity", b"1e400", 1)
+    markdown = publisher.render_markdown(payload).encode("utf-8")
+    _rewrite_and_rehash(output_root, canonical, markdown)
+    with pytest.raises(ValueError, match="non-finite numeric value"):
+        verifier.verify_bundle(output_root)
+
+
+def test_missing_human_score_uses_json_null_and_roundtrips(tmp_path):
+    payload = _synthetic_payload()
+    payload["variant_summary"]["D3"][core.DIMS[0]]["mean_report_score"] = None
+    output_root = tmp_path / "human-analysis"
+    receipt = publisher.write_bundle(payload, output_root)
+    assert receipt["status"] == "human_validation_analysis_bundle_verified"
+    stored = (output_root / publisher.ANALYSIS_JSON).read_text(encoding="utf-8")
+    assert '"mean_report_score": null' in stored

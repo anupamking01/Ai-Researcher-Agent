@@ -84,6 +84,56 @@ def test_bootstrap_confidence_interval_handles_empty_and_invalid_settings():
         bootstrap_confidence_interval([1.0], n_resamples=0)
 
 
+def test_bootstrap_confidence_interval_uses_linear_percentiles(monkeypatch):
+    samples = iter(([0.0], [10.0], [20.0], [30.0]))
+
+    class FixedRandom:
+        def __init__(self, seed):
+            assert seed == 0
+
+        def choices(self, population, *, k):
+            assert population == [0.0]
+            assert k == 1
+            return next(samples)
+
+    monkeypatch.setattr("logic.evaluation.Random", FixedRandom)
+
+    interval = bootstrap_confidence_interval(
+        [0.0], confidence=0.5, n_resamples=4, seed=0
+    )
+
+    assert interval["lower"] == pytest.approx(7.5)
+    assert interval["upper"] == pytest.approx(22.5)
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
+def test_bootstrap_confidence_interval_rejects_non_finite_samples(invalid):
+    with pytest.raises(ValueError, match="bootstrap sample must be finite"):
+        bootstrap_confidence_interval([1.0, invalid], n_resamples=10)
+
+
+def test_bootstrap_confidence_interval_rejects_non_finite_statistic():
+    with pytest.raises(ValueError, match="bootstrap statistic must be finite"):
+        bootstrap_confidence_interval(
+            [1.0, 2.0], statistic=lambda values: float("nan"), n_resamples=10
+        )
+
+
+def test_bootstrap_confidence_interval_interpolates_extreme_finite_estimates():
+    statistic_values = iter((-1e308, 1e308, 0.0))
+
+    interval = bootstrap_confidence_interval(
+        [0.0],
+        statistic=lambda values: next(statistic_values),
+        confidence=0.5,
+        n_resamples=2,
+    )
+
+    assert interval["estimate"] == 0.0
+    assert interval["lower"] == pytest.approx(-5e307)
+    assert interval["upper"] == pytest.approx(5e307)
+
+
 def test_paired_metric_comparison_preserves_task_pairing():
     summary = paired_metric_comparison(
         baseline=[2.0, 4.0, 3.0, 5.0],
@@ -110,6 +160,36 @@ def test_paired_metric_comparison_handles_empty_and_rejects_misalignment():
     }
     with pytest.raises(ValueError, match="equal-length"):
         paired_metric_comparison([1.0], [1.0, 2.0])
+
+
+@pytest.mark.parametrize("side", ["baseline", "candidate"])
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
+def test_paired_metric_comparison_rejects_non_finite_samples(side, invalid):
+    baseline = [1.0]
+    candidate = [2.0]
+    if side == "baseline":
+        baseline[0] = invalid
+    else:
+        candidate[0] = invalid
+
+    with pytest.raises(ValueError, match=f"{side} values must be finite"):
+        paired_metric_comparison(baseline, candidate)
+
+
+def test_paired_metric_comparison_rejects_overflowed_delta():
+    with pytest.raises(ValueError, match="paired deltas must be finite"):
+        paired_metric_comparison([-1e308], [1e308])
+
+
+@pytest.mark.parametrize(
+    ("baseline", "candidate"),
+    [([-1e308, -1e308], [0.0, 0.0]), ([0.0, 0.0], [1e308, -1e308])],
+)
+def test_paired_metric_comparison_rejects_non_finite_summary(
+    baseline, candidate
+):
+    with pytest.raises(ValueError, match="paired summary must be finite"):
+        paired_metric_comparison(baseline, candidate)
 
 
 def test_deduplicate_sources_preserves_order():
