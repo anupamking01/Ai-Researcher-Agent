@@ -107,6 +107,20 @@ A central integrity rule is that additional planning or verification computation
 
 When total compute differs across variants, the project uses a **quality–cost/Pareto interpretation** rather than falsely describing the variants as equal-total-budget systems.
 
+For any future execution of `scripts/run_budget_main_study.py`, the create-only
+study manifest also records the exact Python implementation/version, operating
+platform string, and a sorted PEP-503-normalized inventory of every installed
+Python distribution and version. This describes the environment that actually
+loaded the treatment code, including transitive dependencies, rather than only
+the intended top-level requirements. The inventory is captured before treatment
+model code is imported or any treatment call begins.
+
+This field is prospective provenance. It does not retroactively add environment
+metadata to the already-completed canonical treatment artifact and is not a
+reason to rerun or replace those outcomes. The canonical run retains its
+original GitHub Actions workflow, Git commit, dependency files, and logs; their
+environment-recording limits remain a threat to exact replication.
+
 ## 8. Failure handling and provenance
 
 A failed source fetch is not equivalent to a missing experiment. Likewise, zero successful evidence can be a valid treatment outcome rather than a reason to discard the run.

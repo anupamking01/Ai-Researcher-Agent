@@ -18,9 +18,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import importlib.metadata
 import json
 import math
 import os
+import platform
 import re
 import secrets
 import stat
@@ -60,6 +62,30 @@ def _git_commit() -> str:
         ).strip()
     except Exception:
         return "unavailable"
+
+
+def _execution_environment() -> dict:
+    """Capture the interpreter and installed distributions used by treatments."""
+    distributions = []
+    for distribution in importlib.metadata.distributions():
+        name = str(distribution.metadata.get("Name") or "").strip()
+        version = str(distribution.version or "").strip()
+        if not name or not version:
+            raise SystemExit(
+                "Cannot record treatment execution environment: installed "
+                "distribution metadata is missing a name or version"
+            )
+        distributions.append((re.sub(r"[-_.]+", "-", name).lower(), version))
+
+    return {
+        "python_implementation": platform.python_implementation(),
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "installed_distributions": [
+            {"name": name, "version": version}
+            for name, version in sorted(distributions)
+        ],
+    }
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict:
@@ -654,6 +680,7 @@ async def main() -> None:
             )
 
     initial_treatment_cost = _preflight_new_study_state(pricing)
+    execution_environment = _execution_environment()
 
     from logic.experiment import ExperimentConfig
     from logic.run import run_agent
@@ -673,6 +700,7 @@ async def main() -> None:
         "fast_model": os.environ["FAST_LLM_MODEL"],
         "temperature": float(os.environ["TEMPERATURE"]),
         "git_commit": _git_commit(),
+        "execution_environment": execution_environment,
         "started_at_utc": _utc_now(),
         "max_agent_cost_usd": args.max_agent_cost_usd,
         "posthoc_evaluation_reserved_cost_usd": 1.25,

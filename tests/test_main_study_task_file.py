@@ -1,6 +1,9 @@
 import asyncio
 import hashlib
 import json
+import sys
+import types
+from dataclasses import dataclass
 
 import pytest
 
@@ -24,6 +27,43 @@ def _write_payload(path, payload) -> bytes:
     raw = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
     path.write_bytes(raw)
     return raw
+
+
+def test_execution_environment_records_normalized_sorted_distributions(monkeypatch):
+    distributions = [
+        types.SimpleNamespace(metadata={"Name": "Zeta_Package"}, version="2.0"),
+        types.SimpleNamespace(metadata={"Name": "alpha.package"}, version="1.0"),
+        types.SimpleNamespace(metadata={"Name": "Alpha-Package"}, version="1.0"),
+    ]
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "importlib",
+        types.SimpleNamespace(
+            metadata=types.SimpleNamespace(distributions=lambda: distributions)
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "platform",
+        types.SimpleNamespace(
+            python_implementation=lambda: "SyntheticPython",
+            python_version=lambda: "3.11.99",
+            platform=lambda: "synthetic-runner",
+        ),
+        raising=False,
+    )
+
+    assert run_budget_main_study._execution_environment() == {
+        "python_implementation": "SyntheticPython",
+        "python_version": "3.11.99",
+        "platform": "synthetic-runner",
+        "installed_distributions": [
+            {"name": "alpha-package", "version": "1.0"},
+            {"name": "alpha-package", "version": "1.0"},
+            {"name": "zeta-package", "version": "2.0"},
+        ],
+    }
 
 
 def test_task_loader_binds_validated_tasks_to_exact_file_snapshot(tmp_path):
@@ -124,6 +164,20 @@ def test_main_study_manifest_records_task_snapshot_before_execution(tmp_path, mo
 
     monkeypatch.setattr(run_budget_main_study, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(run_budget_main_study, "PRICING_FILE", pricing_file)
+    expected_environment = {
+        "python_implementation": "SyntheticPython",
+        "python_version": "3.11.99",
+        "platform": "synthetic-runner",
+        "installed_distributions": [
+            {"name": "example-package", "version": "1.2.3"},
+        ],
+    }
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "_execution_environment",
+        lambda: expected_environment,
+        raising=False,
+    )
     monkeypatch.setattr(
         run_budget_main_study,
         "TRACE_ROOT",
@@ -142,10 +196,28 @@ def test_main_study_manifest_records_task_snapshot_before_execution(tmp_path, mo
     }.items():
         monkeypatch.setenv(name, value)
 
+    @dataclass(frozen=True)
+    class FakeConfig:
+        browse_timeout_seconds: int = 1
+        run_timeout_seconds: int = 2
+        max_concurrent_browses: int = 3
+        task_set_id: str = ""
+        task_id: str = ""
+
+    class FakeExperimentConfig:
+        @classmethod
+        def from_variant(cls, _variant):
+            return FakeConfig()
+
     async def fake_run_agent(**_kwargs):
         return None
 
-    monkeypatch.setattr("logic.run.run_agent", fake_run_agent)
+    experiment_module = types.ModuleType("logic.experiment")
+    experiment_module.ExperimentConfig = FakeExperimentConfig
+    run_module = types.ModuleType("logic.run")
+    run_module.run_agent = fake_run_agent
+    monkeypatch.setitem(sys.modules, "logic.experiment", experiment_module)
+    monkeypatch.setitem(sys.modules, "logic.run", run_module)
 
     asyncio.run(run_budget_main_study.main())
 
@@ -157,3 +229,4 @@ def test_main_study_manifest_records_task_snapshot_before_execution(tmp_path, mo
     assert manifest["task_file"] == "tasks.json"
     assert manifest["task_file_size_bytes"] == len(raw)
     assert manifest["task_file_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert manifest["execution_environment"] == expected_environment
