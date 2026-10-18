@@ -26,10 +26,10 @@ jobs:
 
     steps:
       - name: Checkout research branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up pinned Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version-file: ".python-version"
           cache: pip
@@ -45,7 +45,7 @@ jobs:
           python -m pytest -q             tests/test_canonical_analysis_workflow.py             tests/test_main_study_analysis.py             tests/test_main_study_input_preflight.py             tests/test_verified_main_study_analysis.py             tests/test_main_study_output_verification.py             tests/test_analysis_provenance.py             tests/test_analysis_provenance_verification.py
 
       - name: Download canonical recovered study artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ${{ env.CANONICAL_RECOVERY_ARTIFACT }}
           path: outputs
@@ -88,7 +88,7 @@ jobs:
           python -m scripts.verify_main_study_outputs
 
       - name: Upload canonical analysis bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: canonical-main-study-analysis-${{ github.run_id }}
           path: |

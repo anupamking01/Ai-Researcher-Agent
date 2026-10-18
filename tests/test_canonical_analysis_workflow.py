@@ -27,7 +27,10 @@ def test_workflow_pins_canonical_recovery_artifact() -> None:
         'CANONICAL_RECOVERY_ARTIFACT: "budget-main-study-recovered-34783525480"'
         in workflow
     )
-    assert "actions/download-artifact@v4" in workflow
+    assert (
+        "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+        in workflow
+    )
     assert "run-id: ${{ env.CANONICAL_RECOVERY_RUN_ID }}" in workflow
 
 
