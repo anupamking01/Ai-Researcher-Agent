@@ -123,6 +123,25 @@ def test_canonically_equivalent_ids_cannot_supply_two_independent_raters(
     assert not options["output_root"].exists()
 
 
+def test_case_equivalent_ids_cannot_supply_two_independent_raters(
+    submission_inputs,
+):
+    paths, options = submission_inputs
+    paths[0].write_bytes(_csv_bytes(["synthetic-a"]))
+    paths[1].write_bytes(_csv_bytes(["SYNTHETIC-A"]))
+    write_valid_annotator_attestations(
+        options["annotator_attestations_path"],
+        ("synthetic-a", "SYNTHETIC-A"),
+    )
+    originals = [path.read_bytes() for path in paths]
+
+    with pytest.raises(ValueError, match="canonically equivalent annotator_id"):
+        freeze.freeze_ratings(paths, **options)
+
+    assert originals == [path.read_bytes() for path in paths]
+    assert not options["output_root"].exists()
+
+
 @pytest.mark.parametrize(
     "hidden_character",
     ["\u200b", "\u202e", "\x00"],

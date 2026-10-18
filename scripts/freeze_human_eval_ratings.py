@@ -35,7 +35,7 @@ DEFAULT_ASSIGNMENT_PLAN = REPO_ROOT / "paper" / "HUMAN_EVAL_ASSIGNMENT_PLAN.md"
 DEFAULT_ANNOTATOR_GUIDE = REPO_ROOT / "paper" / "HUMAN_EVAL_ANNOTATOR_GUIDE.md"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "outputs" / "human_eval" / "frozen-v1"
 FROZEN_PROTOCOL_SHA256 = (
-    "de1c03feeda05abbdf554eab4ae530f436e6ee44b47debc93156425185a5d835"
+    "17a75675a9093a682895de8a7e3f5d571a8fcdc5fca6ead347879d117ca6f321"
 )
 FROZEN_ASSIGNMENT_PLAN_SHA256 = (
     "add3f2c1a6f64c27213d57d34fea7235ad5f87a0f4f1643e9b2c2b89a1bafea8"
@@ -239,8 +239,8 @@ def _reject_spreadsheet_active_text(
 
 
 def _annotator_identity_key(annotator_id: str) -> str:
-    """Collapse canonically equivalent Unicode spellings for identity checks."""
-    return unicodedata.normalize("NFC", annotator_id)
+    """Collapse canonically and case-equivalent pseudonym spellings."""
+    return unicodedata.normalize("NFC", annotator_id).casefold()
 
 
 def _validate_annotator_id_characters(annotator_id: str) -> None:

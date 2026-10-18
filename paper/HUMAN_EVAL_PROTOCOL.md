@@ -172,6 +172,12 @@ scores, or outcome summaries in them. Identity, consent, and
 conflict-resolution records should be retained separately under the applicable
 governance policy; they are not part of the research artifact.
 
+Annotator pseudonyms are compared for independence after Unicode NFC
+normalization and case folding. Canonical or case variants of one pseudonym
+therefore cannot satisfy the distinct-rater requirement. Accepted IDs keep
+their exact submitted spelling and raw CSV bytes; this equivalence check
+prevents clerical aliases from being counted as independent humans.
+
 Use the offline freeze utility on the completed annotator files:
 
 ```bash
