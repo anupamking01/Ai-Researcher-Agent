@@ -31,7 +31,7 @@ jobs:
       - name: Set up pinned Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version-file: ".python-version"
+          python-version: "3.11.17"
           pip-version: "26.2.1"
           cache: pip
 

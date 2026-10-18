@@ -40,6 +40,7 @@ NODE24_PINNED_WORKFLOWS = {
     "tests.yml",
 }
 PINNED_RUNNER = "ubuntu-24.04"
+PINNED_PYTHON_VERSION = "3.11.17"
 PINNED_PIP_VERSION = "26.2.1"
 
 
@@ -184,7 +185,15 @@ def _bootstrap_pin_problems(
                     f"{workflow_name}:{job_name}: missing actions/setup-python"
                 )
             for step in setup_python_steps:
-                pip_version = step.get("with", {}).get("pip-version")
+                setup_options = step.get("with", {})
+                python_version = setup_options.get("python-version")
+                if python_version != PINNED_PYTHON_VERSION:
+                    problems.append(
+                        f"{workflow_name}:{job_name}: "
+                        f"python-version={python_version!r}"
+                    )
+
+                pip_version = setup_options.get("pip-version")
                 if pip_version != PINNED_PIP_VERSION:
                     problems.append(
                         f"{workflow_name}:{job_name}: pip-version={pip_version!r}"
@@ -206,6 +215,45 @@ def test_research_workflow_bootstrap_environment_is_frozen() -> None:
         required_workflows=NODE24_PINNED_WORKFLOWS,
     )
     assert not problems, "mutable workflow bootstrap settings:\n" + "\n".join(problems)
+
+
+def test_bootstrap_guard_rejects_python_patch_drift(tmp_path: Path) -> None:
+    workflows = tmp_path / "workflows"
+    workflows.mkdir()
+    setup_options = {
+        "major-minor.yml": "          python-version: 3.11\n",
+        "other-patch.yml": "          python-version: 3.11.18\n",
+        "version-file.yml": "          python-version-file: .python-version\n",
+    }
+    for workflow_name, python_option in setup_options.items():
+        (workflows / workflow_name).write_text(
+            "jobs:\n"
+            "  unit-tests:\n"
+            f"    runs-on: {PINNED_RUNNER}\n"
+            "    steps:\n"
+            "      - uses: actions/setup-python@immutable\n"
+            "        with:\n"
+            f"{python_option}"
+            f"          pip-version: {PINNED_PIP_VERSION}\n",
+            encoding="utf-8",
+        )
+
+    assert _bootstrap_pin_problems(
+        workflows,
+        required_workflows=set(setup_options),
+    ) == [
+        "major-minor.yml:unit-tests: python-version='3.11'",
+        "other-patch.yml:unit-tests: python-version='3.11.18'",
+        "version-file.yml:unit-tests: python-version=None",
+    ]
+
+
+def test_live_smoke_workflow_change_requires_manual_dispatch() -> None:
+    workflow = WORKFLOWS / "live-app-smoke.yml"
+    document = yaml.load(workflow.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    automatic_paths = document["on"]["push"]["paths"]
+
+    assert ".github/workflows/live-app-smoke.yml" not in automatic_paths
 
 
 def test_bootstrap_guard_requires_setup_python_in_each_job(tmp_path: Path) -> None:
@@ -235,6 +283,7 @@ def test_bootstrap_guard_rejects_pip_upgrade_shorthand(tmp_path: Path) -> None:
         "    steps:\n"
         "      - uses: actions/setup-python@immutable\n"
         "        with:\n"
+        f"          python-version: {PINNED_PYTHON_VERSION}\n"
         f"          pip-version: {PINNED_PIP_VERSION}\n"
         "      - run: pip install -U pip\n",
         encoding="utf-8",
