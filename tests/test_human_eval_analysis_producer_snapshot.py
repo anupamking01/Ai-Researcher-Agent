@@ -11,6 +11,7 @@ import pytest
 
 from scripts import freeze_human_eval_ratings as freeze
 from scripts import human_eval_analysis_core as analysis
+from human_eval_test_support import write_valid_annotator_attestations
 
 
 class EndOfBlindedGate(Exception):
@@ -58,6 +59,10 @@ def case(tmp_path, monkeypatch):
     freeze_root = packet_root / "frozen-v1"
     freeze.freeze_ratings(
         rating_paths,
+        annotator_attestations_path=write_valid_annotator_attestations(
+            tmp_path / "annotator_attestations.csv",
+            ("synthetic-a", "synthetic-b"),
+        ),
         packet_path=packet,
         protocol_path=protocol,
         assignment_plan_path=assignment,

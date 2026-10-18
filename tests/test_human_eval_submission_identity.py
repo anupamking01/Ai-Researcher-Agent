@@ -13,6 +13,7 @@ import pytest
 
 from scripts import freeze_human_eval_ratings as freeze
 from scripts import verify_human_eval_freeze as verify
+from human_eval_test_support import write_valid_annotator_attestations
 
 
 def _csv_bytes(annotators):
@@ -42,6 +43,10 @@ def submission_inputs(tmp_path):
     for path, annotator in zip(paths, ("synthetic-a", "synthetic-b")):
         path.write_bytes(_csv_bytes([annotator]))
     return paths, {
+        "annotator_attestations_path": write_valid_annotator_attestations(
+            tmp_path / "annotator_attestations.csv",
+            ("synthetic-a", "synthetic-b"),
+        ),
         "packet_path": packet,
         "protocol_path": protocol,
         "assignment_plan_path": assignment,
@@ -50,8 +55,11 @@ def submission_inputs(tmp_path):
 
 
 def _verify_options(options):
-    return {"freeze_root" if key == "output_root" else key: value
-            for key, value in options.items()}
+    return {
+        "freeze_root" if key == "output_root" else key: value
+        for key, value in options.items()
+        if key != "annotator_attestations_path"
+    }
 
 
 @pytest.mark.parametrize("filename", ["combined.csv", "frozen_ratings.csv"])
@@ -189,6 +197,10 @@ def test_single_decomposed_id_preserves_submitted_spelling_and_bytes(
     paths, options = submission_inputs
     decomposed = "synthetic-e\u0301"
     paths[0].write_bytes(_csv_bytes([decomposed]))
+    write_valid_annotator_attestations(
+        options["annotator_attestations_path"],
+        (decomposed, "synthetic-b"),
+    )
     original = paths[0].read_bytes()
 
     manifest = freeze.freeze_ratings(paths, **options)
@@ -241,6 +253,7 @@ def test_freeze_cli_rejects_combined_submission_before_publication(submission_in
         "--packet", str(options["packet_path"]),
         "--protocol", str(options["protocol_path"]),
         "--assignment-plan", str(options["assignment_plan_path"]),
+        "--annotator-attestations", str(options["annotator_attestations_path"]),
         "--output-root", str(options["output_root"]),
     ])
     with pytest.raises(SystemExit, match="exactly one annotator_id"):
@@ -283,6 +296,10 @@ def _fragmented_submissions(tmp_path):
 def test_each_raw_submission_must_cover_the_complete_packet(submission_inputs):
     paths, options = submission_inputs
     fragmented = _fragmented_submissions(paths[0].parent)
+    write_valid_annotator_attestations(
+        options["annotator_attestations_path"],
+        ("synthetic-a", "synthetic-b", "synthetic-c", "synthetic-d"),
+    )
     originals = [path.read_bytes() for path in fragmented]
 
     # Aggregate coverage is two raters per item, but no annotator completed the
@@ -320,6 +337,17 @@ def test_verifier_rejects_rehashed_fragmented_multi_annotator_archive(
         child.unlink()
 
     fragmented = _fragmented_submissions(paths[0].parent)
+    attestation_path = root / freeze.ATTESTATION_ARCHIVE_PATH
+    write_valid_annotator_attestations(
+        attestation_path,
+        ("synthetic-a", "synthetic-b", "synthetic-c", "synthetic-d"),
+    )
+    attestation_content = attestation_path.read_bytes()
+    manifest["annotator_attestations"].update(
+        bytes=len(attestation_content),
+        sha256=hashlib.sha256(attestation_content).hexdigest(),
+        n_annotators=4,
+    )
     archived_paths = []
     rating_entries = []
     for index, source in enumerate(fragmented, start=1):

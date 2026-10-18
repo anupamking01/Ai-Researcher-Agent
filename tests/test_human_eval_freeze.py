@@ -9,9 +9,27 @@ from scripts.freeze_human_eval_ratings import (
     DEFAULT_PROTOCOL,
     RATING_FIELDS,
     SCORE_FIELDS,
-    freeze_ratings,
+    freeze_ratings as _freeze_ratings,
     quadratic_weighted_kappa,
 )
+from human_eval_test_support import write_valid_annotator_attestations
+
+
+def freeze_ratings(rating_paths, **kwargs):
+    """Supply attestations matching the synthetic submitters in this test module."""
+    if "annotator_attestations_path" not in kwargs:
+        annotator_ids = []
+        for path in rating_paths:
+            with Path(path).open(encoding="utf-8", newline="") as handle:
+                annotator_ids.extend(
+                    row.get("annotator_id", "") for row in csv.DictReader(handle)
+                )
+        attestation_path = Path(kwargs["output_root"]).parent / "annotator_attestations.csv"
+        kwargs["annotator_attestations_path"] = write_valid_annotator_attestations(
+            attestation_path,
+            dict.fromkeys(annotator_ids),
+        )
+    return _freeze_ratings(rating_paths, **kwargs)
 
 
 def _packet(tmp_path: Path) -> Path:

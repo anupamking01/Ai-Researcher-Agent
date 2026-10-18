@@ -1,8 +1,8 @@
 """Verify a blinded human-evaluation freeze before any unblinding.
 
 The verifier never reads the coordinator-only blinding key. It checks that the
-frozen outputs, archived raw rating inputs, blinded packet, protocol, assignment
-plan, and annotator guide still match the freeze manifest, then independently
+frozen outputs, archived raw rating inputs, coordinator attestations, blinded
+packet, protocol, assignment plan, and annotator guide still match the freeze manifest, then independently
 recomputes the normalized ratings, assignment coverage, and pre-unblinding
 agreement.
 
@@ -164,6 +164,7 @@ def _verify_manifest_schema(manifest: dict) -> None:
             "protocol",
             "assignment_plan",
             "annotator_guide",
+            "annotator_attestations",
             "assignment_coverage",
             "producer",
             "content_validator",
@@ -186,6 +187,7 @@ def _verify_manifest_schema(manifest: dict) -> None:
             "protocol": dict,
             "assignment_plan": dict,
             "annotator_guide": dict,
+            "annotator_attestations": dict,
             "assignment_coverage": dict,
             "producer": dict,
             "content_validator": dict,
@@ -228,6 +230,26 @@ def _verify_manifest_schema(manifest: dict) -> None:
             optional_types={"archive_path": str},
             label=role,
         )
+    _require_object_schema(
+        manifest["annotator_attestations"],
+        required={"archive_path", "name", "bytes", "sha256", "n_annotators"},
+        label="annotator_attestations",
+    )
+    _require_field_types(
+        manifest["annotator_attestations"],
+        field_types={
+            "archive_path": str,
+            "name": str,
+            "bytes": int,
+            "sha256": str,
+            "n_annotators": int,
+        },
+        label="annotator_attestations",
+    )
+    _require_safe_filename(
+        manifest["annotator_attestations"]["name"],
+        label="annotator_attestations.name",
+    )
     _require_object_schema(
         manifest["assignment_coverage"],
         required={
@@ -375,7 +397,7 @@ def _verify_bundle_layout(freeze_root: Path, manifest: dict) -> None:
     expected_names = {*freeze.OUTPUT_FILES, "provenance"}
     if all(rating_archive_flags):
         expected_names.add("raw_rating_inputs")
-    if all(governing_archive_flags):
+    if all(governing_archive_flags) or "annotator_attestations" in manifest:
         expected_names.add("governing_inputs")
     extra_names = {child.name for child in freeze_root.iterdir()} - expected_names
     if extra_names:
@@ -407,14 +429,22 @@ def _verify_governing_archive(freeze_root: Path, manifest: dict, *, required: bo
         if required:
             raise ValueError("retained governing inputs are required for --retained-inputs")
         if archive_root.exists() or archive_root.is_symlink():
-            raise ValueError("undeclared governing input archive")
+            if archive_root.is_symlink() or not archive_root.is_dir():
+                raise ValueError("undeclared governing input archive")
+            if {child.name for child in archive_root.iterdir()} != {
+                Path(freeze.ATTESTATION_ARCHIVE_PATH).name
+            }:
+                raise ValueError("undeclared governing input archive")
         return None  # Legacy freezes still require external governing files.
     if not all(flags):
         raise ValueError("retained governing input archive paths are incomplete")
     if archive_root.is_symlink() or not archive_root.is_dir():
         raise ValueError(f"governing input archive must be a regular directory: {archive_root}")
 
-    expected_names = {Path(path).name for path in freeze.GOVERNING_INPUT_PATHS.values()}
+    expected_names = {
+        *(Path(path).name for path in freeze.GOVERNING_INPUT_PATHS.values()),
+        Path(freeze.ATTESTATION_ARCHIVE_PATH).name,
+    }
     _require_equal(
         {child.name for child in archive_root.iterdir()}, expected_names,
         label="governing input archive contents",
@@ -431,6 +461,25 @@ def _verify_governing_archive(freeze_root: Path, manifest: dict, *, required: bo
         )
         captured[role] = content
     return captured
+
+
+def _verify_attestation_archive(freeze_root: Path, manifest: dict) -> bytes:
+    entry = manifest["annotator_attestations"]
+    _require_equal(
+        entry["archive_path"],
+        freeze.ATTESTATION_ARCHIVE_PATH,
+        label="retained annotator attestation archive path",
+    )
+    content = _require_regular_file(
+        freeze_root / freeze.ATTESTATION_ARCHIVE_PATH,
+        label="retained annotator attestations",
+    )
+    _require_equal(
+        {"bytes": entry["bytes"], "sha256": entry["sha256"]},
+        _fingerprint(content),
+        label="retained annotator attestation fingerprint",
+    )
+    return content
 
 
 def verify_frozen_snapshot(
@@ -481,6 +530,7 @@ def verify_frozen_snapshot(
     )
 
     retained = _verify_governing_archive(freeze_root, manifest, required=use_retained_inputs)
+    attestation_content = _verify_attestation_archive(freeze_root, manifest)
     if use_retained_inputs:
         # The name is descriptive only: file reads use fixed archive paths above.
         name = manifest["packet"].get("name")
@@ -715,6 +765,25 @@ def verify_frozen_snapshot(
         )
         _require_equal(rating_entries, raw_sources, label="raw rating inputs")
 
+    attestation_rows, attestation_source, _ = freeze._load_annotator_attestations(
+        freeze_root / freeze.ATTESTATION_ARCHIVE_PATH,
+        content=attestation_content,
+    )
+    _require_equal(
+        {
+            "bytes": manifest["annotator_attestations"]["bytes"],
+            "sha256": manifest["annotator_attestations"]["sha256"],
+            "n_annotators": manifest["annotator_attestations"]["n_annotators"],
+        },
+        {
+            "bytes": attestation_source["bytes"],
+            "sha256": attestation_source["sha256"],
+            "n_annotators": attestation_source["n_annotators"],
+        },
+        label="annotator attestation summary",
+    )
+    freeze._validate_annotator_attestation_coverage(attestation_rows, raw_rows)
+
     _verify_bundle_layout(freeze_root, manifest)
 
     frozen_entry = manifest.get("frozen_ratings")
@@ -809,6 +878,7 @@ def verify_frozen_snapshot(
         "requires_predeclared_multi_rater_statistic": recomputed_agreement[
             "requires_predeclared_multi_rater_statistic"
         ],
+        "annotator_attestations_verified": True,
     }
 
 

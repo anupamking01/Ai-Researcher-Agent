@@ -14,6 +14,7 @@ import pytest
 
 from scripts import freeze_human_eval_ratings as freeze
 from scripts.verify_human_eval_freeze import verify_frozen_snapshot
+from human_eval_test_support import write_valid_annotator_attestations
 
 
 def _write_ratings(path: Path, annotator: str, score: str = "3") -> Path:
@@ -61,6 +62,10 @@ def frozen_case(tmp_path: Path):
 
     freeze.freeze_ratings(
         [first, second],
+        annotator_attestations_path=write_valid_annotator_attestations(
+            tmp_path / "annotator_attestations.csv",
+            ("synthetic-a", "synthetic-b"),
+        ),
         packet_path=packet,
         protocol_path=protocol,
         assignment_plan_path=assignment,
@@ -270,6 +275,7 @@ def test_verified_snapshot_recomputes_blinded_invariants(frozen_case):
         "study_id": "budget-main-v1",
         "status": "blinded_human_ratings_verified",
         "blinding_key_used": False,
+        "annotator_attestations_verified": True,
         "n_raw_rating_inputs": 2,
         "n_rows": 2,
         "n_annotators": 2,

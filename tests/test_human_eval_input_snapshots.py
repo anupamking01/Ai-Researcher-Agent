@@ -14,6 +14,7 @@ import pytest
 
 from scripts import freeze_human_eval_ratings as freeze
 from scripts import export_human_eval_annotator_bundle as exporter
+from human_eval_test_support import write_valid_annotator_attestations
 
 
 def _csv_bytes(*, annotator="synthetic-a", score="2", notes="", newline="\r\n"):
@@ -42,6 +43,10 @@ def inputs(tmp_path):
     for path, annotator in zip(rating_paths, ("synthetic-a", "synthetic-b")):
         path.write_bytes(_csv_bytes(annotator=annotator))
     return rating_paths, {
+        "annotator_attestations_path": write_valid_annotator_attestations(
+            tmp_path / "annotator_attestations.csv",
+            ("synthetic-a", "synthetic-b"),
+        ),
         "packet_path": packet,
         "protocol_path": protocol,
         "assignment_plan_path": assignment,

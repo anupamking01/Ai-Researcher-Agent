@@ -4,10 +4,11 @@ Status: **protocol frozen; human ratings not yet collected**.
 
 Study: `budget-main-v1`
 
-Distribution-only revision: **2026-10-14, before collection of any human
-ratings**. This revision adds a treatment-blind annotator guide to the safe
-distribution bundle. It does not change the rubric, assignment, estimands,
-missingness rules, agreement statistics, or analysis plan.
+Provenance-only revision: **2026-10-18, before collection of any human
+ratings**. This revision requires a coordinator-only, pseudonymous annotator
+attestation file at the blinded freeze gate. It does not change the rubric,
+assignment, estimands, missingness rules, agreement statistics, or analysis
+plan.
 
 This protocol defines a blinded human evaluation layer for the D3, D6, P6, and P6V research-agent variants. It complements the common post-hoc support evaluator by measuring dimensions that automated claim-support scoring does not fully capture: overall correctness, completeness, source quality, synthesis/reasoning, and clarity.
 
@@ -153,25 +154,51 @@ Before joining ratings with `blinding_key.csv`, the coordinator should create an
 - the blinded packet fingerprint;
 - the frozen protocol fingerprint.
 
+The coordinator must also prepare `annotator_attestations.csv` using exactly
+this header order:
+
+```text
+annotator_id,eligibility_decided_before_report_access,treatment_identity_unseen_during_scoring,scored_independently,human_only_scoring,generated_or_selected_treatment_reports,material_conflicts_resolved_before_assignment
+```
+
+There must be exactly one row for each pseudonymous `annotator_id` present in
+the submitted ratings, and no other rows. The first four declarations and
+`material_conflicts_resolved_before_assignment` must be the literal value
+`true`; `generated_or_selected_treatment_reports` must be the literal value
+`false`. Whitespace or case variants are not accepted. The schema contains no
+free-text notes field. The coordinator must assign non-identifying pseudonymous
+IDs and must not encode names, contact details, treatment IDs, report IDs,
+scores, or outcome summaries in them. Identity, consent, and
+conflict-resolution records should be retained separately under the applicable
+governance policy; they are not part of the research artifact.
+
 Use the offline freeze utility on the completed annotator files:
 
 ```bash
 python scripts/freeze_human_eval_ratings.py \
   outputs/human_eval/annotator-a.csv \
   outputs/human_eval/annotator-b.csv \
+  --annotator-attestations outputs/human_eval/annotator_attestations.csv \
   --output-root outputs/human_eval/frozen-v1
 ```
 
-The utility deliberately never reads `blinding_key.csv`. Before writing a snapshot it fails closed on unknown blind IDs, duplicate annotator/item rows, treatment-identity columns, non-integer/out-of-range scores, missing reasons for unscored dimensions, or missing notes for endpoint scores (1 or 5). It then writes:
+The utility deliberately never reads `blinding_key.csv`. Before writing a snapshot it fails closed on unknown blind IDs, duplicate annotator/item rows, treatment-identity columns, non-integer/out-of-range scores, missing reasons for unscored dimensions, missing notes for endpoint scores (1 or 5), any non-literal attestation declaration, or any mismatch between attested and submitted pseudonymous annotator IDs. It then writes:
 
 - `raw_rating_inputs/0001.csv`, `0002.csv`, ... — exact captured bytes of the completed annotator files that were actually parsed, retained inside the create-only freeze;
+- `governing_inputs/annotator_attestations.csv` — exact captured bytes of the coordinator-only pseudonymous declarations accepted by the freeze;
 - `frozen_ratings.csv` — normalized human-entered ratings, still blinded;
 - `agreement.json` — pre-unblinding exact agreement, mean absolute difference, and quadratic-weighted Cohen's kappa for each annotator pair and rubric dimension;
-- `freeze_manifest.json` — SHA-256 fingerprints of the packet, protocol, retained raw rating inputs, frozen ratings, and agreement output.
+- `freeze_manifest.json` — SHA-256 fingerprints of the packet, protocol, retained attestations, retained raw rating inputs, frozen ratings, and agreement output.
 
 An existing frozen snapshot is never overwritten; use a new versioned output directory for any later freeze. With exactly two annotators, the single pair provides the protocol's two-rater agreement statistics. If more than two annotators score the same items, the pairwise values are diagnostics only and a predeclared ordinal multi-rater reliability statistic is still required before treatment-level analysis.
 
 This operational tooling does not change the frozen rubric or the planned human-evaluation estimands. Only after a valid blinded freeze should treatment identities be merged for statistical analysis.
+
+The attestation gate makes the coordinator's predeclared eligibility and
+independence decisions auditable and binds them to the accepted submissions. It
+does not authenticate a person, prove that a declaration is true, replace
+consent or ethics review, or convert pending annotations into human-validation
+evidence.
 
 ## 8. Human-evaluation analysis
 

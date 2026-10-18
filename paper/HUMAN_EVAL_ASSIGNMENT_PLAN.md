@@ -22,6 +22,17 @@ Eligibility must be decided **before an annotator sees any study report or ratin
 
 Prior familiarity with the project, repository, or research question is not by itself an exclusion if treatment identity remains concealed. Any material conflict or role that could reasonably reveal treatment identity must be recorded before assignment and resolved before ratings are accepted.
 
+Before a blinded freeze is accepted, the coordinator must record one
+machine-readable attestation row for every pseudonymous annotator ID and no
+others. Each row affirms that eligibility was decided before report access,
+treatment identity remained unseen during scoring, scoring was independent and
+human-only, and the annotator did not generate or select the rated treatment
+reports, and that material conflicts were resolved before assignment. The exact
+schema and literal values are frozen in `paper/HUMAN_EVAL_PROTOCOL.md`. The
+retained artifact contains pseudonymous IDs and declarations only; direct
+identity and conflict-resolution records must remain outside the research
+bundle.
+
 ## Submission provenance and correction rule
 
 Each annotator must submit ratings under a single stable `annotator_id`, and each submitted CSV must represent exactly one annotator. The coordinator must preserve every submitted file unchanged rather than combining rows from different annotators into a convenience file before the blinded freeze.
@@ -46,7 +57,10 @@ If a rating or annotator must be excluded for an allowed reason, preserve the or
 
 ## Freeze gate
 
-`scripts/freeze_human_eval_ratings.py` must fail closed if any packet item has fewer than two distinct annotators. A successful freeze records the SHA-256 fingerprint of this plan plus the required and observed rater coverage. Because the plan fingerprint is part of the blinded freeze manifest, later changes to eligibility or exclusion rules require a new versioned plan/freeze and must not be retroactively substituted for the rules governing an existing frozen dataset.
+`scripts/freeze_human_eval_ratings.py` must fail closed if any packet item has fewer than two distinct annotators, if an attestation declaration is not the required literal value, or if the attested and submitted pseudonymous annotator-ID sets differ. A successful freeze retains and fingerprints the exact attestation CSV and records the SHA-256 fingerprint of this plan plus the required and observed rater coverage. Because the plan fingerprint is part of the blinded freeze manifest, later changes to eligibility or exclusion rules require a new versioned plan/freeze and must not be retroactively substituted for the rules governing an existing frozen dataset.
+
+These checks preserve a coordinator declaration; they do not independently
+authenticate annotators or prove the truth of the declared conditions.
 
 ## Rationale and deviations
 

@@ -12,8 +12,8 @@ manifest change could otherwise go unnoticed before treatment identities are
 opened.
 
 Run the verifier while ratings are still blinded. New freezes retain the exact
-raw annotator CSVs, producer source, blinded packet, protocol, assignment plan,
-and treatment-blind annotator guide. To audit a relocated bundle without
+raw annotator CSVs, coordinator annotator attestations, producer source, blinded
+packet, protocol, assignment plan, and treatment-blind annotator guide. To audit a relocated bundle without
 external governing files, run:
 
 ```bash
@@ -43,7 +43,8 @@ same bytes exclusively under these fixed paths before publishing the manifest:
 - `governing_inputs/packet.jsonl`;
 - `governing_inputs/HUMAN_EVAL_PROTOCOL.md`;
 - `governing_inputs/HUMAN_EVAL_ASSIGNMENT_PLAN.md`;
-- `governing_inputs/HUMAN_EVAL_ANNOTATOR_GUIDE.md`.
+- `governing_inputs/HUMAN_EVAL_ANNOTATOR_GUIDE.md`;
+- `governing_inputs/annotator_attestations.csv`.
 
 Each corresponding manifest entry binds its archive path, byte count, and
 SHA-256. Original packet names and existing protocol identifiers are retained as
@@ -62,10 +63,11 @@ annotator guide to match their literal frozen anchors in
 `freeze_human_eval_ratings.py`, before opening any raw or normalized ratings.
 Rehashing a replacement document in the manifest cannot make that bundle valid.
 
-Freezes predating the annotator-guide manifest binding do not satisfy this
-verifier. The study has not yet collected production annotations, so there is
-no observed-rating bundle to migrate. Never backfill a historical freeze using
-today's working copies or rewrite an archived bundle to make it pass.
+Freezes predating either the annotator-guide manifest binding or the mandatory
+annotator-attestation entry do not satisfy this verifier. The study has not yet
+collected production annotations, so there is no observed-rating bundle to
+migrate. Never backfill a historical freeze using today's working copies or
+rewrite an archived bundle to make it pass.
 
 ## Checks performed
 
@@ -85,6 +87,8 @@ following agree:
 - protocol, assignment-plan, and annotator-guide fingerprints plus their
   literal frozen anchors;
 - declared retained governing-input paths, bytes, and fingerprints;
+- retained attestation bytes and manifest summary, strict literal declarations,
+  and an exact pseudonymous-ID set match to the raw rating submissions;
 - deterministic in-bundle raw-rating archive paths, byte counts, and SHA-256
   fingerprints, with no undeclared archive files;
 - frozen normalized ratings versus normalization of the retained raw inputs;
@@ -120,8 +124,9 @@ working files. Never rehash an edited research artifact merely to make it pass.
 ## Scope and limits
 
 This gate is designed to catch accidental provenance drift and inconsistent
-freeze artifacts before unblinding. It does not prove that annotators were
-independent humans, authenticate filesystem history, or protect against an actor
+freeze artifacts before unblinding. The retained attestation records the
+coordinator's declarations; it does not prove that annotators were independent
+humans, authenticate their identities or filesystem history, or protect against an actor
 who can rewrite every archived input and its external history. Keep original
 files under controlled, versioned storage and retain Git history or another
 external provenance anchor.

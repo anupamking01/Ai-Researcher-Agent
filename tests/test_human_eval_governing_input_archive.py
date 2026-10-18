@@ -15,6 +15,7 @@ import pytest
 
 from scripts import freeze_human_eval_ratings as freeze
 from scripts import verify_human_eval_freeze as verify
+from human_eval_test_support import write_valid_annotator_attestations
 
 ARCHIVES = {
     "packet": "governing_inputs/packet.jsonl",
@@ -49,6 +50,10 @@ def inputs(tmp_path):
                 writer.writerow([f"synthetic-{index}", blind_id, "2", "3", "4",
                                  "", "3", "Synthetic missing-dimension reason."])
     return paths, {
+        "annotator_attestations_path": write_valid_annotator_attestations(
+            tmp_path / "annotator_attestations.csv",
+            ("synthetic-0", "synthetic-1"),
+        ),
         "packet_path": packet, "protocol_path": protocol,
         "assignment_plan_path": assignment,
         "annotator_guide_path": guide,
@@ -57,8 +62,11 @@ def inputs(tmp_path):
 
 
 def _verify_options(options):
-    return {"freeze_root" if key == "output_root" else key: value
-            for key, value in options.items()}
+    return {
+        "freeze_root" if key == "output_root" else key: value
+        for key, value in options.items()
+        if key != "annotator_attestations_path"
+    }
 
 
 def _save_manifest(root, manifest):
@@ -207,15 +215,15 @@ def test_legacy_requires_external_governing_files_and_is_not_backfilled(inputs):
     paths, options = inputs
     manifest = freeze.freeze_ratings(paths, **options)
     root = options["output_root"]
-    if (root / "governing_inputs").exists():
-        shutil.rmtree(root / "governing_inputs")
+    for relative in ARCHIVES.values():
+        (root / relative).unlink()
     for role in ARCHIVES:
         manifest[role].pop("archive_path", None)
     _save_manifest(root, manifest)
     assert verify.verify_frozen_snapshot(**_verify_options(options))["n_rows"] == 4
     with pytest.raises(ValueError, match="retained governing inputs.*required"):
         verify.verify_frozen_snapshot(freeze_root=root, use_retained_inputs=True)
-    assert not (root / "governing_inputs").exists()
+    assert (root / freeze.ATTESTATION_ARCHIVE_PATH).is_file()
 
 
 def test_retained_mode_rejects_explicit_external_governing_arguments(inputs):

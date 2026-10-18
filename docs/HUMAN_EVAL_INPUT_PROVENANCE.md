@@ -17,6 +17,14 @@ assignment-plan, and annotator-guide fingerprints are captured before processing
 ratings, not after agreement has been calculated. Output fingerprints still
 describe the generated files.
 
+The coordinator-only annotator attestation CSV is likewise captured once,
+strictly parsed from those bytes, retained at
+`governing_inputs/annotator_attestations.csv`, and bound by byte count, SHA-256,
+and annotator count. Its pseudonymous ID set must exactly equal the IDs in the
+raw submissions. The independent verifier repeats the strict parse from the
+retained bytes and rechecks that set equality; rehashing a declaration with a
+false literal or substituted ID cannot make it valid.
+
 The captured protocol, assignment-plan, and treatment-blind annotator-guide
 bytes must also match literal SHA-256 anchors in the freeze implementation.
 This prevents substituted or post-hoc governing instructions from becoming
@@ -123,8 +131,11 @@ the failed freeze. The verifier applies the same rule to archived and normalized
 ratings. This transport-safety check does not alter scores, missingness, the
 rubric, the assignment plan, or treatment blinding.
 
-This is a file-level provenance check, not proof of distinct eligible humans.
-Coordinator eligibility, independence, and correction responsibilities remain
+The required retained attestation makes the coordinator's eligibility,
+blinding, independence, human-only-scoring, and non-author declarations
+machine-auditable. It remains a file-level provenance check, not proof of
+distinct eligible humans or truth of those declarations. Coordinator
+eligibility, independence, and correction responsibilities remain
 those in `paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md`.
 
 ## Coordinator responsibilities and limits

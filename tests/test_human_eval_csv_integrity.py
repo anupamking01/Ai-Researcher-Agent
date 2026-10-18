@@ -17,6 +17,7 @@ from scripts.freeze_human_eval_ratings import (
     RATING_FIELDS,
     freeze_ratings,
 )
+from human_eval_test_support import write_valid_annotator_attestations
 
 
 @pytest.fixture
@@ -33,6 +34,10 @@ def inputs(tmp_path):
     assignment = tmp_path / "assignment.md"
     assignment.write_bytes(DEFAULT_ASSIGNMENT_PLAN.read_bytes())
     return {
+        "annotator_attestations_path": write_valid_annotator_attestations(
+            tmp_path / "annotator_attestations.csv",
+            ("synthetic-a", "synthetic-b"),
+        ),
         "packet_path": packet,
         "protocol_path": protocol,
         "assignment_plan_path": assignment,
@@ -235,6 +240,7 @@ def test_cli_rejects_extra_cell_without_success_receipt(tmp_path, inputs):
             "--packet", str(inputs["packet_path"]),
             "--protocol", str(inputs["protocol_path"]),
             "--assignment-plan", str(inputs["assignment_plan_path"]),
+            "--annotator-attestations", str(inputs["annotator_attestations_path"]),
             "--output-root", str(inputs["output_root"]),
         ],
         cwd=Path(__file__).resolve().parents[1],
@@ -267,6 +273,8 @@ def test_cli_rejects_malformed_quoted_cell_without_success_receipt(tmp_path, inp
             str(inputs["protocol_path"]),
             "--assignment-plan",
             str(inputs["assignment_plan_path"]),
+            "--annotator-attestations",
+            str(inputs["annotator_attestations_path"]),
             "--output-root",
             str(inputs["output_root"]),
         ],

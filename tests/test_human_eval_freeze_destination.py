@@ -14,6 +14,7 @@ import pytest
 
 from scripts import freeze_human_eval_ratings as freeze
 from scripts import verify_human_eval_freeze as verifier
+from human_eval_test_support import write_valid_annotator_attestations
 
 
 @pytest.fixture
@@ -31,6 +32,10 @@ def inputs(tmp_path):
     assignment.write_bytes(freeze.DEFAULT_ASSIGNMENT_PLAN.read_bytes())
     ratings = _ratings(tmp_path / "ratings.csv", "2")
     return ratings, {
+        "annotator_attestations_path": write_valid_annotator_attestations(
+            tmp_path / "annotator_attestations.csv",
+            ("synthetic-a", "synthetic-b"),
+        ),
         "packet_path": packet,
         "protocol_path": protocol,
         "assignment_plan_path": assignment,

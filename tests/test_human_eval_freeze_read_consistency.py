@@ -13,6 +13,7 @@ import pytest
 
 from scripts import freeze_human_eval_ratings as freeze
 from scripts import verify_human_eval_freeze as verify
+from human_eval_test_support import write_valid_annotator_attestations
 
 
 @pytest.fixture
@@ -33,7 +34,15 @@ def frozen_case(tmp_path):
             writer.writerow([annotator, "H001", "3", "3", "4", "4", "3", ""])
         ratings.append(path)
     root = tmp_path / "frozen"
-    freeze.freeze_ratings(ratings, packet_path=packet, output_root=root)
+    freeze.freeze_ratings(
+        ratings,
+        annotator_attestations_path=write_valid_annotator_attestations(
+            tmp_path / "annotator_attestations.csv",
+            ("synthetic-a", "synthetic-b"),
+        ),
+        packet_path=packet,
+        output_root=root,
+    )
     return root, packet
 
 

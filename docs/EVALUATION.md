@@ -281,7 +281,15 @@ The script creates:
 
 The packet is deterministic under a fixed seed and fails closed on duplicate treatment/task cells, incomplete runs, missing Markdown reports, unexpected variants, or incomplete task matrices. The annotator-facing leakage audit covers rendered text and recursively percent-decoded Markdown URL metadata so encoded treatment labels cannot be hidden in link destinations; metadata exceeding the bounded decoding depth is rejected instead of bypassing or exhausting the audit, and opaque `data:` destinations are not permitted. Annotator-facing reports are text-and-links only: all Markdown image nodes are rejected because externally fetched or inline pixels can reveal treatment identity or change after the packet is frozen. Only canonical schema-version-2 treatment traces with object-valued experiment and trace sections can enter or later verify against the packet. When a persisted trace carries task-set identity in both its experiment configuration and run-trace payload, those copies must agree and match the frozen task manifest; neither packet generation nor later packet verification silently prefers one conflicting identity.
 
-Annotators must not receive `blinding_key.csv` until ratings are frozen. At least a predeclared subset should be independently double-scored and inter-annotator agreement should be reported before adjudication.
+Annotators must not receive `blinding_key.csv` until ratings are frozen. The
+entire 40-report packet must be independently double-scored and inter-annotator
+agreement reported before adjudication. The coordinator must provide a
+pseudonymous attestation CSV declaring, for exactly the submitted annotator IDs,
+pre-report eligibility, treatment blinding, independent human-only scoring, and
+no role in generating or selecting the rated reports. The create-only freeze
+retains the exact attestation bytes and the independent verifier reparses them;
+the declaration is auditable provenance, not independent proof of identity or
+conduct.
 
 After real ratings are frozen, the complementary human-analysis command writes
 a create-only result bundle whose manifest binds the exact analysis and verifier

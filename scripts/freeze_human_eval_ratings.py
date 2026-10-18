@@ -35,10 +35,10 @@ DEFAULT_ASSIGNMENT_PLAN = REPO_ROOT / "paper" / "HUMAN_EVAL_ASSIGNMENT_PLAN.md"
 DEFAULT_ANNOTATOR_GUIDE = REPO_ROOT / "paper" / "HUMAN_EVAL_ANNOTATOR_GUIDE.md"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "outputs" / "human_eval" / "frozen-v1"
 FROZEN_PROTOCOL_SHA256 = (
-    "8dadc9b25bd8f3c33dd2ddeb10b672d97c844b83cbd63101520002dcac8f409f"
+    "23ff9a94d37b164a90ac084b7f9dcac91799baa8c7355d6668f9fe50bee2aaf9"
 )
 FROZEN_ASSIGNMENT_PLAN_SHA256 = (
-    "ad66f5fc97e13d93365341fd650d00951e4923c2919676922e5a97ef500def71"
+    "add3f2c1a6f64c27213d57d34fea7235ad5f87a0f4f1643e9b2c2b89a1bafea8"
 )
 FROZEN_ANNOTATOR_GUIDE_SHA256 = (
     "3e27ef38231ed70fe36370af31ced7762a253a72dc5cc4997d8ef62d0a6e3370"
@@ -51,6 +51,7 @@ GOVERNING_INPUT_PATHS = {
     "assignment_plan": "governing_inputs/HUMAN_EVAL_ASSIGNMENT_PLAN.md",
     "annotator_guide": "governing_inputs/HUMAN_EVAL_ANNOTATOR_GUIDE.md",
 }
+ATTESTATION_ARCHIVE_PATH = "governing_inputs/annotator_attestations.csv"
 
 SCORE_FIELDS = (
     "correctness_1_5",
@@ -60,6 +61,23 @@ SCORE_FIELDS = (
     "clarity_1_5",
 )
 RATING_FIELDS = ("annotator_id", "blind_id", *SCORE_FIELDS, "notes")
+ANNOTATOR_ATTESTATION_FIELDS = (
+    "annotator_id",
+    "eligibility_decided_before_report_access",
+    "treatment_identity_unseen_during_scoring",
+    "scored_independently",
+    "human_only_scoring",
+    "generated_or_selected_treatment_reports",
+    "material_conflicts_resolved_before_assignment",
+)
+_REQUIRED_ATTESTATION_VALUES = {
+    "eligibility_decided_before_report_access": "true",
+    "treatment_identity_unseen_during_scoring": "true",
+    "scored_independently": "true",
+    "human_only_scoring": "true",
+    "generated_or_selected_treatment_reports": "false",
+    "material_conflicts_resolved_before_assignment": "true",
+}
 FORBIDDEN_COLUMNS = {
     "variant_id",
     "run_id",
@@ -76,9 +94,9 @@ OUTPUT_FILES = (
 SPREADSHEET_FORMULA_PREFIXES = ("=", "+", "-", "@")
 FREEZE_INTEGRITY_NOTE = (
     "This snapshot is blinded and pre-unblinding. It retains the exact raw "
-    "rating bytes that were parsed, validates and freezes human-entered ratings "
-    "only, and does not generate, impute, adjudicate, or join ratings to "
-    "treatment identities."
+    "rating and coordinator attestation bytes that were parsed, validates and "
+    "freezes human-entered ratings only, and does not generate, impute, "
+    "adjudicate, or join ratings to treatment identities."
 )
 
 
@@ -249,6 +267,96 @@ def _validate_annotator_identity_spellings(rows: list[dict]) -> None:
                 f"independent raters: {previous!r} and {annotator_id!r}"
             )
         spellings[identity_key] = annotator_id
+
+
+def _load_annotator_attestations(path: Path, *, content: bytes | None = None):
+    """Capture and validate coordinator attestations without retaining names."""
+    path = Path(path)
+    if content is None:
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"annotator attestations must be a regular file: {path}")
+        content = path.read_bytes()
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("annotator attestations are not valid UTF-8 CSV") from exc
+
+    rows: list[dict] = []
+    seen: dict[str, str] = {}
+    with io.StringIO(text, newline="") as handle:
+        reader = csv.DictReader(handle, strict=True)
+        try:
+            fieldnames = reader.fieldnames or []
+        except csv.Error as exc:
+            raise ValueError("malformed annotator attestations CSV header") from exc
+        if fieldnames != list(ANNOTATOR_ATTESTATION_FIELDS):
+            raise ValueError(
+                "annotator attestations CSV schema must exactly match "
+                f"{list(ANNOTATOR_ATTESTATION_FIELDS)!r}"
+            )
+
+        for raw in _strict_csv_rows(reader, path=path, handle=handle):
+            line_number = reader.line_num
+            if None in raw or any(value is None for value in raw.values()):
+                raise ValueError(
+                    f"{path.name}:{line_number}: malformed annotator attestation row"
+                )
+            row = {
+                field: str(raw[field])
+                for field in ANNOTATOR_ATTESTATION_FIELDS
+            }
+            annotator_id = row["annotator_id"].strip()
+            if not annotator_id:
+                raise ValueError(
+                    f"{path.name}:{line_number}: annotator_id must be non-empty"
+                )
+            _validate_annotator_id_characters(annotator_id)
+            _reject_spreadsheet_active_text(
+                annotator_id,
+                field="annotator_id",
+                path=path,
+                line_number=line_number,
+            )
+            row["annotator_id"] = annotator_id
+            identity_key = _annotator_identity_key(annotator_id)
+            previous = seen.get(identity_key)
+            if previous is not None:
+                raise ValueError(
+                    "duplicate or canonically equivalent annotator attestations: "
+                    f"{previous!r} and {annotator_id!r}"
+                )
+            seen[identity_key] = annotator_id
+            for field, expected in _REQUIRED_ATTESTATION_VALUES.items():
+                if row[field] != expected:
+                    raise ValueError(
+                        f"{path.name}:{line_number}: {field} must equal literal "
+                        f"{expected!r}, got {row[field]!r}"
+                    )
+            rows.append(row)
+
+    if not rows:
+        raise ValueError("annotator attestations CSV contains no annotators")
+    rows.sort(key=lambda row: row["annotator_id"])
+    return rows, {
+        "name": path.name,
+        "bytes": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+        "n_annotators": len(rows),
+    }, content
+
+
+def _validate_annotator_attestation_coverage(
+    attestations: list[dict], rating_rows: list[dict]
+) -> None:
+    """Require exactly one passing attestation for every submitted annotator."""
+    attested = {row["annotator_id"] for row in attestations}
+    submitted = {row["annotator_id"] for row in rating_rows}
+    if attested != submitted:
+        raise ValueError(
+            "annotator ID set mismatch between attestations and ratings: "
+            f"missing={sorted(submitted - attested)!r}, "
+            f"unexpected={sorted(attested - submitted)!r}"
+        )
 
 
 def _load_ratings(
@@ -712,6 +820,7 @@ def _publish_directory_noreplace(staging_root: Path, output_root: Path) -> None:
 def freeze_ratings(
     rating_paths: list[Path],
     *,
+    annotator_attestations_path: Path | None = None,
     packet_path: Path = DEFAULT_PACKET,
     protocol_path: Path = DEFAULT_PROTOCOL,
     assignment_plan_path: Path = DEFAULT_ASSIGNMENT_PLAN,
@@ -719,6 +828,9 @@ def freeze_ratings(
     output_root: Path = DEFAULT_OUTPUT_ROOT,
 ) -> dict:
     """Validate ratings and persist a blinded, fingerprinted, immutable snapshot."""
+    if annotator_attestations_path is None:
+        raise ValueError("annotator attestations are required before ratings can be frozen")
+    annotator_attestations_path = Path(annotator_attestations_path)
     packet_path = Path(packet_path)
     protocol_path = Path(protocol_path)
     assignment_plan_path = Path(assignment_plan_path)
@@ -766,6 +878,10 @@ def freeze_ratings(
         return_captured=True,
         require_single_annotator=True,
     )
+    attestations, attestation_source, attestation_content = (
+        _load_annotator_attestations(annotator_attestations_path)
+    )
+    _validate_annotator_attestation_coverage(attestations, rows)
     assignment_coverage = _validate_assignment_coverage(rows, blind_ids)
     _validate_submission_coverage(rows, blind_ids)
     agreement = build_agreement(rows)
@@ -832,6 +948,8 @@ def freeze_ratings(
         }.items():
             with (staging_root / GOVERNING_INPUT_PATHS[role]).open("xb") as handle:
                 handle.write(content)
+        with (staging_root / ATTESTATION_ARCHIVE_PATH).open("xb") as handle:
+            handle.write(attestation_content)
 
         manifest = {
             "schema_version": 1,
@@ -862,6 +980,10 @@ def freeze_ratings(
                 "bytes": len(annotator_guide_content),
                 "path": "paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md",
                 "sha256": annotator_guide_sha256,
+            },
+            "annotator_attestations": {
+                "archive_path": ATTESTATION_ARCHIVE_PATH,
+                **attestation_source,
             },
             "assignment_coverage": assignment_coverage,
             "producer": {
@@ -923,6 +1045,11 @@ def main() -> int:
     parser.add_argument("--protocol", type=Path, default=DEFAULT_PROTOCOL)
     parser.add_argument("--assignment-plan", type=Path, default=DEFAULT_ASSIGNMENT_PLAN)
     parser.add_argument("--annotator-guide", type=Path, default=DEFAULT_ANNOTATOR_GUIDE)
+    parser.add_argument(
+        "--annotator-attestations",
+        type=Path,
+        help="coordinator-only CSV attesting eligibility, blinding, independence, and human-only scoring",
+    )
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument(
         "--preflight-bundle",
@@ -956,6 +1083,7 @@ def main() -> int:
     try:
         manifest = freeze_ratings(
             args.ratings,
+            annotator_attestations_path=args.annotator_attestations,
             packet_path=args.packet,
             protocol_path=args.protocol,
             assignment_plan_path=args.assignment_plan,
