@@ -171,6 +171,13 @@ def test_build_packet_rejects_treatment_leakage_before_publication(tmp_path):
         "Internal treatment P**6**V must remain hidden.",
         "Internal treatment D&#51; must remain hidden.",
         "Internal treatment P[6](https://example.test)V must remain hidden.",
+        "[source](https://example.test/%50%36%56)",
+        "[source](https://example.test/%2550%2536%2556)",
+        "[unused]: https://example.test/%2550%2536%2556",
+        (
+            "[shadowed]: https://safe.example/\n"
+            "[shadowed]: https://example.test/%2550%2536%2556"
+        ),
         "Internal treatment <span>P</span>6V must remain hidden.",
         "Internal treatment ![P](missing.png)6V must remain hidden.",
         '<input type="button" value="P&#54;V">',
@@ -186,6 +193,10 @@ def test_build_packet_rejects_treatment_leakage_before_publication(tmp_path):
         "markdown-emphasis",
         "html-entity",
         "markdown-link",
+        "percent-encoded-link-destination",
+        "nested-percent-encoded-link-destination",
+        "unused-reference-destination",
+        "shadowed-reference-destination",
         "inline-html",
         "image-alt-text",
         "input-value",
@@ -203,6 +214,24 @@ def test_blinding_audit_rejects_rendered_treatment_label_variants(leaked_text):
                     "blind_id": "H001",
                     "question": "Synthetic question?",
                     "report_markdown": leaked_text,
+                }
+            ],
+            label="synthetic packet",
+        )
+
+
+def test_blinding_audit_fails_closed_on_excessive_percent_encoding_depth():
+    destination = "https://example.test/%41"
+    for _ in range(packet_builder.MAX_METADATA_DECODE_LAYERS + 1):
+        destination = destination.replace("%", "%25")
+
+    with pytest.raises(ValueError, match="percent-encoding depth exceeds"):
+        packet_builder.validate_annotator_facing_content(
+            [
+                {
+                    "blind_id": "H001",
+                    "question": "Synthetic question?",
+                    "report_markdown": f"[unused]: {destination}",
                 }
             ],
             label="synthetic packet",

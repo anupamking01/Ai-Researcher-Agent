@@ -78,6 +78,7 @@ _COORDINATOR_MARKER_RE = re.compile(
 MARKDOWN_RENDERER_DISTRIBUTION = "markdown-it-py"
 MARKDOWN_RENDERER_PRESET = "commonmark"
 MARKDOWN_RENDERER_OPTIONS = {"html": True}
+MAX_METADATA_DECODE_LAYERS = 64
 _MARKDOWN_RENDERER = MarkdownIt(MARKDOWN_RENDERER_PRESET, MARKDOWN_RENDERER_OPTIONS)
 _BLOCK_TAGS = frozenset(
     {
@@ -176,11 +177,40 @@ def _canonical_audit_text(text: str) -> str:
     )
 
 
-def _rendered_markdown_text(text: str) -> str:
+def _metadata_strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for child in value.values():
+            yield from _metadata_strings(child)
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            yield from _metadata_strings(child)
+
+
+def _rendered_markdown_parts(text: str) -> tuple[str, tuple[str, ...]]:
+    environment = {}
     parser = _RenderedTextParser()
-    parser.feed(_MARKDOWN_RENDERER.render(text))
+    parser.feed(_MARKDOWN_RENDERER.render(text, environment))
     parser.close()
-    return "\n".join(("".join(parser.parts), *parser.attribute_values))
+    metadata = (*parser.attribute_values, *_metadata_strings(environment))
+    return "".join(parser.parts), metadata
+
+
+def _decoded_attribute_forms(value: str):
+    """Yield canonical URL/metadata text through every percent-decoding layer."""
+    current = _canonical_audit_text(value)
+    for layer in range(MAX_METADATA_DECODE_LAYERS + 1):
+        yield current
+        decoded = _canonical_audit_text(unquote(current))
+        if decoded == current:
+            return
+        if layer == MAX_METADATA_DECODE_LAYERS:
+            raise ValueError(
+                "annotator-facing metadata percent-encoding depth exceeds "
+                f"the {MAX_METADATA_DECODE_LAYERS}-layer audit limit"
+            )
+        current = decoded
 
 
 def _contains_raw_html(text: str) -> bool:
@@ -208,10 +238,12 @@ def validate_annotator_facing_content(rows: list[dict], *, label: str) -> None:
                     "annotator-facing treatment leakage risk in "
                     f"{label} {blind_id} {field}: raw HTML is not permitted"
                 )
-            for audit_text in (
+            rendered_text, attribute_values = _rendered_markdown_parts(text)
+            audit_texts = (
                 _canonical_audit_text(text),
-                _canonical_audit_text(_rendered_markdown_text(text)),
-            ):
+                _canonical_audit_text(rendered_text),
+            )
+            for audit_text in audit_texts:
                 match = _COORDINATOR_MARKER_RE.search(
                     audit_text
                 ) or _TREATMENT_LABEL_RE.search(audit_text)
@@ -221,6 +253,17 @@ def validate_annotator_facing_content(rows: list[dict], *, label: str) -> None:
                         f"{label} {blind_id} {field}: "
                         f"forbidden marker {match.group(0)!r}"
                     )
+            for value in attribute_values:
+                for audit_text in _decoded_attribute_forms(value):
+                    match = _COORDINATOR_MARKER_RE.search(
+                        audit_text
+                    ) or _TREATMENT_LABEL_RE.search(audit_text)
+                    if match:
+                        raise ValueError(
+                            "annotator-facing treatment leakage in "
+                            f"{label} {blind_id} {field}: "
+                            f"forbidden marker {match.group(0)!r}"
+                        )
 
 
 def _load_json_object(content: bytes, *, label: str) -> dict:
