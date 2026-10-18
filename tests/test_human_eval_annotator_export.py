@@ -1,4 +1,5 @@
 """Synthetic checks for annotator-safe human-evaluation distribution bundles."""
+import csv
 import hashlib
 import json
 import os
@@ -83,12 +84,13 @@ def packet_case(tmp_path: Path):
     }
 
 
-def _export(case):
+def _export(case, *, presentation_order="canonical"):
     return exporter.export_annotator_bundle(
         packet_root=case["packet_root"],
         output_root=case["export_root"],
         task_manifest_path=case["task_manifest"],
         repo_root=case["repo_root"],
+        presentation_order=presentation_order,
     )
 
 
@@ -737,6 +739,7 @@ def test_source_bound_verifier_accepts_untampered_export(packet_case):
     _export(packet_case)
 
     receipt = exporter.verify_annotator_bundle_against_source(
+        expected_presentation_order="canonical",
         packet_root=packet_case["packet_root"],
         output_root=packet_case["export_root"],
         task_manifest_path=packet_case["task_manifest"],
@@ -746,6 +749,134 @@ def test_source_bound_verifier_accepts_untampered_export(packet_case):
     assert receipt["status"] == "human_eval_annotator_distribution_verified"
     assert receipt["source_bound_to_verified_coordinator"] is True
     assert len(receipt["coordinator_manifest_sha256"]) == 64
+
+
+def test_reverse_export_counterbalances_packet_and_template_order(packet_case):
+    source_packet = [
+        json.loads(line)
+        for line in (packet_case["packet_root"] / "packet.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    source_template = list(
+        csv.DictReader(
+            (packet_case["packet_root"] / "ratings_template.csv").open(
+                encoding="utf-8", newline=""
+            )
+        )
+    )
+
+    receipt = _export(packet_case, presentation_order="reverse")
+
+    exported_packet = [
+        json.loads(line)
+        for line in (packet_case["export_root"] / "packet.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    exported_template = list(
+        csv.DictReader(
+            (packet_case["export_root"] / "ratings_template.csv").open(
+                encoding="utf-8", newline=""
+            )
+        )
+    )
+    manifest = json.loads(
+        (packet_case["export_root"] / "annotator_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert exported_packet == list(reversed(source_packet))
+    assert exported_template == list(reversed(source_template))
+    assert [row["blind_id"] for row in exported_packet] == [
+        row["blind_id"] for row in exported_template
+    ]
+    assert manifest["presentation_order"] == "reverse"
+    assert manifest["schema_version"] == 2
+    assert receipt["presentation_order"] == "reverse"
+
+
+def test_reverse_export_remains_bound_to_verified_coordinator(packet_case):
+    _export(packet_case, presentation_order="reverse")
+
+    receipt = exporter.verify_annotator_bundle_against_source(
+        expected_presentation_order="reverse",
+        packet_root=packet_case["packet_root"],
+        output_root=packet_case["export_root"],
+        task_manifest_path=packet_case["task_manifest"],
+        repo_root=packet_case["repo_root"],
+    )
+
+    assert receipt["presentation_order"] == "reverse"
+    assert receipt["source_bound_to_verified_coordinator"] is True
+
+
+def test_source_bound_verifier_rejects_false_presentation_order(packet_case):
+    _export(packet_case, presentation_order="reverse")
+    manifest_path = packet_case["export_root"] / "annotator_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["presentation_order"] = "canonical"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="presentation order"):
+        exporter.verify_annotator_bundle_against_source(
+            packet_root=packet_case["packet_root"],
+            output_root=packet_case["export_root"],
+            task_manifest_path=packet_case["task_manifest"],
+            repo_root=packet_case["repo_root"],
+            expected_presentation_order="reverse",
+        )
+
+
+def test_source_bound_verifier_rejects_coherently_rehashed_order_switch(packet_case):
+    _export(packet_case, presentation_order="reverse")
+    export_root = packet_case["export_root"]
+    packet_bytes = (packet_case["packet_root"] / "packet.jsonl").read_bytes()
+    template_bytes = (
+        packet_case["packet_root"] / "ratings_template.csv"
+    ).read_bytes()
+    (export_root / "packet.jsonl").write_bytes(packet_bytes)
+    (export_root / "ratings_template.csv").write_bytes(template_bytes)
+    manifest_path = export_root / "annotator_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["presentation_order"] = "canonical"
+    manifest["artifacts"]["packet"] = {
+        "path": "packet.jsonl",
+        **exporter._fingerprint(packet_bytes),
+    }
+    manifest["artifacts"]["ratings_template"] = {
+        "path": "ratings_template.csv",
+        **exporter._fingerprint(template_bytes),
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    # The modified bundle is internally valid and source-derived, but no
+    # longer matches the coordinator's externally assigned reverse order.
+    exporter.verify_annotator_bundle(export_root)
+    with pytest.raises(ValueError, match="expected presentation order"):
+        exporter.verify_annotator_bundle_against_source(
+            packet_root=packet_case["packet_root"],
+            output_root=export_root,
+            task_manifest_path=packet_case["task_manifest"],
+            repo_root=packet_case["repo_root"],
+            expected_presentation_order="reverse",
+        )
+
+
+def test_export_rejects_undeclared_presentation_order(packet_case):
+    with pytest.raises(ValueError, match="presentation order"):
+        _export(packet_case, presentation_order="outcome-ranked")
+
+    assert not packet_case["export_root"].exists()
 
 
 def test_source_bound_verifier_rejects_self_consistently_rehashed_tamper(packet_case):
@@ -783,6 +914,7 @@ def test_source_bound_verifier_rejects_self_consistently_rehashed_tamper(packet_
 
     with pytest.raises(ValueError, match="does not match the verified coordinator source"):
         exporter.verify_annotator_bundle_against_source(
+            expected_presentation_order="canonical",
             packet_root=packet_case["packet_root"],
             output_root=packet_case["export_root"],
             task_manifest_path=packet_case["task_manifest"],
@@ -808,6 +940,7 @@ def test_source_bound_verifier_rejects_different_valid_coordinator_packet(packet
 
     with pytest.raises(ValueError, match="does not match the verified coordinator source"):
         exporter.verify_annotator_bundle_against_source(
+            expected_presentation_order="canonical",
             packet_root=alternate_root,
             output_root=packet_case["export_root"],
             task_manifest_path=packet_case["task_manifest"],
@@ -828,6 +961,7 @@ def test_source_bound_verifier_uses_captured_coordinator_snapshot(packet_case, m
 
     monkeypatch.setattr(exporter, "verify_packet", verify_snapshot)
     receipt = exporter.verify_annotator_bundle_against_source(
+        expected_presentation_order="canonical",
         packet_root=packet_case["packet_root"],
         output_root=packet_case["export_root"],
         task_manifest_path=packet_case["task_manifest"],
@@ -854,6 +988,8 @@ def test_verify_against_source_cli(packet_case):
             "--repo-root",
             str(packet_case["repo_root"]),
             "--verify-against-source",
+            "--presentation-order",
+            "canonical",
         ],
         cwd=Path(__file__).resolve().parents[1],
         capture_output=True,
@@ -866,3 +1002,32 @@ def test_verify_against_source_cli(packet_case):
     assert "HUMAN EVAL ANNOTATOR EXPORT: PASS" in result.stdout
     assert '"source_bound_to_verified_coordinator": true' in result.stdout.lower()
     assert result.stderr == ""
+
+
+def test_verify_against_source_cli_requires_expected_order(packet_case):
+    _export(packet_case)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.export_human_eval_annotator_bundle",
+            "--packet-root",
+            str(packet_case["packet_root"]),
+            "--output-root",
+            str(packet_case["export_root"]),
+            "--task-manifest",
+            str(packet_case["task_manifest"]),
+            "--repo-root",
+            str(packet_case["repo_root"]),
+            "--verify-against-source",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode != 0
+    assert "--presentation-order is required" in result.stderr
+    assert "PASS" not in result.stdout

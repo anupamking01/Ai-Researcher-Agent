@@ -29,7 +29,7 @@ from scripts.verify_human_eval_packet import verify_packet
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PACKET_ROOT = build.DEFAULT_OUTPUT_ROOT
-DEFAULT_OUTPUT_ROOT = DEFAULT_PACKET_ROOT / "annotator-bundle-v1"
+DEFAULT_OUTPUT_ROOT = DEFAULT_PACKET_ROOT / "annotator-bundle-v2"
 DEFAULT_TASK_MANIFEST = build.DEFAULT_TASK_MANIFEST
 DEFAULT_ANNOTATOR_GUIDE = REPO_ROOT / "paper" / "HUMAN_EVAL_ANNOTATOR_GUIDE.md"
 FROZEN_ANNOTATOR_GUIDE_SHA256 = (
@@ -48,6 +48,7 @@ DISTRIBUTION_NOTE = (
     "the coordinator packet manifest."
 )
 CONTENT_VALIDATOR_PATH = "scripts/build_human_eval_packet.py"
+PRESENTATION_ORDERS = ("canonical", "reverse")
 
 
 def _regular_bytes(path: Path, *, label: str) -> bytes:
@@ -220,12 +221,34 @@ def _source_bound_receipt(
     coordinator_bytes: dict[str, bytes],
     annotator_bytes: dict[str, bytes],
     guide_bytes: bytes,
+    expected_presentation_order: str,
 ) -> dict:
     """Bind a locally verified distribution snapshot to its coordinator source."""
-    for name in ("packet.jsonl", "ratings_template.csv"):
-        if annotator_bytes[name] != coordinator_bytes[name]:
+    if expected_presentation_order not in PRESENTATION_ORDERS:
+        raise ValueError(
+            "expected presentation order must be one of "
+            + ", ".join(repr(value) for value in PRESENTATION_ORDERS)
+        )
+    presentation_order = receipt["presentation_order"]
+    if presentation_order != expected_presentation_order:
+        raise ValueError(
+            "annotator bundle does not match expected presentation order: "
+            f"expected {expected_presentation_order!r}, got {presentation_order!r}"
+        )
+    expected_packet, expected_template = _ordered_artifacts(
+        coordinator_bytes["packet.jsonl"],
+        coordinator_bytes["ratings_template.csv"],
+        presentation_order=expected_presentation_order,
+    )
+    expected = {
+        "packet.jsonl": expected_packet,
+        "ratings_template.csv": expected_template,
+    }
+    for name, expected_bytes in expected.items():
+        if annotator_bytes[name] != expected_bytes:
             raise ValueError(
-                f"annotator {name} does not match the verified coordinator source"
+                "annotator presentation order does not match the verified "
+                f"coordinator source for {name}"
             )
     if annotator_bytes["annotator_instructions.md"] != guide_bytes:
         raise ValueError(
@@ -305,6 +328,39 @@ def _read_ratings_template(content: bytes) -> list[dict]:
     return rows
 
 
+def _ordered_artifacts(
+    packet_content: bytes,
+    template_content: bytes,
+    *,
+    presentation_order: str,
+) -> tuple[bytes, bytes]:
+    """Return one declared ordering of the same validated blinded rows."""
+    if presentation_order not in PRESENTATION_ORDERS:
+        raise ValueError(
+            "presentation order must be one of "
+            + ", ".join(repr(value) for value in PRESENTATION_ORDERS)
+        )
+    packet_rows = _read_jsonl_packet(packet_content)
+    template_rows = _read_ratings_template(template_content)
+    if presentation_order == "canonical":
+        return packet_content, template_content
+
+    packet_rows.reverse()
+    template_rows.reverse()
+    packet_bytes = (
+        "\n".join(
+            json.dumps(row, ensure_ascii=False, sort_keys=True)
+            for row in packet_rows
+        )
+        + "\n"
+    ).encode("utf-8")
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=list(build.RATING_FIELDS))
+    writer.writeheader()
+    writer.writerows(template_rows)
+    return packet_bytes, output.getvalue().encode("utf-8")
+
+
 def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
     """Verify that a published bundle contains only annotator-safe artifacts."""
     output_root = Path(output_root)
@@ -350,6 +406,7 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
         "artifacts",
         "content_validator",
         "content_validator_runtime",
+        "presentation_order",
     }
     allowed_manifest_keys = required_manifest_keys | {"distribution_note"}
     if not required_manifest_keys.issubset(manifest) or not set(manifest).issubset(
@@ -363,7 +420,7 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
         raise ValueError("annotator manifest distribution_note mismatch")
 
     expected_identity = {
-        "schema_version": 1,
+        "schema_version": 2,
         "study_id": "budget-main-v1",
         "status": "human_eval_annotator_distribution",
         "coordinator_artifacts_included": False,
@@ -373,6 +430,9 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
             raise ValueError(
                 f"annotator manifest {key} mismatch: expected {expected!r}, got {manifest.get(key)!r}"
             )
+    presentation_order = manifest.get("presentation_order")
+    if presentation_order not in PRESENTATION_ORDERS:
+        raise ValueError("annotator manifest presentation order is invalid")
     expected_runtime = build.content_validator_runtime_contract()
     if manifest.get("content_validator_runtime") != expected_runtime:
         raise ValueError(
@@ -449,11 +509,13 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
         "packet_sha256": _fingerprint(packet_bytes)["sha256"],
         "ratings_template_sha256": _fingerprint(template_bytes)["sha256"],
         "annotator_guide_sha256": _fingerprint(guide_bytes)["sha256"],
+        "presentation_order": presentation_order,
     }
 
 
 def verify_annotator_bundle_against_source(
     *,
+    expected_presentation_order: str,
     packet_root: Path = DEFAULT_PACKET_ROOT,
     output_root: Path = DEFAULT_OUTPUT_ROOT,
     task_manifest_path: Path = DEFAULT_TASK_MANIFEST,
@@ -489,6 +551,7 @@ def verify_annotator_bundle_against_source(
             coordinator_bytes=coordinator_bytes,
             annotator_bytes=annotator_bytes,
             guide_bytes=guide_bytes,
+            expected_presentation_order=expected_presentation_order,
         )
 
 
@@ -499,6 +562,7 @@ def export_annotator_bundle(
     task_manifest_path: Path = DEFAULT_TASK_MANIFEST,
     repo_root: Path = REPO_ROOT,
     annotator_guide_path: Path = DEFAULT_ANNOTATOR_GUIDE,
+    presentation_order: str = "canonical",
 ) -> dict:
     """Snapshot, verify, and export only annotator-facing packet artifacts."""
     packet_root = Path(packet_root)
@@ -506,6 +570,11 @@ def export_annotator_bundle(
     task_manifest_path = Path(task_manifest_path)
     repo_root = Path(repo_root)
     guide_bytes = _frozen_guide_bytes(Path(annotator_guide_path))
+    if presentation_order not in PRESENTATION_ORDERS:
+        raise ValueError(
+            "presentation order must be one of "
+            + ", ".join(repr(value) for value in PRESENTATION_ORDERS)
+        )
 
     if packet_root.is_symlink() or not packet_root.is_dir():
         raise ValueError(f"coordinator packet root must be a regular directory: {packet_root}")
@@ -526,10 +595,11 @@ def export_annotator_bundle(
             repo_root=repo_root,
         )
 
-        packet_bytes = captured["packet.jsonl"]
-        template_bytes = captured["ratings_template.csv"]
-        _read_jsonl_packet(packet_bytes)
-        _read_ratings_template(template_bytes)
+        packet_bytes, template_bytes = _ordered_artifacts(
+            captured["packet.jsonl"],
+            captured["ratings_template.csv"],
+            presentation_order=presentation_order,
+        )
 
         output_root.parent.mkdir(parents=True, exist_ok=True)
         staging_root = Path(
@@ -548,10 +618,11 @@ def export_annotator_bundle(
                 guide_bytes,
             )
             manifest = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "study_id": "budget-main-v1",
                 "status": "human_eval_annotator_distribution",
                 "coordinator_artifacts_included": False,
+                "presentation_order": presentation_order,
                 "n_reports": len(_read_jsonl_packet(packet_bytes)),
                 "content_validator": _content_validator_source_contract(),
                 "content_validator_runtime": (
@@ -602,6 +673,7 @@ def export_annotator_bundle(
                 coordinator_bytes=captured,
                 annotator_bytes=annotator_bytes,
                 guide_bytes=guide_bytes,
+                expected_presentation_order=presentation_order,
             )
             _require_directory_binding(staging_root, output_fd)
             _publish_directory_noreplace(staging_root, output_root)
@@ -625,13 +697,27 @@ def main() -> int:
         type=Path,
         default=DEFAULT_ANNOTATOR_GUIDE,
     )
+    parser.add_argument(
+        "--presentation-order",
+        choices=PRESENTATION_ORDERS,
+        default=None,
+        help=(
+            "Annotator-facing row order. Defaults to canonical for export and "
+            "is required for source-bound verification."
+        ),
+    )
     verification = parser.add_mutually_exclusive_group()
     verification.add_argument("--verify-only", action="store_true")
     verification.add_argument("--verify-against-source", action="store_true")
     args = parser.parse_args()
     try:
         if args.verify_against_source:
+            if args.presentation_order is None:
+                raise ValueError(
+                    "--presentation-order is required with --verify-against-source"
+                )
             receipt = verify_annotator_bundle_against_source(
+                expected_presentation_order=args.presentation_order,
                 packet_root=args.packet_root,
                 output_root=args.output_root,
                 task_manifest_path=args.task_manifest,
@@ -640,6 +726,15 @@ def main() -> int:
             )
         elif args.verify_only:
             receipt = verify_annotator_bundle(args.output_root)
+            if (
+                args.presentation_order is not None
+                and receipt["presentation_order"] != args.presentation_order
+            ):
+                raise ValueError(
+                    "annotator bundle does not match expected presentation order: "
+                    f"expected {args.presentation_order!r}, got "
+                    f"{receipt['presentation_order']!r}"
+                )
         else:
             receipt = export_annotator_bundle(
                 packet_root=args.packet_root,
@@ -647,6 +742,7 @@ def main() -> int:
                 task_manifest_path=args.task_manifest,
                 repo_root=args.repo_root,
                 annotator_guide_path=args.annotator_guide,
+                presentation_order=args.presentation_order or "canonical",
             )
     except (OSError, ValueError) as exc:
         raise SystemExit(f"HUMAN EVAL ANNOTATOR EXPORT: FAIL: {exc}") from exc

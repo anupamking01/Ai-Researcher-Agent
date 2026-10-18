@@ -50,10 +50,11 @@ def _write_bundle(root: Path) -> Path:
     guide_bytes = exporter.DEFAULT_ANNOTATOR_GUIDE.read_bytes()
     (root / "annotator_instructions.md").write_bytes(guide_bytes)
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "study_id": "budget-main-v1",
         "status": "human_eval_annotator_distribution",
         "coordinator_artifacts_included": False,
+        "presentation_order": "canonical",
         "n_reports": len(packet_rows),
         "content_validator": exporter._content_validator_source_contract(),
         "content_validator_runtime": (

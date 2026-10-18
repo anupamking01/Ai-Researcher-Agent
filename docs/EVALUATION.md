@@ -39,6 +39,11 @@ Saved traces/evaluator records are summarized with a frozen paired analysis plan
 
 A deterministic offline packet builder hides variant identity and prepares the same reports for rubric-based human evaluation. Human annotations are a complementary measure of overall quality and usefulness, not a synthetic replacement for the automated support metric.
 
+The first two eligible annotators receive source-bound bundles containing the
+same blinded reports in canonical and exact reverse order. Section 11 records
+this prospective, pre-collection operational control separately from the
+frozen rubric, assignment, and analysis rules.
+
 ## 3. Frozen main-study treatment matrix
 
 The current main-study analysis focuses on the following four conditions over the same frozen task set:
@@ -338,6 +343,30 @@ The script creates:
 - `outputs/human_eval/manifest.json` — packet metadata.
 
 The packet is deterministic under a fixed seed and fails closed on duplicate treatment/task cells, incomplete runs, missing Markdown reports, unexpected variants, or incomplete task matrices. The annotator-facing leakage audit covers rendered text and recursively percent-decoded Markdown URL metadata so encoded treatment labels cannot be hidden in link destinations; metadata exceeding the bounded decoding depth is rejected instead of bypassing or exhausting the audit, and opaque `data:` destinations are not permitted. Annotator-facing reports are text-and-links only: all Markdown image nodes are rejected because externally fetched or inline pixels can reveal treatment identity or change after the packet is frozen. Only canonical schema-version-2 treatment traces with object-valued experiment and trace sections can enter or later verify against the packet. When a persisted trace carries task-set identity in both its experiment configuration and run-trace payload, those copies must agree and match the frozen task manifest; neither packet generation nor later packet verification silently prefers one conflicting identity.
+
+Before report access, export the first eligible annotator's source-bound bundle
+in canonical order and the second's in exact reverse order:
+
+```bash
+python scripts/export_human_eval_annotator_bundle.py \
+  --output-root outputs/human_eval/annotator-bundle-canonical-v2 \
+  --presentation-order canonical
+
+python scripts/export_human_eval_annotator_bundle.py \
+  --output-root outputs/human_eval/annotator-bundle-reverse-v2 \
+  --presentation-order reverse
+```
+
+Each schema-version-2 annotator manifest declares the order and fingerprints
+the reordered packet and blank ratings template. Source-bound verification
+derives that declared order from the verified coordinator packet, so relabeling
+or coherently rehashing a different order fails closed. The two bundles retain
+the same reports, blind IDs, rubric, and rating rows; only their presentation
+sequence differs. For the required two-rater design, canonical plus exact
+reverse pairs position `p` with position `41 - p`, balancing every report's
+mean position at 20.5. This is an operational distribution control selected
+before access to reports or ratings; it does not revise the frozen rubric,
+eligibility/exclusion rules, estimands, missingness rules, or analysis plan.
 
 Annotators must not receive `blinding_key.csv` until ratings are frozen. The
 entire 40-report packet must be independently double-scored and inter-annotator

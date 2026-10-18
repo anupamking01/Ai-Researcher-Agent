@@ -14,6 +14,10 @@ import pytest
 from scripts import export_human_eval_annotator_bundle as exporter
 
 
+def test_default_output_name_tracks_manifest_schema():
+    assert exporter.DEFAULT_OUTPUT_ROOT.name == "annotator-bundle-v2"
+
+
 def _write_bundle(root: Path, packet_rows: list[dict], *, template_ids=None, n_reports=None) -> Path:
     root.mkdir()
     packet_bytes = (
@@ -32,10 +36,11 @@ def _write_bundle(root: Path, packet_rows: list[dict], *, template_ids=None, n_r
     guide_bytes = exporter.DEFAULT_ANNOTATOR_GUIDE.read_bytes()
     (root / "annotator_instructions.md").write_bytes(guide_bytes)
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "study_id": "budget-main-v1",
         "status": "human_eval_annotator_distribution",
         "coordinator_artifacts_included": False,
+        "presentation_order": "canonical",
         "n_reports": len(packet_rows) if n_reports is None else n_reports,
         "content_validator": exporter._content_validator_source_contract(),
         "content_validator_runtime": (
@@ -87,6 +92,20 @@ def test_standalone_bundle_accepts_valid_synthetic_packet(tmp_path):
     assert receipt["annotator_guide_sha256"] == (
         exporter.FROZEN_ANNOTATOR_GUIDE_SHA256
     )
+
+
+def test_standalone_bundle_rejects_legacy_schema_without_order_contract(tmp_path):
+    root = _write_bundle(tmp_path / "bundle", _rows())
+    manifest_path = root / "annotator_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema_version"] = 1
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="schema_version mismatch"):
+        exporter.verify_annotator_bundle(root)
 
 
 @pytest.mark.parametrize("duplicate_key", ["blind_id", r"bl\u0069nd_id"])
