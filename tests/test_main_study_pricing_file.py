@@ -175,8 +175,10 @@ def test_main_study_manifest_records_pricing_snapshot_before_execution(
         return None
 
     experiment_module = types.ModuleType("logic.experiment")
+    experiment_module.__file__ = str(tmp_path / "logic" / "experiment.py")
     experiment_module.ExperimentConfig = FakeExperimentConfig
     run_module = types.ModuleType("logic.run")
+    run_module.__file__ = str(tmp_path / "logic" / "run.py")
     run_module.run_agent = fake_run_agent
     monkeypatch.setitem(sys.modules, "logic.experiment", experiment_module)
     monkeypatch.setitem(sys.modules, "logic.run", run_module)

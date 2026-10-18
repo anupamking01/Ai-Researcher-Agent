@@ -138,7 +138,18 @@ requires Git's top-level directory to be the project root and rejects
 otherwise hide modified treatment source. Repository-discovery and object/index
 overrides from inherited `GIT_*` environment variables are removed from these
 read-only probes, so an external repository cannot supply the recorded commit,
-tree, status, or index state for the project working tree.
+tree, status, or index state for the project working tree. Finally, every
+tracked `HEAD` entry must be a regular blob, and the runner computes each
+working-tree file's raw Git object hash without clean/smudge filters and compares
+it with the committed blob ID. Committed symlinks, submodules, filters, or other
+states that make executed bytes differ while `git status` remains clean therefore
+fail before treatment imports or calls. Before those imports, Python bytecode
+lookup is also redirected to a newly created private empty cache and cache writes
+are disabled. Treatment modules therefore compile from the attested source rather
+than loading ignored adjacent bytecode, including unchecked-hash `.pyc` files.
+The attested repository is placed first on Python's import path, inherited
+`PYTHONPATH` roots are removed, and the two treatment entry modules must report
+their exact repository source paths before any treatment call can begin.
 
 These fields are prospective provenance. They do not retroactively add environment
 metadata to the already-completed canonical treatment artifact and are not a

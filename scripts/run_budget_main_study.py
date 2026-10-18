@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hashlib
+import importlib
 import importlib.metadata
 import json
 import math
@@ -28,6 +30,7 @@ import secrets
 import stat
 import subprocess
 import sys
+import tempfile
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,6 +58,83 @@ def _check_environment() -> None:
     if missing:
         raise SystemExit(f"Missing required experiment environment variables: {', '.join(missing)}")
     float(os.environ["TEMPERATURE"])
+
+
+@contextlib.contextmanager
+def _repository_bytecode_isolation():
+    """Compile imports from source using a fresh cache for the whole run."""
+    try:
+        cache_guard = tempfile.TemporaryDirectory(prefix="vera-main-study-bytecode-")
+    except OSError as exc:
+        raise SystemExit(
+            "Cannot isolate Python bytecode for main-study execution"
+        ) from exc
+    previous_prefix = sys.pycache_prefix
+    previous_write_setting = sys.dont_write_bytecode
+    previous_search_path = list(sys.path)
+    had_pythonpath = "PYTHONPATH" in os.environ
+    previous_pythonpath = os.environ.get("PYTHONPATH")
+    try:
+        sys.pycache_prefix = cache_guard.name
+        sys.dont_write_bytecode = True
+        yield
+    finally:
+        sys.pycache_prefix = previous_prefix
+        sys.dont_write_bytecode = previous_write_setting
+        sys.path[:] = previous_search_path
+        if had_pythonpath:
+            os.environ["PYTHONPATH"] = previous_pythonpath
+        else:
+            os.environ.pop("PYTHONPATH", None)
+        importlib.invalidate_caches()
+        cache_guard.cleanup()
+
+
+def _prioritize_repository_imports() -> None:
+    """Put the attested checkout first and remove inherited PYTHONPATH roots."""
+    repository_path = REPO_ROOT.resolve()
+    inherited_roots = set()
+    for entry in os.environ.get("PYTHONPATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        try:
+            inherited_roots.add(Path(entry).resolve())
+        except OSError as exc:
+            raise SystemExit(
+                "Cannot isolate repository imports for main-study execution"
+            ) from exc
+
+    sanitized_path = [str(repository_path)]
+    for entry in sys.path:
+        try:
+            resolved_entry = Path(entry or os.getcwd()).resolve()
+        except OSError as exc:
+            raise SystemExit(
+                "Cannot isolate repository imports for main-study execution"
+            ) from exc
+        if resolved_entry == repository_path or resolved_entry in inherited_roots:
+            continue
+        sanitized_path.append(entry)
+    sys.path[:] = sanitized_path
+    os.environ.pop("PYTHONPATH", None)
+    importlib.invalidate_caches()
+
+
+def _verify_repository_module_origin(module, relative_path: str) -> None:
+    """Require an imported treatment module to originate at its attested path."""
+    expected_path = (REPO_ROOT.resolve() / relative_path).resolve()
+    module_path = getattr(module, "__file__", None)
+    try:
+        actual_path = Path(module_path).resolve() if module_path else None
+    except OSError as exc:
+        raise SystemExit(
+            "Cannot verify treatment module origin for main-study execution"
+        ) from exc
+    if actual_path != expected_path:
+        raise SystemExit(
+            "Treatment module did not load from the attested repository; "
+            "refusing main-study execution"
+        )
 
 
 def _git_source_state() -> dict:
@@ -100,6 +180,12 @@ def _git_source_state() -> dict:
             text=True,
             stderr=subprocess.DEVNULL,
         )
+        tree_entries = subprocess.check_output(
+            ["git", "ls-tree", "-r", "-z", "HEAD"],
+            cwd=REPO_ROOT,
+            env=git_environment,
+            stderr=subprocess.DEVNULL,
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         raise SystemExit("Cannot record Git source state for main study") from exc
 
@@ -119,6 +205,59 @@ def _git_source_state() -> dict:
         raise SystemExit(
             "Git index hides tracked source state; refusing main-study execution"
         )
+
+    repository_path = REPO_ROOT.resolve()
+    for entry in tree_entries.split(b"\0"):
+        if not entry:
+            continue
+        try:
+            header, relative_path_bytes = entry.split(b"\t", 1)
+            mode, object_type, object_id_bytes = header.split(b" ", 2)
+        except ValueError as exc:
+            raise SystemExit(
+                "Cannot attest exact Git source bytes for main study"
+            ) from exc
+        if mode not in {b"100644", b"100755"} or object_type != b"blob":
+            raise SystemExit(
+                "Git tracked source entry is not a regular blob; "
+                "refusing main-study execution"
+            )
+        if not re.fullmatch(rb"[0-9a-f]{40}|[0-9a-f]{64}", object_id_bytes):
+            raise SystemExit(
+                "Cannot attest exact Git source bytes for main study"
+            )
+
+        relative_path = os.fsdecode(relative_path_bytes)
+        source_path = repository_path / relative_path
+        descriptor = None
+        try:
+            descriptor = os.open(
+                source_path,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            )
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise OSError("tracked source is not a regular file")
+            with os.fdopen(descriptor, "rb") as source_handle:
+                descriptor = None
+                source_bytes = source_handle.read()
+        except OSError as exc:
+            raise SystemExit(
+                "Cannot attest exact Git source bytes for main study"
+            ) from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+
+        algorithm = "sha1" if len(object_id_bytes) == 40 else "sha256"
+        worktree_object = hashlib.new(algorithm)
+        worktree_object.update(
+            b"blob " + str(len(source_bytes)).encode("ascii") + b"\0" + source_bytes
+        )
+        if worktree_object.hexdigest().encode("ascii") != object_id_bytes:
+            raise SystemExit(
+                "Git tracked source bytes do not match HEAD; "
+                "refusing main-study execution"
+            )
     return {"commit": commit, "tree": tree}
 
 
@@ -856,7 +995,7 @@ class ConsoleWebSocket:
         print(text, end="", flush=True)
 
 
-async def main() -> None:
+async def _run_main_study() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--task-file", type=Path, default=DEFAULT_TASK_FILE)
     parser.add_argument("--max-agent-cost-usd", type=float, default=3.00)
@@ -886,8 +1025,12 @@ async def main() -> None:
     source_state = _git_source_state()
     execution_environment = _execution_environment()
 
-    from logic.experiment import ExperimentConfig
-    from logic.run import run_agent
+    experiment_module = importlib.import_module("logic.experiment")
+    run_module = importlib.import_module("logic.run")
+    _verify_repository_module_origin(experiment_module, "logic/experiment.py")
+    _verify_repository_module_origin(run_module, "logic/run.py")
+    ExperimentConfig = experiment_module.ExperimentConfig
+    run_agent = run_module.run_agent
 
     base = ExperimentConfig.from_variant("D3")
     if _git_source_state() != source_state:
@@ -1009,6 +1152,12 @@ async def main() -> None:
         f"estimated_cost=${progress['estimated_treatment_cost_usd']:.4f}",
         flush=True,
     )
+
+
+async def main() -> None:
+    with _repository_bytecode_isolation():
+        _prioritize_repository_imports()
+        await _run_main_study()
 
 
 if __name__ == "__main__":

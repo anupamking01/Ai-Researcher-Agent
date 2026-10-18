@@ -1,12 +1,16 @@
 import asyncio
 import builtins
 import hashlib
+import importlib
 import json
+import os
+import py_compile
 import re
 import subprocess
 import sys
 import types
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
@@ -133,6 +137,139 @@ def test_git_source_state_ignores_repository_override_environment(
 
     with pytest.raises(SystemExit, match="Git working tree is not clean"):
         run_budget_main_study._git_source_state()
+
+
+def test_git_source_state_rejects_tracked_symlink(tmp_path, monkeypatch):
+    _initialize_git_repository(tmp_path)
+    external_source = tmp_path.parent / "external-treatment.py"
+    external_source.write_text("VALUE = 1\n", encoding="utf-8")
+    (tmp_path / "linked-treatment.py").symlink_to(external_source)
+    _git("add", "linked-treatment.py", cwd=tmp_path)
+    _git("commit", "-q", "-m", "track treatment symlink", cwd=tmp_path)
+    monkeypatch.setattr(run_budget_main_study, "REPO_ROOT", tmp_path)
+
+    with pytest.raises(SystemExit, match="tracked source entry is not a regular blob"):
+        run_budget_main_study._git_source_state()
+
+
+def test_git_source_state_rejects_clean_filter_byte_divergence(
+    tmp_path, monkeypatch
+):
+    source = _initialize_git_repository(tmp_path)
+    _git(
+        "config",
+        "filter.freeze.clean",
+        "sed 's/VALUE = .*/VALUE = 1/'",
+        cwd=tmp_path,
+    )
+    _git("config", "filter.freeze.smudge", "cat", cwd=tmp_path)
+    (tmp_path / ".gitattributes").write_text(
+        "source.py filter=freeze\n",
+        encoding="utf-8",
+    )
+    _git("add", ".gitattributes", "source.py", cwd=tmp_path)
+    _git("commit", "-q", "-m", "configure source filter", cwd=tmp_path)
+    source.write_text("VALUE = 2\n", encoding="utf-8")
+    assert _git("status", "--porcelain=v1", cwd=tmp_path) == ""
+    monkeypatch.setattr(run_budget_main_study, "REPO_ROOT", tmp_path)
+
+    with pytest.raises(SystemExit, match="tracked source bytes do not match HEAD"):
+        run_budget_main_study._git_source_state()
+
+
+def test_repository_bytecode_isolation_ignores_unchecked_hash_cache(
+    tmp_path, monkeypatch
+):
+    source = _initialize_git_repository(tmp_path)
+    (tmp_path / ".gitignore").write_text(
+        "**/__pycache__/\n",
+        encoding="utf-8",
+    )
+    _git("add", ".gitignore", cwd=tmp_path)
+    _git("commit", "-q", "-m", "ignore bytecode", cwd=tmp_path)
+
+    source.write_text("VALUE = 2\n", encoding="utf-8")
+    py_compile.compile(
+        str(source),
+        invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH,
+    )
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    assert _git("status", "--porcelain=v1", cwd=tmp_path) == ""
+    imported_value = subprocess.check_output(
+        [sys.executable, "-c", "import source; print(source.VALUE)"],
+        cwd=tmp_path,
+        text=True,
+    ).strip()
+    assert imported_value == "2"
+    monkeypatch.setattr(run_budget_main_study, "REPO_ROOT", tmp_path)
+    assert run_budget_main_study._git_source_state()["commit"] == _git(
+        "rev-parse", "HEAD", cwd=tmp_path
+    )
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    with run_budget_main_study._repository_bytecode_isolation():
+        sys.modules.pop("source", None)
+        importlib.invalidate_caches()
+        source_module = importlib.import_module("source")
+        assert source_module.VALUE == 1
+    sys.modules.pop("source", None)
+
+
+def test_repository_imports_precede_external_pythonpath(tmp_path, monkeypatch):
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    _initialize_git_repository(repository)
+    repository_package = repository / "treatment_shadow"
+    repository_package.mkdir()
+    (repository_package / "__init__.py").write_text("", encoding="utf-8")
+    (repository_package / "runtime.py").write_text(
+        "ORIGIN = 'repository'\n",
+        encoding="utf-8",
+    )
+    _git("add", "treatment_shadow", cwd=repository)
+    _git("commit", "-q", "-m", "add treatment package", cwd=repository)
+
+    external = tmp_path / "external-shadow"
+    external_package = external / "treatment_shadow"
+    external_package.mkdir(parents=True)
+    (external_package / "__init__.py").write_text("", encoding="utf-8")
+    (external_package / "runtime.py").write_text(
+        "ORIGIN = 'external'\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(run_budget_main_study, "REPO_ROOT", repository)
+    monkeypatch.setenv(
+        "PYTHONPATH",
+        os.pathsep.join((str(external), str(repository))),
+    )
+    monkeypatch.setattr(
+        sys,
+        "path",
+        [str(external), str(repository), *sys.path],
+    )
+    sys.modules.pop("treatment_shadow", None)
+    sys.modules.pop("treatment_shadow.runtime", None)
+    original_search_path = list(sys.path)
+    original_pythonpath = os.environ["PYTHONPATH"]
+    try:
+        with run_budget_main_study._repository_bytecode_isolation():
+            run_budget_main_study._prioritize_repository_imports()
+            treatment_module = importlib.import_module("treatment_shadow.runtime")
+            assert treatment_module.ORIGIN == "repository"
+            run_budget_main_study._verify_repository_module_origin(
+                treatment_module,
+                "treatment_shadow/runtime.py",
+            )
+            assert Path(sys.path[0]).resolve() == repository.resolve()
+            assert external.resolve() not in {
+                Path(entry or os.getcwd()).resolve() for entry in sys.path
+            }
+        assert sys.path == original_search_path
+        assert os.environ["PYTHONPATH"] == original_pythonpath
+    finally:
+        sys.modules.pop("treatment_shadow.runtime", None)
+        sys.modules.pop("treatment_shadow", None)
 
 
 def test_execution_environment_records_normalized_sorted_distributions(
@@ -654,8 +791,10 @@ def test_main_study_manifest_records_task_snapshot_before_execution(tmp_path, mo
         return None
 
     experiment_module = types.ModuleType("logic.experiment")
+    experiment_module.__file__ = str(tmp_path / "logic" / "experiment.py")
     experiment_module.ExperimentConfig = FakeExperimentConfig
     run_module = types.ModuleType("logic.run")
+    run_module.__file__ = str(tmp_path / "logic" / "run.py")
     run_module.run_agent = fake_run_agent
     monkeypatch.setitem(sys.modules, "logic.experiment", experiment_module)
     monkeypatch.setitem(sys.modules, "logic.run", run_module)
@@ -757,8 +896,10 @@ def test_main_study_rejects_source_drift_while_loading_treatment_code(
         model_calls.append(kwargs)
 
     experiment_module = types.ModuleType("logic.experiment")
+    experiment_module.__file__ = str(tmp_path / "logic" / "experiment.py")
     experiment_module.ExperimentConfig = FakeExperimentConfig
     run_module = types.ModuleType("logic.run")
+    run_module.__file__ = str(tmp_path / "logic" / "run.py")
     run_module.run_agent = fake_run_agent
     monkeypatch.setitem(sys.modules, "logic.experiment", experiment_module)
     monkeypatch.setitem(sys.modules, "logic.run", run_module)
