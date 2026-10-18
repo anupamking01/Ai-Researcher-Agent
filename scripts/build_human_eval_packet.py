@@ -75,6 +75,7 @@ _COORDINATOR_MARKER_RE = re.compile(
     r"(?:variant_id|run_id|trace_path|report_path|blinding_key\.csv|experiment_traces)",
     re.IGNORECASE,
 )
+_OPAQUE_DATA_URI_RE = re.compile(r"^\s*data:", re.IGNORECASE)
 MARKDOWN_RENDERER_DISTRIBUTION = "markdown-it-py"
 MARKDOWN_RENDERER_PRESET = "commonmark"
 MARKDOWN_RENDERER_OPTIONS = {"html": True}
@@ -127,11 +128,13 @@ class _RenderedTextParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
-        self.attribute_values: list[str] = []
+        self.attribute_values: list[tuple[str, str]] = []
 
     def handle_starttag(self, tag: str, attrs) -> None:
         self.attribute_values.extend(
-            value for _, value in attrs if isinstance(value, str) and value
+            (name, value)
+            for name, value in attrs
+            if isinstance(name, str) and isinstance(value, str) and value
         )
         if tag in _BLOCK_TAGS:
             self.parts.append(" ")
@@ -177,23 +180,26 @@ def _canonical_audit_text(text: str) -> str:
     )
 
 
-def _metadata_strings(value):
+def _metadata_fields(value, *, field_name: str | None = None):
     if isinstance(value, str):
-        yield value
+        if field_name is not None:
+            yield field_name.lower(), value
     elif isinstance(value, dict):
-        for child in value.values():
-            yield from _metadata_strings(child)
+        for name, child in value.items():
+            yield from _metadata_fields(child, field_name=str(name))
     elif isinstance(value, (list, tuple)):
         for child in value:
-            yield from _metadata_strings(child)
+            yield from _metadata_fields(child, field_name=field_name)
 
 
-def _rendered_markdown_parts(text: str) -> tuple[str, tuple[str, ...]]:
+def _rendered_markdown_parts(
+    text: str,
+) -> tuple[str, tuple[tuple[str, str], ...]]:
     environment = {}
     parser = _RenderedTextParser()
     parser.feed(_MARKDOWN_RENDERER.render(text, environment))
     parser.close()
-    metadata = (*parser.attribute_values, *_metadata_strings(environment))
+    metadata = (*parser.attribute_values, *_metadata_fields(environment))
     return "".join(parser.parts), metadata
 
 
@@ -253,8 +259,16 @@ def validate_annotator_facing_content(rows: list[dict], *, label: str) -> None:
                         f"{label} {blind_id} {field}: "
                         f"forbidden marker {match.group(0)!r}"
                     )
-            for value in attribute_values:
+            for attribute_name, value in attribute_values:
                 for audit_text in _decoded_attribute_forms(value):
+                    if (
+                        attribute_name in {"href", "src"}
+                        and _OPAQUE_DATA_URI_RE.search(audit_text)
+                    ):
+                        raise ValueError(
+                            "annotator-facing treatment leakage risk in "
+                            f"{label} {blind_id} {field}: opaque data URI is not permitted"
+                        )
                     match = _COORDINATOR_MARKER_RE.search(
                         audit_text
                     ) or _TREATMENT_LABEL_RE.search(audit_text)

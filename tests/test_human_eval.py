@@ -238,6 +238,54 @@ def test_blinding_audit_fails_closed_on_excessive_percent_encoding_depth():
         )
 
 
+def test_blinding_audit_rejects_opaque_inline_image_payload():
+    # Valid PNG whose pixels spell the otherwise absent treatment label P6V.
+    payload = (
+        "iVBORw0KGgoAAAANSUhEUgAAADAAAAAUCAIAAABEXSnwAAABc0lEQVR42u2VP8tB"
+        "YRjGb6/JSSg+gZJFMZzyJx2Pk0yE1DGdr8BmON/AYDSyWk6UMhqcSSnFiJhNBhY5"
+        "uQxPySDT8ebtPdf0dHcNv67rvnscAOib9ENfJhvobwMJgsAYy2az6XR6Pp/fbrd6"
+        "vZ5MJiVJ2u12RNRsNrvd7sOfz+eXy6XFRHiS1+vlj9VqJYpip9PRNA3AYDCoVCoA"
+        "ptNptVrlntPpFA6HYbVeAwHw+/2pVGqz2QC4XC6tVguAaZrBYPB6vQIYDoeNRsNy"
+        "oNc7NJlMYrHYer0ejUaMsVqtpigKETmdzkQiMZvNiGg8HpdKJeuX6JnO5XJlMhlJ"
+        "korF4n6/93g8uq4D0HVdlmXu6ff7vMdIJMKj+qXKAIRCIdM0eVOBQIAPj8djPB5f"
+        "LBaqquIDenf2siwbhkFEhmFEo1E+9Pl8giD0er1yufyRu3+T0OFwKBQKjLFcLrfdbh"
+        "/zdrvtdrvP5/MnEnLYn6sNZAP9N6A7cIOuqKjm/7IAAAAASUVORK5CYII="
+    )
+    with pytest.raises(ValueError, match="opaque data URI"):
+        packet_builder.validate_annotator_facing_content(
+            [
+                {
+                    "blind_id": "H001",
+                    "question": "Synthetic question?",
+                    "report_markdown": f"![figure](data:image/png;base64,{payload})",
+                }
+            ],
+            label="synthetic packet",
+        )
+
+
+@pytest.mark.parametrize(
+    "markdown",
+    [
+        '[results](https://example.test/report "Data: quarterly results")',
+        "![Data: quarterly results](https://example.test/chart.png)",
+        '![chart](https://example.test/chart.png "data: source summary")',
+    ],
+    ids=["link-title", "image-alt", "image-title"],
+)
+def test_blinding_audit_allows_data_prefix_in_non_destination_metadata(markdown):
+    packet_builder.validate_annotator_facing_content(
+        [
+            {
+                "blind_id": "H001",
+                "question": "Synthetic question?",
+                "report_markdown": markdown,
+            }
+        ],
+        label="synthetic packet",
+    )
+
+
 def test_blinding_audit_preserves_markdown_block_boundaries():
     packet_builder.validate_annotator_facing_content(
         [
