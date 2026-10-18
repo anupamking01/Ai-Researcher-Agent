@@ -109,6 +109,50 @@ def test_freeze_rejects_symlinked_raw_rating_input(inputs):
     assert not options["output_root"].exists()
 
 
+@pytest.mark.parametrize(
+    ("option", "label"),
+    [
+        ("packet_path", "blinded packet"),
+        ("protocol_path", "frozen human-evaluation protocol"),
+        ("assignment_plan_path", "frozen human-evaluation assignment plan"),
+        ("annotator_guide_path", "frozen human-evaluation annotator guide"),
+    ],
+)
+def test_freeze_rejects_symlinked_governing_input(inputs, option, label):
+    rating_paths, options = inputs
+    submitted = options[option]
+    displaced = submitted.with_name(f"displaced-{submitted.name}")
+    submitted.rename(displaced)
+    submitted.symlink_to(displaced)
+
+    with pytest.raises(ValueError, match=f"{label} must be a regular file"):
+        freeze.freeze_ratings(rating_paths, **options)
+    assert not options["output_root"].exists()
+
+
+@pytest.mark.parametrize(
+    ("module", "label"),
+    [
+        (freeze, "ratings freezer implementation"),
+        (freeze.packet_build, "annotator content validator implementation"),
+    ],
+)
+def test_freeze_rejects_symlinked_producer_source(
+    inputs, tmp_path, monkeypatch, module, label
+):
+    rating_paths, options = inputs
+    original = Path(module.__file__).read_bytes()
+    backing = tmp_path / f"backing-{Path(module.__file__).name}"
+    backing.write_bytes(original)
+    linked = tmp_path / f"linked-{Path(module.__file__).name}"
+    linked.symlink_to(backing)
+    monkeypatch.setattr(module, "__file__", str(linked))
+
+    with pytest.raises(ValueError, match=f"{label} must be a regular file"):
+        freeze.freeze_ratings(rating_paths, **options)
+    assert not options["output_root"].exists()
+
+
 @pytest.mark.parametrize("replacement_notes", ["", "An editor saved a longer version."])
 def test_rating_digest_and_scores_use_the_same_snapshot(inputs, monkeypatch, replacement_notes):
     rating_paths, options = inputs
@@ -189,24 +233,14 @@ def test_data_input_is_opened_for_reading_once(inputs, monkeypatch, option):
     ratings = rating_paths[0]
     watched = ratings if option == "ratings" else options[option]
     opened = []
-    if option == "ratings":
-        os_open = freeze.os.open
+    os_open = freeze.os.open
 
-        def count_descriptor_reads(path, flags, *args, **kwargs):
-            if path == watched.name and kwargs.get("dir_fd") is not None:
-                opened.append(flags)
-            return os_open(path, flags, *args, **kwargs)
+    def count_descriptor_reads(path, flags, *args, **kwargs):
+        if path == watched.name and kwargs.get("dir_fd") is not None:
+            opened.append(flags)
+        return os_open(path, flags, *args, **kwargs)
 
-        monkeypatch.setattr(freeze.os, "open", count_descriptor_reads)
-    else:
-        path_open = Path.open
-
-        def count_path_reads(self, mode="r", *args, **kwargs):
-            if self == watched and "r" in mode:
-                opened.append(mode)
-            return path_open(self, mode, *args, **kwargs)
-
-        monkeypatch.setattr(Path, "open", count_path_reads)
+    monkeypatch.setattr(freeze.os, "open", count_descriptor_reads)
     freeze.freeze_ratings(rating_paths, **options)
     assert len(opened) == 1, opened
 

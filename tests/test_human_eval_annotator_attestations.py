@@ -96,6 +96,35 @@ def test_valid_attestations_bind_exact_pseudonymous_annotator_set(tmp_path):
     }
 
 
+def test_attestation_path_replacement_during_capture_is_rejected(
+    tmp_path, monkeypatch
+):
+    path = _write_attestations(tmp_path, [_row("synthetic-a")])
+    displaced = tmp_path / "displaced-attestations.csv"
+    initial = path.stat()
+    target = (initial.st_dev, initial.st_ino)
+    real_pread = freeze.os.pread
+    replacements = []
+
+    def replace_after_read(file_descriptor, size, offset):
+        content = real_pread(file_descriptor, size, offset)
+        opened = freeze.os.fstat(file_descriptor)
+        if content and not replacements and (opened.st_dev, opened.st_ino) == target:
+            path.rename(displaced)
+            _write_attestations(tmp_path, [_row("synthetic-b")])
+            replacements.append(True)
+        return content
+
+    monkeypatch.setattr(freeze.os, "pread", replace_after_read)
+
+    with pytest.raises(
+        ValueError,
+        match="annotator attestations changed while it was being read",
+    ):
+        freeze._load_annotator_attestations(path)
+    assert replacements == [True]
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

@@ -273,9 +273,10 @@ def _load_annotator_attestations(path: Path, *, content: bytes | None = None):
     """Capture and validate coordinator attestations without retaining names."""
     path = Path(path)
     if content is None:
-        if path.is_symlink() or not path.is_file():
-            raise ValueError(f"annotator attestations must be a regular file: {path}")
-        content = path.read_bytes()
+        content = _capture_regular_input(
+            path,
+            label="annotator attestations",
+        )
     try:
         text = content.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -990,16 +991,15 @@ def freeze_ratings(
     assignment_plan_path = Path(assignment_plan_path)
     annotator_guide_path = Path(annotator_guide_path)
     output_root = Path(output_root)
-    producer_content = Path(__file__).resolve().read_bytes()
-    content_validator_content = Path(packet_build.__file__).resolve().read_bytes()
+    producer_content = _capture_regular_input(
+        Path(__file__),
+        label="ratings freezer implementation",
+    )
+    content_validator_content = _capture_regular_input(
+        Path(packet_build.__file__),
+        label="annotator content validator implementation",
+    )
     content_validator_runtime = packet_build.content_validator_runtime_contract()
-
-    if not protocol_path.is_file():
-        raise ValueError(f"frozen human-evaluation protocol is missing: {protocol_path}")
-    if not assignment_plan_path.is_file():
-        raise ValueError(f"frozen human-evaluation assignment plan is missing: {assignment_plan_path}")
-    if not annotator_guide_path.is_file():
-        raise ValueError(f"frozen human-evaluation annotator guide is missing: {annotator_guide_path}")
 
     destination_error = (
         "refusing to overwrite an existing human-evaluation output path: "
@@ -1010,12 +1010,22 @@ def freeze_ratings(
 
     # Capture packet and protocol identity before processing any ratings.
     # These are per-file snapshots, not a lock on the caller's working files.
-    if not packet_path.is_file():
-        raise ValueError(f"blinded packet is missing: {packet_path}")
-    packet_content = packet_path.read_bytes()
-    protocol_content = protocol_path.read_bytes()
-    assignment_content = assignment_plan_path.read_bytes()
-    annotator_guide_content = annotator_guide_path.read_bytes()
+    packet_content = _capture_regular_input(
+        packet_path,
+        label="blinded packet",
+    )
+    protocol_content = _capture_regular_input(
+        protocol_path,
+        label="frozen human-evaluation protocol",
+    )
+    assignment_content = _capture_regular_input(
+        assignment_plan_path,
+        label="frozen human-evaluation assignment plan",
+    )
+    annotator_guide_content = _capture_regular_input(
+        annotator_guide_path,
+        label="frozen human-evaluation annotator guide",
+    )
     (
         protocol_sha256,
         assignment_plan_sha256,

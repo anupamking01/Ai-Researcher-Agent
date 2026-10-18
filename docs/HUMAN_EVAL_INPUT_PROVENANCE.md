@@ -6,10 +6,18 @@ rubric, assignment plan, or automated analysis plan.
 
 ## What the manifest binds
 
-Each ratings CSV is read once into an in-memory byte snapshot. The importer
-computes its SHA-256 and byte count from that snapshot and decodes those same
-bytes for CSV validation and scoring. An editor saving the path after capture
-cannot cause one revision's digest to attest to another revision's scores.
+Every file that determines the blinded freeze is read once into an in-memory
+byte snapshot through a non-symlink regular-file descriptor under a bound
+regular parent directory. This includes each ratings CSV, the blinded packet,
+the three frozen governing documents, the coordinator attestation CSV, and the
+archived freezer and annotator-content-validator implementations. Capture
+fails closed if the file, its immediate parent, or the visible pathname is
+replaced while bytes are being read.
+
+The importer computes each ratings CSV's SHA-256 and byte count from its
+captured snapshot and decodes those same bytes for CSV validation and scoring.
+An editor saving the path after capture cannot cause one revision's digest to
+attest to another revision's scores.
 
 The blinded packet is also captured once. Its allowed blind IDs, recorded byte
 count, and SHA-256 all describe the same captured content. Protocol,
@@ -17,8 +25,8 @@ assignment-plan, and annotator-guide fingerprints are captured before processing
 ratings, not after agreement has been calculated. Output fingerprints still
 describe the generated files.
 
-The coordinator-only annotator attestation CSV is likewise captured once,
-strictly parsed from those bytes, retained at
+The coordinator-only annotator attestation CSV is likewise strictly parsed
+from its descriptor-bound bytes, retained at
 `governing_inputs/annotator_attestations.csv`, and bound by byte count, SHA-256,
 and annotator count. Its pseudonymous ID set must exactly equal the IDs in the
 raw submissions. The independent verifier repeats the strict parse from the
@@ -150,11 +158,12 @@ Use a fresh output directory for a later freeze rather than replacing a snapshot
 
 These are **per-file snapshots**, not an atomic transaction across all inputs,
 a filesystem lock, or proof that a submitted score came from an independent
-human. The tool does not prevent another process from editing source files after
-capture. Later edits do not change the retained archive; supplying the external
-files to the verifier is an optional additional cross-check against that
-in-bundle source. The manifest attests to captured input bytes, not the latest
-contents of a path.
+human. Concurrent replacement during an individual capture is rejected, but
+the tool does not prevent another process from editing a source after that
+capture finishes. Later edits do not change the retained archive; supplying the
+external files to the verifier is an optional additional cross-check against
+that in-bundle source. The manifest attests to captured input bytes, not the
+latest contents of a path.
 
 ## Offline regression coverage
 
