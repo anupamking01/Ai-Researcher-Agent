@@ -123,7 +123,10 @@ commit/tree drift therefore aborts before any treatment call instead of allowing
 locally modified code to masquerade as the recorded commit. The check also
 requires Git's top-level directory to be the project root and rejects
 `assume-unchanged` or `skip-worktree` index flags, closing Git states that could
-otherwise hide modified treatment source.
+otherwise hide modified treatment source. Repository-discovery and object/index
+overrides from inherited `GIT_*` environment variables are removed from these
+read-only probes, so an external repository cannot supply the recorded commit,
+tree, status, or index state for the project working tree.
 
 These fields are prospective provenance. They do not retroactively add environment
 metadata to the already-completed canonical treatment artifact and is not a

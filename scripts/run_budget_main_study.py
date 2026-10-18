@@ -57,34 +57,44 @@ def _check_environment() -> None:
 
 def _git_source_state() -> dict:
     """Return immutable source identifiers only for a clean Git checkout."""
+    git_environment = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith("GIT_")
+    }
     try:
         repository_root = subprocess.check_output(
             ["git", "rev-parse", "--show-toplevel"],
             cwd=REPO_ROOT,
+            env=git_environment,
             text=True,
             stderr=subprocess.DEVNULL,
         ).strip()
         commit = subprocess.check_output(
             ["git", "rev-parse", "--verify", "HEAD^{commit}"],
             cwd=REPO_ROOT,
+            env=git_environment,
             text=True,
             stderr=subprocess.DEVNULL,
         ).strip()
         tree = subprocess.check_output(
             ["git", "rev-parse", "--verify", "HEAD^{tree}"],
             cwd=REPO_ROOT,
+            env=git_environment,
             text=True,
             stderr=subprocess.DEVNULL,
         ).strip()
         status = subprocess.check_output(
             ["git", "status", "--porcelain=v1", "--untracked-files=all"],
             cwd=REPO_ROOT,
+            env=git_environment,
             text=True,
             stderr=subprocess.DEVNULL,
         )
         index_entries = subprocess.check_output(
             ["git", "ls-files", "-v", "-z"],
             cwd=REPO_ROOT,
+            env=git_environment,
             text=True,
             stderr=subprocess.DEVNULL,
         )

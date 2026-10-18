@@ -110,6 +110,29 @@ def test_git_source_state_rejects_ancestor_repository(tmp_path, monkeypatch):
         run_budget_main_study._git_source_state()
 
 
+def test_git_source_state_ignores_repository_override_environment(
+    tmp_path, monkeypatch
+):
+    real_root = tmp_path / "real-project"
+    real_root.mkdir()
+    source = _initialize_git_repository(real_root)
+
+    spoof_root = tmp_path / "spoof-project"
+    spoof_root.mkdir()
+    spoof_source = _initialize_git_repository(spoof_root)
+    spoof_source.write_text("VALUE = 2\n", encoding="utf-8")
+    _git("add", "source.py", cwd=spoof_root)
+    _git("commit", "-q", "-m", "spoof changed source", cwd=spoof_root)
+
+    source.write_text("VALUE = 2\n", encoding="utf-8")
+    monkeypatch.setattr(run_budget_main_study, "REPO_ROOT", real_root)
+    monkeypatch.setenv("GIT_DIR", str(spoof_root / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(real_root))
+
+    with pytest.raises(SystemExit, match="Git working tree is not clean"):
+        run_budget_main_study._git_source_state()
+
+
 def test_execution_environment_records_normalized_sorted_distributions(monkeypatch):
     distributions = [
         types.SimpleNamespace(metadata={"Name": "Zeta_Package"}, version="2.0"),
