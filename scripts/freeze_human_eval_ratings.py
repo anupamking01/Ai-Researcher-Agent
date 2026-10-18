@@ -359,6 +359,99 @@ def _validate_annotator_attestation_coverage(
         )
 
 
+def _capture_regular_input(path: Path, *, label: str) -> bytes:
+    """Capture one stable, path-bound regular file without following symlinks."""
+    path = Path(path)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(
+        os, "O_NOFOLLOW", 0
+    )
+    try:
+        parent_fd = os.open(path.parent, directory_flags)
+    except OSError as exc:
+        raise ValueError(
+            f"{label} parent must be a regular directory: {path.parent}"
+        ) from exc
+    try:
+        parent = os.fstat(parent_fd)
+        if not stat.S_ISDIR(parent.st_mode):
+            raise ValueError(
+                f"{label} parent must be a regular directory: {path.parent}"
+            )
+        file_flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+        file_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(
+            os, "O_NOFOLLOW", 0
+        )
+        try:
+            file_fd = os.open(path.name, file_flags, dir_fd=parent_fd)
+        except OSError as exc:
+            raise ValueError(f"{label} must be a regular file: {path}") from exc
+        try:
+            before = os.fstat(file_fd)
+            if not stat.S_ISREG(before.st_mode):
+                raise ValueError(f"{label} must be a regular file: {path}")
+            chunks = []
+            offset = 0
+            while True:
+                chunk = os.pread(file_fd, 1024 * 1024, offset)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                offset += len(chunk)
+            after = os.fstat(file_fd)
+            before_identity = (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+                before.st_ctime_ns,
+            )
+            after_identity = (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+            )
+            if before_identity != after_identity:
+                raise ValueError(f"{label} changed while it was being read")
+            try:
+                current = os.stat(
+                    path.name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+                visible_parent = os.stat(path.parent, follow_symlinks=False)
+            except OSError as exc:
+                raise ValueError(f"{label} changed while it was being read") from exc
+            parent_identity = (
+                parent.st_dev,
+                parent.st_ino,
+                parent.st_size,
+                parent.st_mtime_ns,
+                parent.st_ctime_ns,
+            )
+            visible_parent_identity = (
+                visible_parent.st_dev,
+                visible_parent.st_ino,
+                visible_parent.st_size,
+                visible_parent.st_mtime_ns,
+                visible_parent.st_ctime_ns,
+            )
+            if (
+                not stat.S_ISREG(current.st_mode)
+                or (current.st_dev, current.st_ino) != (after.st_dev, after.st_ino)
+                or not stat.S_ISDIR(visible_parent.st_mode)
+                or visible_parent_identity != parent_identity
+            ):
+                raise ValueError(f"{label} changed while it was being read")
+            return b"".join(chunks)
+        finally:
+            os.close(file_fd)
+    finally:
+        os.close(parent_fd)
+
+
 def _load_ratings(
     rating_paths: list[Path],
     *,
@@ -378,11 +471,12 @@ def _load_ratings(
 
     for source_index, path in enumerate(rating_paths, start=1):
         source_annotators: set[str] = set()
-        if not path.is_file():
-            raise ValueError(f"ratings file is missing: {path}")
         # Parse and fingerprint the same captured bytes. Reopening a live CSV
         # after hashing can bind one revision's digest to another's scores.
-        content = path.read_bytes()
+        content = _capture_regular_input(
+            path,
+            label=f"ratings input {source_index}",
+        )
         captured_inputs.append(content)
         sources.append(
             {

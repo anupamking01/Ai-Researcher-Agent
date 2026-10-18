@@ -80,6 +80,9 @@ def _inject_edit(case, monkeypatch, kind):
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     before = _snapshot(root)
     real_read = Path.read_bytes
+    real_pread = freeze.os.pread
+    path_stat = path.stat()
+    target_identity = (path_stat.st_dev, path_stat.st_ino)
     reads = []
     agreement_reads = []
 
@@ -93,7 +96,19 @@ def _inject_edit(case, monkeypatch, kind):
             agreement_reads.append(content)
         return content
 
+    def observe_descriptor_read(file_descriptor, size, offset):
+        content = real_pread(file_descriptor, size, offset)
+        opened = freeze.os.fstat(file_descriptor)
+        if (
+            content
+            and offset == 0
+            and (opened.st_dev, opened.st_ino) == target_identity
+        ):
+            reads.append(content)
+        return content
+
     monkeypatch.setattr(Path, "read_bytes", edit_after_read)
+    monkeypatch.setattr(freeze.os, "pread", observe_descriptor_read)
     return first, second, before, reads, agreement_reads
 
 

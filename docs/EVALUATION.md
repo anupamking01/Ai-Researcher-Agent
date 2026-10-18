@@ -402,6 +402,12 @@ JSON artifact, rejects symlinked roots and files, duplicate JSON keys, schema
 type confusion, receipt tampering, and submission or bundle substitution. The
 ratings and bundle remain blinded throughout this check.
 
+Both this single-submission preflight and the later multi-annotator freeze
+capture every submitted ratings CSV through a non-symlink regular-file
+descriptor under a bound regular parent directory. They reject non-regular
+inputs and detect file or parent replacement while bytes are being captured;
+parsing, hashing, and archival all consume the same captured bytes.
+
 Annotators must not receive `blinding_key.csv` until ratings are frozen. The
 entire 40-report packet must be independently double-scored and inter-annotator
 agreement reported before adjudication. The coordinator must provide a

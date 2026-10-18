@@ -241,6 +241,61 @@ def test_preflight_never_reads_coordinator_blinding_key(tmp_path, monkeypatch):
     assert receipt["status"] == "human_eval_annotator_submission_verified"
 
 
+def test_preflight_rejects_symlinked_ratings_submission(tmp_path):
+    bundle = _write_bundle(tmp_path / "bundle")
+    original = _write_submission(
+        tmp_path / "original.csv",
+        [_rating_row("ann-a", "H001"), _rating_row("ann-a", "H002")],
+    )
+    submission = tmp_path / "linked.csv"
+    submission.symlink_to(original)
+
+    with pytest.raises(ValueError, match="ratings input 1 must be a regular file"):
+        freeze.preflight_annotator_submission(
+            submission,
+            annotator_bundle_root=bundle,
+        )
+
+
+def test_preflight_rejects_ratings_path_replacement_during_capture(
+    tmp_path, monkeypatch
+):
+    bundle = _write_bundle(tmp_path / "bundle")
+    submission = _write_submission(
+        tmp_path / "ann-a.csv",
+        [_rating_row("ann-a", "H001"), _rating_row("ann-a", "H002")],
+    )
+    displaced = tmp_path / "displaced.csv"
+    initial = submission.stat()
+    target = (initial.st_dev, initial.st_ino)
+    real_pread = freeze.os.pread
+    replacements = []
+
+    def replace_after_read(file_descriptor, size, offset):
+        content = real_pread(file_descriptor, size, offset)
+        opened = freeze.os.fstat(file_descriptor)
+        if content and not replacements and (opened.st_dev, opened.st_ino) == target:
+            submission.rename(displaced)
+            _write_submission(
+                submission,
+                [
+                    _rating_row("ann-a", "H001", score="3"),
+                    _rating_row("ann-a", "H002", score="3"),
+                ],
+            )
+            replacements.append(True)
+        return content
+
+    monkeypatch.setattr(freeze.os, "pread", replace_after_read)
+
+    with pytest.raises(ValueError, match="changed while it was being read"):
+        freeze.preflight_annotator_submission(
+            submission,
+            annotator_bundle_root=bundle,
+        )
+    assert replacements == [True]
+
+
 def test_preflight_cli_prints_blinded_receipt_without_writing_outputs(tmp_path):
     bundle = _write_bundle(tmp_path / "bundle")
     submission = _write_submission(
