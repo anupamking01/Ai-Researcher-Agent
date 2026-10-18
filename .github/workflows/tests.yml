@@ -24,8 +24,9 @@ jobs:
 
       - name: Install application and test dependencies
         run: |
-          pip install -r requirements.txt
-          pip install -r requirements-dev.txt
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
+          python -m pip check
 
       - name: Compile research code
         run: python -m compileall -q agent logic scripts tests settings scrape text_preprocess

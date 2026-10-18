@@ -127,6 +127,14 @@ inventory, so a recorded environment cannot silently claim a dependency lock it
 did not satisfy. Extra installed distributions remain visible in the inventory
 without being treated as part of the application lock.
 
+All repository workflows install requirements through `python -m pip`, binding
+dependency resolution to the exact interpreter selected by `setup-python`.
+They run `python -m pip check` after the application and development
+requirements are installed, so an inconsistent resolved environment fails
+before offline tests, analysis, evaluator recovery, or any live research step.
+This is a prospective execution safeguard; it does not alter or reinterpret
+the preserved pilot or canonical main-study artifacts.
+
 The same prospective preflight requires a clean Git checkout and records both
 the exact commit object and its tree object. The source state is checked again
 after treatment modules load and before the create-only manifest is written. A
