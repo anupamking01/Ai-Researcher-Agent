@@ -1,4 +1,5 @@
 import asyncio
+import builtins
 import hashlib
 import json
 import subprocess
@@ -133,7 +134,14 @@ def test_git_source_state_ignores_repository_override_environment(
         run_budget_main_study._git_source_state()
 
 
-def test_execution_environment_records_normalized_sorted_distributions(monkeypatch):
+def test_execution_environment_records_normalized_sorted_distributions(
+    tmp_path, monkeypatch
+):
+    python_version_file = tmp_path / ".python-version"
+    python_version_file.write_text("3.11.99\n", encoding="utf-8")
+    monkeypatch.setattr(
+        run_budget_main_study, "PYTHON_VERSION_FILE", python_version_file
+    )
     distributions = [
         types.SimpleNamespace(metadata={"Name": "Zeta_Package"}, version="2.0"),
         types.SimpleNamespace(metadata={"Name": "alpha.package"}, version="1.0"),
@@ -160,6 +168,7 @@ def test_execution_environment_records_normalized_sorted_distributions(monkeypat
 
     assert run_budget_main_study._execution_environment() == {
         "python_implementation": "SyntheticPython",
+        "python_version_pin": "3.11.99",
         "python_version": "3.11.99",
         "platform": "synthetic-runner",
         "installed_distributions": [
@@ -168,6 +177,170 @@ def test_execution_environment_records_normalized_sorted_distributions(monkeypat
             {"name": "zeta-package", "version": "2.0"},
         ],
     }
+
+
+def test_execution_environment_accepts_patch_within_major_minor_pin(
+    tmp_path, monkeypatch
+):
+    python_version_file = tmp_path / ".python-version"
+    python_version_file.write_text("3.11\n", encoding="utf-8")
+    monkeypatch.setattr(
+        run_budget_main_study, "PYTHON_VERSION_FILE", python_version_file
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "importlib",
+        types.SimpleNamespace(
+            metadata=types.SimpleNamespace(distributions=lambda: [])
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "platform",
+        types.SimpleNamespace(
+            python_implementation=lambda: "CPython",
+            python_version=lambda: "3.11.99",
+            platform=lambda: "synthetic-runner",
+        ),
+        raising=False,
+    )
+
+    environment = run_budget_main_study._execution_environment()
+
+    assert environment["python_version_pin"] == "3.11"
+    assert environment["python_version"] == "3.11.99"
+
+
+@pytest.mark.parametrize(
+    ("pin", "active_python"),
+    [("3.11", "3.12.1"), ("3.11.17", "3.11.18")],
+)
+def test_execution_environment_rejects_python_outside_repository_pin(
+    tmp_path, monkeypatch, pin, active_python
+):
+    python_version_file = tmp_path / ".python-version"
+    python_version_file.write_text(f"{pin}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "PYTHON_VERSION_FILE",
+        python_version_file,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "importlib",
+        types.SimpleNamespace(
+            metadata=types.SimpleNamespace(distributions=lambda: [])
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "platform",
+        types.SimpleNamespace(
+            python_implementation=lambda: "CPython",
+            python_version=lambda: active_python,
+            platform=lambda: "synthetic-runner",
+        ),
+        raising=False,
+    )
+
+    with pytest.raises(SystemExit, match=f"does not match repository pin {pin}"):
+        run_budget_main_study._execution_environment()
+
+
+@pytest.mark.parametrize("pin", ["3", "3.11\n3.12", "python-3.11"])
+def test_execution_environment_rejects_malformed_repository_pin(
+    tmp_path, monkeypatch, pin
+):
+    python_version_file = tmp_path / ".python-version"
+    python_version_file.write_text(pin, encoding="utf-8")
+    monkeypatch.setattr(
+        run_budget_main_study, "PYTHON_VERSION_FILE", python_version_file
+    )
+
+    with pytest.raises(SystemExit, match="Invalid repository Python version pin"):
+        run_budget_main_study._execution_environment()
+
+
+def test_execution_environment_rejects_missing_repository_pin(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "PYTHON_VERSION_FILE",
+        tmp_path / ".python-version",
+    )
+
+    with pytest.raises(SystemExit, match="Cannot read the repository Python version pin"):
+        run_budget_main_study._execution_environment()
+
+
+def test_main_study_rejects_unpinned_python_before_treatment_imports(
+    tmp_path, monkeypatch
+):
+    python_version_file = tmp_path / ".python-version"
+    python_version_file.write_text("3.11\n", encoding="utf-8")
+    monkeypatch.setattr(
+        run_budget_main_study, "PYTHON_VERSION_FILE", python_version_file
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "platform",
+        types.SimpleNamespace(
+            python_implementation=lambda: "CPython",
+            python_version=lambda: "3.12.1",
+            platform=lambda: "synthetic-runner",
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(run_budget_main_study, "_check_environment", lambda: None)
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "_load_task_file",
+        lambda _path: (
+            "main-budget-v1-test",
+            [_valid_payload()["tasks"][0]],
+            {"path": "tasks.json", "size_bytes": 1, "sha256": "a" * 64},
+        ),
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "_load_pricing",
+        lambda _path: (
+            {
+                "models": {
+                    "test-smart": {"input": 1.0, "output": 2.0},
+                    "test-fast": {"input": 0.5, "output": 1.0},
+                }
+            },
+            {"path": "pricing.json", "size_bytes": 1, "sha256": "b" * 64},
+        ),
+    )
+    monkeypatch.setattr(
+        run_budget_main_study, "_preflight_new_study_state", lambda _pricing: 0.0
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "_git_source_state",
+        lambda: {"commit": "1" * 40, "tree": "2" * 40},
+    )
+    monkeypatch.setattr(
+        run_budget_main_study.sys, "argv", ["run_budget_main_study.py"]
+    )
+    monkeypatch.setenv("SMART_LLM_MODEL", "test-smart")
+    monkeypatch.setenv("FAST_LLM_MODEL", "test-fast")
+
+    real_import = builtins.__import__
+
+    def reject_treatment_import(name, *args, **kwargs):
+        if name in {"logic.experiment", "logic.run"}:
+            raise AssertionError(f"treatment module imported before Python gate: {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", reject_treatment_import)
+
+    with pytest.raises(SystemExit, match="does not match repository pin 3.11"):
+        asyncio.run(run_budget_main_study.main())
 
 
 def test_task_loader_binds_validated_tasks_to_exact_file_snapshot(tmp_path):
@@ -270,6 +443,7 @@ def test_main_study_manifest_records_task_snapshot_before_execution(tmp_path, mo
     monkeypatch.setattr(run_budget_main_study, "PRICING_FILE", pricing_file)
     expected_environment = {
         "python_implementation": "SyntheticPython",
+        "python_version_pin": "3.11",
         "python_version": "3.11.99",
         "platform": "synthetic-runner",
         "installed_distributions": [
@@ -380,6 +554,7 @@ def test_main_study_rejects_source_drift_while_loading_treatment_code(
         "_execution_environment",
         lambda: {
             "python_implementation": "SyntheticPython",
+            "python_version_pin": "3.11",
             "python_version": "3.11.99",
             "platform": "synthetic-runner",
             "installed_distributions": [],

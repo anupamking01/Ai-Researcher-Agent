@@ -39,6 +39,7 @@ if str(REPO_ROOT) not in sys.path:
 REQUIRED_ENV = ("OPENAI_API_KEY", "SMART_LLM_MODEL", "FAST_LLM_MODEL", "TEMPERATURE")
 DEFAULT_TASK_FILE = REPO_ROOT / "experiments" / "main_budget_tasks.json"
 PRICING_FILE = REPO_ROOT / "experiments" / "openai_pricing_2026-09-08.json"
+PYTHON_VERSION_FILE = REPO_ROOT / ".python-version"
 TRACE_ROOT = REPO_ROOT / "outputs" / "experiment_traces"
 VARIANTS = ("D3", "D6", "P6", "P6V")
 VARIANT_SOURCE_BUDGETS = {"D3": 3, "D6": 6, "P6": 6, "P6V": 6}
@@ -122,6 +123,23 @@ def _git_source_state() -> dict:
 
 def _execution_environment() -> dict:
     """Capture the interpreter and installed distributions used by treatments."""
+    try:
+        pinned_python = PYTHON_VERSION_FILE.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise SystemExit(
+            "Cannot read the repository Python version pin for main study"
+        ) from exc
+    if not re.fullmatch(r"\d+\.\d+(?:\.\d+)?", pinned_python):
+        raise SystemExit("Invalid repository Python version pin for main study")
+
+    active_python = platform.python_version()
+    pinned_parts = pinned_python.split(".")
+    if active_python.split(".")[: len(pinned_parts)] != pinned_parts:
+        raise SystemExit(
+            f"Active Python {active_python} does not match repository pin "
+            f"{pinned_python}; refusing main-study execution"
+        )
+
     distributions = []
     for distribution in importlib.metadata.distributions():
         name = str(distribution.metadata.get("Name") or "").strip()
@@ -135,7 +153,8 @@ def _execution_environment() -> dict:
 
     return {
         "python_implementation": platform.python_implementation(),
-        "python_version": platform.python_version(),
+        "python_version_pin": pinned_python,
+        "python_version": active_python,
         "platform": platform.platform(),
         "installed_distributions": [
             {"name": name, "version": version}

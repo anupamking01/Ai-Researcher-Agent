@@ -113,7 +113,10 @@ platform string, and a sorted PEP-503-normalized inventory of every installed
 Python distribution and version. This describes the environment that actually
 loaded the treatment code, including transitive dependencies, rather than only
 the intended top-level requirements. The inventory is captured before treatment
-model code is imported or any treatment call begins.
+model code is imported or any treatment call begins. The runner reads the
+version-controlled `.python-version` pin, records it alongside the exact runtime
+patch version, and refuses a runtime outside that pinned major/minor (or exact
+patch, when the repository pin includes one) before treatment imports or calls.
 
 The same prospective preflight requires a clean Git checkout and records both
 the exact commit object and its tree object. The source state is checked again
@@ -129,7 +132,7 @@ read-only probes, so an external repository cannot supply the recorded commit,
 tree, status, or index state for the project working tree.
 
 These fields are prospective provenance. They do not retroactively add environment
-metadata to the already-completed canonical treatment artifact and is not a
+metadata to the already-completed canonical treatment artifact and are not a
 reason to rerun or replace those outcomes. The canonical run retains its
 original GitHub Actions workflow, Git commit, dependency files, and logs; their
 environment-recording limits remain a threat to exact replication.

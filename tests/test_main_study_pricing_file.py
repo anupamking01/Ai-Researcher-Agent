@@ -129,6 +129,7 @@ def test_main_study_manifest_records_pricing_snapshot_before_execution(
         "_execution_environment",
         lambda: {
             "python_implementation": "SyntheticPython",
+            "python_version_pin": "3.11",
             "python_version": "3.11.99",
             "platform": "synthetic-runner",
             "installed_distributions": [],
