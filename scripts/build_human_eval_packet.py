@@ -296,6 +296,21 @@ def _consistent_trace_identity(
     return trace_value or experiment_value
 
 
+def _validated_trace_sections(payload: dict, *, trace_path: Path) -> tuple[dict, dict]:
+    """Require the canonical treatment-trace envelope used by this study."""
+    if type(payload.get("schema_version")) is not int or payload["schema_version"] != 2:
+        raise ValueError(
+            f"Experiment trace {trace_path} schema_version must equal integer 2"
+        )
+    experiment = payload.get("experiment")
+    trace = payload.get("trace")
+    if not isinstance(experiment, dict) or not isinstance(trace, dict):
+        raise ValueError(
+            f"Experiment trace {trace_path} experiment and trace must be objects"
+        )
+    return experiment, trace
+
+
 def _load_task_manifest(task_manifest_path: Path) -> dict:
     """Load and validate the frozen task set used by the human-eval packet."""
     task_manifest_path = Path(task_manifest_path)
@@ -346,8 +361,7 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
             )
         trace_content = trace_path.read_bytes()
         payload = _load_json_object(trace_content, label=f"Experiment trace {trace_path}")
-        experiment = payload.get("experiment", {})
-        trace = payload.get("trace", {})
+        experiment, trace = _validated_trace_sections(payload, trace_path=trace_path)
 
         variant_id = _consistent_trace_identity(
             experiment, trace, "variant_id", trace_path=trace_path

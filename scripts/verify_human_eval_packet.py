@@ -282,8 +282,10 @@ def verify_packet(
             label=f"source_artifacts schema for {blind_id}",
         )
         trace_payload = _load_json_object(trace_content, label=f"trace for {blind_id}")
-        experiment = trace_payload.get("experiment", {})
-        trace = trace_payload.get("trace", {})
+        experiment, trace = build._validated_trace_sections(
+            trace_payload,
+            trace_path=trace_path,
+        )
         observed_variant = build._consistent_trace_identity(
             experiment, trace, "variant_id", trace_path=trace_path
         )

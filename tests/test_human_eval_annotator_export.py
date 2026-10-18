@@ -41,6 +41,7 @@ def _source(root: Path, variant: str, task_id: str, question: str) -> None:
     trace.write_text(
         json.dumps(
             {
+                "schema_version": 2,
                 "experiment": {
                     "variant_id": variant,
                     "task_id": task_id,

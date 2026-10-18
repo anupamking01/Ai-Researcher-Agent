@@ -342,6 +342,41 @@ def test_build_packet_rejects_conflicting_task_set_identity(tmp_path):
     assert not output_root.exists()
 
 
+@pytest.mark.parametrize("invalid_version", [None, True, 1, 3, "2"])
+def test_build_packet_rejects_noncanonical_trace_schema_version(
+    tmp_path, invalid_version
+):
+    trace_root = _write_complete_matrix(tmp_path)
+    trace_path = trace_root / "D3" / "d3-main-01.json"
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    if invalid_version is None:
+        payload.pop("schema_version")
+    else:
+        payload["schema_version"] = invalid_version
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+    output_root = tmp_path / "human-eval"
+
+    with pytest.raises(ValueError, match="schema_version must equal integer 2"):
+        _build_packet(trace_root, output_root, tmp_path)
+
+    assert not output_root.exists()
+
+
+@pytest.mark.parametrize("section", ["experiment", "trace"])
+def test_build_packet_rejects_nonobject_trace_sections(tmp_path, section):
+    trace_root = _write_complete_matrix(tmp_path)
+    trace_path = trace_root / "D3" / "d3-main-01.json"
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    payload[section] = []
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+    output_root = tmp_path / "human-eval"
+
+    with pytest.raises(ValueError, match="experiment and trace must be objects"):
+        _build_packet(trace_root, output_root, tmp_path)
+
+    assert not output_root.exists()
+
+
 def test_build_packet_rejects_unfrozen_task_manifest(tmp_path):
     trace_root = _write_complete_matrix(tmp_path)
     task_manifest = _write_task_manifest(tmp_path)
