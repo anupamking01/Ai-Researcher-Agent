@@ -231,6 +231,15 @@ def _contains_raw_html(text: str) -> bool:
     return False
 
 
+def _contains_markdown_image(text: str) -> bool:
+    for token in _MARKDOWN_RENDERER.parse(text):
+        if token.type == "image":
+            return True
+        if any(child.type == "image" for child in (token.children or ())):
+            return True
+    return False
+
+
 def validate_annotator_facing_content(rows: list[dict], *, label: str) -> None:
     """Reject treatment/coordinator markers embedded in annotator-visible text."""
     for index, row in enumerate(rows, start=1):
@@ -243,6 +252,11 @@ def validate_annotator_facing_content(rows: list[dict], *, label: str) -> None:
                 raise ValueError(
                     "annotator-facing treatment leakage risk in "
                     f"{label} {blind_id} {field}: raw HTML is not permitted"
+                )
+            if _contains_markdown_image(text):
+                raise ValueError(
+                    "annotator-facing treatment leakage risk in "
+                    f"{label} {blind_id} {field}: Markdown images are not permitted"
                 )
             rendered_text, attribute_values = _rendered_markdown_parts(text)
             audit_texts = (

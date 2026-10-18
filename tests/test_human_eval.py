@@ -251,7 +251,7 @@ def test_blinding_audit_rejects_opaque_inline_image_payload():
         "LBaqquIDenf2siwbhkFEhmFEo1E+9Pl8giD0er1yufyRu3+T0OFwKBQKjLFcLrfdbh"
         "/zdrvtdrvP5/MnEnLYn6sNZAP9N6A7cIOuqKjm/7IAAAAASUVORK5CYII="
     )
-    with pytest.raises(ValueError, match="opaque data URI"):
+    with pytest.raises(ValueError, match="Markdown images are not permitted"):
         packet_builder.validate_annotator_facing_content(
             [
                 {
@@ -267,11 +267,32 @@ def test_blinding_audit_rejects_opaque_inline_image_payload():
 @pytest.mark.parametrize(
     "markdown",
     [
-        '[results](https://example.test/report "Data: quarterly results")',
-        "![Data: quarterly results](https://example.test/chart.png)",
-        '![chart](https://example.test/chart.png "data: source summary")',
+        "![comparison figure](https://example.test/comparison.png)",
+        "![comparison figure][figure]\n\n[figure]: https://example.test/comparison.png",
     ],
-    ids=["link-title", "image-alt", "image-title"],
+    ids=["inline-image", "reference-image"],
+)
+def test_blinding_audit_rejects_markdown_images(markdown):
+    with pytest.raises(ValueError, match="Markdown images are not permitted"):
+        packet_builder.validate_annotator_facing_content(
+            [
+                {
+                    "blind_id": "H001",
+                    "question": "Synthetic question?",
+                    "report_markdown": markdown,
+                }
+            ],
+            label="synthetic packet",
+        )
+
+
+@pytest.mark.parametrize(
+    "markdown",
+    [
+        '[results](https://example.test/report "Data: quarterly results")',
+        "[Data: quarterly results](https://example.test/report)",
+    ],
+    ids=["link-title", "link-text"],
 )
 def test_blinding_audit_allows_data_prefix_in_non_destination_metadata(markdown):
     packet_builder.validate_annotator_facing_content(
