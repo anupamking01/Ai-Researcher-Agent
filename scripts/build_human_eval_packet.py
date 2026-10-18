@@ -32,6 +32,7 @@ DEFAULT_TASK_MANIFEST = REPO_ROOT / "experiments" / "main_budget_tasks.json"
 EXPECTED_VARIANTS = ("D3", "D6", "P6", "P6V")
 DEFAULT_SEED = 20260915
 PACKET_ARTIFACTS = ("packet.jsonl", "blinding_key.csv", "ratings_template.csv", "manifest.json")
+CONTENT_VALIDATOR_PATH = "scripts/build_human_eval_packet.py"
 MANIFEST_FIELDS = frozenset(
     {
         "schema_version",
@@ -48,6 +49,8 @@ MANIFEST_FIELDS = frozenset(
         "ratings_template",
         "blinding_key",
         "blinding_note",
+        "content_validator",
+        "content_validator_runtime",
     }
 )
 ARTIFACT_KEYS = frozenset({"packet", "ratings_template", "blinding_key"})
@@ -156,8 +159,8 @@ class _RenderedTextParser(HTMLParser):
         self.parts.append(data)
 
 
-def content_validator_runtime_contract() -> dict:
-    """Describe every runtime component that affects visible-text auditing."""
+def _content_validator_runtime_contract_now() -> dict:
+    """Read every runtime component that affects visible-text auditing."""
     return {
         "schema_version": 1,
         "python_implementation": platform.python_implementation(),
@@ -170,6 +173,49 @@ def content_validator_runtime_contract() -> dict:
         "markdown_preset": MARKDOWN_RENDERER_PRESET,
         "markdown_options": dict(MARKDOWN_RENDERER_OPTIONS),
     }
+
+
+def _content_validator_source_contract_now() -> dict:
+    """Read the validator source contract from disk."""
+    content = Path(__file__).resolve().read_bytes()
+    return {
+        "path": CONTENT_VALIDATOR_PATH,
+        "bytes": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
+_LOADED_CONTENT_VALIDATOR_SOURCE = _content_validator_source_contract_now()
+_LOADED_CONTENT_VALIDATOR_RUNTIME = _content_validator_runtime_contract_now()
+
+
+def content_validator_source_contract() -> dict:
+    """Return the source contract captured with the loaded validator code."""
+    return dict(_LOADED_CONTENT_VALIDATOR_SOURCE)
+
+
+def content_validator_runtime_contract() -> dict:
+    """Return the runtime contract captured with the loaded validator code."""
+    return {
+        **_LOADED_CONTENT_VALIDATOR_RUNTIME,
+        "markdown_options": dict(
+            _LOADED_CONTENT_VALIDATOR_RUNTIME["markdown_options"]
+        ),
+    }
+
+
+def require_loaded_content_validator_unchanged(*, operation: str) -> None:
+    """Fail if loaded validation semantics no longer match disk/runtime state."""
+    if _content_validator_source_contract_now() != _LOADED_CONTENT_VALIDATOR_SOURCE:
+        raise ValueError(
+            f"content validator source changed during {operation}: "
+            "loaded validator source differs from current source"
+        )
+    if _content_validator_runtime_contract_now() != _LOADED_CONTENT_VALIDATOR_RUNTIME:
+        raise ValueError(
+            f"content validator runtime changed during {operation}: "
+            "loaded validator runtime differs from current runtime"
+        )
 
 
 def _canonical_audit_text(text: str) -> str:
@@ -568,6 +614,8 @@ def build_packet(
     if type(seed) is not int:
         raise TypeError("seed must be an integer")
 
+    require_loaded_content_validator_unchanged(operation="packet construction")
+
     trace_root = Path(trace_root)
     output_root = Path(output_root)
     task_manifest_path = Path(task_manifest_path)
@@ -624,6 +672,7 @@ def build_packet(
         )
 
     validate_annotator_facing_content(packet_rows, label="packet")
+    require_loaded_content_validator_unchanged(operation="packet construction")
 
     if output_root.is_symlink():
         raise ValueError(f"human-evaluation output root must not be a symbolic link: {output_root}")
@@ -659,7 +708,7 @@ def build_packet(
     _write_csv(ratings_template_path, list(RATING_FIELDS), ratings_rows)
 
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "study_id": "budget-main-v1",
         "task_set_id": task_manifest["task_set_id"],
         "task_manifest": {
@@ -682,6 +731,8 @@ def build_packet(
         "ratings_template": "ratings_template.csv",
         "blinding_key": "blinding_key.csv",
         "blinding_note": BLINDING_NOTE,
+        "content_validator": content_validator_source_contract(),
+        "content_validator_runtime": content_validator_runtime_contract(),
     }
     _write_text_exclusive(
         output_root / "manifest.json",

@@ -173,6 +173,8 @@ def verify_packet(
     task_manifest_path = Path(task_manifest_path)
     repo_root = Path(repo_root)
 
+    build.require_loaded_content_validator_unchanged(operation="packet verification")
+
     if output_root.is_symlink() or not output_root.is_dir():
         raise ValueError(f"human-evaluation output root must be a regular directory: {output_root}")
 
@@ -181,7 +183,7 @@ def verify_packet(
     task_manifest = build._load_task_manifest(task_manifest_path)
 
     _require_equal(set(manifest), build.MANIFEST_FIELDS, label="packet manifest schema")
-    _require_equal(manifest.get("schema_version"), 1, label="packet manifest schema_version")
+    _require_equal(manifest.get("schema_version"), 2, label="packet manifest schema_version")
     _require_equal(manifest.get("study_id"), "budget-main-v1", label="packet manifest study_id")
     _require_equal(manifest.get("task_set_id"), task_manifest["task_set_id"], label="task_set_id")
     _require_equal(manifest.get("variants"), list(build.EXPECTED_VARIANTS), label="variant contract")
@@ -222,6 +224,16 @@ def verify_packet(
 
     _require_equal(
         manifest.get("blinding_note"), build.BLINDING_NOTE, label="blinding notice"
+    )
+    _require_equal(
+        manifest.get("content_validator"),
+        build.content_validator_source_contract(),
+        label="content validator source contract",
+    )
+    _require_equal(
+        manifest.get("content_validator_runtime"),
+        build.content_validator_runtime_contract(),
+        label="content validator runtime contract",
     )
 
     packet_rows = _read_packet(contents["packet"], task_manifest=task_manifest)
@@ -392,6 +404,7 @@ def verify_packet(
         set(task_manifest["tasks"]),
         label="task coverage",
     )
+    build.require_loaded_content_validator_unchanged(operation="packet verification")
 
     return {
         "schema_version": 1,

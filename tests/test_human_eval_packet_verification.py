@@ -160,6 +160,69 @@ def test_packet_verifier_checks_source_mapping_and_artifact_fingerprints(packet_
         }
 
 
+def test_packet_manifest_binds_content_validator_source_and_runtime(packet_case):
+    manifest = json.loads(
+        (packet_case["output_root"] / "manifest.json").read_text(encoding="utf-8")
+    )
+
+    assert manifest["schema_version"] == 2
+    assert manifest["content_validator"] == build.content_validator_source_contract()
+    assert manifest["content_validator_runtime"] == (
+        build.content_validator_runtime_contract()
+    )
+
+
+def test_packet_verifier_rejects_content_validator_source_drift(
+    packet_case, monkeypatch
+):
+    source_contract = {
+        "path": "scripts/build_human_eval_packet.py",
+        "bytes": 1,
+        "sha256": "0" * 64,
+    }
+    monkeypatch.setattr(
+        build,
+        "content_validator_source_contract",
+        lambda: source_contract,
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="content validator source contract mismatch"):
+        _verify(packet_case)
+
+
+def test_packet_verifier_rejects_content_validator_runtime_drift(
+    packet_case, monkeypatch
+):
+    runtime_contract = {
+        **build.content_validator_runtime_contract(),
+        "unicode_database_version": "synthetic-drift",
+    }
+    monkeypatch.setattr(
+        build,
+        "content_validator_runtime_contract",
+        lambda: runtime_contract,
+    )
+
+    with pytest.raises(ValueError, match="content validator runtime contract mismatch"):
+        _verify(packet_case)
+
+
+def test_packet_verifier_rejects_disk_source_drift_from_loaded_validator(
+    packet_case, monkeypatch
+):
+    loaded = build.content_validator_source_contract()
+    monkeypatch.setattr(
+        build,
+        "_content_validator_source_contract_now",
+        lambda: {**loaded, "sha256": "0" * 64},
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="loaded validator source differs"):
+        _verify(packet_case)
+
+
 def test_packet_verifier_rejects_unknown_manifest_field(packet_case):
     manifest_path = packet_case["output_root"] / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

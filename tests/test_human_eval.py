@@ -577,6 +577,27 @@ def test_interrupted_packet_build_is_preserved_and_never_reused(tmp_path, monkey
     assert not (output_root / "manifest.json").exists()
 
 
+def test_build_packet_rejects_validator_source_drift_during_construction(
+    tmp_path, monkeypatch
+):
+    trace_root = _write_complete_matrix(tmp_path)
+    output_root = tmp_path / "human-eval"
+    loaded = packet_builder.content_validator_source_contract()
+    changed = {**loaded, "sha256": "0" * 64}
+    observed = iter((loaded, changed))
+    monkeypatch.setattr(
+        packet_builder,
+        "_content_validator_source_contract_now",
+        lambda: next(observed),
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="changed during packet construction"):
+        _build_packet(trace_root, output_root, tmp_path)
+
+    assert not output_root.exists()
+
+
 def test_nonpacket_children_do_not_block_first_packet_publication(tmp_path):
     trace_root = _write_complete_matrix(tmp_path)
     output_root = tmp_path / "human-eval"
