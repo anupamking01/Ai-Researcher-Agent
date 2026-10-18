@@ -232,23 +232,18 @@ def _verify_manifest_schema(manifest: dict) -> None:
         )
     _require_object_schema(
         manifest["annotator_attestations"],
-        required={"archive_path", "name", "bytes", "sha256", "n_annotators"},
+        required={"archive_path", "bytes", "sha256", "n_annotators"},
         label="annotator_attestations",
     )
     _require_field_types(
         manifest["annotator_attestations"],
         field_types={
             "archive_path": str,
-            "name": str,
             "bytes": int,
             "sha256": str,
             "n_annotators": int,
         },
         label="annotator_attestations",
-    )
-    _require_safe_filename(
-        manifest["annotator_attestations"]["name"],
-        label="annotator_attestations.name",
     )
     _require_object_schema(
         manifest["assignment_coverage"],
@@ -306,17 +301,16 @@ def _verify_manifest_schema(manifest: dict) -> None:
     for index, entry in enumerate(rating_entries, start=1):
         _require_object_schema(
             entry,
-            required={"input_index", "name", "bytes", "sha256"},
+            required={"input_index", "bytes", "sha256"},
             optional={"archive_path"},
             label=f"rating_inputs[{index}]",
         )
         _require_field_types(
             entry,
-            field_types={"input_index": int, "name": str, "bytes": int, "sha256": str},
+            field_types={"input_index": int, "bytes": int, "sha256": str},
             optional_types={"archive_path": str},
             label=f"rating_inputs[{index}]",
         )
-        _require_safe_filename(entry["name"], label=f"rating_inputs[{index}].name")
 
     frozen_entry = manifest["frozen_ratings"]
     _require_object_schema(
@@ -737,11 +731,17 @@ def verify_frozen_snapshot(
             expected_external = [
                 {
                     "input_index": index,
-                    "name": entry.get("name"),
                     "bytes": entry.get("bytes"),
                     "sha256": entry.get("sha256"),
                 }
                 for index, entry in enumerate(rating_entries, start=1)
+            ]
+            external_sources = [
+                {
+                    key: source[key]
+                    for key in ("input_index", "bytes", "sha256")
+                }
+                for source in external_sources
             ]
             _require_equal(
                 external_sources,
@@ -763,6 +763,13 @@ def verify_frozen_snapshot(
             allowed_blind_ids=set(blind_ids),
             require_single_annotator=True,
         )
+        raw_sources = [
+            {
+                key: source[key]
+                for key in ("input_index", "bytes", "sha256")
+            }
+            for source in raw_sources
+        ]
         _require_equal(rating_entries, raw_sources, label="raw rating inputs")
 
     attestation_rows, attestation_source, _ = freeze._load_annotator_attestations(

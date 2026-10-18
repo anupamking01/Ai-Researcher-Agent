@@ -358,7 +358,6 @@ def test_verifier_rejects_rehashed_fragmented_multi_annotator_archive(
         rating_entries.append(
             {
                 "input_index": index,
-                "name": source.name,
                 "bytes": len(content),
                 "sha256": hashlib.sha256(content).hexdigest(),
                 "archive_path": f"raw_rating_inputs/{index:04d}.csv",
@@ -462,7 +461,6 @@ def test_verifier_rejects_rehashed_split_of_one_raw_annotator(submission_inputs)
         first,
         {
             "input_index": 2,
-            "name": "a-part-2.csv",
             "bytes": len(a_second),
             "sha256": hashlib.sha256(a_second).hexdigest(),
             "archive_path": "raw_rating_inputs/0002.csv",

@@ -153,7 +153,6 @@ def test_freeze_manifest_rejects_undeclared_fields_at_every_level(
     [
         ((), "integrity_note"),
         (("rating_inputs", 0), "input_index"),
-        (("rating_inputs", 0), "name"),
     ],
 )
 def test_freeze_manifest_requires_all_declared_fields(frozen_case, object_path, field):
@@ -182,11 +181,6 @@ def test_freeze_manifest_integrity_statement_is_immutable(frozen_case):
     ("field", "value", "error"),
     [
         ("input_index", 99, "rating input 1 index mismatch"),
-        (
-            "name",
-            "../annotator-a.csv",
-            r"rating_inputs\[1\]\.name.*safe filename",
-        ),
     ],
 )
 def test_self_contained_freeze_validates_rating_input_identity_fields(
@@ -217,17 +211,6 @@ def test_rating_input_index_requires_an_integer(frozen_case, value):
     )
 
     with pytest.raises(ValueError, match=r"rating_inputs\[1\]\.input_index.*integer"):
-        _verify(frozen_case)
-
-
-@pytest.mark.parametrize("value", ["..", "annotator\x00.csv"])
-def test_rating_input_name_requires_a_safe_filename(frozen_case, value):
-    _rewrite_manifest(
-        frozen_case,
-        lambda manifest: manifest["rating_inputs"][0].__setitem__("name", value),
-    )
-
-    with pytest.raises(ValueError, match=r"rating_inputs\[1\]\.name.*safe filename"):
         _verify(frozen_case)
 
 

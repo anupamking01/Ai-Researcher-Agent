@@ -190,6 +190,13 @@ The utility deliberately never reads `blinding_key.csv`. Before writing a snapsh
 - `agreement.json` — pre-unblinding exact agreement, mean absolute difference, and quadratic-weighted Cohen's kappa for each annotator pair and rubric dimension;
 - `freeze_manifest.json` — SHA-256 fingerprints of the packet, protocol, retained attestations, retained raw rating inputs, frozen ratings, and agreement output.
 
+Caller-controlled source filenames are not copied into `freeze_manifest.json`:
+ratings and attestation filenames may contain direct identities even when their
+CSV contents use only pseudonymous IDs. The manifest binds each retained input
+by neutral archive path, ordinal input index where applicable, byte count, and
+SHA-256. Coordinators must preserve any filename-to-person mapping separately
+under the applicable governance policy, not inside the blinded research bundle.
+
 An existing frozen snapshot is never overwritten; use a new versioned output directory for any later freeze. With exactly two annotators, the single pair provides the protocol's two-rater agreement statistics. If more than two annotators score the same items, the pairwise values are diagnostics only and a predeclared ordinal multi-rater reliability statistic is still required before treatment-level analysis.
 
 This operational tooling does not change the frozen rubric or the planned human-evaluation estimands. Only after a valid blinded freeze should treatment identities be merged for statistical analysis.

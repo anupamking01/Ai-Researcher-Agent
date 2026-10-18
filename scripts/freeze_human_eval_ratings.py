@@ -35,7 +35,7 @@ DEFAULT_ASSIGNMENT_PLAN = REPO_ROOT / "paper" / "HUMAN_EVAL_ASSIGNMENT_PLAN.md"
 DEFAULT_ANNOTATOR_GUIDE = REPO_ROOT / "paper" / "HUMAN_EVAL_ANNOTATOR_GUIDE.md"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "outputs" / "human_eval" / "frozen-v1"
 FROZEN_PROTOCOL_SHA256 = (
-    "23ff9a94d37b164a90ac084b7f9dcac91799baa8c7355d6668f9fe50bee2aaf9"
+    "de1c03feeda05abbdf554eab4ae530f436e6ee44b47debc93156425185a5d835"
 )
 FROZEN_ASSIGNMENT_PLAN_SHA256 = (
     "add3f2c1a6f64c27213d57d34fea7235ad5f87a0f4f1643e9b2c2b89a1bafea8"
@@ -926,6 +926,17 @@ def freeze_ratings(
                 handle.write(content)
             source["archive_path"] = f"raw_rating_inputs/{archive_name}"
 
+        # Caller-controlled filenames can contain direct annotator identity.
+        # Preserve input order, exact bytes, and fingerprints in the published
+        # bundle, but never copy those local filenames into its manifest.
+        manifest_rating_inputs = [
+            {
+                key: source[key]
+                for key in ("input_index", "archive_path", "bytes", "sha256")
+            }
+            for source in sources
+        ]
+
         provenance_root = staging_root / "provenance"
         provenance_root.mkdir(exist_ok=False)
         producer_rel = "provenance/freeze_human_eval_ratings.py"
@@ -983,7 +994,9 @@ def freeze_ratings(
             },
             "annotator_attestations": {
                 "archive_path": ATTESTATION_ARCHIVE_PATH,
-                **attestation_source,
+                "bytes": attestation_source["bytes"],
+                "sha256": attestation_source["sha256"],
+                "n_annotators": attestation_source["n_annotators"],
             },
             "assignment_coverage": assignment_coverage,
             "producer": {
@@ -997,7 +1010,7 @@ def freeze_ratings(
                 "sha256": hashlib.sha256(content_validator_content).hexdigest(),
             },
             "content_validator_runtime": content_validator_runtime,
-            "rating_inputs": sources,
+            "rating_inputs": manifest_rating_inputs,
             "frozen_ratings": {
                 "path": "frozen_ratings.csv",
                 "bytes": frozen_path.stat().st_size,

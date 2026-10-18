@@ -52,7 +52,10 @@ Raw input hashes are not hashes of normalized CSV text: UTF-8 bytes and line
 endings are retained for fingerprinting. The exact captured bytes that were
 parsed are also written create-only inside the freeze as
 `raw_rating_inputs/0001.csv`, `0002.csv`, and so on. The manifest binds each
-ordered input to its deterministic archive path, byte count, and SHA-256.
+ordered input to its deterministic archive path, byte count, and SHA-256. It
+does not retain the caller-controlled ratings or attestation source filenames,
+because those names may identify annotators or the coordinator. Original names
+and any filename-to-person mapping remain outside the blinded research bundle.
 Existing CSV structure, score, note, and independent-rater coverage checks still
 apply. No treatment key is read.
 
@@ -62,9 +65,9 @@ producer and validator identities, ordered rating-input descriptors, normalized
 output summary, per-dimension counts, and agreement descriptor may contain only
 the fields and JSON value types emitted by the freeze producer. Missing fields,
 added metadata, and objects hidden in scalar fields are rejected before retained
-inputs or computed outputs are trusted. It also
-requires each rating-input index to match its archive order, requires the source
-name to be a single filename, and requires the producer's exact blinded,
+inputs or computed outputs are trusted. It also requires each rating-input index
+to match its archive order, rejects any reintroduced source-name field, and
+requires the producer's exact blinded,
 pre-unblinding integrity statement. Consequently, reserializing a manifest with
 an added treatment label, coordinator field, redirected source identity, or
 misleading integrity claim cannot produce a verified freeze even when every

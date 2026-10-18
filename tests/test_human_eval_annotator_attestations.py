@@ -10,8 +10,8 @@ from scripts import freeze_human_eval_ratings as freeze
 from scripts import verify_human_eval_freeze as verify
 
 
-def _write_attestations(tmp_path, rows, *, fields=None):
-    path = tmp_path / "annotator_attestations.csv"
+def _write_attestations(tmp_path, rows, *, fields=None, filename="annotator_attestations.csv"):
+    path = tmp_path / filename
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
             handle,
@@ -202,12 +202,71 @@ def test_freeze_retains_exact_annotator_attestation_bytes(tmp_path):
     entry = manifest["annotator_attestations"]
     assert entry == {
         "archive_path": "governing_inputs/annotator_attestations.csv",
-        "name": "annotator_attestations.csv",
         "bytes": len(original),
         "sha256": hashlib.sha256(original).hexdigest(),
         "n_annotators": 2,
     }
     assert (output / entry["archive_path"]).read_bytes() == original
+
+
+def test_freeze_manifest_does_not_retain_caller_controlled_source_filenames(tmp_path):
+    packet, ratings = _freeze_inputs(tmp_path)
+    renamed_ratings = []
+    for path, filename in zip(
+        ratings,
+        ("Synthetic_Person_One_ratings.csv", "Synthetic_Person_Two_ratings.csv"),
+    ):
+        renamed = path.with_name(filename)
+        path.rename(renamed)
+        renamed_ratings.append(renamed)
+    attestations = _write_attestations(
+        tmp_path,
+        [_row("synthetic-a"), _row("synthetic-b")],
+        filename="Synthetic_Coordinator_attestations.csv",
+    )
+    output = tmp_path / "frozen"
+
+    manifest = freeze.freeze_ratings(
+        renamed_ratings,
+        annotator_attestations_path=attestations,
+        packet_path=packet,
+        output_root=output,
+    )
+
+    assert "name" not in manifest["annotator_attestations"]
+    assert all("name" not in entry for entry in manifest["rating_inputs"])
+    serialized = (output / "freeze_manifest.json").read_text(encoding="utf-8")
+    assert "Synthetic_Person" not in serialized
+    assert "Synthetic_Coordinator" not in serialized
+
+
+@pytest.mark.parametrize("object_path", [("annotator_attestations",), ("rating_inputs", 0)])
+def test_verifier_rejects_reintroduced_source_filename(tmp_path, object_path):
+    packet, ratings = _freeze_inputs(tmp_path)
+    attestations = _write_attestations(
+        tmp_path,
+        [_row("synthetic-a"), _row("synthetic-b")],
+    )
+    output = tmp_path / "frozen"
+    freeze.freeze_ratings(
+        ratings,
+        annotator_attestations_path=attestations,
+        packet_path=packet,
+        output_root=output,
+    )
+    manifest_path = output / "freeze_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    child = manifest
+    for key in object_path:
+        child = child[key]
+    child["name"] = "Synthetic_Person_source.csv"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="freeze manifest schema mismatch"):
+        verify.verify_frozen_snapshot(freeze_root=output, use_retained_inputs=True)
 
 
 def test_verifier_rejects_false_retained_attestation_after_coherent_rehash(tmp_path):
