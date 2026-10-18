@@ -368,6 +368,24 @@ mean position at 20.5. This is an operational distribution control selected
 before access to reports or ratings; it does not revise the frozen rubric,
 eligibility/exclusion rules, estimands, missingness rules, or analysis plan.
 
+Before accepting a completed blinded CSV, the coordinator can validate it
+against the annotator's exact distribution bundle and retain an immutable
+receipt:
+
+```bash
+python scripts/freeze_human_eval_ratings.py completed-ratings.csv \
+  --preflight-bundle outputs/human_eval/annotator-bundle-canonical-v2 \
+  --preflight-receipt-root outputs/human_eval/preflight-receipts/annotator-01
+```
+
+The optional receipt directory is published atomically and create-only. Its
+schema-version-2 JSON binds the exact submission bytes to the verified bundle
+manifest, packet, blank ratings template, annotator guide, and declared
+presentation order. This preserves treatment-blind intake evidence before the
+multi-annotator freeze; it neither reads the coordinator blinding key nor proves
+annotator identity, independence, or real-world compliance. Those claims remain
+subject to the separate attestations and frozen human-evaluation gates below.
+
 Annotators must not receive `blinding_key.csv` until ratings are frozen. The
 entire 40-report packet must be independently double-scored and inter-annotator
 agreement reported before adjudication. The coordinator must provide a

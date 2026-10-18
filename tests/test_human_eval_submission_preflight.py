@@ -111,12 +111,13 @@ def test_preflight_accepts_one_complete_blinded_submission(tmp_path):
     )
 
     assert receipt == {
-        "schema_version": 1,
+        "schema_version": 2,
         "study_id": "budget-main-v1",
         "status": "human_eval_annotator_submission_verified",
         "annotator_id": "ann-a",
         "n_reports": 2,
         "n_missing_dimension_values": 0,
+        "presentation_order": "canonical",
         "submission": {
             "name": "ann-a.csv",
             "bytes": submission.stat().st_size,
@@ -124,6 +125,13 @@ def test_preflight_accepts_one_complete_blinded_submission(tmp_path):
         },
         "annotator_manifest_sha256": freeze.sha256_file(
             bundle / "annotator_manifest.json"
+        ),
+        "packet_sha256": freeze.sha256_file(bundle / "packet.jsonl"),
+        "ratings_template_sha256": freeze.sha256_file(
+            bundle / "ratings_template.csv"
+        ),
+        "annotator_guide_sha256": freeze.sha256_file(
+            bundle / "annotator_instructions.md"
         ),
     }
 
@@ -250,3 +258,90 @@ def test_preflight_cli_prints_blinded_receipt_without_writing_outputs(tmp_path):
         completed.stdout
     )
     assert not output_root.exists()
+
+
+def test_preflight_cli_can_publish_create_only_receipt(tmp_path):
+    bundle = _write_bundle(tmp_path / "bundle")
+    submission = _write_submission(
+        tmp_path / "ann-a.csv",
+        [_rating_row("ann-a", "H001"), _rating_row("ann-a", "H002")],
+    )
+    receipt_root = tmp_path / "preflight-receipt"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.freeze_human_eval_ratings",
+            str(submission),
+            "--preflight-bundle",
+            str(bundle),
+            "--preflight-receipt-root",
+            str(receipt_root),
+        ],
+        cwd=freeze.REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    retained = json.loads(
+        (receipt_root / "preflight_receipt.json").read_text(encoding="utf-8")
+    )
+    assert retained == freeze.preflight_annotator_submission(
+        submission,
+        annotator_bundle_root=bundle,
+    )
+    assert retained["presentation_order"] == "canonical"
+    assert retained["submission"]["sha256"] == freeze.sha256_file(submission)
+    assert "HUMAN EVAL SUBMISSION PREFLIGHT: PASS (ratings remain blinded)" in (
+        completed.stdout
+    )
+
+
+def test_preflight_receipt_publication_refuses_existing_destination(tmp_path):
+    bundle = _write_bundle(tmp_path / "bundle")
+    submission = _write_submission(
+        tmp_path / "ann-a.csv",
+        [_rating_row("ann-a", "H001"), _rating_row("ann-a", "H002")],
+    )
+    receipt = freeze.preflight_annotator_submission(
+        submission,
+        annotator_bundle_root=bundle,
+    )
+    receipt_root = tmp_path / "existing"
+    receipt_root.mkdir()
+    marker = receipt_root / "keep.txt"
+    marker.write_text("preserve me\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="refusing to overwrite"):
+        freeze.publish_preflight_receipt(receipt, receipt_root)
+
+    assert marker.read_text(encoding="utf-8") == "preserve me\n"
+    assert not (receipt_root / "preflight_receipt.json").exists()
+
+
+def test_preflight_receipt_option_requires_preflight_bundle(tmp_path):
+    submission = _write_submission(
+        tmp_path / "ann-a.csv",
+        [_rating_row("ann-a", "H001"), _rating_row("ann-a", "H002")],
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.freeze_human_eval_ratings",
+            str(submission),
+            "--preflight-receipt-root",
+            str(tmp_path / "receipt"),
+        ],
+        cwd=freeze.REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "requires --preflight-bundle" in completed.stderr

@@ -610,7 +610,7 @@ def preflight_annotator_submission(
 
     source = sources[0]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "study_id": bundle_receipt["study_id"],
         "status": "human_eval_annotator_submission_verified",
         "annotator_id": rows[0]["annotator_id"],
@@ -628,6 +628,10 @@ def preflight_annotator_submission(
         "annotator_manifest_sha256": hashlib.sha256(
             captured["annotator_manifest.json"]
         ).hexdigest(),
+        "packet_sha256": bundle_receipt["packet_sha256"],
+        "ratings_template_sha256": bundle_receipt["ratings_template_sha256"],
+        "annotator_guide_sha256": bundle_receipt["annotator_guide_sha256"],
+        "presentation_order": bundle_receipt["presentation_order"],
     }
 
 
@@ -815,6 +819,62 @@ def _publish_directory_noreplace(staging_root: Path, output_root: Path) -> None:
         error_number,
         f"could not atomically publish human-evaluation freeze: {output_root}",
     )
+
+
+def publish_preflight_receipt(receipt: dict, output_root: Path) -> Path:
+    """Atomically retain a verified blinded-submission receipt, create-only."""
+    output_root = Path(output_root)
+    destination_error = (
+        "refusing to overwrite an existing human-evaluation preflight receipt "
+        f"path: {output_root}; choose a new, nonexistent "
+        "--preflight-receipt-root"
+    )
+    if output_root.exists() or output_root.is_symlink():
+        raise ValueError(destination_error)
+
+    output_root.parent.mkdir(parents=True, exist_ok=True)
+    staging_root = Path(
+        tempfile.mkdtemp(
+            prefix=f".{output_root.name}.staging-",
+            dir=output_root.parent,
+        )
+    )
+    output_fd = _open_bound_directory(staging_root)
+    receipt_bytes = (
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    receipt_fd = -1
+    try:
+        receipt_fd = os.open(
+            "preflight_receipt.json",
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=output_fd,
+        )
+        view = memoryview(receipt_bytes)
+        while view:
+            written = os.write(receipt_fd, view)
+            if written <= 0:
+                raise OSError("could not write human-evaluation preflight receipt")
+            view = view[written:]
+        os.fsync(receipt_fd)
+        os.close(receipt_fd)
+        receipt_fd = -1
+        os.fsync(output_fd)
+
+        _require_directory_binding(staging_root, output_fd)
+        _publish_directory_noreplace(staging_root, output_root)
+        _require_directory_binding(output_root, output_fd)
+        return output_root / "preflight_receipt.json"
+    finally:
+        if receipt_fd >= 0:
+            os.close(receipt_fd)
+        # Retain a failed staging tree for forensic inspection, matching the
+        # freeze publication path's identity-race handling.
+        os.close(output_fd)
 
 
 def freeze_ratings(
@@ -1069,10 +1129,24 @@ def main() -> int:
         type=Path,
         help=(
             "validate exactly one completed ratings CSV against this treatment-blind "
-            "annotator distribution bundle without freezing or writing outputs"
+            "annotator distribution bundle without freezing or unblinding"
+        ),
+    )
+    parser.add_argument(
+        "--preflight-receipt-root",
+        type=Path,
+        help=(
+            "with --preflight-bundle, atomically retain a create-only "
+            "treatment-blind verification receipt in this new directory"
         ),
     )
     args = parser.parse_args()
+
+    if args.preflight_receipt_root is not None and args.preflight_bundle is None:
+        raise SystemExit(
+            "HUMAN EVAL SUBMISSION PREFLIGHT: FAIL: "
+            "--preflight-receipt-root requires --preflight-bundle"
+        )
 
     if args.preflight_bundle is not None:
         if len(args.ratings) != 1:
@@ -1085,6 +1159,11 @@ def main() -> int:
                 args.ratings[0],
                 annotator_bundle_root=args.preflight_bundle,
             )
+            if args.preflight_receipt_root is not None:
+                publish_preflight_receipt(
+                    receipt,
+                    args.preflight_receipt_root,
+                )
         except (OSError, ValueError) as exc:
             raise SystemExit(
                 f"HUMAN EVAL SUBMISSION PREFLIGHT: FAIL: {exc}"
