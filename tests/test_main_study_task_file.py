@@ -2,6 +2,7 @@ import asyncio
 import builtins
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import types
@@ -139,8 +140,21 @@ def test_execution_environment_records_normalized_sorted_distributions(
 ):
     python_version_file = tmp_path / ".python-version"
     python_version_file.write_text("3.11.99\n", encoding="utf-8")
+    requirements_file = tmp_path / "requirements.txt"
+    requirements_file.write_text(
+        "Zeta_Package==2.0\nalpha.package==1.0\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(
         run_budget_main_study, "PYTHON_VERSION_FILE", python_version_file
+    )
+    monkeypatch.setattr(
+        run_budget_main_study, "REQUIREMENTS_FILE", requirements_file
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "_read_requirements_lock",
+        requirements_file.read_bytes,
     )
     distributions = [
         types.SimpleNamespace(metadata={"Name": "Zeta_Package"}, version="2.0"),
@@ -176,6 +190,14 @@ def test_execution_environment_records_normalized_sorted_distributions(
             {"name": "alpha-package", "version": "1.0"},
             {"name": "zeta-package", "version": "2.0"},
         ],
+        "requirements_file": str(requirements_file.resolve()),
+        "requirements_file_sha256": hashlib.sha256(
+            requirements_file.read_bytes()
+        ).hexdigest(),
+        "required_distributions": [
+            {"name": "alpha-package", "version": "1.0"},
+            {"name": "zeta-package", "version": "2.0"},
+        ],
     }
 
 
@@ -184,14 +206,30 @@ def test_execution_environment_accepts_patch_within_major_minor_pin(
 ):
     python_version_file = tmp_path / ".python-version"
     python_version_file.write_text("3.11\n", encoding="utf-8")
+    requirements_file = tmp_path / "requirements.txt"
+    requirements_file.write_text("example-package==1.0\n", encoding="utf-8")
     monkeypatch.setattr(
         run_budget_main_study, "PYTHON_VERSION_FILE", python_version_file
+    )
+    monkeypatch.setattr(
+        run_budget_main_study, "REQUIREMENTS_FILE", requirements_file
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "_read_requirements_lock",
+        requirements_file.read_bytes,
     )
     monkeypatch.setattr(
         run_budget_main_study,
         "importlib",
         types.SimpleNamespace(
-            metadata=types.SimpleNamespace(distributions=lambda: [])
+            metadata=types.SimpleNamespace(
+                distributions=lambda: [
+                    types.SimpleNamespace(
+                        metadata={"Name": "example-package"}, version="1.0"
+                    )
+                ]
+            )
         ),
         raising=False,
     )
@@ -210,6 +248,122 @@ def test_execution_environment_accepts_patch_within_major_minor_pin(
 
     assert environment["python_version_pin"] == "3.11"
     assert environment["python_version"] == "3.11.99"
+
+
+@pytest.mark.parametrize(
+    ("requirements", "distributions", "message"),
+    [
+        (
+            "example-package==1.2.3\n",
+            [
+                types.SimpleNamespace(
+                    metadata={"Name": "example-package"}, version="1.2.4"
+                )
+            ],
+            "requires example-package==1.2.3, found 1.2.4",
+        ),
+        (
+            "example-package==1.2.3\n",
+            [],
+            "missing required distribution example-package==1.2.3",
+        ),
+        (
+            "example-package>=1.2.3\n",
+            [],
+            "must contain only exact name==version pins",
+        ),
+        (
+            "Example_Package==1.2.3\nexample-package==1.2.3\n",
+            [
+                types.SimpleNamespace(
+                    metadata={"Name": "example-package"}, version="1.2.3"
+                )
+            ],
+            "duplicate normalized distribution pin: example-package",
+        ),
+        (
+            "example-package==1.2.3,!=2.0\n",
+            [
+                types.SimpleNamespace(
+                    metadata={"Name": "example-package"}, version="1.2.3,!=2.0"
+                )
+            ],
+            "must contain only exact name==version pins",
+        ),
+    ],
+)
+def test_execution_environment_rejects_unsatisfied_or_ambiguous_requirements(
+    tmp_path, monkeypatch, requirements, distributions, message
+):
+    python_version_file = tmp_path / ".python-version"
+    python_version_file.write_text("3.11\n", encoding="utf-8")
+    requirements_file = tmp_path / "requirements.txt"
+    requirements_file.write_text(requirements, encoding="utf-8")
+    monkeypatch.setattr(
+        run_budget_main_study, "PYTHON_VERSION_FILE", python_version_file
+    )
+    monkeypatch.setattr(
+        run_budget_main_study, "REQUIREMENTS_FILE", requirements_file
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "_read_requirements_lock",
+        requirements_file.read_bytes,
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "importlib",
+        types.SimpleNamespace(
+            metadata=types.SimpleNamespace(distributions=lambda: distributions)
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "platform",
+        types.SimpleNamespace(
+            python_implementation=lambda: "CPython",
+            python_version=lambda: "3.11.99",
+            platform=lambda: "synthetic-runner",
+        ),
+        raising=False,
+    )
+
+    with pytest.raises(SystemExit, match=re.escape(message)):
+        run_budget_main_study._execution_environment()
+
+
+def test_requirements_lock_rejects_tracked_symlink(tmp_path, monkeypatch):
+    _initialize_git_repository(tmp_path)
+    external_requirements = tmp_path.parent / "external-requirements.txt"
+    external_requirements.write_text("example-package==1.0\n", encoding="utf-8")
+    requirements_file = tmp_path / "requirements.txt"
+    requirements_file.symlink_to(external_requirements)
+    _git("add", "requirements.txt", cwd=tmp_path)
+    _git("commit", "-q", "-m", "track requirements symlink", cwd=tmp_path)
+    monkeypatch.setattr(run_budget_main_study, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        run_budget_main_study, "REQUIREMENTS_FILE", requirements_file
+    )
+
+    with pytest.raises(SystemExit, match="tracked regular file at HEAD"):
+        run_budget_main_study._read_requirements_lock()
+
+
+def test_requirements_lock_rejects_ignored_replacement(tmp_path, monkeypatch):
+    _initialize_git_repository(tmp_path)
+    (tmp_path / ".gitignore").write_text("requirements.txt\n", encoding="utf-8")
+    _git("add", ".gitignore", cwd=tmp_path)
+    _git("commit", "-q", "-m", "ignore requirements", cwd=tmp_path)
+    requirements_file = tmp_path / "requirements.txt"
+    requirements_file.write_text("example-package==1.0\n", encoding="utf-8")
+    monkeypatch.setattr(run_budget_main_study, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        run_budget_main_study, "REQUIREMENTS_FILE", requirements_file
+    )
+
+    with pytest.raises(SystemExit, match="tracked regular file at HEAD"):
+        run_budget_main_study._read_requirements_lock()
 
 
 @pytest.mark.parametrize(
