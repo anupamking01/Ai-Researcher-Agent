@@ -55,13 +55,59 @@ def _check_environment() -> None:
     float(os.environ["TEMPERATURE"])
 
 
-def _git_commit() -> str:
+def _git_source_state() -> dict:
+    """Return immutable source identifiers only for a clean Git checkout."""
     try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True, stderr=subprocess.DEVNULL
+        repository_root = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=REPO_ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
         ).strip()
-    except Exception:
-        return "unavailable"
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--verify", "HEAD^{commit}"],
+            cwd=REPO_ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        tree = subprocess.check_output(
+            ["git", "rev-parse", "--verify", "HEAD^{tree}"],
+            cwd=REPO_ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        status = subprocess.check_output(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=REPO_ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        index_entries = subprocess.check_output(
+            ["git", "ls-files", "-v", "-z"],
+            cwd=REPO_ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SystemExit("Cannot record Git source state for main study") from exc
+
+    if Path(repository_root).resolve() != REPO_ROOT.resolve():
+        raise SystemExit("Git repository root does not match main-study repository root")
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
+        raise SystemExit("Cannot record Git source state: invalid commit identifier")
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", tree):
+        raise SystemExit("Cannot record Git source state: invalid tree identifier")
+    if status:
+        raise SystemExit("Git working tree is not clean; refusing main-study execution")
+    if any(
+        entry[:1] == "S" or entry[:1].islower()
+        for entry in index_entries.split("\0")
+        if entry
+    ):
+        raise SystemExit(
+            "Git index hides tracked source state; refusing main-study execution"
+        )
+    return {"commit": commit, "tree": tree}
 
 
 def _execution_environment() -> dict:
@@ -680,12 +726,18 @@ async def main() -> None:
             )
 
     initial_treatment_cost = _preflight_new_study_state(pricing)
+    source_state = _git_source_state()
     execution_environment = _execution_environment()
 
     from logic.experiment import ExperimentConfig
     from logic.run import run_agent
 
     base = ExperimentConfig.from_variant("D3")
+    if _git_source_state() != source_state:
+        raise SystemExit(
+            "Git source state changed while loading treatment code; "
+            "refusing main-study execution"
+        )
     manifest = {
         "schema_version": 1,
         "study_id": "budget-main-v1",
@@ -699,7 +751,8 @@ async def main() -> None:
         "smart_model": os.environ["SMART_LLM_MODEL"],
         "fast_model": os.environ["FAST_LLM_MODEL"],
         "temperature": float(os.environ["TEMPERATURE"]),
-        "git_commit": _git_commit(),
+        "git_commit": source_state["commit"],
+        "git_tree": source_state["tree"],
         "execution_environment": execution_environment,
         "started_at_utc": _utc_now(),
         "max_agent_cost_usd": args.max_agent_cost_usd,

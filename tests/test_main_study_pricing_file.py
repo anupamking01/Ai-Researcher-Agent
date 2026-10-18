@@ -2,6 +2,9 @@ import asyncio
 import builtins
 import hashlib
 import json
+import sys
+import types
+from dataclasses import dataclass
 
 import pytest
 
@@ -123,6 +126,21 @@ def test_main_study_manifest_records_pricing_snapshot_before_execution(
     monkeypatch.setattr(run_budget_main_study, "PRICING_FILE", pricing_file)
     monkeypatch.setattr(
         run_budget_main_study,
+        "_execution_environment",
+        lambda: {
+            "python_implementation": "SyntheticPython",
+            "python_version": "3.11.99",
+            "platform": "synthetic-runner",
+            "installed_distributions": [],
+        },
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "_git_source_state",
+        lambda: {"commit": "1" * 40, "tree": "2" * 40},
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
         "TRACE_ROOT",
         tmp_path / "outputs" / "experiment_traces",
     )
@@ -139,10 +157,28 @@ def test_main_study_manifest_records_pricing_snapshot_before_execution(
     }.items():
         monkeypatch.setenv(name, value)
 
+    @dataclass(frozen=True)
+    class FakeConfig:
+        browse_timeout_seconds: int = 1
+        run_timeout_seconds: int = 2
+        max_concurrent_browses: int = 3
+        task_set_id: str = ""
+        task_id: str = ""
+
+    class FakeExperimentConfig:
+        @classmethod
+        def from_variant(cls, _variant):
+            return FakeConfig()
+
     async def fake_run_agent(**_kwargs):
         return None
 
-    monkeypatch.setattr("logic.run.run_agent", fake_run_agent)
+    experiment_module = types.ModuleType("logic.experiment")
+    experiment_module.ExperimentConfig = FakeExperimentConfig
+    run_module = types.ModuleType("logic.run")
+    run_module.run_agent = fake_run_agent
+    monkeypatch.setitem(sys.modules, "logic.experiment", experiment_module)
+    monkeypatch.setitem(sys.modules, "logic.run", run_module)
 
     asyncio.run(run_budget_main_study.main())
 

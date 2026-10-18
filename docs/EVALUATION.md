@@ -115,7 +115,17 @@ loaded the treatment code, including transitive dependencies, rather than only
 the intended top-level requirements. The inventory is captured before treatment
 model code is imported or any treatment call begins.
 
-This field is prospective provenance. It does not retroactively add environment
+The same prospective preflight requires a clean Git checkout and records both
+the exact commit object and its tree object. The source state is checked again
+after treatment modules load and before the create-only manifest is written. A
+missing repository, tracked or non-ignored untracked worktree change, or
+commit/tree drift therefore aborts before any treatment call instead of allowing
+locally modified code to masquerade as the recorded commit. The check also
+requires Git's top-level directory to be the project root and rejects
+`assume-unchanged` or `skip-worktree` index flags, closing Git states that could
+otherwise hide modified treatment source.
+
+These fields are prospective provenance. They do not retroactively add environment
 metadata to the already-completed canonical treatment artifact and is not a
 reason to rerun or replace those outcomes. The canonical run retains its
 original GitHub Actions workflow, Git commit, dependency files, and logs; their
