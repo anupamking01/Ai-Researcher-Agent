@@ -1164,6 +1164,15 @@ def main() -> int:
                     receipt,
                     args.preflight_receipt_root,
                 )
+                from scripts import (
+                    verify_human_eval_submission_preflight as receipt_verifier,
+                )
+
+                receipt_verifier.verify_preflight_receipt(
+                    receipt_root=args.preflight_receipt_root,
+                    rating_path=args.ratings[0],
+                    annotator_bundle_root=args.preflight_bundle,
+                )
         except (OSError, ValueError) as exc:
             raise SystemExit(
                 f"HUMAN EVAL SUBMISSION PREFLIGHT: FAIL: {exc}"

@@ -386,6 +386,22 @@ multi-annotator freeze; it neither reads the coordinator blinding key nor proves
 annotator identity, independence, or real-world compliance. Those claims remain
 subject to the separate attestations and frozen human-evaluation gates below.
 
+The publishing command independently reads the visible receipt back and
+recomputes the blinded submission-to-bundle binding before reporting success.
+The same check can be repeated later without coordinator-only data:
+
+```bash
+python scripts/verify_human_eval_submission_preflight.py \
+  --receipt-root outputs/human_eval/preflight-receipts/annotator-01 \
+  --ratings completed-ratings.csv \
+  --preflight-bundle outputs/human_eval/annotator-bundle-canonical-v2
+```
+
+Verification requires the receipt directory to contain exactly the canonical
+JSON artifact, rejects symlinked roots and files, duplicate JSON keys, schema
+type confusion, receipt tampering, and submission or bundle substitution. The
+ratings and bundle remain blinded throughout this check.
+
 Annotators must not receive `blinding_key.csv` until ratings are frozen. The
 entire 40-report packet must be independently double-scored and inter-annotator
 agreement reported before adjudication. The coordinator must provide a
