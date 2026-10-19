@@ -67,6 +67,26 @@ and any filename-to-person mapping remain outside the blinded research bundle.
 Existing CSV structure, score, note, and independent-rater coverage checks still
 apply. No treatment key is read.
 
+When one `--submission-preflight RECEIPT_ROOT BUNDLE_ROOT` pair is supplied for
+every ratings input, the freeze also retains treatment-blind intake replay
+evidence under `submission_preflights/0001`, `0002`, and so on. Each neutral
+directory contains a filename-neutralized receipt and the four
+annotator-distribution artifacts; no caller-controlled source filename is copied
+into the manifest or retained receipt. Before publication,
+the producer replays the receipt against the already captured submission,
+checks that the pseudonymous annotator is unique across receipts, and requires
+the distributed packet rows to equal the final coordinator packet rows in the
+declared canonical or reverse order. The manifest binds each evidence directory
+to its ratings-input index, pseudonym, presentation order, receipt byte count,
+and receipt SHA-256.
+
+The independent verifier repeats that replay entirely from the raw-rating and
+submission-preflight archives. Substituting a receipt, a distribution bundle,
+or a different report order therefore invalidates the freeze even when the
+ratings CSV alone remains syntactically valid. This proves a byte-level chain
+between blinded intake and freeze; it does not prove who completed the file,
+that scoring was independent, or that the declarations are true.
+
 The independent verifier treats the freeze manifest as a closed schema at every
 object boundary. The root, governing-input descriptors, coverage summary,
 producer and validator identities, ordered rating-input descriptors, normalized

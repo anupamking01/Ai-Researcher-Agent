@@ -12,7 +12,9 @@ import pytest
 
 from scripts import export_human_eval_annotator_bundle as exporter
 from scripts import freeze_human_eval_ratings as freeze
+from scripts import verify_human_eval_freeze as freeze_verify
 from scripts import verify_human_eval_submission_preflight as verify
+from human_eval_test_support import write_valid_annotator_attestations
 
 
 def _write_bundle(root: Path) -> Path:
@@ -112,6 +114,334 @@ def _published_receipt(tmp_path: Path) -> tuple[Path, Path, Path]:
     receipt_root = tmp_path / "preflight-receipt"
     freeze.publish_preflight_receipt(receipt, receipt_root)
     return receipt_root, submission, bundle
+
+
+def _publish_receipt(submission: Path, bundle: Path, receipt_root: Path) -> Path:
+    receipt = freeze.preflight_annotator_submission(
+        submission,
+        annotator_bundle_root=bundle,
+    )
+    freeze.publish_preflight_receipt(receipt, receipt_root)
+    return receipt_root
+
+
+def test_final_freeze_retains_verified_submission_preflights(tmp_path):
+    bundle_a = _write_bundle(tmp_path / "bundle-a")
+    bundle_b = _write_bundle(tmp_path / "bundle-b")
+    submission_a = _write_submission(
+        tmp_path / "ann-a.csv",
+        [_rating_row("ann-a", "H001"), _rating_row("ann-a", "H002")],
+    )
+    submission_b = _write_submission(
+        tmp_path / "ann-b.csv",
+        [_rating_row("ann-b", "H001"), _rating_row("ann-b", "H002")],
+    )
+    receipt_a = _publish_receipt(
+        submission_a, bundle_a, tmp_path / "receipt-a"
+    )
+    receipt_b = _publish_receipt(
+        submission_b, bundle_b, tmp_path / "receipt-b"
+    )
+    attestations = write_valid_annotator_attestations(
+        tmp_path / "annotator_attestations.csv",
+        ["ann-a", "ann-b"],
+    )
+    output = tmp_path / "frozen"
+
+    manifest = freeze.freeze_ratings(
+        [submission_a, submission_b],
+        submission_preflights=[
+            (receipt_a, bundle_a),
+            (receipt_b, bundle_b),
+        ],
+        annotator_attestations_path=attestations,
+        packet_path=bundle_a / "packet.jsonl",
+        output_root=output,
+    )
+
+    assert [
+        entry["annotator_id"] for entry in manifest["submission_preflights"]
+    ] == ["ann-a", "ann-b"]
+    assert {
+        path.relative_to(output).as_posix()
+        for path in (output / "submission_preflights").rglob("*")
+        if path.is_file()
+    } == {
+        f"submission_preflights/{index:04d}/bundle/{name}"
+        for index in (1, 2)
+        for name in exporter.ANNOTATOR_ARTIFACTS
+    } | {
+        f"submission_preflights/{index:04d}/receipt/{verify.RECEIPT_NAME}"
+        for index in (1, 2)
+    }
+    retained_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (output / "submission_preflights").rglob("*")
+        if path.is_file()
+    )
+    assert "ann-a.csv" not in retained_text
+    assert "ann-b.csv" not in retained_text
+    receipt = freeze_verify.verify_frozen_snapshot(
+        freeze_root=output,
+        use_retained_inputs=True,
+    )
+    assert receipt["status"] == "blinded_human_ratings_verified"
+
+
+def test_final_freeze_rejects_receipt_for_different_submission(tmp_path):
+    bundle = _write_bundle(tmp_path / "bundle")
+    submission_a = _write_submission(
+        tmp_path / "ann-a.csv",
+        [_rating_row("ann-a", "H001"), _rating_row("ann-a", "H002")],
+    )
+    submission_b = _write_submission(
+        tmp_path / "ann-b.csv",
+        [_rating_row("ann-b", "H001"), _rating_row("ann-b", "H002")],
+    )
+    receipt_a = _publish_receipt(
+        submission_a, bundle, tmp_path / "receipt-a"
+    )
+    attestations = write_valid_annotator_attestations(
+        tmp_path / "annotator_attestations.csv",
+        ["ann-a", "ann-b"],
+    )
+
+    with pytest.raises(ValueError, match="does not match.*submission"):
+        freeze.freeze_ratings(
+            [submission_a, submission_b],
+            submission_preflights=[
+                (receipt_a, bundle),
+                (receipt_a, bundle),
+            ],
+            annotator_attestations_path=attestations,
+            packet_path=bundle / "packet.jsonl",
+            output_root=tmp_path / "frozen",
+        )
+
+
+def test_final_freeze_cli_accepts_one_preflight_pair_per_submission(tmp_path):
+    bundle_a = _write_bundle(tmp_path / "bundle-a")
+    bundle_b = _write_bundle(tmp_path / "bundle-b")
+    submission_a = _write_submission(
+        tmp_path / "ann-a.csv",
+        [_rating_row("ann-a", "H001"), _rating_row("ann-a", "H002")],
+    )
+    submission_b = _write_submission(
+        tmp_path / "ann-b.csv",
+        [_rating_row("ann-b", "H001"), _rating_row("ann-b", "H002")],
+    )
+    receipt_a = _publish_receipt(
+        submission_a, bundle_a, tmp_path / "receipt-a"
+    )
+    receipt_b = _publish_receipt(
+        submission_b, bundle_b, tmp_path / "receipt-b"
+    )
+    attestations = write_valid_annotator_attestations(
+        tmp_path / "annotator_attestations.csv",
+        ["ann-a", "ann-b"],
+    )
+    output = tmp_path / "frozen"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.freeze_human_eval_ratings",
+            str(submission_a),
+            str(submission_b),
+            "--packet",
+            str(bundle_a / "packet.jsonl"),
+            "--annotator-attestations",
+            str(attestations),
+            "--submission-preflight",
+            str(receipt_a),
+            str(bundle_a),
+            "--submission-preflight",
+            str(receipt_b),
+            str(bundle_b),
+            "--output-root",
+            str(output),
+        ],
+        cwd=freeze.REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "HUMAN EVAL FREEZE: PASS (ratings remain blinded)" in completed.stdout
+    assert len(json.loads((output / "freeze_manifest.json").read_text())[
+        "submission_preflights"
+    ]) == 2
+
+
+def test_final_freeze_rejects_unsafe_receipt_submission_name(tmp_path):
+    bundle = _write_bundle(tmp_path / "bundle")
+    submission_a = _write_submission(
+        tmp_path / "ann-a.csv",
+        [_rating_row("ann-a", "H001"), _rating_row("ann-a", "H002")],
+    )
+    submission_b = _write_submission(
+        tmp_path / "ann-b.csv",
+        [_rating_row("ann-b", "H001"), _rating_row("ann-b", "H002")],
+    )
+    receipt_a = _publish_receipt(
+        submission_a, bundle, tmp_path / "receipt-a"
+    )
+    receipt_b = _publish_receipt(
+        submission_b, bundle, tmp_path / "receipt-b"
+    )
+    receipt_path = receipt_a / verify.RECEIPT_NAME
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["submission"]["name"] = ".."
+    receipt_path.write_text(
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    attestations = write_valid_annotator_attestations(
+        tmp_path / "annotator_attestations.csv",
+        ["ann-a", "ann-b"],
+    )
+
+    with pytest.raises(ValueError, match="unsafe submission name"):
+        freeze.freeze_ratings(
+            [submission_a, submission_b],
+            submission_preflights=[
+                (receipt_a, bundle),
+                (receipt_b, bundle),
+            ],
+            annotator_attestations_path=attestations,
+            packet_path=bundle / "packet.jsonl",
+            output_root=tmp_path / "frozen",
+        )
+
+
+def test_final_freeze_rejects_extra_source_receipt_artifact(tmp_path):
+    bundle = _write_bundle(tmp_path / "bundle")
+    submission_a = _write_submission(
+        tmp_path / "ann-a.csv",
+        [_rating_row("ann-a", "H001"), _rating_row("ann-a", "H002")],
+    )
+    submission_b = _write_submission(
+        tmp_path / "ann-b.csv",
+        [_rating_row("ann-b", "H001"), _rating_row("ann-b", "H002")],
+    )
+    receipt_a = _publish_receipt(
+        submission_a, bundle, tmp_path / "receipt-a"
+    )
+    receipt_b = _publish_receipt(
+        submission_b, bundle, tmp_path / "receipt-b"
+    )
+    (receipt_a / "undeclared.txt").write_text("not canonical", encoding="utf-8")
+    attestations = write_valid_annotator_attestations(
+        tmp_path / "annotator_attestations.csv",
+        ["ann-a", "ann-b"],
+    )
+
+    with pytest.raises(ValueError, match="receipt artifact set mismatch"):
+        freeze.freeze_ratings(
+            [submission_a, submission_b],
+            submission_preflights=[
+                (receipt_a, bundle),
+                (receipt_b, bundle),
+            ],
+            annotator_attestations_path=attestations,
+            packet_path=bundle / "packet.jsonl",
+            output_root=tmp_path / "frozen",
+        )
+
+
+def test_final_freeze_rejects_tampered_source_submission_name(tmp_path):
+    bundle = _write_bundle(tmp_path / "bundle")
+    submission_a = _write_submission(
+        tmp_path / "ann-a.csv",
+        [_rating_row("ann-a", "H001"), _rating_row("ann-a", "H002")],
+    )
+    submission_b = _write_submission(
+        tmp_path / "ann-b.csv",
+        [_rating_row("ann-b", "H001"), _rating_row("ann-b", "H002")],
+    )
+    receipt_a = _publish_receipt(
+        submission_a, bundle, tmp_path / "receipt-a"
+    )
+    receipt_b = _publish_receipt(
+        submission_b, bundle, tmp_path / "receipt-b"
+    )
+    receipt_path = receipt_a / verify.RECEIPT_NAME
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["submission"]["name"] = "renamed.csv"
+    receipt_path.write_text(
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    attestations = write_valid_annotator_attestations(
+        tmp_path / "annotator_attestations.csv",
+        ["ann-a", "ann-b"],
+    )
+
+    with pytest.raises(ValueError, match="does not match captured submission"):
+        freeze.freeze_ratings(
+            [submission_a, submission_b],
+            submission_preflights=[
+                (receipt_a, bundle),
+                (receipt_b, bundle),
+            ],
+            annotator_attestations_path=attestations,
+            packet_path=bundle / "packet.jsonl",
+            output_root=tmp_path / "frozen",
+        )
+
+
+def test_final_freeze_verifier_rejects_receipt_byte_reserialization(tmp_path):
+    bundle_a = _write_bundle(tmp_path / "bundle-a")
+    bundle_b = _write_bundle(tmp_path / "bundle-b")
+    submission_a = _write_submission(
+        tmp_path / "ann-a.csv",
+        [_rating_row("ann-a", "H001"), _rating_row("ann-a", "H002")],
+    )
+    submission_b = _write_submission(
+        tmp_path / "ann-b.csv",
+        [_rating_row("ann-b", "H001"), _rating_row("ann-b", "H002")],
+    )
+    receipt_a = _publish_receipt(
+        submission_a, bundle_a, tmp_path / "receipt-a"
+    )
+    receipt_b = _publish_receipt(
+        submission_b, bundle_b, tmp_path / "receipt-b"
+    )
+    attestations = write_valid_annotator_attestations(
+        tmp_path / "annotator_attestations.csv",
+        ["ann-a", "ann-b"],
+    )
+    output = tmp_path / "frozen"
+    freeze.freeze_ratings(
+        [submission_a, submission_b],
+        submission_preflights=[
+            (receipt_a, bundle_a),
+            (receipt_b, bundle_b),
+        ],
+        annotator_attestations_path=attestations,
+        packet_path=bundle_a / "packet.jsonl",
+        output_root=output,
+    )
+    archived_receipt = (
+        output
+        / "submission_preflights"
+        / "0001"
+        / "receipt"
+        / verify.RECEIPT_NAME
+    )
+    value = json.loads(archived_receipt.read_text(encoding="utf-8"))
+    archived_receipt.write_text(
+        json.dumps(value, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="submission preflight evidence"):
+        freeze_verify.verify_frozen_snapshot(
+            freeze_root=output,
+            use_retained_inputs=True,
+        )
 
 
 def test_preflight_accepts_one_complete_blinded_submission(tmp_path):

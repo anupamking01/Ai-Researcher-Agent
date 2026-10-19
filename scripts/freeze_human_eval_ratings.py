@@ -52,6 +52,7 @@ GOVERNING_INPUT_PATHS = {
     "annotator_guide": "governing_inputs/HUMAN_EVAL_ANNOTATOR_GUIDE.md",
 }
 ATTESTATION_ARCHIVE_PATH = "governing_inputs/annotator_attestations.csv"
+SUBMISSION_PREFLIGHT_ARCHIVE_ROOT = "submission_preflights"
 
 SCORE_FIELDS = (
     "correctness_1_5",
@@ -730,6 +731,147 @@ def preflight_annotator_submission(
     }
 
 
+def _validate_and_capture_submission_preflights(
+    *,
+    rating_sources: list[dict],
+    rating_contents: list[bytes],
+    packet_content: bytes,
+    submission_preflights: list[tuple[Path, Path]],
+    neutralize_receipt_names: bool = True,
+) -> tuple[list[dict], list[dict[str, bytes]]]:
+    """Verify one retained receipt/bundle pair for every captured submission."""
+    from scripts import export_human_eval_annotator_bundle as exporter
+    from scripts import verify_human_eval_submission_preflight as receipt_verifier
+
+    if len(submission_preflights) != len(rating_sources):
+        raise ValueError(
+            "submission preflight evidence count must match ratings input count"
+        )
+
+    coordinator_rows = exporter._read_jsonl_packet(packet_content)
+    entries: list[dict] = []
+    captures: list[dict[str, bytes]] = []
+    seen_annotators: set[str] = set()
+    for index, ((receipt_root, bundle_root), source, rating_content) in enumerate(
+        zip(submission_preflights, rating_sources, rating_contents), start=1
+    ):
+        receipt_root = Path(receipt_root)
+        bundle_root = Path(bundle_root)
+        with receipt_verifier._retained_receipt_window(receipt_root) as source_receipt:
+            receipt_content = _capture_regular_input(
+                receipt_root / receipt_verifier.RECEIPT_NAME,
+                label=f"submission preflight receipt {index}",
+            )
+        exporter._require_annotator_artifact_set(bundle_root)
+        bundle_content = {
+            name: _capture_regular_input(
+                bundle_root / name,
+                label=f"submission preflight bundle {index} {name}",
+            )
+            for name in exporter.ANNOTATOR_ARTIFACTS
+        }
+        exporter._require_annotator_artifact_set(bundle_root)
+
+        with tempfile.TemporaryDirectory(
+            prefix=f"vera-final-freeze-preflight-{index:04d}-"
+        ) as tmp_name:
+            tmp_root = Path(tmp_name)
+            receipt_snapshot = tmp_root / "receipt"
+            bundle_snapshot = tmp_root / "bundle"
+            receipt_snapshot.mkdir()
+            bundle_snapshot.mkdir()
+            (receipt_snapshot / receipt_verifier.RECEIPT_NAME).write_bytes(
+                receipt_content
+            )
+            for name, content in bundle_content.items():
+                (bundle_snapshot / name).write_bytes(content)
+
+            try:
+                declared_name = source_receipt["submission"]["name"]
+            except (KeyError, TypeError) as exc:
+                raise ValueError(
+                    f"submission preflight receipt {index} is malformed"
+                ) from exc
+            if (
+                not isinstance(declared_name, str)
+                or not declared_name
+                or declared_name in {".", ".."}
+                or Path(declared_name).name != declared_name
+                or "/" in declared_name
+                or "\\" in declared_name
+                or any(ord(character) < 32 for character in declared_name)
+            ):
+                raise ValueError(
+                    f"submission preflight receipt {index} has an unsafe submission name"
+                )
+            rating_snapshot = tmp_root / declared_name
+            rating_snapshot.write_bytes(rating_content)
+            retained = receipt_verifier.verify_preflight_receipt(
+                receipt_root=receipt_snapshot,
+                rating_path=rating_snapshot,
+                annotator_bundle_root=bundle_snapshot,
+            )
+
+        if retained != source_receipt:
+            raise ValueError(
+                f"submission preflight receipt {index} changed during capture"
+            )
+
+        if retained["submission"] != {
+            "name": source["name"],
+            "bytes": source["bytes"],
+            "sha256": source["sha256"],
+        }:
+            raise ValueError(
+                f"submission preflight receipt {index} does not match captured submission"
+            )
+        annotator_id = retained["annotator_id"]
+        identity_key = _annotator_identity_key(annotator_id)
+        if identity_key in seen_annotators:
+            raise ValueError(
+                "submission preflight receipts must identify distinct annotators"
+            )
+        seen_annotators.add(identity_key)
+
+        bundle_rows = exporter._read_jsonl_packet(bundle_content["packet.jsonl"])
+        expected_rows = list(coordinator_rows)
+        if retained["presentation_order"] == "reverse":
+            expected_rows.reverse()
+        if bundle_rows != expected_rows:
+            raise ValueError(
+                f"submission preflight bundle {index} does not match the frozen "
+                f"packet in {retained['presentation_order']!r} order"
+            )
+
+        archive_path = f"{SUBMISSION_PREFLIGHT_ARCHIVE_ROOT}/{index:04d}"
+        archived_receipt_content = receipt_content
+        if neutralize_receipt_names:
+            archived_receipt = json.loads(json.dumps(retained))
+            archived_receipt["submission"]["name"] = f"{index:04d}.csv"
+            archived_receipt_content = (
+                json.dumps(archived_receipt, indent=2, sort_keys=True) + "\n"
+            ).encode("utf-8")
+        entries.append(
+            {
+                "input_index": index,
+                "archive_path": archive_path,
+                "annotator_id": annotator_id,
+                "presentation_order": retained["presentation_order"],
+                "receipt_bytes": len(archived_receipt_content),
+                "receipt_sha256": hashlib.sha256(
+                    archived_receipt_content
+                ).hexdigest(),
+            }
+        )
+        captures.append(
+            {
+                receipt_verifier.RECEIPT_NAME: archived_receipt_content,
+                **bundle_content,
+            }
+        )
+    return entries, captures
+
+
 def _score(row: dict, field: str) -> int | None:
     value = str(row.get(field) or "").strip()
     return int(value) if value else None
@@ -975,6 +1117,7 @@ def publish_preflight_receipt(receipt: dict, output_root: Path) -> Path:
 def freeze_ratings(
     rating_paths: list[Path],
     *,
+    submission_preflights: list[tuple[Path, Path]] | None = None,
     annotator_attestations_path: Path | None = None,
     packet_path: Path = DEFAULT_PACKET,
     protocol_path: Path = DEFAULT_PROTOCOL,
@@ -1042,6 +1185,17 @@ def freeze_ratings(
         return_captured=True,
         require_single_annotator=True,
     )
+    preflight_entries: list[dict] | None = None
+    preflight_captures: list[dict[str, bytes]] | None = None
+    if submission_preflights is not None:
+        preflight_entries, preflight_captures = (
+            _validate_and_capture_submission_preflights(
+                rating_sources=sources,
+                rating_contents=captured_inputs,
+                packet_content=packet_content,
+                submission_preflights=submission_preflights,
+            )
+        )
     attestations, attestation_source, attestation_content = (
         _load_annotator_attestations(annotator_attestations_path)
     )
@@ -1126,6 +1280,26 @@ def freeze_ratings(
         with (staging_root / ATTESTATION_ARCHIVE_PATH).open("xb") as handle:
             handle.write(attestation_content)
 
+        if preflight_entries is not None and preflight_captures is not None:
+            preflight_root = staging_root / SUBMISSION_PREFLIGHT_ARCHIVE_ROOT
+            preflight_root.mkdir(exist_ok=False)
+            for index, captured in enumerate(preflight_captures, start=1):
+                evidence_root = preflight_root / f"{index:04d}"
+                receipt_root = evidence_root / "receipt"
+                bundle_root = evidence_root / "bundle"
+                receipt_root.mkdir(parents=True, exist_ok=False)
+                bundle_root.mkdir(exist_ok=False)
+                with (receipt_root / "preflight_receipt.json").open("xb") as handle:
+                    handle.write(captured["preflight_receipt.json"])
+                for name in (
+                    "packet.jsonl",
+                    "ratings_template.csv",
+                    "annotator_instructions.md",
+                    "annotator_manifest.json",
+                ):
+                    with (bundle_root / name).open("xb") as handle:
+                        handle.write(captured[name])
+
         manifest = {
             "schema_version": 1,
             "study_id": "budget-main-v1",
@@ -1191,6 +1365,8 @@ def freeze_ratings(
             },
             "integrity_note": FREEZE_INTEGRITY_NOTE,
         }
+        if preflight_entries is not None:
+            manifest["submission_preflights"] = preflight_entries
         manifest_path.write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -1244,6 +1420,17 @@ def main() -> int:
             "treatment-blind verification receipt in this new directory"
         ),
     )
+    parser.add_argument(
+        "--submission-preflight",
+        nargs=2,
+        action="append",
+        type=Path,
+        metavar=("RECEIPT_ROOT", "BUNDLE_ROOT"),
+        help=(
+            "for final freeze, independently verify and retain one receipt/bundle "
+            "pair corresponding to each ratings input, in the same order"
+        ),
+    )
     args = parser.parse_args()
 
     if args.preflight_receipt_root is not None and args.preflight_bundle is None:
@@ -1253,6 +1440,11 @@ def main() -> int:
         )
 
     if args.preflight_bundle is not None:
+        if args.submission_preflight:
+            raise SystemExit(
+                "HUMAN EVAL SUBMISSION PREFLIGHT: FAIL: --submission-preflight "
+                "is only valid for the final multi-annotator freeze"
+            )
         if len(args.ratings) != 1:
             raise SystemExit(
                 "HUMAN EVAL SUBMISSION PREFLIGHT: FAIL: exactly one completed "
@@ -1288,6 +1480,7 @@ def main() -> int:
     try:
         manifest = freeze_ratings(
             args.ratings,
+            submission_preflights=args.submission_preflight,
             annotator_attestations_path=args.annotator_attestations,
             packet_path=args.packet,
             protocol_path=args.protocol,

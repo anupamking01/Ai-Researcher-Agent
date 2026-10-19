@@ -402,6 +402,33 @@ JSON artifact, rejects symlinked roots and files, duplicate JSON keys, schema
 type confusion, receipt tampering, and submission or bundle substitution. The
 ratings and bundle remain blinded throughout this check.
 
+Bind those intake checks into the final blinded freeze by supplying one
+receipt/bundle pair for each ratings argument, in the same order:
+
+```bash
+python scripts/freeze_human_eval_ratings.py \
+  outputs/human_eval/annotator-a.csv \
+  outputs/human_eval/annotator-b.csv \
+  --annotator-attestations outputs/human_eval/annotator_attestations.csv \
+  --submission-preflight outputs/human_eval/preflight-receipts/annotator-a \
+    outputs/human_eval/annotator-bundle-canonical-v2 \
+  --submission-preflight outputs/human_eval/preflight-receipts/annotator-b \
+    outputs/human_eval/annotator-bundle-reverse-v2 \
+  --output-root outputs/human_eval/frozen-v1
+```
+
+This evidence-bound path independently replays every receipt against the exact
+captured submission, requires the distributed packet to equal the final frozen
+packet in the receipt's declared canonical or reverse order, and rejects
+missing, duplicate, substituted, or reordered evidence. It archives a
+filename-neutralized replay receipt and the treatment-blind distribution bundle
+under neutral ordinal paths inside the create-only freeze; the original receipt
+is verified but its caller-controlled submission filename is not copied into
+the shareable snapshot. The independent freeze verifier replays the same chain
+from those retained artifacts. A legacy-compatible freeze without
+`submission_preflights` does not establish this intake-to-freeze chain and
+must not be used as the planned human-validation evidence bundle.
+
 Both this single-submission preflight and the later multi-annotator freeze
 capture every submitted ratings CSV through a non-symlink regular-file
 descriptor under a bound regular parent directory. The final freeze applies

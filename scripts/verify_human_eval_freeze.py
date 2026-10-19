@@ -174,6 +174,7 @@ def _verify_manifest_schema(manifest: dict) -> None:
             "agreement",
             "integrity_note",
         },
+        optional={"submission_preflights"},
         label="root",
     )
     _require_field_types(
@@ -197,6 +198,7 @@ def _verify_manifest_schema(manifest: dict) -> None:
             "agreement": dict,
             "integrity_note": str,
         },
+        optional_types={"submission_preflights": list},
         label="root",
     )
     _require_object_schema(
@@ -312,6 +314,38 @@ def _verify_manifest_schema(manifest: dict) -> None:
             label=f"rating_inputs[{index}]",
         )
 
+    if "submission_preflights" in manifest:
+        preflight_entries = manifest["submission_preflights"]
+        if len(preflight_entries) != len(rating_entries):
+            raise ValueError(
+                "freeze manifest schema mismatch at submission_preflights: "
+                "expected one entry per rating input"
+            )
+        for index, entry in enumerate(preflight_entries, start=1):
+            _require_object_schema(
+                entry,
+                required={
+                    "input_index",
+                    "archive_path",
+                    "annotator_id",
+                    "presentation_order",
+                    "receipt_bytes",
+                    "receipt_sha256",
+                },
+                label=f"submission_preflights[{index}]",
+            )
+            _require_field_types(
+                entry,
+                field_types={
+                    "input_index": int,
+                    "archive_path": str,
+                    "annotator_id": str,
+                    "presentation_order": str,
+                    "receipt_bytes": int,
+                    "receipt_sha256": str,
+                },
+                label=f"submission_preflights[{index}]",
+            )
     frozen_entry = manifest["frozen_ratings"]
     _require_object_schema(
         frozen_entry,
@@ -393,6 +427,8 @@ def _verify_bundle_layout(freeze_root: Path, manifest: dict) -> None:
         expected_names.add("raw_rating_inputs")
     if all(governing_archive_flags) or "annotator_attestations" in manifest:
         expected_names.add("governing_inputs")
+    if "submission_preflights" in manifest:
+        expected_names.add(freeze.SUBMISSION_PREFLIGHT_ARCHIVE_ROOT)
     extra_names = {child.name for child in freeze_root.iterdir()} - expected_names
     if extra_names:
         raise ValueError(
@@ -707,9 +743,10 @@ def verify_frozen_snapshot(
             label="raw rating archive contents",
         )
 
-        raw_rows, archived_sources = freeze._load_ratings(
+        raw_rows, archived_sources, archived_contents = freeze._load_ratings(
             archive_paths,
             allowed_blind_ids=set(blind_ids),
+            return_captured=True,
             require_single_annotator=True,
         )
         for index, (entry, source) in enumerate(
@@ -758,9 +795,10 @@ def verify_frozen_snapshot(
             raise ValueError(
                 "archived raw rating CSVs are required for legacy freeze verification"
             )
-        raw_rows, raw_sources = freeze._load_ratings(
+        raw_rows, raw_sources, archived_contents = freeze._load_ratings(
             rating_paths,
             allowed_blind_ids=set(blind_ids),
+            return_captured=True,
             require_single_annotator=True,
         )
         raw_sources = [
@@ -771,6 +809,43 @@ def verify_frozen_snapshot(
             for source in raw_sources
         ]
         _require_equal(rating_entries, raw_sources, label="raw rating inputs")
+
+    if "submission_preflights" in manifest:
+        preflight_root = freeze_root / freeze.SUBMISSION_PREFLIGHT_ARCHIVE_ROOT
+        if preflight_root.is_symlink() or not preflight_root.is_dir():
+            raise ValueError(
+                f"submission preflight archive must be a regular directory: {preflight_root}"
+            )
+        expected_names = [f"{index:04d}" for index in range(1, len(rating_entries) + 1)]
+        _require_equal(
+            sorted(child.name for child in preflight_root.iterdir()),
+            expected_names,
+            label="submission preflight archive contents",
+        )
+        evidence = []
+        for index, expected_name in enumerate(expected_names, start=1):
+            evidence_root = preflight_root / expected_name
+            if evidence_root.is_symlink() or not evidence_root.is_dir():
+                raise ValueError(
+                    f"submission preflight evidence must be a regular directory: {evidence_root}"
+                )
+            if {child.name for child in evidence_root.iterdir()} != {"receipt", "bundle"}:
+                raise ValueError(
+                    f"submission preflight evidence {index} artifact set mismatch"
+                )
+            evidence.append((evidence_root / "receipt", evidence_root / "bundle"))
+        recomputed_preflights, _ = freeze._validate_and_capture_submission_preflights(
+            rating_sources=archived_sources if all(archive_flags) else raw_sources,
+            rating_contents=archived_contents,
+            packet_content=packet_content,
+            submission_preflights=evidence,
+            neutralize_receipt_names=False,
+        )
+        _require_equal(
+            manifest["submission_preflights"],
+            recomputed_preflights,
+            label="submission preflight evidence",
+        )
 
     attestation_rows, attestation_source, _ = freeze._load_annotator_attestations(
         freeze_root / freeze.ATTESTATION_ARCHIVE_PATH,
