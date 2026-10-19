@@ -478,6 +478,10 @@ accepted through permissive JSON or numeric equality. The bundle directory is
 also closed to exactly the canonical JSON, deterministic Markdown, and manifest;
 undeclared files or directories are rejected, including entries added while the
 verifier captures the declared artifacts.
+Before the no-replace rename, the publisher synchronizes every artifact and
+the candidate/source directories; after the rename it synchronizes both source
+and destination parents. A successful command therefore attests to durable
+publication rather than only process-visible atomicity.
 
 The reconciliation readiness gate holds every contract, automated-analysis,
 provenance, human-analysis, and human-manifest input open by descriptor for the

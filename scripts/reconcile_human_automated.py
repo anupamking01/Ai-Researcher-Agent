@@ -281,6 +281,8 @@ def _write_exclusive(path: Path, content: bytes) -> None:
     try:
         with Path(path).open("xb") as handle:
             handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
     except FileExistsError as exc:
         raise ValueError(f"refusing to overwrite reconciliation artifact: {path}") from exc
 
@@ -529,6 +531,11 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
         _write_exclusive(candidate_root / RECONCILIATION_JSON, json_bytes)
         _write_exclusive(candidate_root / RECONCILIATION_MARKDOWN, markdown_bytes)
         _write_exclusive(candidate_root / RECONCILIATION_MANIFEST, manifest_bytes)
+        # Persist artifact contents and the candidate/source directory entries
+        # before making the verified bundle visible. Atomic rename alone does
+        # not make either the files or their directory metadata crash-durable.
+        os.fsync(candidate_fd)
+        os.fsync(staging_container_fd)
 
         # Resolve the verifier's path through the retained container fd, so an
         # external rename/replacement of the hidden container cannot redirect
@@ -552,6 +559,11 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
             output_root.name,
             output_root=output_root,
         )
+        # The move updates both source and destination directories. Sync both
+        # before reporting success so a completed command cannot precede the
+        # durable publication record.
+        os.fsync(staging_container_fd)
+        os.fsync(output_parent_fd)
         _require_directory_entry_binding(
             output_parent_fd,
             output_root.name,

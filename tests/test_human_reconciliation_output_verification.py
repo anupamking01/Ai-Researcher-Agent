@@ -3,8 +3,10 @@
 These fixtures are not collected human ratings or study findings.
 """
 import json
+import os
 import platform
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -929,6 +931,41 @@ def test_failed_candidate_verification_never_publishes_final_directory(
         reconcile.RECONCILIATION_MARKDOWN,
         reconcile.RECONCILIATION_MANIFEST,
     } == {path.name for path in candidate.iterdir()}
+
+
+def test_reconciliation_publication_syncs_files_and_rename_before_success(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    events = []
+    real_fsync = os.fsync
+    real_publish = reconcile._publish_directory_noreplace
+
+    def observe_fsync(descriptor):
+        mode = os.fstat(descriptor).st_mode
+        events.append("file-sync" if stat.S_ISREG(mode) else "directory-sync")
+        return real_fsync(descriptor)
+
+    def observe_publish(*args, **kwargs):
+        events.append("publish")
+        return real_publish(*args, **kwargs)
+
+    monkeypatch.setattr(reconcile.os, "fsync", observe_fsync)
+    monkeypatch.setattr(
+        reconcile,
+        "_publish_directory_noreplace",
+        observe_publish,
+    )
+
+    receipt = reconcile.write_bundle(payload, output, root=tmp_path)
+
+    assert receipt["status"] == "automated_human_reconciliation_bundle_verified"
+    publish_index = events.index("publish")
+    assert events[:publish_index].count("file-sync") == 3
+    assert events[:publish_index].count("directory-sync") >= 2
+    assert events[publish_index + 1 :].count("directory-sync") >= 2
 
 
 def test_staging_path_replacement_cannot_publish_replacement_directory(
