@@ -240,6 +240,393 @@ def _analyze(case):
     )
 
 
+def test_analysis_carries_submission_preflight_evidence_into_blinded_gate(
+    analysis_case, monkeypatch
+):
+    case = analysis_case
+    evidence_root = case["freeze_root"] / "submission_preflights" / "0001"
+    receipt_root = evidence_root / "receipt"
+    bundle_root = evidence_root / "bundle"
+    receipt_root.mkdir(parents=True)
+    bundle_root.mkdir()
+    expected = {
+        "receipt/preflight_receipt.json": b'{"synthetic":"receipt"}\n',
+        "bundle/packet.jsonl": b'{"synthetic":"packet"}\n',
+        "bundle/ratings_template.csv": b"blind_id\nH001\n",
+        "bundle/annotator_instructions.md": b"# Synthetic instructions\n",
+        "bundle/annotator_manifest.json": b'{"synthetic":"manifest"}\n',
+    }
+    for relative_path, content in expected.items():
+        (evidence_root / relative_path).write_bytes(content)
+
+    observed = []
+
+    def verify_blinded_snapshot(*args, **kwargs):
+        retained_root = Path(kwargs["freeze_root"]) / "submission_preflights" / "0001"
+        observed.append(
+            {
+                relative_path: (retained_root / relative_path).read_bytes()
+                for relative_path in expected
+            }
+        )
+        return {
+            "n_annotators": 2,
+            "requires_predeclared_multi_rater_statistic": False,
+        }
+
+    monkeypatch.setattr(
+        core.blind_verify,
+        "verify_frozen_snapshot",
+        verify_blinded_snapshot,
+    )
+
+    _analyze(case)
+
+    assert observed == [expected]
+
+
+def test_analysis_rejects_preflight_entry_added_during_snapshot(
+    analysis_case, monkeypatch
+):
+    case = analysis_case
+    receipt_root = (
+        case["freeze_root"] / "submission_preflights" / "0001" / "receipt"
+    )
+    receipt_root.mkdir(parents=True)
+    (receipt_root / "preflight_receipt.json").write_text(
+        '{"synthetic":"receipt"}\n', encoding="utf-8"
+    )
+
+    real_pread = core.os.pread
+    added = []
+
+    def add_entry_after_archive_read(descriptor, length, offset):
+        chunk = real_pread(descriptor, length, offset)
+        descriptor_path = os.readlink(f"/proc/self/fd/{descriptor}")
+        if (
+            not chunk
+            and descriptor_path.endswith("/preflight_receipt.json")
+            and not added
+        ):
+            (receipt_root / "late-added.json").write_text(
+                '{"synthetic":"late"}\n', encoding="utf-8"
+            )
+            added.append(True)
+        return chunk
+
+    snapshot_file = core._snapshot_file
+
+    def forbid_mapping_snapshot(source, destination, *, label):
+        if label in {"human-evaluation packet manifest", "coordinator blinding key"}:
+            raise AssertionError("treatment mapping opened after an unstable snapshot")
+        return snapshot_file(source, destination, label=label)
+
+    monkeypatch.setattr(core.os, "pread", add_entry_after_archive_read)
+    monkeypatch.setattr(core, "_snapshot_file", forbid_mapping_snapshot)
+
+    with pytest.raises(ValueError, match="changed while it was being snapshotted"):
+        _analyze(case)
+    assert added == [True]
+
+
+def test_analysis_rejects_preflight_archive_appearing_at_snapshot_boundary(
+    analysis_case, monkeypatch
+):
+    case = analysis_case
+    reject_sidecars = core._reject_undeclared_freeze_sidecars
+    injected = []
+
+    def inject_archive_then_reject(freeze_root, *args, **kwargs):
+        archive = Path(freeze_root) / "submission_preflights" / "0001" / "receipt"
+        archive.mkdir(parents=True)
+        (archive / "preflight_receipt.json").write_text(
+            '{"synthetic":"appeared-late"}\n', encoding="utf-8"
+        )
+        injected.append(True)
+        return reject_sidecars(freeze_root, *args, **kwargs)
+
+    snapshot_file = core._snapshot_file
+
+    def forbid_mapping_snapshot(source, destination, *, label):
+        if label in {"human-evaluation packet manifest", "coordinator blinding key"}:
+            raise AssertionError("treatment mapping opened after an unstable snapshot")
+        return snapshot_file(source, destination, label=label)
+
+    monkeypatch.setattr(
+        core,
+        "_reject_undeclared_freeze_sidecars",
+        inject_archive_then_reject,
+    )
+    monkeypatch.setattr(core, "_snapshot_file", forbid_mapping_snapshot)
+
+    with pytest.raises(ValueError, match="changed while it was being snapshotted"):
+        _analyze(case)
+    assert injected == [True]
+
+
+def test_analysis_rejects_same_name_preflight_replacement_after_copy(
+    analysis_case, monkeypatch
+):
+    case = analysis_case
+    receipt_root = (
+        case["freeze_root"] / "submission_preflights" / "0001" / "receipt"
+    )
+    receipt_root.mkdir(parents=True)
+    first = receipt_root / "a.json"
+    first.write_text('{"synthetic":"original"}\n', encoding="utf-8")
+    (receipt_root / "z.json").write_text(
+        '{"synthetic":"last"}\n', encoding="utf-8"
+    )
+
+    real_pread = core.os.pread
+    replaced = []
+
+    def replace_first_after_last_read(descriptor, length, offset):
+        chunk = real_pread(descriptor, length, offset)
+        descriptor_path = os.readlink(f"/proc/self/fd/{descriptor}")
+        if not chunk and descriptor_path.endswith("/z.json") and not replaced:
+            replacement = receipt_root / "replacement.json"
+            replacement.write_text(
+                '{"synthetic":"replacement"}\n', encoding="utf-8"
+            )
+            os.replace(replacement, first)
+            replaced.append(True)
+        return chunk
+
+    snapshot_file = core._snapshot_file
+
+    def forbid_mapping_snapshot(source, destination, *, label):
+        if label in {"human-evaluation packet manifest", "coordinator blinding key"}:
+            raise AssertionError("treatment mapping opened after an unstable snapshot")
+        return snapshot_file(source, destination, label=label)
+
+    monkeypatch.setattr(core.os, "pread", replace_first_after_last_read)
+    monkeypatch.setattr(core, "_snapshot_file", forbid_mapping_snapshot)
+
+    with pytest.raises(ValueError, match="changed while it was being snapshotted"):
+        _analyze(case)
+    assert replaced == [True]
+
+
+def test_analysis_rejects_freeze_root_path_aba(
+    analysis_case, monkeypatch
+):
+    case = analysis_case
+    freeze_root = case["freeze_root"]
+    original_archive = freeze_root / "submission_preflights" / "0001" / "receipt"
+    original_archive.mkdir(parents=True)
+    original_bytes = b'{"synthetic":"original"}\n'
+    replacement_bytes = b'{"synthetic":"replacement"}\n'
+    (original_archive / "preflight_receipt.json").write_bytes(original_bytes)
+
+    held_root = freeze_root.with_name("frozen-v1-held")
+    replacement_root = freeze_root.with_name("frozen-v1-replacement")
+    replacement_archive = replacement_root / "submission_preflights" / "0001" / "receipt"
+    replacement_archive.mkdir(parents=True)
+    (replacement_archive / "preflight_receipt.json").write_bytes(replacement_bytes)
+
+    original_identity = (freeze_root.stat().st_dev, freeze_root.stat().st_ino)
+    real_listdir = core.os.listdir
+    swapped = []
+    restored = []
+
+    def swap_root_between_inventory_reads(path_or_descriptor):
+        if isinstance(path_or_descriptor, int):
+            current = os.fstat(path_or_descriptor)
+            if (current.st_dev, current.st_ino) == original_identity:
+                if not swapped:
+                    names = real_listdir(path_or_descriptor)
+                    freeze_root.rename(held_root)
+                    replacement_root.rename(freeze_root)
+                    swapped.append(True)
+                    return names
+                if not restored:
+                    freeze_root.rename(replacement_root)
+                    held_root.rename(freeze_root)
+                    restored.append(True)
+        return real_listdir(path_or_descriptor)
+
+    monkeypatch.setattr(core.os, "listdir", swap_root_between_inventory_reads)
+
+    with pytest.raises(
+        ValueError,
+        match="freeze root changed while it was being snapshotted",
+    ):
+        _analyze(case)
+
+    assert swapped == [True]
+    assert restored == [True]
+
+
+def test_analysis_checks_provenance_sidecars_from_bound_root_during_path_aba(
+    analysis_case, monkeypatch
+):
+    case = analysis_case
+    freeze_root = case["freeze_root"]
+    provenance = freeze_root / "provenance"
+    provenance.mkdir()
+    for filename in ("freeze_human_eval_ratings.py", "build_human_eval_packet.py"):
+        (provenance / filename).write_text("# synthetic\n", encoding="utf-8")
+    (provenance / "notes.txt").write_text(
+        "undeclared synthetic sidecar\n", encoding="utf-8"
+    )
+
+    held_root = freeze_root.with_name("frozen-v1-held")
+    replacement_root = freeze_root.with_name("frozen-v1-replacement")
+    clean_provenance = replacement_root / "provenance"
+    clean_provenance.mkdir(parents=True)
+    for filename in ("freeze_human_eval_ratings.py", "build_human_eval_packet.py"):
+        (clean_provenance / filename).write_text("# synthetic\n", encoding="utf-8")
+
+    original_identity = (freeze_root.stat().st_dev, freeze_root.stat().st_ino)
+    real_listdir = core.os.listdir
+    swapped = []
+    restored = []
+
+    def swap_root_between_inventory_reads(path_or_descriptor):
+        if isinstance(path_or_descriptor, int):
+            current = os.fstat(path_or_descriptor)
+            if (current.st_dev, current.st_ino) == original_identity:
+                if not swapped:
+                    names = real_listdir(path_or_descriptor)
+                    freeze_root.rename(held_root)
+                    replacement_root.rename(freeze_root)
+                    swapped.append(True)
+                    return names
+                if not restored:
+                    freeze_root.rename(replacement_root)
+                    held_root.rename(freeze_root)
+                    restored.append(True)
+        return real_listdir(path_or_descriptor)
+
+    snapshot_file = core._snapshot_file
+
+    def forbid_mapping_snapshot(source, destination, *, label):
+        if label in {"human-evaluation packet manifest", "coordinator blinding key"}:
+            raise AssertionError("treatment mapping opened with an undeclared sidecar")
+        return snapshot_file(source, destination, label=label)
+
+    monkeypatch.setattr(core.os, "listdir", swap_root_between_inventory_reads)
+    monkeypatch.setattr(core, "_snapshot_file", forbid_mapping_snapshot)
+
+    with pytest.raises(ValueError, match="provenance archive contents mismatch"):
+        _analyze(case)
+    assert swapped == [True]
+
+
+def test_analysis_rejects_same_name_preflight_archive_aba(
+    analysis_case, monkeypatch
+):
+    case = analysis_case
+    freeze_root = case["freeze_root"]
+    archive = freeze_root / "submission_preflights"
+    receipt = archive / "0001" / "receipt"
+    receipt.mkdir(parents=True)
+    (receipt / "preflight_receipt.json").write_text(
+        '{"synthetic":"original"}\n', encoding="utf-8"
+    )
+
+    held_archive = freeze_root.parent / "submission-preflights-held"
+    replacement_archive = freeze_root.parent / "submission-preflights-replacement"
+    replacement_receipt = replacement_archive / "0001" / "receipt"
+    replacement_receipt.mkdir(parents=True)
+    (replacement_receipt / "preflight_receipt.json").write_text(
+        '{"synthetic":"replacement"}\n', encoding="utf-8"
+    )
+
+    root_identity = (freeze_root.stat().st_dev, freeze_root.stat().st_ino)
+    real_listdir = core.os.listdir
+    swapped = []
+    restored = []
+
+    def swap_archive_between_root_inventory_reads(path_or_descriptor):
+        if isinstance(path_or_descriptor, int):
+            current = os.fstat(path_or_descriptor)
+            if (current.st_dev, current.st_ino) == root_identity:
+                if not swapped:
+                    names = real_listdir(path_or_descriptor)
+                    archive.rename(held_archive)
+                    replacement_archive.rename(archive)
+                    swapped.append(True)
+                    return names
+                if not restored:
+                    archive.rename(replacement_archive)
+                    held_archive.rename(archive)
+                    restored.append(True)
+        return real_listdir(path_or_descriptor)
+
+    snapshot_file = core._snapshot_file
+
+    def forbid_mapping_snapshot(source, destination, *, label):
+        if label in {"human-evaluation packet manifest", "coordinator blinding key"}:
+            raise AssertionError("treatment mapping opened after archive ABA")
+        return snapshot_file(source, destination, label=label)
+
+    monkeypatch.setattr(
+        core.os,
+        "listdir",
+        swap_archive_between_root_inventory_reads,
+    )
+    monkeypatch.setattr(core, "_snapshot_file", forbid_mapping_snapshot)
+
+    with pytest.raises(ValueError, match="freeze root changed while it was being snapshotted"):
+        _analyze(case)
+    assert swapped == [True]
+    assert restored == [True]
+
+
+def test_analysis_rejects_observed_provenance_disappearance(
+    analysis_case, monkeypatch
+):
+    case = analysis_case
+    freeze_root = case["freeze_root"]
+    provenance = freeze_root / "provenance"
+    provenance.mkdir()
+    for filename in ("freeze_human_eval_ratings.py", "build_human_eval_packet.py"):
+        (provenance / filename).write_text("# synthetic\n", encoding="utf-8")
+    held_provenance = freeze_root.parent / "provenance-held"
+
+    real_stat = core.os.stat
+    removed = []
+
+    def remove_provenance_before_bound_stat(path, *args, **kwargs):
+        if path == "provenance" and kwargs.get("dir_fd") is not None and not removed:
+            provenance.rename(held_provenance)
+            removed.append(True)
+        return real_stat(path, *args, **kwargs)
+
+    root_identity = (freeze_root.stat().st_dev, freeze_root.stat().st_ino)
+    real_listdir = core.os.listdir
+    root_reads = []
+
+    def restore_before_final_root_inventory(path_or_descriptor):
+        if isinstance(path_or_descriptor, int):
+            current = os.fstat(path_or_descriptor)
+            if (current.st_dev, current.st_ino) == root_identity:
+                root_reads.append(True)
+                if len(root_reads) == 2 and removed:
+                    held_provenance.rename(provenance)
+        return real_listdir(path_or_descriptor)
+
+    snapshot_file = core._snapshot_file
+
+    def forbid_mapping_snapshot(source, destination, *, label):
+        if label in {"human-evaluation packet manifest", "coordinator blinding key"}:
+            raise AssertionError("treatment mapping opened after provenance disappeared")
+        return snapshot_file(source, destination, label=label)
+
+    monkeypatch.setattr(core.os, "stat", remove_provenance_before_bound_stat)
+    monkeypatch.setattr(core.os, "listdir", restore_before_final_root_inventory)
+    monkeypatch.setattr(core, "_snapshot_file", forbid_mapping_snapshot)
+
+    with pytest.raises(
+        ValueError,
+        match="freeze (?:root )?provenance changed",
+    ):
+        _analyze(case)
+    assert removed == [True]
+
+
 def test_published_payload_recomputes_from_retained_rating_archive(
     analysis_case, monkeypatch
 ):

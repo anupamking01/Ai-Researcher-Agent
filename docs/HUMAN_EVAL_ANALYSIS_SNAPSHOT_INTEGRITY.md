@@ -6,10 +6,19 @@ same captured bytes.
 Before any treatment identity is opened, the analyzer snapshots the archived raw
 rating inputs, blinded packet, frozen ratings, agreement artifact, freeze
 manifest, protocol, assignment plan, treatment-blind annotator guide, and
-human-analysis plan into private temporary scratch space. The pre-unblinding
-freeze verifier runs against those snapshots. If that gate passes and the
-frozen two-rater requirement is satisfied, the analyzer then reads the
-coordinator-only mapping artifacts.
+human-analysis plan into private temporary scratch space. Evidence-bound freezes
+also carry the complete retained `submission_preflights/` tree into that same
+snapshot. This preserves every neutralized intake receipt and treatment-blind
+distribution bundle, including undeclared entries that the independent verifier
+must reject, rather than laundering them away through selective copying.
+The analyzer holds each source directory by descriptor, compares entry
+inventories before and after copying, and rechecks each directory and file
+binding. It also binds the freeze-root inventory across the optional-archive
+decision. Replacements, late additions, symlinks, and other non-regular entries
+therefore fail before unblinding. The pre-unblinding freeze verifier runs
+against those snapshots and independently replays the retained receipt chain.
+If that gate passes and the frozen two-rater requirement is satisfied, the
+analyzer then reads the coordinator-only mapping artifacts.
 
 The captured human-analysis plan must also match the literal SHA-256 anchor in
 the analysis implementation before any coordinator mapping is read. Merely

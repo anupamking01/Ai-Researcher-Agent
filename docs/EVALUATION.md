@@ -457,6 +457,14 @@ unblinding, every analysis input is copied from an open regular-file descriptor
 under a non-symlink parent and checked for stable path, inode, metadata, and byte
 identity. Redirected parents and same-byte path replacement therefore fail
 closed instead of being laundered into the retained analysis snapshot. This
+snapshot now also carries the complete retained `submission_preflights/` tree,
+including each neutralized receipt and treatment-blind distribution bundle, so
+the independent freeze verifier can replay the intake-to-freeze chain before
+the coordinator mapping is opened. Every directory is held by descriptor while
+its entry inventory is copied and rescanned; entry replacement, late additions,
+symlinks, and non-regular entries fail closed. The freeze-root inventory is
+similarly bound across the optional-archive decision, so a late archive cannot
+be silently omitted by selective copying. This
 records reproducibility metadata; it does not create ratings or convert pending
 human validation into a result.
 
