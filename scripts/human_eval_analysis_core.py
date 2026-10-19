@@ -412,11 +412,7 @@ def _reject_undeclared_freeze_sidecars(
         if observed_names is None
         else set(observed_names)
     )
-    extra_names = root_names - allowed_names
-    if extra_names:
-        raise ValueError(
-            f"freeze root contents mismatch: undeclared artifacts {sorted(extra_names)!r}"
-        )
+    root_extra_names = root_names - allowed_names
 
     if root_descriptor is not None and "provenance" in root_names:
         directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
@@ -445,6 +441,11 @@ def _reject_undeclared_freeze_sidecars(
                 "freeze provenance changed while it was being inspected"
             )
         if not stat.S_ISDIR(provenance_metadata.st_mode):
+            if root_extra_names:
+                raise ValueError(
+                    "freeze root contents mismatch: undeclared artifacts "
+                    f"{sorted(root_extra_names)!r}"
+                )
             return
         try:
             provenance_descriptor = os.open(
@@ -465,15 +466,31 @@ def _reject_undeclared_freeze_sidecars(
                     "freeze provenance changed while it was being inspected"
                 )
             names_before = tuple(sorted(os.listdir(provenance_descriptor)))
-            extra_names = set(names_before) - {
+            provenance_extra_names = set(names_before) - {
                 "freeze_human_eval_ratings.py",
                 "build_human_eval_packet.py",
             }
-            if extra_names:
+            if provenance_extra_names:
                 raise ValueError(
                     "provenance archive contents mismatch: "
-                    f"undeclared artifacts {sorted(extra_names)!r}"
+                    f"undeclared artifacts {sorted(provenance_extra_names)!r}"
                 )
+            for filename, label in (
+                ("freeze_human_eval_ratings.py", "blinded freeze producer"),
+                ("build_human_eval_packet.py", "blinded content validator"),
+            ):
+                if filename not in names_before:
+                    continue
+                try:
+                    child = os.stat(
+                        filename,
+                        dir_fd=provenance_descriptor,
+                        follow_symlinks=False,
+                    )
+                except OSError as exc:
+                    raise ValueError(f"{label} must be a regular file") from exc
+                if not stat.S_ISREG(child.st_mode):
+                    raise ValueError(f"{label} must be a regular file")
             names_after = tuple(sorted(os.listdir(provenance_descriptor)))
             if names_after != names_before:
                 raise ValueError(
@@ -498,29 +515,192 @@ def _reject_undeclared_freeze_sidecars(
     elif root_descriptor is None:
         provenance_root = freeze_root / "provenance"
         if not provenance_root.is_dir() or provenance_root.is_symlink():
+            if root_extra_names:
+                raise ValueError(
+                    "freeze root contents mismatch: undeclared artifacts "
+                    f"{sorted(root_extra_names)!r}"
+                )
             return
-        extra_names = {
+        provenance_extra_names = {
             child.name for child in provenance_root.iterdir()
         } - {"freeze_human_eval_ratings.py", "build_human_eval_packet.py"}
-        if extra_names:
+        if provenance_extra_names:
             raise ValueError(
                 "provenance archive contents mismatch: "
-                f"undeclared artifacts {sorted(extra_names)!r}"
+                f"undeclared artifacts {sorted(provenance_extra_names)!r}"
+            )
+    if root_extra_names:
+        raise ValueError(
+            "freeze root contents mismatch: undeclared artifacts "
+            f"{sorted(root_extra_names)!r}"
+        )
+
+
+def _require_freeze_inventory_stable(
+    freeze_root,
+    descriptor,
+    root_opened,
+    names,
+    metadata,
+):
+    try:
+        current_names = tuple(sorted(os.listdir(descriptor)))
+    except OSError as exc:
+        raise ValueError("freeze root changed while it was being snapshotted") from exc
+    if current_names != names:
+        raise ValueError("freeze root changed while it was being snapshotted")
+    if _snapshot_entry_identity(os.fstat(descriptor)) != _snapshot_entry_identity(
+        root_opened
+    ):
+        raise ValueError("freeze root changed while it was being snapshotted")
+    for name in names:
+        try:
+            current = os.stat(
+                name,
+                dir_fd=descriptor,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise ValueError(
+                f"freeze root {name} changed while it was being snapshotted"
+            ) from exc
+        if _snapshot_entry_identity(current) != _snapshot_entry_identity(
+            metadata[name]
+        ):
+            raise ValueError(
+                f"freeze root {name} changed while it was being snapshotted"
+            )
+    _require_snapshot_directory_binding(
+        freeze_root,
+        descriptor,
+        label="freeze root",
+    )
+
+
+def _snapshot_directory_inventory(
+    source_root,
+    descriptor,
+    *,
+    label,
+    parent_descriptor=None,
+    entry_name=None,
+):
+    """Capture a stable recursive inode/metadata inventory without file bytes."""
+    opened = os.fstat(descriptor)
+    if not stat.S_ISDIR(opened.st_mode):
+        raise ValueError(f"{label} must be a regular directory: {source_root}")
+    try:
+        names = tuple(sorted(os.listdir(descriptor)))
+    except OSError as exc:
+        raise ValueError(f"{label} could not be enumerated: {source_root}") from exc
+
+    metadata = {}
+    for name in names:
+        try:
+            metadata[name] = os.stat(
+                name,
+                dir_fd=descriptor,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise ValueError(
+                f"{label} {name} changed while it was being snapshotted"
+            ) from exc
+
+    entries = []
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    for name in names:
+        child_label = f"{label} {name}"
+        child_metadata = metadata[name]
+        child_identity = _snapshot_entry_identity(child_metadata)
+        if stat.S_ISDIR(child_metadata.st_mode):
+            try:
+                child_descriptor = os.open(name, directory_flags, dir_fd=descriptor)
+            except OSError as exc:
+                raise ValueError(
+                    f"{child_label} changed while it was being snapshotted"
+                ) from exc
+            try:
+                child_opened = os.fstat(child_descriptor)
+                if _snapshot_entry_identity(child_opened) != child_identity:
+                    raise ValueError(
+                        f"{child_label} changed while it was being snapshotted"
+                    )
+                child_inventory = _snapshot_directory_inventory(
+                    Path(source_root) / name,
+                    child_descriptor,
+                    label=child_label,
+                    parent_descriptor=descriptor,
+                    entry_name=name,
+                )
+            finally:
+                os.close(child_descriptor)
+            entries.append((name, "directory", child_identity, child_inventory))
+        elif stat.S_ISREG(child_metadata.st_mode):
+            entries.append((name, "file", child_identity))
+        else:
+            raise ValueError(
+                f"{child_label} must be a regular file or directory: "
+                f"{Path(source_root) / name}"
             )
 
+    try:
+        names_after = tuple(sorted(os.listdir(descriptor)))
+    except OSError as exc:
+        raise ValueError(f"{label} changed while it was being snapshotted") from exc
+    if names_after != names or _snapshot_entry_identity(
+        os.fstat(descriptor)
+    ) != _snapshot_entry_identity(opened):
+        raise ValueError(f"{label} changed while it was being snapshotted")
+    for name in names:
+        try:
+            current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError(
+                f"{label} {name} changed while it was being snapshotted"
+            ) from exc
+        if _snapshot_entry_identity(current) != _snapshot_entry_identity(metadata[name]):
+            raise ValueError(
+                f"{label} {name} changed while it was being snapshotted"
+            )
 
-def _snapshot_submission_preflight_archive(freeze_root, blind_freeze):
-    """Bind the optional evidence tree to one stable freeze-root inventory."""
+    if parent_descriptor is None:
+        _require_snapshot_directory_binding(source_root, descriptor, label=label)
+    else:
+        try:
+            current = os.stat(
+                entry_name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise ValueError(f"{label} changed while it was being snapshotted") from exc
+        if (
+            not stat.S_ISDIR(current.st_mode)
+            or (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
+        ):
+            raise ValueError(f"{label} changed while it was being snapshotted")
+    return (_snapshot_entry_identity(opened), tuple(entries))
+
+
+def _snapshot_freeze_tree(freeze_root, blind_freeze):
+    """Capture every allowed freeze artifact from one bound root generation."""
     freeze_root = Path(freeze_root)
-    archive_name = freeze.SUBMISSION_PREFLIGHT_ARCHIVE_ROOT
+    blind_freeze = Path(blind_freeze)
     descriptor = _open_snapshot_directory(freeze_root, label="freeze root")
     try:
         root_opened = os.fstat(descriptor)
-        names_before = tuple(sorted(os.listdir(descriptor)))
-        metadata_by_name = {}
-        for name in names_before:
+        try:
+            names = tuple(sorted(os.listdir(descriptor)))
+        except OSError as exc:
+            raise ValueError(
+                f"freeze root could not be enumerated: {freeze_root}"
+            ) from exc
+        metadata = {}
+        for name in names:
             try:
-                metadata_by_name[name] = os.stat(
+                metadata[name] = os.stat(
                     name,
                     dir_fd=descriptor,
                     follow_symlinks=False,
@@ -529,79 +709,56 @@ def _snapshot_submission_preflight_archive(freeze_root, blind_freeze):
                 raise ValueError(
                     f"freeze root {name} changed while it was being snapshotted"
                 ) from exc
-        if archive_name in names_before:
-            archive_path = freeze_root / archive_name
-            directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-            directory_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(
-                os, "O_NOFOLLOW", 0
-            )
-            archive_metadata = metadata_by_name[archive_name]
-            try:
-                archive_descriptor = os.open(
-                    archive_name,
-                    directory_flags,
-                    dir_fd=descriptor,
-                )
-            except OSError as exc:
-                raise ValueError(
-                    "submission preflight archive changed while it was being "
-                    "snapshotted"
-                ) from exc
-            try:
-                archive_opened = os.fstat(archive_descriptor)
-                if (
-                    not stat.S_ISDIR(archive_metadata.st_mode)
-                    or _snapshot_entry_identity(archive_opened)
-                    != _snapshot_entry_identity(archive_metadata)
-                ):
-                    raise ValueError(
-                        "submission preflight archive changed while it was being "
-                        "snapshotted"
-                    )
-                _snapshot_directory_descriptor(
-                    archive_path,
-                    Path(blind_freeze) / archive_name,
-                    archive_descriptor,
-                    label="submission preflight archive",
-                    parent_descriptor=descriptor,
-                    entry_name=archive_name,
-                )
-            finally:
-                os.close(archive_descriptor)
         _reject_undeclared_freeze_sidecars(
             freeze_root,
-            observed_names=names_before,
-            observed_metadata=metadata_by_name,
+            observed_names=names,
+            observed_metadata=metadata,
             root_descriptor=descriptor,
         )
-        names_after = tuple(sorted(os.listdir(descriptor)))
-        if names_after != names_before:
-            raise ValueError("freeze root changed while it was being snapshotted")
-        if _snapshot_entry_identity(os.fstat(descriptor)) != _snapshot_entry_identity(
-            root_opened
-        ):
-            raise ValueError("freeze root changed while it was being snapshotted")
-        for name in names_before:
-            try:
-                current = os.stat(
-                    name,
-                    dir_fd=descriptor,
-                    follow_symlinks=False,
-                )
-            except OSError as exc:
-                raise ValueError(
-                    f"freeze root {name} changed while it was being snapshotted"
-                ) from exc
-            if _snapshot_entry_identity(current) != _snapshot_entry_identity(
-                metadata_by_name[name]
-            ):
-                raise ValueError(
-                    f"freeze root {name} changed while it was being snapshotted"
-                )
-        _require_snapshot_directory_binding(
+        _require_freeze_inventory_stable(
+            freeze_root,
+            descriptor,
+            root_opened,
+            names,
+            metadata,
+        )
+        recursive_inventory = _snapshot_directory_inventory(
             freeze_root,
             descriptor,
             label="freeze root",
+        )
+        _require_freeze_inventory_stable(
+            freeze_root,
+            descriptor,
+            root_opened,
+            names,
+            metadata,
+        )
+        _snapshot_directory_descriptor(
+            freeze_root,
+            blind_freeze,
+            descriptor,
+            label="freeze root",
+        )
+        _require_freeze_inventory_stable(
+            freeze_root,
+            descriptor,
+            root_opened,
+            names,
+            metadata,
+        )
+        if _snapshot_directory_inventory(
+            freeze_root,
+            descriptor,
+            label="freeze root",
+        ) != recursive_inventory:
+            raise ValueError("freeze root changed while it was being snapshotted")
+        _require_freeze_inventory_stable(
+            freeze_root,
+            descriptor,
+            root_opened,
+            names,
+            metadata,
         )
     finally:
         os.close(descriptor)
@@ -760,64 +917,12 @@ def analyze(
                 "frozen analysis plan fingerprint mismatch: "
                 f"expected {FROZEN_ANALYSIS_PLAN_SHA256}, got {analysis_plan_sha256}"
             )
-        for filename in ("freeze_manifest.json", "frozen_ratings.csv", "agreement.json"):
-            _snapshot_file(
-                freeze_root / filename,
-                blind_freeze / filename,
-                label=f"blinded freeze {filename}",
-            )
-        raw_archive = freeze_root / "raw_rating_inputs"
-        if raw_archive.exists() or raw_archive.is_symlink():
-            if raw_archive.is_symlink() or not raw_archive.is_dir():
-                raise ValueError(f"raw rating archive must be a regular directory: {raw_archive}")
-            (blind_freeze / "raw_rating_inputs").mkdir(parents=True, exist_ok=True)
-            for child in sorted(raw_archive.iterdir(), key=lambda path: path.name):
-                _snapshot_file(
-                    child,
-                    blind_freeze / "raw_rating_inputs" / child.name,
-                    label=f"blinded raw rating archive {child.name}",
-                )
-        # Preserve the exact archived freeze implementation and shared packet
-        # content validator inside the same blinded snapshot. The independent
-        # verifier requires these bytes, not a later source revision.
-        producer_dir = freeze_root / "provenance"
-        if producer_dir.exists() or producer_dir.is_symlink():
-            if producer_dir.is_symlink() or not producer_dir.is_dir():
-                raise ValueError(
-                    f"blinded freeze provenance must be a regular directory: {producer_dir}"
-                )
-            for filename, label in (
-                ("freeze_human_eval_ratings.py", "blinded freeze producer"),
-                ("build_human_eval_packet.py", "blinded content validator"),
-            ):
-                _snapshot_file(
-                    producer_dir / filename,
-                    blind_freeze / "provenance" / filename,
-                    label=label,
-                )
-        # Legacy/malformed freezes without a producer are rejected by the
-        # independent verifier, not backfilled with today's source code.
-        # Carry retained governing inputs through the same blinded snapshot;
-        # the verifier checks their declared paths and hashes before mapping.
-        governing_dir = freeze_root / "governing_inputs"
-        if governing_dir.exists() or governing_dir.is_symlink():
-            if governing_dir.is_symlink() or not governing_dir.is_dir():
-                raise ValueError(f"governing input archive must be a regular directory: {governing_dir}")
-            (blind_freeze / "governing_inputs").mkdir(parents=True, exist_ok=True)
-            for child in sorted(governing_dir.iterdir(), key=lambda path: path.name):
-                _snapshot_file(
-                    child,
-                    blind_freeze / "governing_inputs" / child.name,
-                    label=f"blinded governing input {child.name}",
-                )
-        # New evidence-bound freezes retain each annotator's treatment-blind
-        # intake receipt and distribution bundle. Preserve the entire tree so
-        # the independent blinded verifier can replay it before unblinding.
-        # Bind optional preflight evidence and the set of top-level freeze
-        # entries to one descriptor-backed inventory. Selective snapshotting
-        # must not launder a late archive or undeclared source sidecar out of
-        # the bundle that reaches the independent blinded verifier.
-        _snapshot_submission_preflight_archive(freeze_root, blind_freeze)
+        # Capture the complete blinded freeze through one retained root
+        # descriptor. Core files and every optional archive therefore come
+        # from the same directory generation, and the independent verifier
+        # sees the complete allowed artifact set rather than a path-by-path
+        # mixture assembled across replacement windows.
+        _snapshot_freeze_tree(freeze_root, blind_freeze)
         blind_rating_paths = _snapshot_raw_ratings(rating_paths, blind_root / "raw_ratings")
 
         blinded = blind_verify.verify_frozen_snapshot(

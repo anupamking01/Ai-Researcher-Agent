@@ -69,6 +69,159 @@ def test_snapshot_rejects_same_byte_source_replacement(
         )
 
 
+def test_freeze_snapshot_rejects_root_replacement_across_all_artifacts(
+    tmp_path: Path, monkeypatch
+):
+    freeze_root = tmp_path / "frozen-v1"
+    freeze_root.mkdir()
+    expected = {
+        "freeze_manifest.json": b'{"generation":"original"}\n',
+        "frozen_ratings.csv": b"generation\noriginal\n",
+        "agreement.json": b'{"generation":"original"}\n',
+        "raw_rating_inputs/0001.csv": b"generation\noriginal\n",
+        "provenance/freeze_human_eval_ratings.py": b"# original freezer\n",
+        "provenance/build_human_eval_packet.py": b"# original packet builder\n",
+        "governing_inputs/protocol.md": b"# original protocol\n",
+        "submission_preflights/0001/receipt/preflight_receipt.json": (
+            b'{"generation":"original"}\n'
+        ),
+    }
+    for relative_path, content in expected.items():
+        path = freeze_root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+    replacement_root = tmp_path / "frozen-v1-replacement"
+    for relative_path in expected:
+        path = replacement_root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"replacement generation\n")
+    held_root = tmp_path / "frozen-v1-held"
+
+    original_identity = (freeze_root.stat().st_dev, freeze_root.stat().st_ino)
+    real_listdir = core.os.listdir
+    root_reads = 0
+
+    def swap_path_between_bound_root_inventory_reads(path_or_descriptor):
+        nonlocal root_reads
+        if isinstance(path_or_descriptor, int):
+            current = os.fstat(path_or_descriptor)
+            if (current.st_dev, current.st_ino) == original_identity:
+                root_reads += 1
+                if root_reads == 1:
+                    names = real_listdir(path_or_descriptor)
+                    freeze_root.rename(held_root)
+                    replacement_root.rename(freeze_root)
+                    return names
+                if root_reads == 2:
+                    freeze_root.rename(replacement_root)
+                    held_root.rename(freeze_root)
+        return real_listdir(path_or_descriptor)
+
+    monkeypatch.setattr(
+        core.os,
+        "listdir",
+        swap_path_between_bound_root_inventory_reads,
+    )
+
+    with pytest.raises(ValueError, match="freeze root changed while it was being"):
+        core._snapshot_freeze_tree(freeze_root, tmp_path / "captured-freeze")
+
+    assert root_reads >= 2
+
+
+def test_freeze_snapshot_rejects_entry_replacement_before_tree_copy(
+    tmp_path: Path, monkeypatch
+):
+    freeze_root = tmp_path / "frozen-v1"
+    freeze_root.mkdir()
+    for filename in ("freeze_manifest.json", "frozen_ratings.csv", "agreement.json"):
+        (freeze_root / filename).write_text(
+            f"original {filename}\n",
+            encoding="utf-8",
+        )
+    replacement = tmp_path / "replacement.csv"
+    replacement.write_text("replacement ratings\n", encoding="utf-8")
+
+    snapshot_directory = core._snapshot_directory_descriptor
+    replaced = []
+
+    def replace_before_tree_copy(*args, label, **kwargs):
+        if label == "freeze root" and not replaced:
+            os.replace(replacement, freeze_root / "frozen_ratings.csv")
+            replaced.append(True)
+        return snapshot_directory(*args, label=label, **kwargs)
+
+    monkeypatch.setattr(
+        core,
+        "_snapshot_directory_descriptor",
+        replace_before_tree_copy,
+    )
+
+    with pytest.raises(ValueError, match="freeze root changed while it was being"):
+        core._snapshot_freeze_tree(freeze_root, tmp_path / "captured-freeze")
+
+    assert replaced == [True]
+
+
+def test_freeze_snapshot_rejects_deep_same_byte_replacement_before_tree_copy(
+    tmp_path: Path, monkeypatch
+):
+    freeze_root = tmp_path / "frozen-v1"
+    receipt = (
+        freeze_root
+        / "submission_preflights"
+        / "0001"
+        / "receipt"
+        / "preflight_receipt.json"
+    )
+    receipt.parent.mkdir(parents=True)
+    original = b'{"synthetic":"same bytes"}\n'
+    receipt.write_bytes(original)
+    for filename in ("freeze_manifest.json", "frozen_ratings.csv", "agreement.json"):
+        (freeze_root / filename).write_text(
+            f"original {filename}\n",
+            encoding="utf-8",
+        )
+    replacement = tmp_path / "replacement.json"
+    replacement.write_bytes(original)
+
+    snapshot_directory = core._snapshot_directory_descriptor
+    replaced = []
+
+    def replace_deep_entry_before_tree_copy(*args, label, **kwargs):
+        if label == "freeze root" and not replaced:
+            os.replace(replacement, receipt)
+            replaced.append(True)
+        return snapshot_directory(*args, label=label, **kwargs)
+
+    monkeypatch.setattr(
+        core,
+        "_snapshot_directory_descriptor",
+        replace_deep_entry_before_tree_copy,
+    )
+
+    with pytest.raises(ValueError, match="freeze root changed while it was being"):
+        core._snapshot_freeze_tree(freeze_root, tmp_path / "captured-freeze")
+
+    assert replaced == [True]
+
+
+def test_freeze_snapshot_reports_root_sidecar_before_malformed_provenance(tmp_path: Path):
+    freeze_root = tmp_path / "frozen-v1"
+    freeze_root.mkdir()
+    for filename in ("freeze_manifest.json", "frozen_ratings.csv", "agreement.json"):
+        (freeze_root / filename).write_text(
+            f"original {filename}\n",
+            encoding="utf-8",
+        )
+    (freeze_root / "provenance").write_text("not a directory\n", encoding="utf-8")
+    (freeze_root / "undeclared.txt").write_text("sidecar\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="freeze root contents mismatch"):
+        core._snapshot_freeze_tree(freeze_root, tmp_path / "captured-freeze")
+
+
 def _write_csv(path: Path, fields, rows):
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(fields))
