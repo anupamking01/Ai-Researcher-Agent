@@ -285,12 +285,12 @@ def _write_exclusive(path: Path, content: bytes) -> None:
         raise ValueError(f"refusing to overwrite reconciliation artifact: {path}") from exc
 
 
-def _open_bound_directory(path: Path) -> int:
+def _open_bound_directory(path: Path, *, dir_fd: int | None = None) -> int:
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(
         os, "O_NOFOLLOW", 0
     )
     try:
-        directory_fd = os.open(path, flags)
+        directory_fd = os.open(path, flags, dir_fd=dir_fd)
     except OSError as exc:
         raise ValueError(
             f"reconciliation staging root must be a regular directory: {path}"
@@ -479,12 +479,6 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
     # Build and independently verify the complete result off-path. The final
     # destination remains absent until one atomic no-replace publication step.
     output_root.parent.mkdir(parents=True, exist_ok=True)
-    staging_container = Path(
-        tempfile.mkdtemp(
-            prefix=f".{output_root.name}.staging-",
-            dir=output_root.parent,
-        )
-    )
     # The private 0700 container and retained dirfds isolate normal concurrent
     # publishers. As with the other research publishers, a hostile same-UID or
     # root process can still mutate owned files and is outside the threat model.
@@ -496,13 +490,41 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
             output_parent_fd,
             label="output parent",
         )
-        staging_container_fd = _open_bound_directory(staging_container)
+        anchored_output_parent = Path(f"/proc/self/fd/{output_parent_fd}")
+        staging_container = Path(
+            tempfile.mkdtemp(
+                prefix=f".{output_root.name}.staging-",
+                dir=anchored_output_parent,
+            )
+        )
+        staging_container_name = staging_container.name
+        _require_directory_path_binding(
+            output_root.parent,
+            output_parent_fd,
+            label="output parent",
+        )
+        staging_container_fd = _open_bound_directory(
+            staging_container_name,
+            dir_fd=output_parent_fd,
+        )
         descriptors.callback(os.close, staging_container_fd)
+        _require_directory_entry_binding(
+            output_parent_fd,
+            staging_container_name,
+            staging_container_fd,
+            label="staging container",
+        )
         candidate_name = "candidate"
-        candidate_root = staging_container / candidate_name
-        candidate_root.mkdir(exist_ok=False)
-        candidate_fd = _open_bound_directory(candidate_root)
+        os.mkdir(candidate_name, mode=0o700, dir_fd=staging_container_fd)
+        candidate_fd = _open_bound_directory(
+            candidate_name,
+            dir_fd=staging_container_fd,
+        )
         descriptors.callback(os.close, candidate_fd)
+
+        candidate_root = (
+            Path(f"/proc/self/fd/{staging_container_fd}") / candidate_name
+        )
 
         _write_exclusive(candidate_root / RECONCILIATION_JSON, json_bytes)
         _write_exclusive(candidate_root / RECONCILIATION_MARKDOWN, markdown_bytes)
@@ -511,10 +533,7 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
         # Resolve the verifier's path through the retained container fd, so an
         # external rename/replacement of the hidden container cannot redirect
         # verification to different bytes.
-        anchored_candidate = (
-            Path(f"/proc/self/fd/{staging_container_fd}") / candidate_name
-        )
-        receipt = output_verifier.verify_bundle(anchored_candidate, root=Path(root))
+        receipt = output_verifier.verify_bundle(candidate_root, root=Path(root))
         _require_directory_entry_binding(
             staging_container_fd,
             candidate_name,

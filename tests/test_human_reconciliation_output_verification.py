@@ -1003,6 +1003,36 @@ def test_destination_parent_replacement_is_detected_without_touching_replacement
     ).is_file()
 
 
+def test_destination_parent_replacement_before_staging_is_rejected(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "published-parent" / "reconciliation"
+    real_mkdtemp = reconcile.tempfile.mkdtemp
+    detached = []
+
+    def replace_parent_before_staging(*args, dir, **kwargs):
+        parent = output.parent
+        moved = parent.with_name(f"{parent.name}-detached")
+        parent.rename(moved)
+        parent.mkdir()
+        detached.append(moved)
+        return real_mkdtemp(*args, dir=dir, **kwargs)
+
+    monkeypatch.setattr(reconcile.tempfile, "mkdtemp", replace_parent_before_staging)
+
+    with pytest.raises(ValueError, match="output parent changed"):
+        reconcile.write_bundle(payload, output, root=tmp_path)
+
+    assert not output.exists()
+    assert list(output.parent.iterdir()) == []
+    assert len(detached) == 1
+    staging = list(detached[0].glob(".reconciliation.staging-*"))
+    assert len(staging) == 1
+    assert list(staging[0].iterdir()) == []
+
+
 def test_setup_failure_closes_previously_opened_directory_descriptors(
     tmp_path, monkeypatch
 ):
@@ -1012,12 +1042,12 @@ def test_setup_failure_closes_previously_opened_directory_descriptors(
     real_open = reconcile._open_bound_directory
     calls = 0
 
-    def fail_second_open(path):
+    def fail_second_open(path, *, dir_fd=None):
         nonlocal calls
         calls += 1
         if calls == 2:
             raise ValueError("synthetic staging-container open failure")
-        return real_open(path)
+        return real_open(path, dir_fd=dir_fd)
 
     before = len(list(Path("/proc/self/fd").iterdir()))
     monkeypatch.setattr(reconcile, "_open_bound_directory", fail_second_open)
