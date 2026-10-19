@@ -181,6 +181,7 @@ Ai-Researcher-Agent/
 ├── .github/workflows/
 ├── requirements.txt
 ├── requirements-dev.txt
+├── requirements-ci.lock
 └── CITATION.cff
 ```
 
@@ -211,7 +212,9 @@ Then open `http://localhost:8000`.
 ## Offline verification
 
 ```bash
-pip install -r requirements-dev.txt
+python -m pip install --no-deps -r requirements.txt
+python -m pip install --no-deps -r requirements-ci.lock
+python -m pip check
 python -m pytest -q
 ```
 

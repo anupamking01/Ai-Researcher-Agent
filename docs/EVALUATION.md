@@ -133,12 +133,16 @@ did not satisfy. Extra installed distributions remain visible in the inventory
 without being treated as part of the application lock.
 
 All repository workflows install requirements through `python -m pip`, binding
-dependency resolution to the exact interpreter selected by `setup-python`.
-They run `python -m pip check` after the application and development
-requirements are installed, so an inconsistent resolved environment fails
-before offline tests, analysis, evaluator recovery, or any live research step.
-This is a prospective execution safeguard; it does not alter or reinterpret
-the preserved pilot or canonical main-study artifacts.
+the installation to the exact interpreter selected by `setup-python`. Runtime
+packages come from the exact pins in `requirements.txt`; pytest and workflow
+environment supplements that pip previously resolved transitively come from
+`requirements-ci.lock`. Both files are installed with `--no-deps`, so pip
+cannot silently resolve a newer transitive package outside the reviewed locks.
+The subsequent `python -m pip check` is the closure check: a missing or
+inconsistent dependency fails before offline tests, analysis, evaluator
+recovery, or any live research step. This is a prospective execution safeguard;
+it does not alter or reinterpret the preserved pilot or canonical main-study
+artifacts.
 
 The same prospective preflight requires a clean Git checkout and records both
 the exact commit object and its tree object. The source state is checked again
@@ -520,7 +524,9 @@ Key research artifacts:
 Install test dependencies and run:
 
 ```bash
-pip install -r requirements-dev.txt
+python -m pip install --no-deps -r requirements.txt
+python -m pip install --no-deps -r requirements-ci.lock
+python -m pip check
 python -m pytest -q
 ```
 

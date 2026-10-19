@@ -17,6 +17,7 @@ import yaml
 
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+CI_REQUIREMENTS_LOCK = WORKFLOWS.parents[1] / "requirements-ci.lock"
 USES_LINE = re.compile(r"^\s*(?:-\s*)?uses:\s*([^\s#]+)", re.MULTILINE)
 FULL_COMMIT_SHA = re.compile(r"[0-9a-f]{40}", re.ASCII)
 PIP_INSTALL_COMMAND = re.compile(
@@ -29,9 +30,31 @@ PIP_REQUIREMENT = re.compile(
 )
 SHELL_CONTROL_TOKENS = {";", "&", "&&", "|", "||"}
 PINNED_PIP_BOOTSTRAP = [
-    ["python", "-m", "pip", "install", "-r", "requirements.txt"],
-    ["python", "-m", "pip", "install", "-r", "requirements-dev.txt"],
+    [
+        "python",
+        "-m",
+        "pip",
+        "install",
+        "--no-deps",
+        "-r",
+        "requirements.txt",
+    ],
+    [
+        "python",
+        "-m",
+        "pip",
+        "install",
+        "--no-deps",
+        "-r",
+        "requirements-ci.lock",
+    ],
     ["python", "-m", "pip", "check"],
+]
+PINNED_CI_REQUIREMENTS = [
+    "iniconfig==2.3.1",
+    "pluggy==1.7.0",
+    "primp==2.0.1",
+    "pytest==8.3.2",
 ]
 NODE24_ACTION_PINS = {
     "actions/checkout": "d23441a48e516b6c34aea4fa41551a30e30af803",
@@ -400,6 +423,12 @@ def test_workflow_dependencies_use_and_validate_the_pinned_interpreter() -> None
     )
 
 
+def test_ci_environment_supplements_have_a_complete_exact_lock() -> None:
+    assert CI_REQUIREMENTS_LOCK.read_text(encoding="utf-8").splitlines() == (
+        PINNED_CI_REQUIREMENTS
+    )
+
+
 def test_pip_environment_guard_rejects_bare_install_and_early_check(
     tmp_path: Path,
 ) -> None:
@@ -557,8 +586,8 @@ def test_pip_environment_guard_requires_setup_before_bootstrap(
         "  unit-tests:\n"
         "    steps:\n"
         "      - run: |\n"
-        "          python -m pip install -r requirements.txt\n"
-        "          python -m pip install -r requirements-dev.txt\n"
+        "          python -m pip install --no-deps -r requirements.txt\n"
+        "          python -m pip install --no-deps -r requirements-ci.lock\n"
         "          python -m pip check\n"
         "      - uses: actions/setup-python@immutable\n",
         encoding="utf-8",
@@ -579,22 +608,22 @@ def test_pip_environment_guard_requires_complete_unconditional_bootstrap(
     cases = {
         "missing-dev.yml": (
             "      - run: |\n"
-            "          python -m pip install -r requirements.txt\n"
+            "          python -m pip install --no-deps -r requirements.txt\n"
             "          python -m pip check\n"
         ),
         "shell-conditional.yml": (
             "      - run: |\n"
             "          if false; then\n"
-            "            python -m pip install -r requirements.txt\n"
-            "            python -m pip install -r requirements-dev.txt\n"
+            "            python -m pip install --no-deps -r requirements.txt\n"
+            "            python -m pip install --no-deps -r requirements-ci.lock\n"
             "            python -m pip check\n"
             "          fi\n"
         ),
         "step-conditional.yml": (
             "      - if: ${{ false }}\n"
             "        run: |\n"
-            "          python -m pip install -r requirements.txt\n"
-            "          python -m pip install -r requirements-dev.txt\n"
+            "          python -m pip install --no-deps -r requirements.txt\n"
+            "          python -m pip install --no-deps -r requirements-ci.lock\n"
             "          python -m pip check\n"
         ),
     }
@@ -627,8 +656,8 @@ def test_pip_environment_guard_rejects_failure_masking_step_metadata(
     setup = "      - uses: actions/setup-python@immutable\n"
     bootstrap = (
         "        run: |\n"
-        "          python -m pip install -r requirements.txt\n"
-        "          python -m pip install -r requirements-dev.txt\n"
+        "          python -m pip install --no-deps -r requirements.txt\n"
+        "          python -m pip install --no-deps -r requirements-ci.lock\n"
         "          python -m pip check\n"
     )
     cases = {
@@ -677,8 +706,8 @@ def test_pip_environment_guard_rejects_installs_outside_bootstrap(
         "      - run: python -m pip install other-package\n"
         "      - uses: actions/setup-python@immutable\n"
         "      - run: |\n"
-        "          python -m pip install -r requirements.txt\n"
-        "          python -m pip install -r requirements-dev.txt\n"
+        "          python -m pip install --no-deps -r requirements.txt\n"
+        "          python -m pip install --no-deps -r requirements-ci.lock\n"
         "          python -m pip check\n",
         encoding="utf-8",
     )
@@ -700,8 +729,8 @@ def test_pip_environment_guard_rejects_inherited_run_defaults(
     bootstrap = (
         "      - uses: actions/setup-python@immutable\n"
         "      - run: |\n"
-        "          python -m pip install -r requirements.txt\n"
-        "          python -m pip install -r requirements-dev.txt\n"
+        "          python -m pip install --no-deps -r requirements.txt\n"
+        "          python -m pip install --no-deps -r requirements-ci.lock\n"
         "          python -m pip check\n"
     )
     (workflows / "job.yml").write_text(
@@ -747,8 +776,8 @@ def test_pip_environment_guard_rejects_nested_installs_outside_bootstrap(
         "      - uses: actions/setup-python@immutable\n"
         "      - run: bash -c 'pip install other-package'\n"
         "      - run: |\n"
-        "          python -m pip install -r requirements.txt\n"
-        "          python -m pip install -r requirements-dev.txt\n"
+        "          python -m pip install --no-deps -r requirements.txt\n"
+        "          python -m pip install --no-deps -r requirements-ci.lock\n"
         "          python -m pip check\n",
         encoding="utf-8",
     )
