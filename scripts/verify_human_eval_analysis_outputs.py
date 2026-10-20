@@ -83,6 +83,21 @@ def _require_directory_path_binding(path: Path, descriptor: int, *, label: str) 
         raise ValueError(f"{label} changed during independent recomputation: {path}")
 
 
+def _require_regular_path_binding(path: Path, descriptor: int, *, label: str) -> None:
+    try:
+        current = os.stat(path, follow_symlinks=False)
+        bound = os.fstat(descriptor)
+    except OSError as exc:
+        raise ValueError(
+            f"{label} changed during independent recomputation: {path}"
+        ) from exc
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or (current.st_dev, current.st_ino) != (bound.st_dev, bound.st_ino)
+    ):
+        raise ValueError(f"{label} changed during independent recomputation: {path}")
+
+
 def _regular_snapshot_from_descriptor(
     descriptor: int,
     *,
@@ -119,6 +134,9 @@ def _regular_snapshot_from_descriptor(
     return b"".join(chunks), after_identity
 
 
+_regular_source_snapshot_from_descriptor = _regular_snapshot_from_descriptor
+
+
 def _open_regular_snapshot_at(
     directory_descriptor: int,
     name: str,
@@ -140,6 +158,119 @@ def _open_regular_snapshot_at(
         os.close(descriptor)
         raise
     return descriptor, snapshot
+
+
+def _implementation_source_specs():
+    return (
+        ("analysis_core", Path(core.__file__), "analysis core implementation"),
+        (
+            "analysis_renderer",
+            Path(analyze_human_eval.__file__),
+            "analysis renderer implementation",
+        ),
+        ("analysis_verifier", Path(__file__), "analysis verifier implementation"),
+        (
+            "blinded_freeze_verifier",
+            Path(core.blind_verify.__file__),
+            "blinded freeze verifier implementation",
+        ),
+        ("packet_builder", Path(core.packet.__file__), "packet builder implementation"),
+        (
+            "packet_verifier",
+            Path(core.map_verify.__file__),
+            "packet verifier implementation",
+        ),
+        ("ratings_freezer", Path(freeze.__file__), "ratings freezer implementation"),
+    )
+
+
+def _owned_provenance_source_specs():
+    return (
+        ("analysis_plan", core.PLAN, "frozen human-analysis plan"),
+        ("protocol", freeze.DEFAULT_PROTOCOL, "frozen protocol"),
+        (
+            "assignment_plan",
+            freeze.DEFAULT_ASSIGNMENT_PLAN,
+            "frozen assignment-plan",
+        ),
+        ("annotator_guide", freeze.DEFAULT_ANNOTATOR_GUIDE, "frozen annotator-guide"),
+        (
+            "requirements",
+            analyze_human_eval.ANALYSIS_REQUIREMENTS,
+            "analysis requirements",
+        ),
+        (
+            "ci_requirements",
+            analyze_human_eval.ANALYSIS_CI_REQUIREMENTS,
+            "analysis CI requirements",
+        ),
+        (
+            "python_version",
+            analyze_human_eval.ANALYSIS_PYTHON_VERSION,
+            "analysis Python version contract",
+        ),
+    )
+
+
+def _open_provenance_source_snapshots(descriptors: ExitStack, specs):
+    snapshots = {}
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    for key, path, label in specs:
+        path = Path(path)
+        try:
+            descriptor = os.open(path, flags)
+        except OSError as exc:
+            snapshots[key] = (path, None, None, label, exc)
+            continue
+        descriptors.callback(os.close, descriptor)
+        try:
+            snapshot = _regular_source_snapshot_from_descriptor(
+                descriptor,
+                label=f"current {label}",
+            )
+            _require_regular_path_binding(
+                path,
+                descriptor,
+                label=label,
+            )
+        except (OSError, ValueError) as exc:
+            snapshots[key] = (path, descriptor, None, label, exc)
+        else:
+            snapshots[key] = (path, descriptor, snapshot, label, None)
+    return snapshots
+
+
+def _snapshot_bytes(source_snapshots, key, path: Path, *, label: str) -> bytes:
+    if source_snapshots is None:
+        return _regular_bytes(path, label=label)
+    source_path, _descriptor, snapshot, source_label, error = source_snapshots[key]
+    if error is not None:
+        raise ValueError(
+            f"current {source_label} must be a regular file: {source_path}"
+        ) from error
+    return snapshot[0]
+
+
+def _require_provenance_sources_stable(source_snapshots) -> None:
+    for path, descriptor, original, label, error in source_snapshots.values():
+        if error is not None:
+            raise ValueError(
+                f"current {label} must be a regular file: {path}"
+            ) from error
+        current = _regular_source_snapshot_from_descriptor(
+            descriptor,
+            label=f"current {label}",
+        )
+        if current != original:
+            raise ValueError(
+                f"{label} changed during independent recomputation: {path}"
+            )
+        _require_regular_path_binding(
+            path,
+            descriptor,
+            label=label,
+        )
 
 
 def _require_regular_entry_binding(
@@ -343,7 +474,7 @@ def _verify_exact_entry(entry, *, expected_path: str, content: bytes, label: str
     )
 
 
-def _validate_analysis_identity(payload: dict) -> None:
+def _validate_analysis_identity(payload: dict, source_snapshots=None) -> None:
     required = {
         "schema_version": 1,
         "study_id": "budget-main-v1",
@@ -378,7 +509,12 @@ def _validate_analysis_identity(payload: dict) -> None:
     plan_entry = provenance.get("analysis_plan")
     if not isinstance(plan_entry, dict):
         raise ValueError("analysis plan provenance must be an object")
-    plan_bytes = _regular_bytes(core.PLAN, label="current frozen human-analysis plan")
+    plan_bytes = _snapshot_bytes(
+        source_snapshots,
+        "analysis_plan",
+        core.PLAN,
+        label="current frozen human-analysis plan",
+    )
     expected_plan = _fingerprint(plan_bytes)
     _require_equal(
         expected_plan["sha256"],
@@ -413,7 +549,12 @@ def _validate_analysis_identity(payload: dict) -> None:
     }
     for key, (path, logical_path, frozen_sha256) in governing_inputs.items():
         label = key.replace("_", "-")
-        content = _regular_bytes(path, label=f"current frozen {label}")
+        content = _snapshot_bytes(
+            source_snapshots,
+            key,
+            path,
+            label=f"current frozen {label}",
+        )
         _require_equal(
             _fingerprint(content)["sha256"],
             frozen_sha256,
@@ -427,7 +568,7 @@ def _validate_analysis_identity(payload: dict) -> None:
         )
 
 
-def _verify_implementation(manifest: dict) -> None:
+def _verify_implementation(manifest: dict, source_snapshots=None) -> None:
     """Bind every source dependency before executing its validation logic."""
     implementation = manifest.get("implementation")
     if not isinstance(implementation, dict):
@@ -491,7 +632,12 @@ def _verify_implementation(manifest: dict) -> None:
         ),
     )
     for key, source, logical_path, label in sources:
-        source_bytes = _regular_bytes(source, label=f"current {label}")
+        source_bytes = _snapshot_bytes(
+            source_snapshots,
+            key,
+            source,
+            label=f"current {label}",
+        )
         _verify_exact_entry(
             implementation[key],
             expected_path=logical_path,
@@ -500,7 +646,7 @@ def _verify_implementation(manifest: dict) -> None:
         )
 
 
-def _verify_analysis_environment(manifest: dict) -> None:
+def _verify_analysis_environment(manifest: dict, source_snapshots=None) -> None:
     """Bind both pinned environment files and the runtime producing numbers."""
     environment = manifest.get("analysis_environment")
     if not isinstance(environment, dict) or set(environment) != {
@@ -516,7 +662,9 @@ def _verify_analysis_environment(manifest: dict) -> None:
     _verify_exact_entry(
         environment["requirements"],
         expected_path="requirements.txt",
-        content=_regular_bytes(
+        content=_snapshot_bytes(
+            source_snapshots,
+            "requirements",
             analyze_human_eval.ANALYSIS_REQUIREMENTS,
             label="current analysis requirements",
         ),
@@ -525,7 +673,9 @@ def _verify_analysis_environment(manifest: dict) -> None:
     _verify_exact_entry(
         environment["ci_requirements"],
         expected_path="requirements-ci.lock",
-        content=_regular_bytes(
+        content=_snapshot_bytes(
+            source_snapshots,
+            "ci_requirements",
             analyze_human_eval.ANALYSIS_CI_REQUIREMENTS,
             label="current analysis CI requirements",
         ),
@@ -534,7 +684,9 @@ def _verify_analysis_environment(manifest: dict) -> None:
     _verify_exact_entry(
         environment["python_version"],
         expected_path=".python-version",
-        content=_regular_bytes(
+        content=_snapshot_bytes(
+            source_snapshots,
+            "python_version",
             analyze_human_eval.ANALYSIS_PYTHON_VERSION,
             label="current analysis Python version contract",
         ),
@@ -550,7 +702,12 @@ def _verify_analysis_environment(manifest: dict) -> None:
         )
 
 
-def _verify_captured_bundle(snapshots) -> dict:
+def _verify_captured_bundle(
+    snapshots,
+    source_snapshots=None,
+    *,
+    source_descriptors: ExitStack | None = None,
+) -> dict:
     """Verify one descriptor-bound snapshot of the complete output bundle."""
     json_bytes = snapshots[analyze_human_eval.ANALYSIS_JSON][1][0]
     markdown_bytes = snapshots[analyze_human_eval.ANALYSIS_MARKDOWN][1][0]
@@ -573,9 +730,16 @@ def _verify_captured_bundle(snapshots) -> dict:
             "analysis manifest schema mismatch at root: "
             f"undeclared fields {undeclared_root_fields!r}"
         )
-    _verify_analysis_environment(manifest)
-    _verify_implementation(manifest)
-    _validate_analysis_identity(payload)
+    _verify_implementation(manifest, source_snapshots)
+    if source_descriptors is not None:
+        source_snapshots.update(
+            _open_provenance_source_snapshots(
+                source_descriptors,
+                _owned_provenance_source_specs(),
+            )
+        )
+    _verify_analysis_environment(manifest, source_snapshots)
+    _validate_analysis_identity(payload, source_snapshots)
 
     expected_markdown = analyze_human_eval.render_markdown(payload).encode("utf-8")
     if markdown_bytes != expected_markdown:
@@ -638,17 +802,26 @@ def verify_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
     """Verify exact outputs, deterministic rendering, and implementation hashes."""
     output_root = Path(output_root)
     with ExitStack() as descriptors:
+        source_snapshots = _open_provenance_source_snapshots(
+            descriptors,
+            _implementation_source_specs(),
+        )
         output_descriptor, snapshots, directory_identity = _open_output_snapshot(
             descriptors,
             output_root,
         )
-        receipt = _verify_captured_bundle(snapshots)
+        receipt = _verify_captured_bundle(
+            snapshots,
+            source_snapshots,
+            source_descriptors=descriptors,
+        )
         _require_output_snapshot_stable(
             output_root,
             output_descriptor,
             snapshots,
             directory_identity,
         )
+        _require_provenance_sources_stable(source_snapshots)
         return receipt
 
 
@@ -674,11 +847,19 @@ def verify_bundle_against_inputs(
     """
     output_root = Path(output_root)
     with ExitStack() as descriptors:
+        source_snapshots = _open_provenance_source_snapshots(
+            descriptors,
+            _implementation_source_specs(),
+        )
         output_descriptor, snapshots, directory_identity = _open_output_snapshot(
             descriptors,
             output_root,
         )
-        receipt = _verify_captured_bundle(snapshots)
+        receipt = _verify_captured_bundle(
+            snapshots,
+            source_snapshots,
+            source_descriptors=descriptors,
+        )
         payload = _load_json(
             snapshots[analyze_human_eval.ANALYSIS_JSON][1][0],
             label="canonical human-analysis JSON",
@@ -723,6 +904,7 @@ def verify_bundle_against_inputs(
             snapshots,
             directory_identity,
         )
+        _require_provenance_sources_stable(source_snapshots)
         receipt["independent_recomputation_verified"] = True
         receipt["recomputed_from_retained_ratings"] = from_retained_archive
         receipt["outputs_stable_during_independent_recomputation"] = True

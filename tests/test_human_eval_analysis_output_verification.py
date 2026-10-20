@@ -815,6 +815,37 @@ def test_independent_verifier_rejects_identical_output_directory_replacement(
         )
 
 
+def test_independent_verifier_rejects_identical_source_replacement_during_recomputation(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "verify_human_eval_analysis_outputs.py"
+    source.write_bytes(Path(verify.__file__).read_bytes())
+    monkeypatch.setattr(verify, "__file__", str(source))
+    monkeypatch.setattr(analyze_human_eval, "ANALYSIS_VERIFIER_SOURCE", source)
+
+    output = tmp_path / "analysis"
+    expected = _payload()
+    analyze_human_eval.write_bundle(expected, output)
+    detached = tmp_path / "detached-verifier.py"
+
+    def replace_verifier_during_recomputation(*_args, **_kwargs):
+        original = source.read_bytes()
+        source.rename(detached)
+        source.write_bytes(original)
+        return expected
+
+    monkeypatch.setattr(core, "analyze", replace_verifier_during_recomputation)
+
+    with pytest.raises(
+        ValueError,
+        match="analysis verifier implementation changed during independent recomputation",
+    ):
+        verify.verify_bundle_against_inputs(
+            output,
+            rating_paths=[tmp_path / "retained.csv"],
+        )
+
+
 def test_independent_verifier_rejects_change_after_output_content_recheck(
     tmp_path, monkeypatch
 ):
@@ -905,6 +936,25 @@ def test_verifier_rejects_fifo_output_without_blocking(tmp_path):
     artifact = output / analyze_human_eval.ANALYSIS_JSON
     artifact.unlink()
     os.mkfifo(artifact)
+
+    with pytest.raises(ValueError, match="must be a regular file"):
+        verify.verify_bundle(output)
+
+
+def test_verifier_opens_provenance_fifo_nonblocking(tmp_path, monkeypatch):
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    plan = tmp_path / "analysis-plan.fifo"
+    os.mkfifo(plan)
+    monkeypatch.setattr(core, "PLAN", plan)
+    real_open = verify.os.open
+
+    def require_nonblocking_open(path, flags, *args, **kwargs):
+        if Path(path) == plan and not flags & os.O_NONBLOCK:
+            raise AssertionError("provenance source must be opened nonblocking")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(verify.os, "open", require_nonblocking_open)
 
     with pytest.raises(ValueError, match="must be a regular file"):
         verify.verify_bundle(output)
@@ -1029,6 +1079,19 @@ def test_rejects_ratings_freezer_implementation_drift(tmp_path, monkeypatch):
         "DEFAULT_PROTOCOL",
         tmp_path / "must-not-read-drifted-protocol.md",
     )
+
+    with pytest.raises(ValueError, match="ratings freezer implementation fingerprint"):
+        verify.verify_bundle(output)
+
+
+def test_implementation_drift_precedes_nonregular_owned_path(tmp_path, monkeypatch):
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+
+    changed_freezer = tmp_path / "freeze_human_eval_ratings.py"
+    changed_freezer.write_text("# changed governing-input anchors\n", encoding="utf-8")
+    monkeypatch.setattr(freeze, "__file__", str(changed_freezer))
+    monkeypatch.setattr(freeze, "DEFAULT_PROTOCOL", tmp_path)
 
     with pytest.raises(ValueError, match="ratings freezer implementation fingerprint"):
         verify.verify_bundle(output)

@@ -43,6 +43,15 @@ the complete canonical payload from the rating inputs and governing artifacts
 before printing its success message. This second pass covers variant summaries,
 paired effects and confidence intervals, missingness, agreement, and provenance;
 it does not trust the persisted result values or their self-reported hashes.
+The verifier first opens and validates every manifest-bound implementation
+source through a retained non-symlink descriptor, then captures the pinned
+environment files and frozen governing documents designated by that validated
+implementation. All provenance opens are nonblocking. Manifest checks consume
+the captured bytes, and the descriptors, file identities, contents, and
+pathname bindings are checked again after independent recomputation. A
+byte-identical source-file replacement can therefore not coexist with a
+successful receipt merely because its digest is unchanged, and a substituted
+FIFO is rejected rather than blocking verification.
 The verifier captures the canonical JSON, deterministic Markdown, and output
 manifest against their verified digests before recomputation, then rereads all
 three afterward. If any byte stream differs at that final reread, verification
@@ -117,6 +126,9 @@ Verification fails closed when:
   every output hash consistently.
 - canonical JSON, Markdown, or the output manifest differs from its captured
   bytes when reread after independent recomputation.
+- any bound implementation source, environment pin, analysis plan, protocol,
+  assignment plan, or annotator guide changes content, file identity, or
+  pathname binding during verification or independent recomputation.
 
 A successful receipt is a publication-integrity check, not a new scientific
 result.
@@ -140,11 +152,12 @@ retry.
 
 This gate detects output/renderer drift, binds the analysis and verification
 implementation sources, and recomputes descriptive human-validation outputs
-from retained inputs. Its before/after byte check detects persistent mutation
-visible at the final reread, but it is not a filesystem lock: a transient change
-restored before the reread is undetectable, and the check makes no claim about
-changes after verification returns. It does not prove that annotators were
-independent humans, replace the earlier
+from retained inputs. Its retained output and provenance descriptors detect
+persistent mutation or replacement visible at the final observation, but they
+are not filesystem locks: a transient replacement restored to the original
+inode before the final observation is outside this guarantee, and the check
+makes no claim about changes after verification returns. It does not prove that
+annotators were independent humans, replace the earlier
 packet/freeze verification gates, or make multiple filesystem writes an atomic
 transaction. The upstream human-analysis code still verifies and snapshots the
 blinded and coordinator artifacts before treatment-level analysis. Real blinded
