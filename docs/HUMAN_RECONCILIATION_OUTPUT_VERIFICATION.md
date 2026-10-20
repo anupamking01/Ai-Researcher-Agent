@@ -39,9 +39,10 @@ governing contract merely by being fingerprinted alongside the results.
 2. validates the frozen study identity, outcome, contrasts, dimensions, missingness rule, direction categories, and descriptive-only inference contract;
 3. verifies artifact byte counts and SHA-256 fingerprints;
 4. deterministically regenerates the manuscript Markdown from the canonical JSON and requires byte-for-byte equality;
-5. verifies the recorded reconciler and readiness-gate implementation fingerprints against the current source;
-6. checks that the canonical payload and manifest bind the same readiness-verified upstream fingerprints;
-7. independently recomputes the frozen descriptive reconciliation from the verified automated and human analysis artifacts and requires exact canonical equality.
+5. captures the reconciler, readiness gate, reconciliation verifier, and pinned environment files through retained non-symlink descriptors before trusting their fingerprints, then revalidates the same inodes, bytes, and pathname bindings after recomputation;
+6. verifies the recorded implementation fingerprints against those captured source bytes;
+7. checks that the canonical payload and manifest bind the same readiness-verified upstream fingerprints;
+8. independently recomputes the frozen descriptive reconciliation from the verified automated and human analysis artifacts and requires exact canonical equality.
 
 Verification fails closed on hand-edited manuscript results, source-fingerprint drift, implementation drift, contract drift, changed task identity, missing-pair imputation, removed frozen contrasts or dimensions, or post-unblinding additions that change the frozen result structure.
 

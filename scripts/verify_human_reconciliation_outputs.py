@@ -145,6 +145,108 @@ def _open_regular_snapshot_at(
     return descriptor, snapshot
 
 
+_regular_source_snapshot_from_descriptor = _regular_snapshot_from_descriptor
+
+
+def _require_regular_path_binding(path: Path, descriptor: int, *, label: str) -> None:
+    """Require *path* to still identify the regular file held by *descriptor*."""
+    try:
+        current = os.stat(path, follow_symlinks=False)
+        bound = os.fstat(descriptor)
+    except OSError as exc:
+        raise ValueError(
+            f"{label} changed during independent recomputation: {path}"
+        ) from exc
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or (current.st_dev, current.st_ino) != (bound.st_dev, bound.st_ino)
+    ):
+        raise ValueError(
+            f"{label} changed during independent recomputation: {path}"
+        )
+
+
+def _provenance_source_specs():
+    return (
+        ("reconciler", Path(reconcile.__file__), "reconciler implementation"),
+        ("readiness_gate", Path(readiness.__file__), "readiness-gate implementation"),
+        (
+            "reconciliation_verifier",
+            Path(__file__),
+            "reconciliation verifier implementation",
+        ),
+        ("requirements", reconcile.ANALYSIS_REQUIREMENTS, "analysis requirements"),
+        (
+            "ci_requirements",
+            reconcile.ANALYSIS_CI_REQUIREMENTS,
+            "analysis CI requirements",
+        ),
+        (
+            "python_version",
+            reconcile.ANALYSIS_PYTHON_VERSION,
+            "analysis Python version contract",
+        ),
+    )
+
+
+def _open_provenance_source_snapshots(descriptors: ExitStack):
+    snapshots = {}
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    for key, path, label in _provenance_source_specs():
+        path = Path(path)
+        try:
+            entry = os.stat(path, follow_symlinks=False)
+            if not stat.S_ISREG(entry.st_mode):
+                raise ValueError(f"current {label} must be a regular file: {path}")
+            descriptor = os.open(path, flags)
+        except (OSError, ValueError) as exc:
+            snapshots[key] = (path, None, None, label, exc)
+            continue
+        descriptors.callback(os.close, descriptor)
+        try:
+            snapshot = _regular_source_snapshot_from_descriptor(
+                descriptor,
+                label=f"current {label}",
+            )
+            if snapshot[1][:2] != (entry.st_dev, entry.st_ino):
+                raise ValueError(f"{label} changed during initial capture: {path}")
+            _require_regular_path_binding(path, descriptor, label=label)
+        except (OSError, ValueError) as exc:
+            snapshots[key] = (path, descriptor, None, label, exc)
+        else:
+            snapshots[key] = (path, descriptor, snapshot, label, None)
+    return snapshots
+
+
+def _snapshot_bytes(source_snapshots, key, path: Path, *, label: str) -> bytes:
+    if source_snapshots is None:
+        return _regular_bytes(path, label=label)
+    source_path, _descriptor, snapshot, source_label, error = source_snapshots[key]
+    if error is not None:
+        raise ValueError(
+            f"current {source_label} must be a regular file: {source_path}"
+        ) from error
+    return snapshot[0]
+
+
+def _require_provenance_sources_stable(source_snapshots) -> None:
+    for path, descriptor, original, label, error in source_snapshots.values():
+        if error is not None:
+            raise ValueError(
+                f"current {label} must be a regular file: {path}"
+            ) from error
+        current = _regular_source_snapshot_from_descriptor(
+            descriptor,
+            label=f"current {label}",
+        )
+        if current != original:
+            raise ValueError(
+                f"{label} changed during independent recomputation: {path}"
+            )
+        _require_regular_path_binding(path, descriptor, label=label)
+
+
 def _require_regular_entry_binding(
     directory_descriptor: int,
     name: str,
@@ -337,7 +439,7 @@ def _verify_producer_commit_environment(
         )
 
 
-def _verify_analysis_environment(manifest: dict) -> dict:
+def _verify_analysis_environment(manifest: dict, source_snapshots=None) -> dict:
     """Verify current pins and the exact runtime contract before result trust."""
     environment = manifest.get("analysis_environment")
     if not isinstance(environment, dict) or set(environment) != {
@@ -353,7 +455,9 @@ def _verify_analysis_environment(manifest: dict) -> dict:
     _verify_exact_entry(
         environment["requirements"],
         expected_path="requirements.txt",
-        content=_regular_bytes(
+        content=_snapshot_bytes(
+            source_snapshots,
+            "requirements",
             reconcile.ANALYSIS_REQUIREMENTS,
             label="current analysis requirements",
         ),
@@ -362,7 +466,9 @@ def _verify_analysis_environment(manifest: dict) -> dict:
     _verify_exact_entry(
         environment["ci_requirements"],
         expected_path="requirements-ci.lock",
-        content=_regular_bytes(
+        content=_snapshot_bytes(
+            source_snapshots,
+            "ci_requirements",
             reconcile.ANALYSIS_CI_REQUIREMENTS,
             label="current analysis CI requirements",
         ),
@@ -371,7 +477,9 @@ def _verify_analysis_environment(manifest: dict) -> dict:
     _verify_exact_entry(
         environment["python_version"],
         expected_path=".python-version",
-        content=_regular_bytes(
+        content=_snapshot_bytes(
+            source_snapshots,
+            "python_version",
             reconcile.ANALYSIS_PYTHON_VERSION,
             label="current analysis Python version contract",
         ),
@@ -441,6 +549,7 @@ def _verify_bound_bundle(
     root: Path = reconcile.ROOT,
     human_root: Path | None = None,
     contract: Path | None = None,
+    source_snapshots=None,
 ) -> dict:
     """Verify a bundle through an already-bound output directory descriptor."""
     output_root = Path(output_root)
@@ -474,7 +583,7 @@ def _verify_bound_bundle(
         reconcile.MANIFEST_INTEGRITY_NOTE,
         label="reconciliation integrity note",
     )
-    analysis_environment = _verify_analysis_environment(manifest)
+    analysis_environment = _verify_analysis_environment(manifest, source_snapshots)
     _validate_identity(payload)
 
     expected_markdown = reconcile.render_markdown(payload).encode("utf-8")
@@ -536,19 +645,34 @@ def _verify_bound_bundle(
     _verify_exact_entry(
         implementation["reconciler"],
         expected_path="scripts/reconcile_human_automated.py",
-        content=_regular_bytes(Path(reconcile.__file__), label="current reconciler"),
+        content=_snapshot_bytes(
+            source_snapshots,
+            "reconciler",
+            Path(reconcile.__file__),
+            label="current reconciler",
+        ),
         label="reconciler implementation",
     )
     _verify_exact_entry(
         implementation["readiness_gate"],
         expected_path="scripts/verify_human_reconciliation_readiness.py",
-        content=_regular_bytes(Path(readiness.__file__), label="current readiness gate"),
+        content=_snapshot_bytes(
+            source_snapshots,
+            "readiness_gate",
+            Path(readiness.__file__),
+            label="current readiness gate",
+        ),
         label="readiness-gate implementation",
     )
     _verify_exact_entry(
         implementation["reconciliation_verifier"],
         expected_path="scripts/verify_human_reconciliation_outputs.py",
-        content=_regular_bytes(Path(__file__), label="current reconciliation verifier"),
+        content=_snapshot_bytes(
+            source_snapshots,
+            "reconciliation_verifier",
+            Path(__file__),
+            label="current reconciliation verifier",
+        ),
         label="reconciliation verifier implementation",
     )
     _verify_producer_commit_implementation(
@@ -635,6 +759,8 @@ def _verify_bound_bundle(
         output_descriptor,
         label="reconciliation output root",
     )
+    if source_snapshots is not None:
+        _require_provenance_sources_stable(source_snapshots)
     return receipt
 
 
@@ -653,6 +779,7 @@ def verify_bundle(
         (reconcile.RECONCILIATION_MANIFEST, "reconciliation output manifest"),
     )
     with ExitStack() as descriptors:
+        source_snapshots = _open_provenance_source_snapshots(descriptors)
         output_descriptor = _open_bound_directory(
             output_root,
             label="reconciliation output root",
@@ -716,6 +843,7 @@ def verify_bundle(
             root=root,
             human_root=human_root,
             contract=contract,
+            source_snapshots=source_snapshots,
         )
 
 

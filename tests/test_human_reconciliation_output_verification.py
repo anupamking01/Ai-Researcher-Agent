@@ -1280,6 +1280,60 @@ def test_rejects_reconciliation_verifier_implementation_drift(tmp_path, monkeypa
         verify.verify_bundle(output, root=tmp_path)
 
 
+def test_rejects_same_byte_reconciler_replacement_during_recomputation(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+    source = tmp_path / "reconcile_human_automated.py"
+    source.write_bytes(Path(reconcile.__file__).read_bytes())
+    detached = tmp_path / "detached-reconcile_human_automated.py"
+    monkeypatch.setattr(reconcile, "__file__", str(source))
+
+    def replace_reconciler(**kwargs):
+        content = source.read_bytes()
+        source.rename(detached)
+        source.write_bytes(content)
+        return payload
+
+    monkeypatch.setattr(reconcile, "reconcile_verified", replace_reconciler)
+
+    with pytest.raises(
+        ValueError,
+        match="reconciler implementation changed during independent recomputation",
+    ):
+        verify.verify_bundle(output, root=tmp_path)
+
+
+def test_rejects_same_byte_requirements_replacement_during_recomputation(
+    tmp_path, monkeypatch
+):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_bytes(reconcile.ANALYSIS_REQUIREMENTS.read_bytes())
+    detached = tmp_path / "detached-requirements.txt"
+    monkeypatch.setattr(reconcile, "ANALYSIS_REQUIREMENTS", requirements)
+
+    def replace_requirements(**kwargs):
+        content = requirements.read_bytes()
+        requirements.rename(detached)
+        requirements.write_bytes(content)
+        return payload
+
+    monkeypatch.setattr(reconcile, "reconcile_verified", replace_requirements)
+
+    with pytest.raises(
+        ValueError,
+        match="analysis requirements changed during independent recomputation",
+    ):
+        verify.verify_bundle(output, root=tmp_path)
+
+
 @pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
 def test_rejects_nonfinite_reconciliation_before_publication(tmp_path, invalid):
     payload = _payload()
