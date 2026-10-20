@@ -97,6 +97,16 @@ captured bytes, then rechecks file identity, mutation metadata, parent identity,
 and final pathname binding. A byte-identical pathname replacement during a
 verification read therefore fails closed instead of becoming newly trusted.
 
+The verifier also captures a descriptor-bound recursive inventory of the full
+freeze tree before reading the manifest and compares it with a second stable
+inventory immediately before returning its success receipt. The inventory binds
+every regular file and directory by relative name, type, device, inode, size,
+and mutation timestamps; existing path-specific checks continue to reject
+symlinks and other special entries with artifact-specific diagnostics.
+Consequently, a file or directory added, removed, replaced, or edited during
+verification cannot coexist with a successful receipt merely because its
+parent's closed-layout check happened earlier.
+
 The independent verifier treats the freeze manifest as a closed schema at every
 object boundary. The root, governing-input descriptors, coverage summary,
 producer and validator identities, ordered rating-input descriptors, normalized

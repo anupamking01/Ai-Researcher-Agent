@@ -192,6 +192,31 @@ def test_manifest_path_replacement_during_capture_is_rejected(
         _verify(frozen_case, retained=True)
 
 
+def test_undeclared_sidecar_added_after_layout_check_is_rejected(
+    frozen_case, monkeypatch
+):
+    """A late bundle addition must not coexist with a success receipt."""
+    root, _ = frozen_case
+    real_verify_layout = verify._verify_bundle_layout
+    injected = False
+
+    def add_sidecar_after_layout(freeze_root, manifest):
+        nonlocal injected
+        real_verify_layout(freeze_root, manifest)
+        if not injected:
+            (root / "raw_rating_inputs" / "late-sidecar.txt").write_text(
+                "undeclared\n", encoding="utf-8"
+            )
+            injected = True
+
+    monkeypatch.setattr(verify, "_verify_bundle_layout", add_sidecar_after_layout)
+
+    with pytest.raises(
+        ValueError, match="freeze root changed while it was being verified"
+    ):
+        _verify(frozen_case, retained=True)
+
+
 def test_cli_read_drift_has_no_success_receipt(frozen_case, monkeypatch, capsys):
     root, _ = frozen_case
     _inject_edit(frozen_case, monkeypatch, "line_endings")

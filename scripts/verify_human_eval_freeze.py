@@ -13,6 +13,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import stat
 from pathlib import Path
 
 from scripts import freeze_human_eval_ratings as freeze
@@ -29,6 +31,113 @@ DEFAULT_ANNOTATOR_GUIDE = freeze.DEFAULT_ANNOTATOR_GUIDE
 def _require_regular_file(path: Path, *, label: str) -> bytes:
     """Capture one path-bound file through the freeze's descriptor contract."""
     return freeze._capture_regular_input(path, label=label)
+
+
+def _entry_identity(metadata) -> tuple[int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _capture_directory_inventory(descriptor: int, *, label: str):
+    """Capture one stable recursive tree inventory without reading file bytes."""
+    opened = os.fstat(descriptor)
+    if not stat.S_ISDIR(opened.st_mode):
+        raise ValueError(f"{label} must be a regular directory")
+    try:
+        names = tuple(sorted(os.listdir(descriptor)))
+    except OSError as exc:
+        raise ValueError(f"{label} changed while it was being verified") from exc
+
+    metadata = {}
+    for name in names:
+        try:
+            metadata[name] = os.stat(
+                name, dir_fd=descriptor, follow_symlinks=False
+            )
+        except OSError as exc:
+            raise ValueError(f"{label} changed while it was being verified") from exc
+
+    entries = []
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(
+        os, "O_NOFOLLOW", 0
+    )
+    for name in names:
+        child = metadata[name]
+        identity = _entry_identity(child)
+        if stat.S_ISREG(child.st_mode):
+            entries.append((name, "file", identity))
+            continue
+        if not stat.S_ISDIR(child.st_mode):
+            # Record invalid/special entries so the established path-specific
+            # validators can retain their more actionable diagnostics.
+            entries.append((name, "special", identity))
+            continue
+        try:
+            child_descriptor = os.open(name, directory_flags, dir_fd=descriptor)
+        except OSError as exc:
+            raise ValueError(f"{label} changed while it was being verified") from exc
+        try:
+            if _entry_identity(os.fstat(child_descriptor)) != identity:
+                raise ValueError(f"{label} changed while it was being verified")
+            child_inventory = _capture_directory_inventory(
+                child_descriptor, label=f"{label}/{name}"
+            )
+        finally:
+            os.close(child_descriptor)
+        entries.append((name, "directory", identity, child_inventory))
+
+    try:
+        names_after = tuple(sorted(os.listdir(descriptor)))
+        current = {
+            name: os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            for name in names
+        }
+    except OSError as exc:
+        raise ValueError(f"{label} changed while it was being verified") from exc
+    if (
+        names_after != names
+        or _entry_identity(os.fstat(descriptor)) != _entry_identity(opened)
+        or any(
+            _entry_identity(current[name]) != _entry_identity(metadata[name])
+            for name in names
+        )
+    ):
+        raise ValueError(f"{label} changed while it was being verified")
+    return (_entry_identity(opened), tuple(entries))
+
+
+def _capture_freeze_inventory(freeze_root: Path):
+    """Bind a stable recursive inventory to the visible freeze-root path."""
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(
+        os, "O_NOFOLLOW", 0
+    )
+    try:
+        descriptor = os.open(freeze_root, directory_flags)
+    except OSError as exc:
+        raise ValueError(
+            f"freeze root must be a regular directory: {freeze_root}"
+        ) from exc
+    try:
+        inventory = _capture_directory_inventory(descriptor, label="freeze root")
+        try:
+            visible = os.stat(freeze_root, follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError(
+                "freeze root changed while it was being verified"
+            ) from exc
+        if _entry_identity(visible) != inventory[0]:
+            raise ValueError("freeze root changed while it was being verified")
+        return inventory
+    finally:
+        os.close(descriptor)
 
 
 def _load_json_bytes(content: bytes, *, label: str) -> dict:
@@ -538,6 +647,7 @@ def verify_frozen_snapshot(
 
     if freeze_root.is_symlink() or not freeze_root.is_dir():
         raise ValueError(f"freeze root must be a regular directory: {freeze_root}")
+    initial_inventory = _capture_freeze_inventory(freeze_root)
 
     manifest_path = freeze_root / "freeze_manifest.json"
     manifest_content = _require_regular_file(manifest_path, label="freeze manifest")
@@ -946,6 +1056,9 @@ def verify_frozen_snapshot(
     stored_agreement = _load_json_bytes(agreement_content, label="agreement output")
     recomputed_agreement = freeze.build_agreement(frozen_rows)
     _require_equal(stored_agreement, recomputed_agreement, label="recomputed agreement")
+
+    if _capture_freeze_inventory(freeze_root) != initial_inventory:
+        raise ValueError("freeze root changed while it was being verified")
 
     return {
         "schema_version": 1,
