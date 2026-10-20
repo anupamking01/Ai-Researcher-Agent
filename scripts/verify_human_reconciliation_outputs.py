@@ -115,7 +115,21 @@ def _open_regular_snapshot_at(
     label: str,
 ) -> tuple[int, tuple[bytes, tuple[int, int, int, int, int]]]:
     """Open and snapshot a regular entry without following a final symlink."""
-    flags = os.O_RDONLY
+    # Classify before a read-open so an already-present FIFO or device cannot
+    # block or trigger device-specific open-time effects.  The nonblocking flag
+    # and descriptor checks below remain race defenses after this metadata check.
+    try:
+        entry = os.stat(
+            name,
+            dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+    except OSError as exc:
+        raise ValueError(f"{label} must be a regular file") from exc
+    if not stat.S_ISREG(entry.st_mode):
+        raise ValueError(f"{label} must be a regular file")
+
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
     flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(name, flags, dir_fd=directory_descriptor)
@@ -123,6 +137,8 @@ def _open_regular_snapshot_at(
         raise ValueError(f"{label} must be a regular file") from exc
     try:
         snapshot = _regular_snapshot_from_descriptor(descriptor, label=label)
+        if snapshot[1][:2] != (entry.st_dev, entry.st_ino):
+            raise ValueError(f"{label} changed during initial capture")
     except BaseException:
         os.close(descriptor)
         raise

@@ -8,6 +8,7 @@ import platform
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -549,6 +550,55 @@ def test_rejects_undeclared_reconciliation_bundle_entry(tmp_path, monkeypatch):
     )
 
     with pytest.raises(ValueError, match="bundle layout"):
+        verify.verify_bundle(output, root=tmp_path)
+
+
+def test_verifier_rejects_fifo_output_without_blocking(tmp_path, monkeypatch):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+    artifact = output / reconcile.RECONCILIATION_JSON
+    artifact.unlink()
+    os.mkfifo(artifact)
+    script = (
+        "from pathlib import Path; "
+        "from scripts import verify_human_reconciliation_outputs as verify; "
+        "verify.verify_bundle(Path(__import__('sys').argv[1]), "
+        "root=Path(__import__('sys').argv[2]))"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(output), str(tmp_path)],
+        cwd=reconcile.ROOT,
+        capture_output=True,
+        env={**os.environ, "PYTHONPATH": str(reconcile.ROOT)},
+        text=True,
+        timeout=5,
+    )
+
+    assert completed.returncode != 0
+    assert "must be a regular file" in completed.stderr
+
+
+def test_verifier_rejects_fifo_before_read_open(tmp_path, monkeypatch):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+    artifact = output / reconcile.RECONCILIATION_JSON
+    artifact.unlink()
+    os.mkfifo(artifact)
+    real_open = verify.os.open
+
+    def reject_special_file_open(path, flags, *args, **kwargs):
+        if path == reconcile.RECONCILIATION_JSON:
+            raise AssertionError("non-regular artifact reached os.open")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(verify.os, "open", reject_special_file_open)
+
+    with pytest.raises(ValueError, match="must be a regular file"):
         verify.verify_bundle(output, root=tmp_path)
 
 
