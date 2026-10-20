@@ -26,7 +26,17 @@ import tempfile
 from contextlib import ExitStack
 from pathlib import Path
 
+from scripts import analyze_human_eval
+from scripts import build_analysis_provenance
+from scripts import build_human_eval_packet
+from scripts import export_human_eval_annotator_bundle
+from scripts import fingerprint_research_artifacts
+from scripts import freeze_human_eval_ratings
+from scripts import verify_human_eval_freeze
+from scripts import verify_human_eval_packet
+from scripts import verify_human_eval_submission_preflight
 from scripts import verify_human_reconciliation_readiness as readiness
+from scripts import verify_research_artifact_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_ROOT = ROOT / "outputs" / "human_eval" / "reconciliation-v1"
@@ -39,9 +49,9 @@ ANALYSIS_PYTHON_VERSION = ROOT / ".python-version"
 MANIFEST_INTEGRITY_NOTE = (
     "Canonical JSON is the source of truth. The deterministic Markdown, "
     "upstream verified-input fingerprints, producing Git commit, and exact "
-    "implementation source bytes, pinned environment files, and actual Python "
-    "runtime are bound here. The verifier independently recomputes the frozen "
-    "descriptive reconciliation before success."
+    "direct and transitive verification implementation source bytes, pinned "
+    "environment files, and actual Python runtime are bound here. The verifier "
+    "independently recomputes the frozen descriptive reconciliation before success."
 )
 
 CATEGORIES = (
@@ -261,6 +271,126 @@ def _implementation_fingerprint(path: Path, *, logical_path: str) -> dict:
     return {"path": logical_path, **_fingerprint_bytes(content)}
 
 
+def implementation_source_specs(output_verifier_path: Path):
+    """Return every source file that can authorize reconciliation inputs/results."""
+    return (
+        (
+            "reconciler",
+            Path(__file__),
+            "scripts/reconcile_human_automated.py",
+            "reconciler implementation",
+        ),
+        (
+            "readiness_gate",
+            Path(readiness.__file__),
+            "scripts/verify_human_reconciliation_readiness.py",
+            "readiness-gate implementation",
+        ),
+        (
+            "reconciliation_verifier",
+            Path(output_verifier_path),
+            "scripts/verify_human_reconciliation_outputs.py",
+            "reconciliation verifier implementation",
+        ),
+        (
+            "main_study_analyzer",
+            Path(readiness.analyze_main_study.__file__),
+            "scripts/analyze_main_study.py",
+            "main-study analyzer implementation",
+        ),
+        (
+            "human_analysis_core",
+            Path(readiness.human_core.__file__),
+            "scripts/human_eval_analysis_core.py",
+            "human analysis core implementation",
+        ),
+        (
+            "automated_provenance_verifier",
+            Path(readiness.verify_analysis_provenance.__file__),
+            "scripts/verify_analysis_provenance.py",
+            "automated provenance verifier implementation",
+        ),
+        (
+            "human_analysis_output_verifier",
+            Path(readiness.verify_human_eval_analysis_outputs.__file__),
+            "scripts/verify_human_eval_analysis_outputs.py",
+            "human analysis output verifier implementation",
+        ),
+        (
+            "main_study_execution_verifier",
+            Path(readiness.verify_main_study_execution.__file__),
+            "scripts/verify_main_study_execution.py",
+            "main-study execution verifier implementation",
+        ),
+        (
+            "main_study_output_verifier",
+            Path(readiness.verify_main_study_outputs.__file__),
+            "scripts/verify_main_study_outputs.py",
+            "main-study output verifier implementation",
+        ),
+        (
+            "automated_provenance_builder",
+            Path(build_analysis_provenance.__file__),
+            "scripts/build_analysis_provenance.py",
+            "automated provenance builder implementation",
+        ),
+        (
+            "research_artifact_fingerprinter",
+            Path(fingerprint_research_artifacts.__file__),
+            "scripts/fingerprint_research_artifacts.py",
+            "research artifact fingerprinter implementation",
+        ),
+        (
+            "research_artifact_manifest_verifier",
+            Path(verify_research_artifact_manifest.__file__),
+            "scripts/verify_research_artifact_manifest.py",
+            "research artifact manifest verifier implementation",
+        ),
+        (
+            "human_analysis_renderer",
+            Path(analyze_human_eval.__file__),
+            "scripts/analyze_human_eval.py",
+            "human analysis renderer implementation",
+        ),
+        (
+            "human_freeze_verifier",
+            Path(verify_human_eval_freeze.__file__),
+            "scripts/verify_human_eval_freeze.py",
+            "human freeze verifier implementation",
+        ),
+        (
+            "human_packet_builder",
+            Path(build_human_eval_packet.__file__),
+            "scripts/build_human_eval_packet.py",
+            "human packet builder implementation",
+        ),
+        (
+            "human_packet_verifier",
+            Path(verify_human_eval_packet.__file__),
+            "scripts/verify_human_eval_packet.py",
+            "human packet verifier implementation",
+        ),
+        (
+            "human_ratings_freezer",
+            Path(freeze_human_eval_ratings.__file__),
+            "scripts/freeze_human_eval_ratings.py",
+            "human ratings freezer implementation",
+        ),
+        (
+            "human_annotator_bundle_exporter",
+            Path(export_human_eval_annotator_bundle.__file__),
+            "scripts/export_human_eval_annotator_bundle.py",
+            "human annotator bundle exporter implementation",
+        ),
+        (
+            "human_submission_preflight_verifier",
+            Path(verify_human_eval_submission_preflight.__file__),
+            "scripts/verify_human_eval_submission_preflight.py",
+            "human submission preflight verifier implementation",
+        ),
+    )
+
+
 def _producer_commit(root: Path) -> str:
     try:
         completed = subprocess.run(
@@ -422,18 +552,10 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
 
     producer_git_commit = _producer_commit(Path(root))
     implementation = {
-        "reconciler": _implementation_fingerprint(
-            Path(__file__),
-            logical_path="scripts/reconcile_human_automated.py",
-        ),
-        "readiness_gate": _implementation_fingerprint(
-            Path(readiness.__file__),
-            logical_path="scripts/verify_human_reconciliation_readiness.py",
-        ),
-        "reconciliation_verifier": _implementation_fingerprint(
-            Path(output_verifier.__file__),
-            logical_path="scripts/verify_human_reconciliation_outputs.py",
-        ),
+        name: _implementation_fingerprint(path, logical_path=logical_path)
+        for name, path, logical_path, _label in implementation_source_specs(
+            Path(output_verifier.__file__)
+        )
     }
     analysis_environment = {
         "requirements": _implementation_fingerprint(

@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from scripts import reconcile_human_automated as reconcile
+from scripts import verify_human_eval_submission_preflight
 from scripts import verify_human_reconciliation_outputs as verify
 from scripts import verify_human_reconciliation_readiness as readiness
 
@@ -113,17 +114,12 @@ def _patch_recomputation(monkeypatch, payload):
 
 def _producer_repo(tmp_path):
     root = tmp_path / "producer-repo"
-    scripts = root / "scripts"
-    scripts.mkdir(parents=True)
-    (scripts / "reconcile_human_automated.py").write_bytes(
-        Path(reconcile.__file__).read_bytes()
-    )
-    (scripts / "verify_human_reconciliation_readiness.py").write_bytes(
-        Path(readiness.__file__).read_bytes()
-    )
-    (scripts / "verify_human_reconciliation_outputs.py").write_bytes(
-        Path(verify.__file__).read_bytes()
-    )
+    for _name, source, logical_path, _label in reconcile.implementation_source_specs(
+        Path(verify.__file__)
+    ):
+        destination = root / logical_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
     (root / "requirements.txt").write_bytes((reconcile.ROOT / "requirements.txt").read_bytes())
     (root / "requirements-ci.lock").write_bytes(
         (reconcile.ROOT / "requirements-ci.lock").read_bytes()
@@ -154,18 +150,13 @@ def _producer_repo(tmp_path):
 
 def _implementation_manifest():
     return {
-        "reconciler": {
-            "path": "scripts/reconcile_human_automated.py",
-            **reconcile._fingerprint_bytes(Path(reconcile.__file__).read_bytes()),
-        },
-        "readiness_gate": {
-            "path": "scripts/verify_human_reconciliation_readiness.py",
-            **reconcile._fingerprint_bytes(Path(readiness.__file__).read_bytes()),
-        },
-        "reconciliation_verifier": {
-            "path": "scripts/verify_human_reconciliation_outputs.py",
-            **reconcile._fingerprint_bytes(Path(verify.__file__).read_bytes()),
-        },
+        name: {
+            "path": logical_path,
+            **reconcile._fingerprint_bytes(source.read_bytes()),
+        }
+        for name, source, logical_path, _label in reconcile.implementation_source_specs(
+            Path(verify.__file__)
+        )
     }
 
 
@@ -528,6 +519,22 @@ def test_write_bundle_is_create_only_and_independently_verified(tmp_path, monkey
         "reconciler",
         "readiness_gate",
         "reconciliation_verifier",
+        "main_study_analyzer",
+        "human_analysis_core",
+        "automated_provenance_verifier",
+        "human_analysis_output_verifier",
+        "main_study_execution_verifier",
+        "main_study_output_verifier",
+        "automated_provenance_builder",
+        "research_artifact_fingerprinter",
+        "research_artifact_manifest_verifier",
+        "human_analysis_renderer",
+        "human_freeze_verifier",
+        "human_packet_builder",
+        "human_packet_verifier",
+        "human_ratings_freezer",
+        "human_annotator_bundle_exporter",
+        "human_submission_preflight_verifier",
     }
     assert manifest["implementation"]["reconciliation_verifier"] == {
         "path": "scripts/verify_human_reconciliation_outputs.py",
@@ -1276,6 +1283,48 @@ def test_rejects_reconciliation_verifier_implementation_drift(tmp_path, monkeypa
     with pytest.raises(
         ValueError,
         match="reconciliation verifier implementation fingerprint",
+    ):
+        verify.verify_bundle(output, root=tmp_path)
+
+
+def test_rejects_transitive_human_analysis_verifier_drift(tmp_path, monkeypatch):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+
+    changed = tmp_path / "verify_human_eval_analysis_outputs.py"
+    changed.write_text("# changed transitive verifier implementation\n", encoding="utf-8")
+    monkeypatch.setattr(
+        readiness.verify_human_eval_analysis_outputs,
+        "__file__",
+        str(changed),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="human analysis output verifier implementation fingerprint",
+    ):
+        verify.verify_bundle(output, root=tmp_path)
+
+
+def test_rejects_lazy_submission_preflight_verifier_drift(tmp_path, monkeypatch):
+    payload = _payload()
+    _patch_recomputation(monkeypatch, payload)
+    output = tmp_path / "reconciliation"
+    reconcile.write_bundle(payload, output, root=tmp_path)
+
+    changed = tmp_path / "verify_human_eval_submission_preflight.py"
+    changed.write_text("# changed lazy preflight verifier\n", encoding="utf-8")
+    monkeypatch.setattr(
+        verify_human_eval_submission_preflight,
+        "__file__",
+        str(changed),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="human submission preflight verifier implementation fingerprint",
     ):
         verify.verify_bundle(output, root=tmp_path)
 

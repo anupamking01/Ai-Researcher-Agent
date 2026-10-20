@@ -20,6 +20,11 @@ The manifest binds, by exact path, SHA-256, and byte count:
 - the deterministic Markdown rendering;
 - the exact reconciler implementation;
 - the exact reconciliation-readiness implementation;
+- the exact reconciliation output verifier and all repository-local
+  implementation modules transitively invoked by the readiness gate, including
+  retained-freeze submission preflights;
+- the pinned application requirements, CI requirements, Python version file,
+  and actual analysis runtime;
 - the readiness gate's verified upstream input fingerprints;
 - the full producing Git commit SHA.
 
@@ -39,8 +44,12 @@ governing contract merely by being fingerprinted alongside the results.
 2. validates the frozen study identity, outcome, contrasts, dimensions, missingness rule, direction categories, and descriptive-only inference contract;
 3. verifies artifact byte counts and SHA-256 fingerprints;
 4. deterministically regenerates the manuscript Markdown from the canonical JSON and requires byte-for-byte equality;
-5. captures the reconciler, readiness gate, reconciliation verifier, and pinned environment files through retained non-symlink descriptors before trusting their fingerprints, then revalidates the same inodes, bytes, and pathname bindings after recomputation;
-6. verifies the recorded implementation fingerprints against those captured source bytes;
+5. captures the reconciler, readiness gate, reconciliation verifier, the complete
+   16-module repository-local implementation closure used by readiness, and pinned
+   environment files through retained non-symlink descriptors before trusting
+   their fingerprints, then revalidates the same inodes, bytes, and pathname
+   bindings after recomputation;
+6. verifies every recorded direct and transitive implementation fingerprint against those captured source bytes and the producing commit;
 7. checks that the canonical payload and manifest bind the same readiness-verified upstream fingerprints;
 8. independently recomputes the frozen descriptive reconciliation from the verified automated and human analysis artifacts and requires exact canonical equality.
 

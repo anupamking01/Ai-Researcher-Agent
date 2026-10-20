@@ -167,14 +167,13 @@ def _require_regular_path_binding(path: Path, descriptor: int, *, label: str) ->
 
 
 def _provenance_source_specs():
-    return (
-        ("reconciler", Path(reconcile.__file__), "reconciler implementation"),
-        ("readiness_gate", Path(readiness.__file__), "readiness-gate implementation"),
-        (
-            "reconciliation_verifier",
-            Path(__file__),
-            "reconciliation verifier implementation",
-        ),
+    implementation = tuple(
+        (name, path, label)
+        for name, path, _logical_path, label in reconcile.implementation_source_specs(
+            Path(__file__)
+        )
+    )
+    return implementation + (
         ("requirements", reconcile.ANALYSIS_REQUIREMENTS, "analysis requirements"),
         (
             "ci_requirements",
@@ -361,7 +360,9 @@ def _verify_producer_commit_implementation(
             f"producer Git SHA must identify a commit object, got {object_type!r}"
         )
 
-    for name in ("reconciler", "readiness_gate", "reconciliation_verifier"):
+    for name, _current_path, _logical_path, _label in reconcile.implementation_source_specs(
+        Path(__file__)
+    ):
         entry = implementation[name]
         path = entry["path"]
         try:
@@ -637,44 +638,24 @@ def _verify_bound_bundle(
     implementation = manifest.get("implementation")
     if not isinstance(implementation, dict):
         raise ValueError("reconciliation manifest implementation must be an object")
+    implementation_specs = reconcile.implementation_source_specs(Path(__file__))
     _require_equal(
         set(implementation),
-        {"reconciler", "readiness_gate", "reconciliation_verifier"},
+        {name for name, _path, _logical_path, _label in implementation_specs},
         label="reconciliation manifest implementation set",
     )
-    _verify_exact_entry(
-        implementation["reconciler"],
-        expected_path="scripts/reconcile_human_automated.py",
-        content=_snapshot_bytes(
-            source_snapshots,
-            "reconciler",
-            Path(reconcile.__file__),
-            label="current reconciler",
-        ),
-        label="reconciler implementation",
-    )
-    _verify_exact_entry(
-        implementation["readiness_gate"],
-        expected_path="scripts/verify_human_reconciliation_readiness.py",
-        content=_snapshot_bytes(
-            source_snapshots,
-            "readiness_gate",
-            Path(readiness.__file__),
-            label="current readiness gate",
-        ),
-        label="readiness-gate implementation",
-    )
-    _verify_exact_entry(
-        implementation["reconciliation_verifier"],
-        expected_path="scripts/verify_human_reconciliation_outputs.py",
-        content=_snapshot_bytes(
-            source_snapshots,
-            "reconciliation_verifier",
-            Path(__file__),
-            label="current reconciliation verifier",
-        ),
-        label="reconciliation verifier implementation",
-    )
+    for name, path, logical_path, label in implementation_specs:
+        _verify_exact_entry(
+            implementation[name],
+            expected_path=logical_path,
+            content=_snapshot_bytes(
+                source_snapshots,
+                name,
+                path,
+                label=f"current {label}",
+            ),
+            label=label,
+        )
     _verify_producer_commit_implementation(
         producer,
         implementation,
