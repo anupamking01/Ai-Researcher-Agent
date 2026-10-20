@@ -282,6 +282,8 @@ def test_execution_environment_records_normalized_sorted_distributions(
         "Zeta_Package==2.0\nalpha.package==1.0\n",
         encoding="utf-8",
     )
+    ci_requirements_file = tmp_path / "requirements-ci.lock"
+    ci_requirements_file.write_text("ci-package==3.0\n", encoding="utf-8")
     monkeypatch.setattr(
         run_budget_main_study, "PYTHON_VERSION_FILE", python_version_file
     )
@@ -293,10 +295,19 @@ def test_execution_environment_records_normalized_sorted_distributions(
         "_read_requirements_lock",
         requirements_file.read_bytes,
     )
+    monkeypatch.setattr(
+        run_budget_main_study, "CI_REQUIREMENTS_FILE", ci_requirements_file
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "_read_ci_requirements_lock",
+        ci_requirements_file.read_bytes,
+    )
     distributions = [
         types.SimpleNamespace(metadata={"Name": "Zeta_Package"}, version="2.0"),
         types.SimpleNamespace(metadata={"Name": "alpha.package"}, version="1.0"),
         types.SimpleNamespace(metadata={"Name": "Alpha-Package"}, version="1.0"),
+        types.SimpleNamespace(metadata={"Name": "ci-package"}, version="3.0"),
     ]
     monkeypatch.setattr(
         run_budget_main_study,
@@ -325,17 +336,199 @@ def test_execution_environment_records_normalized_sorted_distributions(
         "installed_distributions": [
             {"name": "alpha-package", "version": "1.0"},
             {"name": "alpha-package", "version": "1.0"},
+            {"name": "ci-package", "version": "3.0"},
             {"name": "zeta-package", "version": "2.0"},
         ],
         "requirements_file": str(requirements_file.resolve()),
         "requirements_file_sha256": hashlib.sha256(
             requirements_file.read_bytes()
         ).hexdigest(),
+        "ci_requirements_file": str(ci_requirements_file.resolve()),
+        "ci_requirements_file_sha256": hashlib.sha256(
+            ci_requirements_file.read_bytes()
+        ).hexdigest(),
         "required_distributions": [
             {"name": "alpha-package", "version": "1.0"},
+            {"name": "ci-package", "version": "3.0"},
             {"name": "zeta-package", "version": "2.0"},
         ],
     }
+
+
+def test_execution_environment_binds_ci_lock_and_validates_its_pins(
+    tmp_path, monkeypatch
+):
+    python_version_file = tmp_path / ".python-version"
+    python_version_file.write_text("3.11.99\n", encoding="utf-8")
+    requirements_file = tmp_path / "requirements.txt"
+    requirements_file.write_text("alpha-package==1.0\n", encoding="utf-8")
+    ci_requirements_file = tmp_path / "requirements-ci.lock"
+    ci_requirements_file.write_text("beta-package==2.0\n", encoding="utf-8")
+    monkeypatch.setattr(
+        run_budget_main_study, "PYTHON_VERSION_FILE", python_version_file
+    )
+    monkeypatch.setattr(
+        run_budget_main_study, "REQUIREMENTS_FILE", requirements_file
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "CI_REQUIREMENTS_FILE",
+        ci_requirements_file,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "_read_requirements_lock",
+        requirements_file.read_bytes,
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "_read_ci_requirements_lock",
+        ci_requirements_file.read_bytes,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "importlib",
+        types.SimpleNamespace(
+            metadata=types.SimpleNamespace(
+                distributions=lambda: [
+                    types.SimpleNamespace(
+                        metadata={"Name": "alpha-package"}, version="1.0"
+                    ),
+                    types.SimpleNamespace(
+                        metadata={"Name": "beta-package"}, version="2.0"
+                    ),
+                ]
+            )
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "platform",
+        types.SimpleNamespace(
+            python_implementation=lambda: "SyntheticPython",
+            python_version=lambda: "3.11.99",
+            platform=lambda: "synthetic-runner",
+        ),
+        raising=False,
+    )
+
+    environment = run_budget_main_study._execution_environment()
+
+    assert environment["ci_requirements_file"] == str(
+        ci_requirements_file.resolve()
+    )
+    assert environment["ci_requirements_file_sha256"] == hashlib.sha256(
+        ci_requirements_file.read_bytes()
+    ).hexdigest()
+    assert environment["required_distributions"] == [
+        {"name": "alpha-package", "version": "1.0"},
+        {"name": "beta-package", "version": "2.0"},
+    ]
+
+
+def test_execution_environment_rejects_ci_lock_version_drift(tmp_path, monkeypatch):
+    python_version_file = tmp_path / ".python-version"
+    python_version_file.write_text("3.11.99\n", encoding="utf-8")
+    requirements_file = tmp_path / "requirements.txt"
+    requirements_file.write_text("alpha-package==1.0\n", encoding="utf-8")
+    ci_requirements_file = tmp_path / "requirements-ci.lock"
+    ci_requirements_file.write_text("beta-package==2.0\n", encoding="utf-8")
+    monkeypatch.setattr(
+        run_budget_main_study, "PYTHON_VERSION_FILE", python_version_file
+    )
+    monkeypatch.setattr(
+        run_budget_main_study, "REQUIREMENTS_FILE", requirements_file
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "CI_REQUIREMENTS_FILE",
+        ci_requirements_file,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "_read_requirements_lock",
+        requirements_file.read_bytes,
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "_read_ci_requirements_lock",
+        ci_requirements_file.read_bytes,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "importlib",
+        types.SimpleNamespace(
+            metadata=types.SimpleNamespace(
+                distributions=lambda: [
+                    types.SimpleNamespace(
+                        metadata={"Name": "alpha-package"}, version="1.0"
+                    ),
+                    types.SimpleNamespace(
+                        metadata={"Name": "beta-package"}, version="2.1"
+                    ),
+                ]
+            )
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "platform",
+        types.SimpleNamespace(
+            python_implementation=lambda: "SyntheticPython",
+            python_version=lambda: "3.11.99",
+            platform=lambda: "synthetic-runner",
+        ),
+        raising=False,
+    )
+
+    with pytest.raises(
+        SystemExit,
+        match="requires beta-package==2.0, found 2.1",
+    ):
+        run_budget_main_study._execution_environment()
+
+
+def test_execution_environment_rejects_duplicate_pin_across_locks(
+    tmp_path, monkeypatch
+):
+    python_version_file = tmp_path / ".python-version"
+    python_version_file.write_text("3.11.99\n", encoding="utf-8")
+    requirements_file = tmp_path / "requirements.txt"
+    requirements_file.write_text("Example_Package==1.0\n", encoding="utf-8")
+    ci_requirements_file = tmp_path / "requirements-ci.lock"
+    ci_requirements_file.write_text("example-package==1.0\n", encoding="utf-8")
+    monkeypatch.setattr(
+        run_budget_main_study, "PYTHON_VERSION_FILE", python_version_file
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "_read_requirements_lock",
+        requirements_file.read_bytes,
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "_read_ci_requirements_lock",
+        ci_requirements_file.read_bytes,
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "platform",
+        types.SimpleNamespace(python_version=lambda: "3.11.99"),
+        raising=False,
+    )
+
+    with pytest.raises(
+        SystemExit,
+        match="dependency locks contain duplicate normalized distribution pin: "
+        "example-package",
+    ):
+        run_budget_main_study._execution_environment()
 
 
 def test_execution_environment_accepts_patch_within_major_minor_pin(
@@ -345,6 +538,8 @@ def test_execution_environment_accepts_patch_within_major_minor_pin(
     python_version_file.write_text("3.11\n", encoding="utf-8")
     requirements_file = tmp_path / "requirements.txt"
     requirements_file.write_text("example-package==1.0\n", encoding="utf-8")
+    ci_requirements_file = tmp_path / "requirements-ci.lock"
+    ci_requirements_file.write_text("ci-package==3.0\n", encoding="utf-8")
     monkeypatch.setattr(
         run_budget_main_study, "PYTHON_VERSION_FILE", python_version_file
     )
@@ -357,6 +552,14 @@ def test_execution_environment_accepts_patch_within_major_minor_pin(
         requirements_file.read_bytes,
     )
     monkeypatch.setattr(
+        run_budget_main_study, "CI_REQUIREMENTS_FILE", ci_requirements_file
+    )
+    monkeypatch.setattr(
+        run_budget_main_study,
+        "_read_ci_requirements_lock",
+        ci_requirements_file.read_bytes,
+    )
+    monkeypatch.setattr(
         run_budget_main_study,
         "importlib",
         types.SimpleNamespace(
@@ -364,7 +567,10 @@ def test_execution_environment_accepts_patch_within_major_minor_pin(
                 distributions=lambda: [
                     types.SimpleNamespace(
                         metadata={"Name": "example-package"}, version="1.0"
-                    )
+                    ),
+                    types.SimpleNamespace(
+                        metadata={"Name": "ci-package"}, version="3.0"
+                    ),
                 ]
             )
         ),
@@ -485,6 +691,23 @@ def test_requirements_lock_rejects_tracked_symlink(tmp_path, monkeypatch):
 
     with pytest.raises(SystemExit, match="tracked regular file at HEAD"):
         run_budget_main_study._read_requirements_lock()
+
+
+def test_ci_requirements_lock_rejects_tracked_symlink(tmp_path, monkeypatch):
+    _initialize_git_repository(tmp_path)
+    external_requirements = tmp_path.parent / "external-ci-requirements.txt"
+    external_requirements.write_text("example-package==1.0\n", encoding="utf-8")
+    requirements_file = tmp_path / "requirements-ci.lock"
+    requirements_file.symlink_to(external_requirements)
+    _git("add", "requirements-ci.lock", cwd=tmp_path)
+    _git("commit", "-q", "-m", "track CI requirements symlink", cwd=tmp_path)
+    monkeypatch.setattr(run_budget_main_study, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        run_budget_main_study, "CI_REQUIREMENTS_FILE", requirements_file
+    )
+
+    with pytest.raises(SystemExit, match="tracked regular file at HEAD"):
+        run_budget_main_study._read_ci_requirements_lock()
 
 
 def test_requirements_lock_rejects_ignored_replacement(tmp_path, monkeypatch):

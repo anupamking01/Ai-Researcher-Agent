@@ -122,15 +122,17 @@ model code is imported or any treatment call begins. The runner reads the
 version-controlled `.python-version` pin, records it alongside the exact runtime
 patch version, and refuses a runtime outside that pinned major/minor (or exact
 patch, when the repository pin includes one) before treatment imports or calls.
-It also requires `requirements.txt` to be a tracked regular file whose exact
-bytes match the recorded `HEAD` blob, hashes and parses those bytes, requires
-every non-comment entry to be an unambiguous exact `name==version` pin, and
-fails before treatment imports or calls when a required normalized distribution
-is missing or any installed version differs. The manifest records the validated,
-normalized requirement set as well as the complete installed-distribution
-inventory, so a recorded environment cannot silently claim a dependency lock it
-did not satisfy. Extra installed distributions remain visible in the inventory
-without being treated as part of the application lock.
+It also requires both `requirements.txt` and `requirements-ci.lock` to be
+tracked regular files whose exact bytes match their recorded `HEAD` blobs. It
+hashes and records each lock separately, requires every non-comment entry in
+each file to be an unambiguous exact `name==version` pin, rejects duplicate
+normalized names across the two locks, and fails before treatment imports or
+calls when any locked distribution is missing or an installed version differs.
+The manifest records the combined validated requirement set as well as the
+complete installed-distribution inventory, so a recorded environment cannot
+silently omit or misstate the workflow-environment supplement that constructed
+it. Extra installed distributions remain visible in the inventory without being
+treated as part of either reviewed lock.
 
 All repository workflows install requirements through `python -m pip`, binding
 the installation to the exact interpreter selected by `setup-python`. Runtime

@@ -44,6 +44,7 @@ DEFAULT_TASK_FILE = REPO_ROOT / "experiments" / "main_budget_tasks.json"
 PRICING_FILE = REPO_ROOT / "experiments" / "openai_pricing_2026-09-08.json"
 PYTHON_VERSION_FILE = REPO_ROOT / ".python-version"
 REQUIREMENTS_FILE = REPO_ROOT / "requirements.txt"
+CI_REQUIREMENTS_FILE = REPO_ROOT / "requirements-ci.lock"
 TRACE_ROOT = REPO_ROOT / "outputs" / "experiment_traces"
 VARIANTS = ("D3", "D6", "P6", "P6V")
 VARIANT_SOURCE_BUDGETS = {"D3": 3, "D6": 6, "P6": 6, "P6V": 6}
@@ -261,20 +262,20 @@ def _git_source_state() -> dict:
     return {"commit": commit, "tree": tree}
 
 
-def _read_requirements_lock() -> bytes:
-    """Read the exact tracked regular-file requirements blob at ``HEAD``."""
+def _read_tracked_requirements_lock(lock_path: Path, expected_path: str) -> bytes:
+    """Read one exact tracked regular-file requirements blob at ``HEAD``."""
     repository_root = REPO_ROOT.resolve()
-    requirements_path = Path(os.path.abspath(REQUIREMENTS_FILE))
+    requirements_path = Path(os.path.abspath(lock_path))
+    tracked_file_error = (
+        f"Repository requirements lock {expected_path} must be a tracked "
+        "regular file at HEAD"
+    )
     try:
         relative_path = requirements_path.relative_to(repository_root).as_posix()
     except ValueError as exc:
-        raise SystemExit(
-            "Repository requirements lock must be a tracked regular file at HEAD"
-        ) from exc
-    if relative_path != "requirements.txt":
-        raise SystemExit(
-            "Repository requirements lock must be a tracked regular file at HEAD"
-        )
+        raise SystemExit(tracked_file_error) from exc
+    if relative_path != expected_path:
+        raise SystemExit(tracked_file_error)
 
     git_environment = {
         name: value
@@ -295,16 +296,14 @@ def _read_requirements_lock() -> bytes:
             stderr=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        raise SystemExit(
-            "Repository requirements lock must be a tracked regular file at HEAD"
-        ) from exc
+        raise SystemExit(tracked_file_error) from exc
     if not re.fullmatch(
-        rb"100(?:644|755) blob [0-9a-f]{40}(?:[0-9a-f]{24})?\trequirements\.txt\x00",
+        rb"100(?:644|755) blob [0-9a-f]{40}(?:[0-9a-f]{24})?\t"
+        + re.escape(expected_path.encode("utf-8"))
+        + rb"\x00",
         tree_record,
     ):
-        raise SystemExit(
-            "Repository requirements lock must be a tracked regular file at HEAD"
-        )
+        raise SystemExit(tracked_file_error)
 
     descriptor = None
     try:
@@ -318,18 +317,64 @@ def _read_requirements_lock() -> bytes:
             descriptor = None
             requirements_raw = requirements_handle.read()
     except OSError as exc:
-        raise SystemExit(
-            "Repository requirements lock must be a tracked regular file at HEAD"
-        ) from exc
+        raise SystemExit(tracked_file_error) from exc
     finally:
         if descriptor is not None:
             os.close(descriptor)
 
     if requirements_raw != committed_bytes:
         raise SystemExit(
-            "Repository requirements lock bytes do not match the recorded HEAD blob"
+            f"Repository requirements lock {expected_path} bytes do not match "
+            "the recorded HEAD blob"
         )
     return requirements_raw
+
+
+def _read_requirements_lock() -> bytes:
+    """Read the exact tracked application requirements blob at ``HEAD``."""
+    return _read_tracked_requirements_lock(REQUIREMENTS_FILE, "requirements.txt")
+
+
+def _read_ci_requirements_lock() -> bytes:
+    """Read the exact tracked workflow-environment requirements blob at ``HEAD``."""
+    return _read_tracked_requirements_lock(
+        CI_REQUIREMENTS_FILE,
+        "requirements-ci.lock",
+    )
+
+
+def _parse_exact_distribution_pins(lock_raw: bytes, lock_label: str) -> dict[str, str]:
+    try:
+        lock_text = lock_raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SystemExit(f"Cannot decode {lock_label} for main study") from exc
+
+    required_versions = {}
+    for line_number, raw_line in enumerate(lock_text.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = re.fullmatch(
+            r"([A-Za-z0-9][A-Za-z0-9._-]*)\s*==\s*"
+            r"([A-Za-z0-9][A-Za-z0-9.!+_-]*)",
+            line,
+        )
+        if not match:
+            raise SystemExit(
+                f"{lock_label} line {line_number} must contain only exact "
+                "name==version pins"
+            )
+        name = re.sub(r"[-_.]+", "-", match.group(1)).lower()
+        version = match.group(2)
+        if name in required_versions:
+            raise SystemExit(
+                f"{lock_label} contains duplicate normalized distribution pin: "
+                f"{name}"
+            )
+        required_versions[name] = version
+    if not required_versions:
+        raise SystemExit(f"{lock_label} contains no distribution pins")
+    return required_versions
 
 
 def _execution_environment() -> dict:
@@ -351,39 +396,21 @@ def _execution_environment() -> dict:
             f"{pinned_python}; refusing main-study execution"
         )
 
-    try:
-        requirements_raw = _read_requirements_lock()
-        requirements_text = requirements_raw.decode("utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        raise SystemExit(
-            "Cannot read the repository requirements lock for main study"
-        ) from exc
-
+    requirements_raw = _read_requirements_lock()
+    ci_requirements_raw = _read_ci_requirements_lock()
     required_versions = {}
-    for line_number, raw_line in enumerate(requirements_text.splitlines(), start=1):
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        match = re.fullmatch(
-            r"([A-Za-z0-9][A-Za-z0-9._-]*)\s*==\s*"
-            r"([A-Za-z0-9][A-Za-z0-9.!+_-]*)",
-            line,
-        )
-        if not match:
+    for lock_label, lock_raw in (
+        ("Repository requirements", requirements_raw),
+        ("Repository CI requirements", ci_requirements_raw),
+    ):
+        parsed_versions = _parse_exact_distribution_pins(lock_raw, lock_label)
+        duplicate_names = sorted(required_versions.keys() & parsed_versions.keys())
+        if duplicate_names:
             raise SystemExit(
-                f"Repository requirements line {line_number} must contain only "
-                "exact name==version pins"
+                "Repository dependency locks contain duplicate normalized "
+                f"distribution pin: {duplicate_names[0]}"
             )
-        name = re.sub(r"[-_.]+", "-", match.group(1)).lower()
-        version = match.group(2)
-        if name in required_versions:
-            raise SystemExit(
-                f"Repository requirements contain duplicate normalized "
-                f"distribution pin: {name}"
-            )
-        required_versions[name] = version
-    if not required_versions:
-        raise SystemExit("Repository requirements contain no distribution pins")
+        required_versions.update(parsed_versions)
 
     distributions = []
     for distribution in importlib.metadata.distributions():
@@ -423,6 +450,10 @@ def _execution_environment() -> dict:
         ],
         "requirements_file": _file_label(REQUIREMENTS_FILE),
         "requirements_file_sha256": hashlib.sha256(requirements_raw).hexdigest(),
+        "ci_requirements_file": _file_label(CI_REQUIREMENTS_FILE),
+        "ci_requirements_file_sha256": hashlib.sha256(
+            ci_requirements_raw
+        ).hexdigest(),
         "required_distributions": [
             {"name": name, "version": version}
             for name, version in sorted(required_versions.items())
