@@ -7,6 +7,7 @@ import json
 import os
 import platform
 import shutil
+import stat
 from pathlib import Path
 
 import pytest
@@ -465,6 +466,89 @@ def test_failed_candidate_verification_never_publishes_final_directory(
         analyze_human_eval.ANALYSIS_MARKDOWN,
         analyze_human_eval.ANALYSIS_MANIFEST,
     } == {path.name for path in (staging[0] / "candidate").iterdir()}
+
+
+def test_analysis_publication_syncs_files_and_rename_before_success(
+    tmp_path, monkeypatch
+):
+    output = tmp_path / "analysis"
+    events = []
+    real_fsync = os.fsync
+    real_publish = analyze_human_eval._publish_directory
+    real_verify_bundle = verify.verify_bundle
+
+    def observe_fsync(descriptor):
+        mode = os.fstat(descriptor).st_mode
+        resolved = Path(f"/proc/self/fd/{descriptor}").resolve()
+        if stat.S_ISREG(mode):
+            label = resolved.name
+        elif resolved == tmp_path.resolve():
+            label = "output-parent"
+        elif resolved.name == "candidate":
+            label = "candidate"
+        elif resolved.name.startswith(".analysis.staging-"):
+            label = "staging"
+        else:
+            label = f"unexpected-directory:{resolved}"
+        events.append(("sync", label))
+        return real_fsync(descriptor)
+
+    def observe_publish(*args, **kwargs):
+        events.append(("publish",))
+        return real_publish(*args, **kwargs)
+
+    def observe_verify_bundle(candidate):
+        events.append(("verify-bundle",))
+        return real_verify_bundle(candidate)
+
+    def observe_recomputation(_candidate):
+        events.append(("verify-recomputation",))
+        return {"status": "human_validation_analysis_bundle_verified"}
+
+    monkeypatch.setattr(analyze_human_eval.os, "fsync", observe_fsync)
+    monkeypatch.setattr(analyze_human_eval, "_publish_directory", observe_publish)
+    monkeypatch.setattr(verify, "verify_bundle", observe_verify_bundle)
+
+    receipt = analyze_human_eval.write_bundle(
+        _payload(), output, verify_candidate=observe_recomputation
+    )
+
+    assert receipt["status"] == "human_validation_analysis_bundle_verified"
+    assert events == [
+        ("sync", analyze_human_eval.ANALYSIS_JSON),
+        ("sync", analyze_human_eval.ANALYSIS_MARKDOWN),
+        ("sync", analyze_human_eval.ANALYSIS_MANIFEST),
+        ("sync", "candidate"),
+        ("sync", "staging"),
+        ("verify-bundle",),
+        ("verify-recomputation",),
+        ("publish",),
+        ("sync", "staging"),
+        ("sync", "output-parent"),
+    ]
+
+
+def test_analysis_publication_syncs_new_output_parent_hierarchy(
+    tmp_path, monkeypatch
+):
+    first_parent = tmp_path / "new-parent"
+    output_parent = first_parent / "nested"
+    output = output_parent / "analysis"
+    synced_directories = []
+    real_fsync = os.fsync
+
+    def observe_fsync(descriptor):
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            synced_directories.append(Path(f"/proc/self/fd/{descriptor}").resolve())
+        return real_fsync(descriptor)
+
+    monkeypatch.setattr(analyze_human_eval.os, "fsync", observe_fsync)
+
+    analyze_human_eval.write_bundle(_payload(), output)
+
+    assert tmp_path.resolve() in synced_directories
+    assert first_parent.resolve() in synced_directories
+    assert output_parent.resolve() in synced_directories
 
 
 def test_failed_independent_recomputation_never_publishes_final_directory(tmp_path):

@@ -58,9 +58,15 @@ annotator-guide fingerprints and logical paths; the standalone verifier checks
 those entries against the generating checkout and its literal freeze anchors,
 and verifies the anchor implementation itself before trusting those constants.
 The final directory creation remains exclusive, so a concurrent publisher is
-never adopted after preflight. Independent recomputation still runs after
-publication starts; a failure at that stage preserves the create-only artifacts
-for inspection.
+never adopted after preflight. Any missing output-parent hierarchy is created
+one directory at a time through retained descriptors, synchronizing each new
+directory and its parent before staging begins. Before verification, publication
+flushes and `fsync`s all three artifacts plus the candidate and staging
+directories. After the atomic no-replace rename, it `fsync`s both the source and
+destination directories before reporting success. This makes the completed
+publication crash-durable rather than merely atomically visible. Independent
+recomputation still runs before the rename; a failure at that stage preserves
+the create-only staging artifacts for inspection.
 
 ## Independent verification
 

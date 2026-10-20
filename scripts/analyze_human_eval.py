@@ -184,6 +184,8 @@ def _write_exclusive(path, content):
     try:
         with path.open("xb") as handle:
             handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
     except FileExistsError as exc:
         raise ValueError(f"refusing to overwrite human-analysis artifact: {path}") from exc
 
@@ -209,6 +211,49 @@ def _open_bound_directory(path, *, dir_fd=None):
             f"human-analysis staging root must be a regular directory: {path}"
         )
     return directory_fd
+
+
+def _ensure_output_parent(path):
+    """Create missing output-parent directories with durable parent entries."""
+    path = Path(path)
+    missing = []
+    existing = path
+    while not existing.exists():
+        if existing.is_symlink():
+            raise ValueError(
+                f"human-analysis output parent must be a regular directory: {path}"
+            )
+        missing.append(existing)
+        parent = existing.parent
+        if parent == existing:
+            break
+        existing = parent
+    if existing.is_symlink() or not existing.is_dir():
+        raise ValueError(
+            f"human-analysis output parent must be a regular directory: {path}"
+        )
+
+    with ExitStack() as descriptors:
+        parent_fd = _open_bound_directory(existing)
+        descriptors.callback(os.close, parent_fd)
+        for directory in reversed(missing):
+            try:
+                os.mkdir(directory.name, mode=0o777, dir_fd=parent_fd)
+            except FileExistsError as exc:
+                raise ValueError(
+                    "human-analysis output parent changed during durable creation: "
+                    f"{directory}"
+                ) from exc
+            directory_fd = _open_bound_directory(directory.name, dir_fd=parent_fd)
+            descriptors.callback(os.close, directory_fd)
+            _require_directory_path_binding(
+                directory,
+                directory_fd,
+                label="new output parent",
+            )
+            os.fsync(directory_fd)
+            os.fsync(parent_fd)
+            parent_fd = directory_fd
 
 
 def _require_directory_entry_binding(parent_fd, name, directory_fd, *, label):
@@ -381,7 +426,7 @@ def write_bundle(payload, output_root, *, verify_candidate=None):
     }
     manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
-    output_root.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_output_parent(output_root.parent)
     # The private random 0700 container and retained dirfds isolate normal
     # concurrent publishers. Hostile same-UID or root mutation of owned paths
     # during the creation-to-open interval is outside this threat model.
@@ -440,6 +485,11 @@ def write_bundle(payload, output_root, *, verify_candidate=None):
         _write_exclusive(json_path, json_bytes)
         _write_exclusive(markdown_path, markdown_bytes)
         _write_exclusive(manifest_path, manifest_bytes)
+        # Persist artifact contents and the candidate/source directory entries
+        # before making the verified bundle visible. Atomic rename alone does
+        # not make either the files or their directory metadata crash-durable.
+        os.fsync(candidate_fd)
+        os.fsync(staging_container_fd)
 
         receipt = verify_bundle(anchored_candidate)
         if verify_candidate is not None:
@@ -462,6 +512,11 @@ def write_bundle(payload, output_root, *, verify_candidate=None):
             output_root.name,
             output_root=output_root,
         )
+        # The move updates both source and destination directories. Sync both
+        # before reporting success so a completed command cannot precede the
+        # durable publication record.
+        os.fsync(staging_container_fd)
+        os.fsync(output_parent_fd)
         _require_directory_entry_binding(
             output_parent_fd,
             output_root.name,
