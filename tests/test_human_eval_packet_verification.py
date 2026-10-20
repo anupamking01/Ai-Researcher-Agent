@@ -6,6 +6,7 @@ No human ratings or experimental results are created.
 import csv
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -94,6 +95,30 @@ def _verify(case):
         task_manifest_path=case["task_manifest_path"],
         repo_root=case["repo_root"],
     )
+
+
+def test_packet_verifier_rejects_artifact_path_replacement_during_capture(
+    packet_case, monkeypatch
+):
+    packet_path = packet_case["output_root"] / "packet.jsonl"
+    packet_inode = packet_path.stat().st_ino
+    original_os_read = os.read
+    replaced = False
+
+    def replace_during_read(fd, size):
+        nonlocal replaced
+        content = original_os_read(fd, size)
+        if not replaced and os.fstat(fd).st_ino == packet_inode:
+            packet_path.unlink()
+            packet_path.write_bytes(content + b"\n")
+            replaced = True
+        return content
+
+    monkeypatch.setattr(os, "read", replace_during_read)
+
+    with pytest.raises(ValueError, match="replaced during capture"):
+        _verify(packet_case)
+    assert replaced is True
 
 
 def _refresh_artifact(case, key: str):

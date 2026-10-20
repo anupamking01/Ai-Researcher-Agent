@@ -43,6 +43,22 @@ This safeguard validates identity and coverage only. It does not generate human
 ratings, alter treatment outputs, rerun the automated evaluator, or change any
 pilot, confirmatory, exploratory, or human-validation claim.
 
+## Capture-time path binding
+
+The packet builder reads the frozen task manifest, treatment traces, and source
+reports through retained non-symlink file descriptors. After each read it
+requires the descriptor identity, file metadata, parent-directory identity,
+and final pathname binding to remain unchanged. Packet verification applies
+the same capture rule to the packet manifest, annotator-facing artifacts,
+blinding key, task manifest, traces, and reports.
+
+This prevents a concurrent pathname replacement from becoming trusted merely
+because the replacement bytes are the ones subsequently hashed. A detected
+file or parent-directory replacement fails before packet publication or a
+successful verification receipt. The rule strengthens provenance capture only;
+it does not alter packet randomization, blinding, rubric semantics, or any
+research result.
+
 ## Cross-section identity consistency
 
 Persisted experiment traces can carry `variant_id` and `task_id` in both the

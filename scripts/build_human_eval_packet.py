@@ -14,9 +14,11 @@ import csv
 import hashlib
 import importlib.metadata
 import json
+import os
 import platform
 import random
 import re
+import stat
 import unicodedata
 from html.parser import HTMLParser
 from pathlib import Path
@@ -368,6 +370,62 @@ def _byte_fingerprint(content: bytes) -> dict:
     }
 
 
+def _stat_contract(value: os.stat_result) -> tuple[int, int, int, int, int]:
+    """Return identity and mutation fields that must remain stable while reading."""
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _read_regular_file_captured(path: Path, *, label: str) -> bytes:
+    """Read one regular file while retaining and revalidating its descriptors."""
+    path = Path(os.path.abspath(Path(path)))
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    parent_fd = None
+    file_fd = None
+    try:
+        parent_fd = os.open(path.parent, directory_flags | nofollow)
+        parent_before = os.fstat(parent_fd)
+        file_fd = os.open(path.name, os.O_RDONLY | nofollow, dir_fd=parent_fd)
+        file_before = os.fstat(file_fd)
+        if not stat.S_ISREG(file_before.st_mode):
+            raise ValueError(f"{label} must be a regular file: {path}")
+
+        chunks = []
+        while True:
+            chunk = os.read(file_fd, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+
+        file_after = os.fstat(file_fd)
+        path_after = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        parent_after = os.stat(path.parent, follow_symlinks=False)
+        if (
+            _stat_contract(file_before) != _stat_contract(file_after)
+            or (file_after.st_dev, file_after.st_ino)
+            != (path_after.st_dev, path_after.st_ino)
+            or (parent_before.st_dev, parent_before.st_ino)
+            != (parent_after.st_dev, parent_after.st_ino)
+        ):
+            raise ValueError(f"{label} was replaced during capture: {path}")
+        return b"".join(chunks)
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        raise ValueError(f"{label} was replaced during capture: {path}") from exc
+    except OSError as exc:
+        raise ValueError(f"{label} must be a stable regular file: {path}") from exc
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        if parent_fd is not None:
+            os.close(parent_fd)
+
+
 def _resolve_report_markdown(trace_root: Path, report_path: str, *, run_id: str) -> Path:
     """Require the report to belong to the same run as its experiment trace."""
     if not run_id or run_id in (".", "..") or "/" in run_id or "\\" in run_id:
@@ -433,7 +491,9 @@ def _load_task_manifest(task_manifest_path: Path) -> dict:
     task_manifest_path = Path(task_manifest_path)
     if not task_manifest_path.is_file():
         raise FileNotFoundError(f"Frozen task manifest does not exist: {task_manifest_path}")
-    content = task_manifest_path.read_bytes()
+    content = _read_regular_file_captured(
+        task_manifest_path, label="Frozen task manifest"
+    )
     payload = _load_json_object(content, label=f"Frozen task manifest {task_manifest_path}")
     if payload.get("frozen_before_execution") is not True:
         raise ValueError("Human evaluation requires a task manifest frozen before execution")
@@ -476,7 +536,9 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
             raise ValueError(
                 f"Experiment trace source must not traverse a symbolic link: {trace_path}"
             )
-        trace_content = trace_path.read_bytes()
+        trace_content = _read_regular_file_captured(
+            trace_path, label=f"Experiment trace {trace_path}"
+        )
         payload = _load_json_object(trace_content, label=f"Experiment trace {trace_path}")
         experiment, trace = _validated_trace_sections(payload, trace_path=trace_path)
 
@@ -526,7 +588,9 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
         report_md = _resolve_report_markdown(
             trace_root, str(trace.get("report_path") or ""), run_id=run_id
         )
-        report_content = report_md.read_bytes()
+        report_content = _read_regular_file_captured(
+            report_md, label=f"Markdown report {report_md}"
+        )
         report_text = report_content.decode("utf-8").strip()
         if not report_text:
             raise ValueError(f"Empty Markdown report: {report_md}")

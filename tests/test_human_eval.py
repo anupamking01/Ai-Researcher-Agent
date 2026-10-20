@@ -1,6 +1,7 @@
 import csv
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -707,6 +708,33 @@ def test_build_packet_rejects_symlinked_trace_file_before_publication(tmp_path):
 
     with pytest.raises(ValueError, match="symbolic link"):
         _build_packet(trace_root, destination, tmp_path)
+    assert not destination.exists()
+
+
+def test_build_packet_rejects_trace_path_replacement_during_capture(
+    tmp_path, monkeypatch
+):
+    """A pathname swap must not become the packet's newly trusted source."""
+    trace_root = _write_complete_matrix(tmp_path)
+    trace_path = trace_root / "D3" / "d3-main-01.json"
+    destination = tmp_path / "packet-replaced-source"
+    original_os_read = os.read
+    replaced = False
+
+    def replace_during_read(fd, size):
+        nonlocal replaced
+        content = original_os_read(fd, size)
+        if not replaced and content.startswith(b'{"schema_version": 2'):
+            trace_path.unlink()
+            trace_path.write_bytes(content + b"\n")
+            replaced = True
+        return content
+
+    monkeypatch.setattr(os, "read", replace_during_read)
+
+    with pytest.raises(ValueError, match="replaced during capture"):
+        _build_packet(trace_root, destination, tmp_path)
+    assert replaced is True
     assert not destination.exists()
 
 

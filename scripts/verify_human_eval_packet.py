@@ -33,7 +33,7 @@ KEY_FIELDS = (
 def _require_regular_file(path: Path, *, label: str) -> bytes:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"{label} must be a regular file: {path}")
-    return path.read_bytes()
+    return build._read_regular_file_captured(path, label=label)
 
 
 def _load_json_object(content: bytes, *, label: str) -> dict:
