@@ -6,6 +6,7 @@ threads. No values here are collected human annotations or study results.
 import csv
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -105,6 +106,8 @@ def _inject_edit(case, monkeypatch, kind):
             and (opened.st_dev, opened.st_ino) == target_identity
         ):
             reads.append(content)
+            if len(reads) == 1:
+                path.write_bytes(second)
         return content
 
     monkeypatch.setattr(Path, "read_bytes", edit_after_read)
@@ -120,9 +123,15 @@ def test_edit_between_hash_and_parse_is_rejected(frozen_case, monkeypatch, retai
         first, second, before, reads, agreement_reads = _inject_edit(
             frozen_case, context, kind,
         )
-        with pytest.raises(ValueError, match="frozen-ratings parsed fingerprint"):
+        with pytest.raises(
+            ValueError,
+            match=(
+                "frozen ratings changed while it was being read"
+                "|frozen-ratings parsed fingerprint"
+            ),
+        ):
             _verify(frozen_case, retained)
-    assert reads == [first, second]
+    assert reads[0] == first
     assert not agreement_reads  # Reject before recomputing/reporting agreement.
     before[Path("frozen_ratings.csv")] = second
     assert _snapshot(root) == before  # The verifier did not repair or rewrite files.
@@ -139,13 +148,63 @@ def test_unchanged_freeze_still_verifies_without_writes(frozen_case, retained):
     assert _snapshot(root) == before
 
 
+def test_manifest_path_replacement_during_capture_is_rejected(
+    frozen_case, monkeypatch
+):
+    """A byte-identical pathname swap must not become newly trusted."""
+    root, _ = frozen_case
+    target = root / "freeze_manifest.json"
+    replacement = root / "freeze_manifest.replacement.json"
+    replacement.write_bytes(target.read_bytes())
+    target_stat = target.stat()
+    target_identity = (target_stat.st_dev, target_stat.st_ino)
+    real_read = Path.read_bytes
+    real_pread = os.pread
+    replaced = False
+
+    def replace_target():
+        nonlocal replaced
+        if not replaced:
+            os.replace(replacement, target)
+            replaced = True
+
+    def replace_after_path_read(source):
+        content = real_read(source)
+        if source == target:
+            replace_target()
+        return content
+
+    def replace_after_descriptor_read(file_descriptor, size, offset):
+        content = real_pread(file_descriptor, size, offset)
+        opened = os.fstat(file_descriptor)
+        if (
+            content
+            and offset == 0
+            and (opened.st_dev, opened.st_ino) == target_identity
+        ):
+            replace_target()
+        return content
+
+    monkeypatch.setattr(Path, "read_bytes", replace_after_path_read)
+    monkeypatch.setattr(os, "pread", replace_after_descriptor_read)
+
+    with pytest.raises(ValueError, match="freeze manifest changed while it was being read"):
+        _verify(frozen_case, retained=True)
+
+
 def test_cli_read_drift_has_no_success_receipt(frozen_case, monkeypatch, capsys):
     root, _ = frozen_case
     _inject_edit(frozen_case, monkeypatch, "line_endings")
     monkeypatch.setattr(sys, "argv", [
         "verify_human_eval_freeze", "--freeze-root", str(root), "--retained-inputs",
     ])
-    with pytest.raises(SystemExit, match="HUMAN EVAL VERIFY: FAIL:.*parsed fingerprint"):
+    with pytest.raises(
+        SystemExit,
+        match=(
+            "HUMAN EVAL VERIFY: FAIL:.*"
+            "(changed while it was being read|parsed fingerprint)"
+        ),
+    ):
         verify.main()
     captured = capsys.readouterr()
     assert captured.out == ""

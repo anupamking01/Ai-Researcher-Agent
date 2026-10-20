@@ -87,6 +87,16 @@ ratings CSV alone remains syntactically valid. This proves a byte-level chain
 between blinded intake and freeze; it does not prove who completed the file,
 that scoring was independent, or that the declarations are true.
 
+Every individual file read performed directly by the independent freeze
+verifier uses the same descriptor-bound capture contract as freeze creation.
+This includes the manifest, retained governing inputs and attestations,
+archived producer and validator sources, normalized ratings, agreement output,
+and any explicitly supplied external governing files. The verifier retains the
+opened non-symlink file and parent-directory descriptors, parses and hashes the
+captured bytes, then rechecks file identity, mutation metadata, parent identity,
+and final pathname binding. A byte-identical pathname replacement during a
+verification read therefore fails closed instead of becoming newly trusted.
+
 The independent verifier treats the freeze manifest as a closed schema at every
 object boundary. The root, governing-input descriptors, coverage summary,
 producer and validator identities, ordered rating-input descriptors, normalized

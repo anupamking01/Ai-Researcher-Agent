@@ -232,12 +232,17 @@ def test_data_input_is_opened_for_reading_once(inputs, monkeypatch, option):
     rating_paths, options = inputs
     ratings = rating_paths[0]
     watched = ratings if option == "ratings" else options[option]
+    watched_parent = watched.parent.stat()
+    watched_parent_identity = (watched_parent.st_dev, watched_parent.st_ino)
     opened = []
     os_open = freeze.os.open
 
     def count_descriptor_reads(path, flags, *args, **kwargs):
-        if path == watched.name and kwargs.get("dir_fd") is not None:
-            opened.append(flags)
+        dir_fd = kwargs.get("dir_fd")
+        if path == watched.name and dir_fd is not None:
+            opened_parent = freeze.os.fstat(dir_fd)
+            if (opened_parent.st_dev, opened_parent.st_ino) == watched_parent_identity:
+                opened.append(flags)
         return os_open(path, flags, *args, **kwargs)
 
     monkeypatch.setattr(freeze.os, "open", count_descriptor_reads)

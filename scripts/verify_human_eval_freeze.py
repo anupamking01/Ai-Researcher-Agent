@@ -27,9 +27,8 @@ DEFAULT_ANNOTATOR_GUIDE = freeze.DEFAULT_ANNOTATOR_GUIDE
 
 
 def _require_regular_file(path: Path, *, label: str) -> bytes:
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"{label} must be a regular file: {path}")
-    return path.read_bytes()
+    """Capture one path-bound file through the freeze's descriptor contract."""
+    return freeze._capture_regular_input(path, label=label)
 
 
 def _load_json_bytes(content: bytes, *, label: str) -> dict:
