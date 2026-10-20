@@ -30,6 +30,14 @@ That manifest SHA-256-binds:
 - `scripts/freeze_human_eval_ratings.py`, which owns the frozen governing-input
   paths and SHA-256 anchors consumed by the verifier.
 
+The manifest schema is closed at the root. Artifact and implementation
+fingerprints are also closed records containing only their canonical path, byte
+count, and SHA-256 digest. The integrity note must equal the generator-owned
+statement exactly. Verification therefore rejects undeclared result claims,
+extra provenance metadata, and rewritten notes even when every recorded digest
+still matches. These checks authenticate the bundle structure; they do not turn
+human-validation artifacts into confirmatory evidence.
+
 The command first verifies the persisted bundle, then independently recomputes
 the complete canonical payload from the rating inputs and governing artifacts
 before printing its success message. This second pass covers variant summaries,
@@ -77,6 +85,8 @@ Verification fails closed when:
   (including escape-equivalent keys), even when its recorded hash is consistent;
 - Markdown is not byte-for-byte the deterministic rendering of canonical JSON;
 - either output no longer matches its recorded byte count or SHA-256;
+- the manifest contains undeclared root claims, artifact metadata, or
+  implementation metadata, or its integrity note is not canonical;
 - the current analysis core or renderer source bytes do not match the generating
   implementation recorded in the manifest;
 - the current publication verifier source bytes do not match the verification

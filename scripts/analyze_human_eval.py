@@ -31,6 +31,14 @@ ANALYSIS_VERIFIER_SOURCE = Path(__file__).with_name(
 ANALYSIS_REQUIREMENTS = core.ROOT / "requirements.txt"
 ANALYSIS_CI_REQUIREMENTS = core.ROOT / "requirements-ci.lock"
 ANALYSIS_PYTHON_VERSION = core.ROOT / ".python-version"
+ANALYSIS_INTEGRITY_NOTE = (
+    "The manifest binds the exact canonical analysis JSON, deterministic "
+    "Markdown rendering, analysis/verification implementation source "
+    "bytes, governing-input anchor and verifier implementation bytes, "
+    "pinned environment files, and actual Python/PRNG runtime contract. "
+    "It is written last; the analysis command independently recomputes the "
+    "payload from verified inputs before the result is published."
+)
 
 
 def analysis_runtime_contract() -> dict:
@@ -369,14 +377,7 @@ def write_bundle(payload, output_root, *, verify_candidate=None):
         },
         "implementation": implementation,
         "analysis_environment": analysis_environment,
-        "integrity_note": (
-            "The manifest binds the exact canonical analysis JSON, deterministic "
-            "Markdown rendering, analysis/verification implementation source "
-            "bytes, governing-input anchor and verifier implementation bytes, "
-            "pinned environment files, and actual Python/PRNG runtime contract. "
-            "It is written last; the analysis command independently recomputes the "
-            "payload from verified inputs before the result is published."
-        ),
+        "integrity_note": ANALYSIS_INTEGRITY_NOTE,
     }
     manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
 

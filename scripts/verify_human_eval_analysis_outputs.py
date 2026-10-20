@@ -492,7 +492,7 @@ def _verify_implementation(manifest: dict) -> None:
     )
     for key, source, logical_path, label in sources:
         source_bytes = _regular_bytes(source, label=f"current {label}")
-        _verify_entry(
+        _verify_exact_entry(
             implementation[key],
             expected_path=logical_path,
             content=source_bytes,
@@ -558,6 +558,21 @@ def _verify_captured_bundle(snapshots) -> dict:
 
     payload = _load_json(json_bytes, label="canonical human-analysis JSON")
     manifest = _load_json(manifest_bytes, label="human-analysis output manifest")
+    expected_root_fields = {
+        "schema_version",
+        "study_id",
+        "status",
+        "artifacts",
+        "implementation",
+        "analysis_environment",
+        "integrity_note",
+    }
+    undeclared_root_fields = sorted(set(manifest) - expected_root_fields)
+    if undeclared_root_fields:
+        raise ValueError(
+            "analysis manifest schema mismatch at root: "
+            f"undeclared fields {undeclared_root_fields!r}"
+        )
     _verify_analysis_environment(manifest)
     _verify_implementation(manifest)
     _validate_analysis_identity(payload)
@@ -576,6 +591,11 @@ def _verify_captured_bundle(snapshots) -> dict:
         "human_validation_analysis_bundle",
         label="manifest status",
     )
+    _require_equal(
+        manifest.get("integrity_note"),
+        analyze_human_eval.ANALYSIS_INTEGRITY_NOTE,
+        label="manifest integrity note",
+    )
 
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, dict):
@@ -585,13 +605,13 @@ def _verify_captured_bundle(snapshots) -> dict:
         {"canonical_analysis", "manuscript_rendering"},
         label="analysis manifest artifact set",
     )
-    _verify_entry(
+    _verify_exact_entry(
         artifacts["canonical_analysis"],
         expected_path=analyze_human_eval.ANALYSIS_JSON,
         content=json_bytes,
         label="canonical analysis",
     )
-    _verify_entry(
+    _verify_exact_entry(
         artifacts["manuscript_rendering"],
         expected_path=analyze_human_eval.ANALYSIS_MARKDOWN,
         content=markdown_bytes,

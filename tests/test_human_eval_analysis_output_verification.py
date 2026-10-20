@@ -294,6 +294,40 @@ def test_rejects_missing_analysis_environment_contract(tmp_path):
 
 
 @pytest.mark.parametrize(
+    "mutation",
+    [
+        "root_claim",
+        "artifact_metadata",
+        "implementation_metadata",
+        "integrity_note",
+    ],
+)
+def test_rejects_undeclared_or_misleading_manifest_metadata(tmp_path, mutation):
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    manifest_path = output / analyze_human_eval.ANALYSIS_MANIFEST
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    if mutation == "root_claim":
+        manifest["human_validation_confirmed"] = True
+    elif mutation == "artifact_metadata":
+        manifest["artifacts"]["canonical_analysis"]["claim"] = "confirmatory"
+    elif mutation == "implementation_metadata":
+        manifest["implementation"]["analysis_core"]["source"] = "reviewed"
+    else:
+        manifest["integrity_note"] = "Human validation is confirmed."
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError, match="manifest schema|manifest entry|integrity note"
+    ):
+        verify.verify_bundle(output)
+
+
+@pytest.mark.parametrize(
     ("entry", "error_match"),
     [
         ("requirements", "analysis requirements fingerprint"),
