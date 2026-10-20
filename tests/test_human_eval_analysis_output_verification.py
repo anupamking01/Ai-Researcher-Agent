@@ -243,11 +243,16 @@ def test_write_bundle_emits_manifest_and_verifies(tmp_path):
 
 def _expected_analysis_environment():
     requirements = (core.ROOT / "requirements.txt").read_bytes()
+    ci_requirements = (core.ROOT / "requirements-ci.lock").read_bytes()
     python_version = (core.ROOT / ".python-version").read_bytes()
     return {
         "requirements": {
             "path": "requirements.txt",
             **analyze_human_eval._fingerprint_bytes(requirements),
+        },
+        "ci_requirements": {
+            "path": "requirements-ci.lock",
+            **analyze_human_eval._fingerprint_bytes(ci_requirements),
         },
         "python_version": {
             "path": ".python-version",
@@ -288,19 +293,28 @@ def test_rejects_missing_analysis_environment_contract(tmp_path):
         verify.verify_bundle(output)
 
 
-def test_rejects_tampered_analysis_environment_contract(tmp_path):
+@pytest.mark.parametrize(
+    ("entry", "error_match"),
+    [
+        ("requirements", "analysis requirements fingerprint"),
+        ("ci_requirements", "analysis CI requirements fingerprint"),
+    ],
+)
+def test_rejects_tampered_analysis_environment_contract(
+    tmp_path, entry, error_match
+):
     output = tmp_path / "analysis"
     analyze_human_eval.write_bundle(_payload(), output)
     manifest_path = output / analyze_human_eval.ANALYSIS_MANIFEST
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["analysis_environment"] = _expected_analysis_environment()
-    manifest["analysis_environment"]["requirements"]["sha256"] = "0" * 64
+    manifest["analysis_environment"][entry]["sha256"] = "0" * 64
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="analysis requirements fingerprint"):
+    with pytest.raises(ValueError, match=error_match):
         verify.verify_bundle(output)
 
 

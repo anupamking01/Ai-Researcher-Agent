@@ -34,6 +34,7 @@ RECONCILIATION_JSON = "reconciliation.json"
 RECONCILIATION_MARKDOWN = "reconciliation.md"
 RECONCILIATION_MANIFEST = "reconciliation_manifest.json"
 ANALYSIS_REQUIREMENTS = ROOT / "requirements.txt"
+ANALYSIS_CI_REQUIREMENTS = ROOT / "requirements-ci.lock"
 ANALYSIS_PYTHON_VERSION = ROOT / ".python-version"
 MANIFEST_INTEGRITY_NOTE = (
     "Canonical JSON is the source of truth. The deterministic Markdown, "
@@ -438,6 +439,10 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
         "requirements": _implementation_fingerprint(
             ANALYSIS_REQUIREMENTS,
             logical_path="requirements.txt",
+        ),
+        "ci_requirements": _implementation_fingerprint(
+            ANALYSIS_CI_REQUIREMENTS,
+            logical_path="requirements-ci.lock",
         ),
         "python_version": _implementation_fingerprint(
             ANALYSIS_PYTHON_VERSION,

@@ -505,11 +505,13 @@ def _verify_analysis_environment(manifest: dict) -> None:
     environment = manifest.get("analysis_environment")
     if not isinstance(environment, dict) or set(environment) != {
         "requirements",
+        "ci_requirements",
         "python_version",
         "runtime",
     }:
         raise ValueError(
-            "analysis environment must bind requirements, Python version, and runtime"
+            "analysis environment must bind application and CI requirements, "
+            "Python version, and runtime"
         )
     _verify_exact_entry(
         environment["requirements"],
@@ -519,6 +521,15 @@ def _verify_analysis_environment(manifest: dict) -> None:
             label="current analysis requirements",
         ),
         label="analysis requirements",
+    )
+    _verify_exact_entry(
+        environment["ci_requirements"],
+        expected_path="requirements-ci.lock",
+        content=_regular_bytes(
+            analyze_human_eval.ANALYSIS_CI_REQUIREMENTS,
+            label="current analysis CI requirements",
+        ),
+        label="analysis CI requirements",
     )
     _verify_exact_entry(
         environment["python_version"],

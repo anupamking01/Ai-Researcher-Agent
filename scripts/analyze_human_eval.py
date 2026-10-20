@@ -29,6 +29,7 @@ ANALYSIS_VERIFIER_SOURCE = Path(__file__).with_name(
     "verify_human_eval_analysis_outputs.py"
 )
 ANALYSIS_REQUIREMENTS = core.ROOT / "requirements.txt"
+ANALYSIS_CI_REQUIREMENTS = core.ROOT / "requirements-ci.lock"
 ANALYSIS_PYTHON_VERSION = core.ROOT / ".python-version"
 
 
@@ -341,6 +342,10 @@ def write_bundle(payload, output_root, *, verify_candidate=None):
         "requirements": _implementation_fingerprint(
             ANALYSIS_REQUIREMENTS,
             logical_path="requirements.txt",
+        ),
+        "ci_requirements": _implementation_fingerprint(
+            ANALYSIS_CI_REQUIREMENTS,
+            logical_path="requirements-ci.lock",
         ),
         "python_version": _implementation_fingerprint(
             ANALYSIS_PYTHON_VERSION,

@@ -124,6 +124,9 @@ def _producer_repo(tmp_path):
         Path(verify.__file__).read_bytes()
     )
     (root / "requirements.txt").write_bytes((reconcile.ROOT / "requirements.txt").read_bytes())
+    (root / "requirements-ci.lock").write_bytes(
+        (reconcile.ROOT / "requirements-ci.lock").read_bytes()
+    )
     (root / ".python-version").write_bytes((reconcile.ROOT / ".python-version").read_bytes())
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
     subprocess.run(["git", "config", "user.name", "Synthetic Test"], cwd=root, check=True)
@@ -133,7 +136,14 @@ def _producer_repo(tmp_path):
         check=True,
     )
     subprocess.run(
-        ["git", "add", "scripts", "requirements.txt", ".python-version"],
+        [
+            "git",
+            "add",
+            "scripts",
+            "requirements.txt",
+            "requirements-ci.lock",
+            ".python-version",
+        ],
         cwd=root,
         check=True,
     )
@@ -160,11 +170,16 @@ def _implementation_manifest():
 
 def _expected_analysis_environment():
     requirements = (reconcile.ROOT / "requirements.txt").read_bytes()
+    ci_requirements = (reconcile.ROOT / "requirements-ci.lock").read_bytes()
     python_version = (reconcile.ROOT / ".python-version").read_bytes()
     return {
         "requirements": {
             "path": "requirements.txt",
             **reconcile._fingerprint_bytes(requirements),
+        },
+        "ci_requirements": {
+            "path": "requirements-ci.lock",
+            **reconcile._fingerprint_bytes(ci_requirements),
         },
         "python_version": {
             "path": ".python-version",
@@ -297,7 +312,22 @@ def test_git_replacement_ref_cannot_substitute_producer_commit(tmp_path, monkeyp
         verify.verify_bundle(output, root=root)
 
 
-def test_git_replacement_ref_cannot_substitute_producer_environment(tmp_path):
+@pytest.mark.parametrize(
+    ("filename", "error_match"),
+    [
+        (
+            "requirements.txt",
+            "producer requirements fingerprint mismatch",
+        ),
+        (
+            "requirements-ci.lock",
+            "producer ci_requirements fingerprint mismatch",
+        ),
+    ],
+)
+def test_git_replacement_ref_cannot_substitute_producer_environment(
+    tmp_path, filename, error_match
+):
     root = _producer_repo(tmp_path)
     good_commit = subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -306,9 +336,9 @@ def test_git_replacement_ref_cannot_substitute_producer_environment(tmp_path):
         capture_output=True,
         text=True,
     ).stdout.strip()
-    requirements = root / "requirements.txt"
+    requirements = root / filename
     requirements.write_text("substituted==0.0.0\n", encoding="utf-8")
-    subprocess.run(["git", "add", "requirements.txt"], cwd=root, check=True)
+    subprocess.run(["git", "add", filename], cwd=root, check=True)
     subprocess.run(
         ["git", "commit", "-qm", "substitute environment"], cwd=root, check=True
     )
@@ -323,7 +353,7 @@ def test_git_replacement_ref_cannot_substitute_producer_environment(tmp_path):
         ["git", "replace", substituted_commit, good_commit], cwd=root, check=True
     )
 
-    with pytest.raises(ValueError, match="producer requirements fingerprint mismatch"):
+    with pytest.raises(ValueError, match=error_match):
         verify._verify_producer_commit_environment(
             substituted_commit,
             _expected_analysis_environment(),
@@ -772,20 +802,29 @@ def test_rejects_non_exact_reconciliation_provenance_entry_schema(
         verify.verify_bundle(output, root=tmp_path)
 
 
-def test_rejects_tampered_reconciliation_environment_pin(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("entry", "error_match"),
+    [
+        ("requirements", "analysis requirements fingerprint"),
+        ("ci_requirements", "analysis CI requirements fingerprint"),
+    ],
+)
+def test_rejects_tampered_reconciliation_environment_pin(
+    tmp_path, monkeypatch, entry, error_match
+):
     payload = _payload()
     _patch_recomputation(monkeypatch, payload)
     output = tmp_path / "reconciliation"
     reconcile.write_bundle(payload, output, root=tmp_path)
     manifest_path = output / reconcile.RECONCILIATION_MANIFEST
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["analysis_environment"]["requirements"]["sha256"] = "0" * 64
+    manifest["analysis_environment"][entry]["sha256"] = "0" * 64
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="analysis requirements fingerprint"):
+    with pytest.raises(ValueError, match=error_match):
         verify.verify_bundle(output, root=tmp_path)
 
 

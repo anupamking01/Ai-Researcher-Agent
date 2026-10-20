@@ -455,13 +455,14 @@ conduct.
 
 After real ratings are frozen, the complementary human-analysis command writes
 a create-only result bundle whose manifest binds the exact analysis and verifier
-sources, `requirements.txt`, `.python-version`, and the Python implementation,
-version, and standard-library PRNG state contract that produced the numeric
-outputs. Independent verification rejects source, pinned-environment, or runtime
-drift before recomputing the analysis. Before either blinded verification or
-unblinding, every analysis input is copied from an open regular-file descriptor
-under a non-symlink parent and checked for stable path, inode, metadata, and byte
-identity. Redirected parents and same-byte path replacement therefore fail
+sources, both `requirements.txt` and `requirements-ci.lock`, `.python-version`,
+and the Python implementation, version, and standard-library PRNG state contract
+that produced the numeric outputs. Independent verification rejects source,
+pinned-environment, or runtime drift before recomputing the analysis. Before
+either blinded verification or unblinding, every analysis input is copied from
+an open regular-file descriptor under a non-symlink parent and checked for stable
+path, inode, metadata, and byte identity. Redirected parents and same-byte path
+replacement therefore fail
 closed instead of being laundered into the retained analysis snapshot. This
 snapshot now also carries the complete retained `submission_preflights/` tree,
 including each neutralized receipt and treatment-blind distribution bundle, so
@@ -475,15 +476,15 @@ records reproducibility metadata; it does not create ratings or convert pending
 human validation into a result.
 
 The downstream descriptive reconciliation bundle applies the same fail-closed
-environment binding and additionally proves that both pinned files are the exact
-bytes recorded in its producing Git commit. This remains a provenance check, not
-an inferential extension or a substitute for real blinded ratings. Its manifest
-is a closed schema: undeclared fields, an altered integrity statement, extra
-fingerprint members, and non-integer byte counts are rejected rather than being
-accepted through permissive JSON or numeric equality. The bundle directory is
-also closed to exactly the canonical JSON, deterministic Markdown, and manifest;
-undeclared files or directories are rejected, including entries added while the
-verifier captures the declared artifacts.
+environment binding and additionally proves that both dependency locks and the
+Python-version pin are the exact bytes recorded in its producing Git commit. This
+remains a provenance check, not an inferential extension or a substitute for real
+blinded ratings. Its manifest is a closed schema: undeclared fields, an altered
+integrity statement, extra fingerprint members, and non-integer byte counts are
+rejected rather than being accepted through permissive JSON or numeric equality.
+The bundle directory is also closed to exactly the canonical JSON, deterministic
+Markdown, and manifest; undeclared files or directories are rejected, including
+entries added while the verifier captures the declared artifacts.
 Before the no-replace rename, the publisher synchronizes every artifact and
 the candidate/source directories; after the rename it synchronizes both source
 and destination parents. A successful command therefore attests to durable
