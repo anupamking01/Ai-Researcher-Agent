@@ -7,6 +7,7 @@ matrix without modifying or repairing preserved experiment artifacts.
 from __future__ import annotations
 
 import csv
+from decimal import Decimal
 from pathlib import Path
 
 from scripts.validate_numeric_inputs import (
@@ -205,21 +206,25 @@ def _validate_canonical_posthoc_mirrors(
                 f"post-hoc claim count differs across canonical inputs for {label}"
             )
 
-        evaluator_rate = require_unit_interval(
+        require_unit_interval(
             support.get("strict_support_rate"),
             f"support {label} strict_support_rate",
         )
-        main_rate = require_unit_interval(
+        require_unit_interval(
             main.get("posthoc_strict_support_rate"),
             f"main {label} posthoc_strict_support_rate",
         )
         supported = require_nonnegative_integer(
             support.get("supported"), f"support {label} supported"
         )
-        # These saved rates come from the same Python float division used by
-        # the canonical evaluator. Compare that exact recorded computation;
-        # do not silently round discrepant decimals into agreement.
-        if evaluator_rate != supported / evaluator_claims:
+        # Rates are stored as decimal text. Check exact numeric identity
+        # before any floating-point rounding can conceal discrepancies.
+        evaluator_rate = Decimal(str(support["strict_support_rate"]).strip())
+        main_rate = Decimal(str(main["posthoc_strict_support_rate"]).strip())
+        # The canonical evaluator stores Python's floating-point numerator /
+        # denominator result as repr text; bind to that exact encoded value.
+        expected_rate = Decimal(str(supported / evaluator_claims))
+        if evaluator_rate != expected_rate:
             raise ValueError(
                 f"evaluator strict support rate contradicts counts for {label}"
             )

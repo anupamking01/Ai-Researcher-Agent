@@ -223,3 +223,17 @@ def test_canonical_preflight_rejects_rate_rounded_back_inside_unit_interval():
     main[0]["posthoc_strict_support_rate"] = "1.0000000000000001"
     with pytest.raises(ValueError, match="outside"):
         validate_rows(main, support, require_canonical_matrix=True)
+
+
+
+@pytest.mark.parametrize("location", ["treatment", "evaluator", "both"])
+def test_canonical_preflight_rejects_rate_rounding_equivalence(location):
+    # float('0.50000000000000001') equals 0.5, but the persisted
+    # measurement is not the canonical numerator / denominator result.
+    main, support = _canonical_rows()
+    if location in {"treatment", "both"}:
+        main[0]["posthoc_strict_support_rate"] = "0.50000000000000001"
+    if location in {"evaluator", "both"}:
+        support[0]["strict_support_rate"] = "0.50000000000000001"
+    with pytest.raises(ValueError, match="rate differs|rate contradicts"):
+        validate_rows(main, support, require_canonical_matrix=True)
