@@ -23,10 +23,13 @@ def require_finite_number(value: str, field: str) -> float:
 
 
 def require_nonnegative(value: str, field: str) -> float:
-    """Parse a finite number and reject impossible negative measurements."""
+    """Reject negative and underflowed measurements before float conversion loses them."""
     parsed = require_finite_number(value, field)
-    if parsed < 0:
-        raise ValueError(f"negative value for {field}: {parsed}")
+    exact = Decimal(str(value).strip())
+    if exact < 0:
+        raise ValueError(f"negative value for {field}: {value!r}")
+    if exact != 0 and parsed == 0.0:
+        raise ValueError(f"underflow value for {field}: {value!r}")
     return parsed
 
 
@@ -50,8 +53,11 @@ def require_nonnegative_integer(value: str, field: str) -> int:
 
 
 def require_unit_interval(value: str, field: str) -> float:
-    """Require a finite proportion in the closed interval [0, 1]."""
+    """Require exact [0, 1] bounds without float boundary rounding or underflow."""
     parsed = require_finite_number(value, field)
-    if not 0.0 <= parsed <= 1.0:
-        raise ValueError(f"value outside [0, 1] for {field}: {parsed}")
+    exact = Decimal(str(value).strip())
+    if not 0 <= exact <= 1:
+        raise ValueError(f"value outside [0, 1] for {field}: {value!r}")
+    if exact != 0 and parsed == 0.0:
+        raise ValueError(f"underflow value for {field}: {value!r}")
     return parsed
