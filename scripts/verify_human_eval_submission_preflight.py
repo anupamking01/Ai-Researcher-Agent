@@ -17,6 +17,9 @@ from scripts import freeze_human_eval_ratings as freeze
 
 
 RECEIPT_NAME = "preflight_receipt.json"
+# A receipt contains fixed metadata and hashes, never an annotation payload.
+# Bound untrusted retained bytes before JSON parsing, including concurrent growth.
+MAX_RECEIPT_BYTES = 64 * 1024
 _RECEIPT_KEYS = {
     "schema_version",
     "study_id",
@@ -50,14 +53,26 @@ def _unique_json_object(pairs: list[tuple[str, object]]) -> dict:
     return value
 
 
+def _require_receipt_size(size: int) -> None:
+    if size > MAX_RECEIPT_BYTES:
+        raise ValueError(
+            f"human-evaluation preflight receipt exceeds {MAX_RECEIPT_BYTES} bytes"
+        )
+
+
 def _read_descriptor_bytes(file_descriptor: int) -> bytes:
     os.lseek(file_descriptor, 0, os.SEEK_SET)
     chunks = []
+    remaining = MAX_RECEIPT_BYTES
     while True:
-        chunk = os.read(file_descriptor, 64 * 1024)
+        # One extra byte detects a receipt appended after the stat preflight.
+        chunk = os.read(file_descriptor, min(64 * 1024, remaining + 1))
         if not chunk:
             return b"".join(chunks)
+        if len(chunk) > remaining:
+            _require_receipt_size(MAX_RECEIPT_BYTES + 1)
         chunks.append(chunk)
+        remaining -= len(chunk)
 
 
 def _require_same_object(current: os.stat_result, opened: os.stat_result) -> None:
@@ -116,6 +131,7 @@ def _retained_receipt_window(receipt_root: Path):
             raise ValueError(
                 "human-evaluation preflight receipt must be a regular file"
             )
+        _require_receipt_size(candidate.st_size)
         try:
             receipt_fd = os.open(
                 RECEIPT_NAME,
@@ -133,6 +149,7 @@ def _retained_receipt_window(receipt_root: Path):
                 raise ValueError(
                     "human-evaluation preflight receipt must be a regular file"
                 )
+            _require_receipt_size(opened.st_size)
             _require_same_object(opened, candidate)
             receipt_bytes = _read_descriptor_bytes(receipt_fd)
             current = os.stat(
