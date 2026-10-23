@@ -98,10 +98,29 @@ def _retained_receipt_window(receipt_root: Path):
                 "human-evaluation preflight receipt artifact set mismatch: "
                 f"expected only {RECEIPT_NAME!r}, got {sorted(entries)!r}"
             )
+        # Classify the directory entry before open: opening a FIFO in blocking
+        # mode would otherwise hang indefinitely before the fstat() guard.
+        # O_NONBLOCK closes the remaining race where a regular file is swapped
+        # for a FIFO between stat() and open().
+        try:
+            candidate = os.stat(
+                RECEIPT_NAME,
+                dir_fd=root_fd,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise ValueError(
+                "human-evaluation preflight receipt must be a regular file"
+            ) from exc
+        if not stat.S_ISREG(candidate.st_mode):
+            raise ValueError(
+                "human-evaluation preflight receipt must be a regular file"
+            )
         try:
             receipt_fd = os.open(
                 RECEIPT_NAME,
-                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
                 dir_fd=root_fd,
             )
         except OSError as exc:
@@ -114,6 +133,7 @@ def _retained_receipt_window(receipt_root: Path):
                 raise ValueError(
                     "human-evaluation preflight receipt must be a regular file"
                 )
+            _require_same_object(opened, candidate)
             receipt_bytes = _read_descriptor_bytes(receipt_fd)
             current = os.stat(
                 RECEIPT_NAME,
