@@ -151,3 +151,18 @@ def test_canonical_preflight_rejects_unexpected_variant_even_when_files_match():
     support_rows[-1]["variant_id"] = "P12"
     with pytest.raises(ValueError, match="unexpected"):
         validate_rows(main_rows, support_rows, require_canonical_matrix=True)
+
+def test_preflight_detects_large_count_conservation_error_without_float_rounding():
+    # The previous float->int parser rounded 2**53 + 1 down to 2**53,
+    # hiding this one-claim discrepancy as a falsely conserving row.
+    with pytest.raises(ValueError, match="count mismatch"):
+        validate_rows(
+            [_main_row()],
+            [_support_row(
+                claims_checked="9007199254740993",
+                supported="9007199254740992",
+                partially_supported="0",
+                unsupported="0",
+                contradicted="0",
+            )],
+        )

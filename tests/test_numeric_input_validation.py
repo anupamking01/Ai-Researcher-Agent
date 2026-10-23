@@ -52,3 +52,18 @@ def test_unit_interval_accepts_valid_proportions(value):
 def test_unit_interval_rejects_invalid_proportions(value):
     with pytest.raises(ValueError):
         require_unit_interval(value, "support_rate")
+
+def test_nonnegative_integer_keeps_exact_count_above_float_precision():
+    # float('9007199254740993') would silently become 9007199254740992.0.
+    assert require_nonnegative_integer("9007199254740993", "total_tokens") == 9007199254740993
+
+
+@pytest.mark.parametrize("value", ["3.0000000000000001", "1e-324", "-1e-324"])
+def test_nonnegative_integer_rejects_float_rounding_and_underflow(value):
+    with pytest.raises(ValueError, match="negative|non-integer"):
+        require_nonnegative_integer(value, "claims_checked")
+
+
+def test_nonnegative_integer_preserves_finite_float_input_boundary():
+    with pytest.raises(ValueError, match="non-finite"):
+        require_nonnegative_integer("1e309", "total_tokens")

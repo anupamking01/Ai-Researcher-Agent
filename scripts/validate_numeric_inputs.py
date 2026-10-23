@@ -6,6 +6,7 @@ analysis rather than silently enter a research table or statistical test.
 from __future__ import annotations
 
 import math
+from decimal import Decimal
 
 
 def require_finite_number(value: str, field: str) -> float:
@@ -36,9 +37,15 @@ def require_nonnegative_integer(value: str, field: str) -> int:
     turn values such as ``3.6`` into ``4``. Scientific input validation should
     reject a malformed count rather than repair it implicitly.
     """
-    parsed = require_nonnegative(value, field)
-    if not parsed.is_integer():
-        raise ValueError(f"non-integer value for {field}: {parsed}")
+    # Keep the established finite-float input range, but never use float to
+    # decide integrality or return a count: it rounds values above 2**53 and
+    # can erase tiny fractional/negative CSV values through underflow.
+    require_finite_number(value, field)
+    parsed = Decimal(str(value).strip())
+    if parsed < 0:
+        raise ValueError(f"negative value for {field}: {value!r}")
+    if parsed != parsed.to_integral_value():
+        raise ValueError(f"non-integer value for {field}: {value!r}")
     return int(parsed)
 
 
