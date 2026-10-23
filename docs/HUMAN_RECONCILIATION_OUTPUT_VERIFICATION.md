@@ -55,6 +55,24 @@ governing contract merely by being fingerprinted alongside the results.
 
 Verification fails closed on hand-edited manuscript results, source-fingerprint drift, implementation drift, contract drift, changed task identity, missing-pair imputation, removed frozen contrasts or dimensions, or post-unblinding additions that change the frozen result structure.
 
+## Preserved legacy automated-provenance compatibility
+
+One historically preserved automated-analysis receipt lacks the newer
+`verified_execution` field. The readiness gate admits that legacy path **only**
+when the entire receipt matches the frozen legacy SHA-256 anchor; current or
+modified receipts cannot opt into this compatibility mode.
+
+That path must adapt the historical source-code fingerprints for the
+provenance builder, provenance verifier, and output-consistency verifier to
+their exact current bytes before invoking the historical verification calls.
+All three sources are now captured via retained regular-file descriptors,
+opened without following symlinks and nonblocking for special-file races.
+The capture window rechecks bytes, inode and directory/path bindings after
+both verification calls. A same-byte source replacement or parent-directory
+swap fails closed instead of silently rebinding the adapted provenance hash.
+This is a verifier-input integrity safeguard, not a new experiment, human
+rating, or claim about automated or human outcomes.
+
 ## Frozen scientific boundary
 
 The reconciliation remains descriptive. It does not add reconciliation p-values, multiplicity procedures, correlations, composite scores, or treatment-validation thresholds. Automated strict support and human report quality remain different constructs, and pilot, automated-confirmatory, exploratory, and human-validation claims remain separate.

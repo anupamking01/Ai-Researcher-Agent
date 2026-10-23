@@ -44,13 +44,6 @@ def _require(ok, message):
         raise ValueError(message)
 
 
-def _regular_bytes(path, label):
-    path = Path(path)
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"{label} must be a regular file: {path}")
-    return path.read_bytes()
-
-
 def _snapshot_regular_descriptor(descriptor: int, *, label: str):
     before = os.fstat(descriptor)
     if not stat.S_ISREG(before.st_mode):
@@ -371,7 +364,7 @@ def _verify_human_analysis_bundle(human_root, *, root):
 
 
 def _verify_preserved_legacy_receipt(receipt: dict, *, root: Path) -> None:
-    """Validate a hash-pinned legacy receipt after its verifier has evolved."""
+    """Validate the one pinned legacy receipt with stable verifier source bytes."""
     adapted = copy.deepcopy(receipt)
     builder = adapted.get("provenance_builder")
     if (
@@ -379,11 +372,6 @@ def _verify_preserved_legacy_receipt(receipt: dict, *, root: Path) -> None:
         or builder.get("path") != "scripts/build_analysis_provenance.py"
     ):
         raise ValueError("legacy receipt has invalid provenance-builder binding")
-    builder_content = _regular_bytes(
-        root / builder["path"],
-        "analysis_provenance_builder",
-    )
-    builder["sha256"] = hashlib.sha256(builder_content).hexdigest()
     implementations = adapted.get("verification_implementations")
     provenance = (
         implementations.get("provenance")
@@ -395,11 +383,6 @@ def _verify_preserved_legacy_receipt(receipt: dict, *, root: Path) -> None:
         or provenance.get("path") != "scripts/verify_analysis_provenance.py"
     ):
         raise ValueError("legacy receipt has invalid provenance-verifier binding")
-    verifier_content = _regular_bytes(
-        root / provenance["path"],
-        "analysis_provenance_verifier",
-    )
-    provenance["sha256"] = hashlib.sha256(verifier_content).hexdigest()
     output_consistency = (
         implementations.get("output_consistency")
         if isinstance(implementations, dict)
@@ -411,15 +394,27 @@ def _verify_preserved_legacy_receipt(receipt: dict, *, root: Path) -> None:
         != "scripts/verify_main_study_outputs.py"
     ):
         raise ValueError("legacy receipt has invalid output-verifier binding")
-    output_verifier_content = _regular_bytes(
-        root / output_consistency["path"],
-        "analysis_output_consistency_verifier",
-    )
-    output_consistency["sha256"] = hashlib.sha256(
-        output_verifier_content
-    ).hexdigest()
-    verify_analysis_provenance.verify_receipt(adapted, root=root)
-    verify_analysis_provenance.verify_recomputed_outputs(receipt, root=root)
+
+    # These three fingerprints must describe the same retained source inodes
+    # throughout both legacy verification calls. Hashing Path.read_bytes()
+    # independently here would trust a same-byte pathname replacement.
+    source_paths = {
+        "legacy_provenance_builder": root / builder["path"],
+        "legacy_provenance_verifier": root / provenance["path"],
+        "legacy_output_verifier": root / output_consistency["path"],
+    }
+    with _capture_regular_inputs(source_paths) as captured:
+        builder["sha256"] = hashlib.sha256(
+            captured["legacy_provenance_builder"]
+        ).hexdigest()
+        provenance["sha256"] = hashlib.sha256(
+            captured["legacy_provenance_verifier"]
+        ).hexdigest()
+        output_consistency["sha256"] = hashlib.sha256(
+            captured["legacy_output_verifier"]
+        ).hexdigest()
+        verify_analysis_provenance.verify_receipt(adapted, root=root)
+        verify_analysis_provenance.verify_recomputed_outputs(receipt, root=root)
 
 
 def _verify_automated_provenance(content: bytes, *, root: Path) -> None:
