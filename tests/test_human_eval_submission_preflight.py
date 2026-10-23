@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -975,3 +976,52 @@ def test_receipt_verifier_rebinds_path_after_final_descriptor_read(
             rating_path=submission,
             annotator_bundle_root=bundle,
         )
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO")
+def test_receipt_verifier_rejects_fifo_without_blocking(tmp_path):
+    """A named pipe in place of a receipt must fail promptly, not hang on open."""
+    receipt_root = tmp_path / "receipt"
+    receipt_root.mkdir()
+    os.mkfifo(receipt_root / verify.RECEIPT_NAME)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.verify_human_eval_submission_preflight",
+            "--receipt-root",
+            str(receipt_root),
+            "--ratings",
+            str(tmp_path / "missing-ratings.csv"),
+            "--preflight-bundle",
+            str(tmp_path / "missing-bundle"),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=5,
+    )
+
+    assert completed.returncode != 0
+    assert "receipt must be a regular file" in completed.stderr
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO")
+def test_receipt_verifier_checks_nonregular_entry_before_open(tmp_path, monkeypatch):
+    """Never pass a known FIFO/device/symlink to the receipt open call."""
+    receipt_root = tmp_path / "receipt"
+    receipt_root.mkdir()
+    os.mkfifo(receipt_root / verify.RECEIPT_NAME)
+    original_open = verify.os.open
+
+    def guard_open(path, *args, **kwargs):
+        if path == verify.RECEIPT_NAME:
+            raise AssertionError("non-regular receipt reached os.open")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(verify.os, "open", guard_open)
+    with pytest.raises(ValueError, match="receipt must be a regular file"):
+        with verify._retained_receipt_window(receipt_root):
+            pass
