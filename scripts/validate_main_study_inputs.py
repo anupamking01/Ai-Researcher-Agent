@@ -9,7 +9,11 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from scripts.validate_numeric_inputs import require_nonnegative, require_nonnegative_integer
+from scripts.validate_numeric_inputs import (
+    require_nonnegative,
+    require_nonnegative_integer,
+    require_unit_interval,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MAIN_CSV = REPO_ROOT / "outputs" / "main_study_runs.csv"
@@ -164,6 +168,67 @@ def _validate_canonical_matrix(keys: set[tuple[str, str]], *, label: str) -> Non
         )
 
 
+
+def _validate_canonical_posthoc_mirrors(
+    main_rows: list[dict[str, str]],
+    support_rows: list[dict[str, str]],
+) -> None:
+    """Require both canonical exports to agree on the common evaluator's result.
+
+    The treatment summary repeats the post-hoc claim count and strict-support
+    rate. Merely checking equal treatment/task keys allows these two scientific
+    records to contradict each other while preflight still reports success.
+    Match by frozen cell identity, never CSV row position, and independently
+    check the evaluator's claimed rate against its integer numerator and
+    denominator. This does not authenticate either input's provenance.
+    """
+    main_by_cell = {
+        (row["variant_id"], row["task_id"]): row for row in main_rows
+    }
+    support_by_cell = {
+        (row["variant_id"], row["task_id"]): row for row in support_rows
+    }
+    for variant, task in sorted(EXPECTED_CELLS):
+        label = f"{variant}/{task}"
+        main = main_by_cell[(variant, task)]
+        support = support_by_cell[(variant, task)]
+        main_claims = require_nonnegative_integer(
+            main.get("posthoc_claims_checked"),
+            f"main {label} posthoc_claims_checked",
+        )
+        evaluator_claims = require_nonnegative_integer(
+            support.get("claims_checked"),
+            f"support {label} claims_checked",
+        )
+        if main_claims != evaluator_claims:
+            raise ValueError(
+                f"post-hoc claim count differs across canonical inputs for {label}"
+            )
+
+        evaluator_rate = require_unit_interval(
+            support.get("strict_support_rate"),
+            f"support {label} strict_support_rate",
+        )
+        main_rate = require_unit_interval(
+            main.get("posthoc_strict_support_rate"),
+            f"main {label} posthoc_strict_support_rate",
+        )
+        supported = require_nonnegative_integer(
+            support.get("supported"), f"support {label} supported"
+        )
+        # These saved rates come from the same Python float division used by
+        # the canonical evaluator. Compare that exact recorded computation;
+        # do not silently round discrepant decimals into agreement.
+        if evaluator_rate != supported / evaluator_claims:
+            raise ValueError(
+                f"evaluator strict support rate contradicts counts for {label}"
+            )
+        if main_rate != evaluator_rate:
+            raise ValueError(
+                f"post-hoc strict support rate differs across canonical inputs for {label}"
+            )
+
+
 def validate_rows(
     main_rows: list[dict[str, str]],
     support_rows: list[dict[str, str]],
@@ -215,6 +280,12 @@ def validate_rows(
                 f"support row {index} count mismatch: classified={classified}, "
                 f"claims_checked={counts['claims_checked']}"
             )
+
+    # Canonical study inputs redundantly publish evaluator measurements in
+    # both CSVs; fail closed on inconsistencies instead of silently choosing
+    # whichever file an analysis happens to read.
+    if require_canonical_matrix:
+        _validate_canonical_posthoc_mirrors(main_rows, support_rows)
 
 
 def main() -> int:

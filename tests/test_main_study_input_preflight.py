@@ -127,8 +127,13 @@ def _canonical_rows():
     main_rows = []
     support_rows = []
     for variant, task in sorted(EXPECTED_CELLS):
-        main_rows.append(_main_row(variant_id=variant, task_id=task, completed="True"))
-        support_rows.append(_support_row(variant_id=variant, task_id=task))
+        main_rows.append(_main_row(
+            variant_id=variant, task_id=task, completed="True",
+            posthoc_claims_checked="4", posthoc_strict_support_rate="0.5",
+        ))
+        support_rows.append(_support_row(
+            variant_id=variant, task_id=task, strict_support_rate="0.5",
+        ))
     return main_rows, support_rows
 
 
@@ -166,3 +171,55 @@ def test_preflight_detects_large_count_conservation_error_without_float_rounding
                 contradicted="0",
             )],
         )
+
+
+
+def test_canonical_preflight_matches_mirrors_by_identity_not_csv_order():
+    main, support = _canonical_rows()
+    support.reverse()
+    validate_rows(main, support, require_canonical_matrix=True)
+
+
+def test_canonical_preflight_rejects_conflicting_repeated_claim_count():
+    main, support = _canonical_rows()
+    main[0]["posthoc_claims_checked"] = "5"
+    with pytest.raises(ValueError, match="post-hoc claim count differs"):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+def test_canonical_preflight_rejects_conflicting_repeated_support_rate():
+    main, support = _canonical_rows()
+    main[0]["posthoc_strict_support_rate"] = "0.75"
+    with pytest.raises(ValueError, match="post-hoc strict support rate differs"):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+def test_canonical_preflight_rejects_shared_incorrect_support_rate():
+    # Changing BOTH copies must not make a wrong scientific measurement valid.
+    main, support = _canonical_rows()
+    main[0]["posthoc_strict_support_rate"] = "0.75"
+    support[0]["strict_support_rate"] = "0.75"
+    with pytest.raises(ValueError, match="evaluator strict support rate contradicts counts"):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+@pytest.mark.parametrize("missing", ["posthoc_claims_checked", "posthoc_strict_support_rate"])
+def test_canonical_preflight_requires_mirrored_treatment_field(missing):
+    main, support = _canonical_rows()
+    del main[0][missing]
+    with pytest.raises(ValueError, match=missing):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+def test_canonical_preflight_requires_evaluator_rate():
+    main, support = _canonical_rows()
+    del support[0]["strict_support_rate"]
+    with pytest.raises(ValueError, match="strict_support_rate"):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+def test_canonical_preflight_rejects_rate_rounded_back_inside_unit_interval():
+    main, support = _canonical_rows()
+    main[0]["posthoc_strict_support_rate"] = "1.0000000000000001"
+    with pytest.raises(ValueError, match="outside"):
+        validate_rows(main, support, require_canonical_matrix=True)
