@@ -231,8 +231,15 @@ def _strict_csv_rows(reader: csv.DictReader, *, path: Path, handle: io.StringIO)
 def _reject_spreadsheet_active_text(
     value: str, *, field: str, path: Path, line_number: int
 ) -> None:
-    """Keep text cells inert when a frozen CSV is opened in a spreadsheet."""
-    if value.startswith(SPREADSHEET_FORMULA_PREFIXES):
+    """Reject Unicode-obfuscated formula prefixes before archiving ratings.
+
+    A spreadsheet or intermediate CSV processor may apply compatibility
+    normalization or discard invisible formatting marks before interpreting a
+    cell. Apply the same NFKC/invisible-mark audit used for blinded text, then
+    check the first non-whitespace character; never rewrite the captured input.
+    """
+    audit_text = packet_build._canonical_audit_text(value).lstrip()
+    if audit_text.startswith(SPREADSHEET_FORMULA_PREFIXES):
         raise ValueError(
             f"{path.name}:{line_number}: {field} begins with a spreadsheet-active "
             "formula marker; rewrite it as plain text before freezing"

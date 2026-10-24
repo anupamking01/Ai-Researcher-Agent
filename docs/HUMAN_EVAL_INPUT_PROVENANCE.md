@@ -192,9 +192,14 @@ statistical calculations, or any collected ratings.
 ## Spreadsheet-active text gate
 
 The importer rejects `annotator_id` or `notes` values whose normalized text
-begins with `=`, `+`, `-`, or `@`. Spreadsheet programs can interpret those
-prefixes as formulas when a CSV is opened, even though CSV quoting is otherwise
-valid. Rejecting the submission before publication keeps the frozen CSV inert
+begins with `=`, `+`, `-`, or `@`. Before checking the prefix, it applies
+Unicode NFKC compatibility normalization, removes Unicode format and the
+specified invisible variation/combining marks using the existing blinded-text
+audit, and skips leading whitespace. This blocks cells such as fullwidth
+`＝SUM(...)` or a zero-width marker before `=SUM(...)` that can become active
+if a downstream spreadsheet or converter normalizes the text. Spreadsheet
+programs can interpret those prefixes as formulas when a CSV is opened, even
+though CSV quoting is otherwise valid. Rejecting the submission before publication keeps the frozen CSV inert
 without silently escaping or changing the annotator's text; the coordinator
 must ask for plain-text wording and retain the original submitted file outside
 the failed freeze. The verifier applies the same rule to archived and normalized
