@@ -336,6 +336,49 @@ def _validate_canonical_posthoc_mirrors(
 
 
 
+def _validate_canonical_completed_resource_evidence(
+    main_rows: list[dict[str, str]],
+    support_rows: list[dict[str, str]],
+) -> None:
+    """Reject zero-usage, zero-cost, or empty-report canonical measurements.
+
+    Every preserved main-study treatment is a completed live model-generated
+    report under a strictly positive frozen uncached pricing schedule. Every
+    retained post-hoc cell contains actual evaluator classifications. A zero
+    resource/elapsed/cost value in this *specific* 40-cell export would imply
+    missing or incorrectly defaulted accounting and could distort the
+    descriptive cost-quality frontier. Do not apply this constraint to generic
+    fixtures, free-tier studies, or legitimately failed/empty executions.
+    It checks export plausibility, not provider billing or source authenticity.
+    """
+    for row in main_rows:
+        label = f"{row['variant_id']}/{row['task_id']}"
+        for field in ("model_calls", "total_tokens", "report_words"):
+            value = require_nonnegative_integer(
+                row.get(field), f"main {label} {field}"
+            )
+            if value == 0:
+                raise ValueError(
+                    f"canonical completed treatment {field} must be positive for {label}"
+                )
+        for field in ("treatment_cost_usd", "latency_seconds"):
+            value = require_nonnegative(row.get(field), f"main {label} {field}")
+            if value == 0:
+                raise ValueError(
+                    f"canonical completed treatment {field} must be positive for {label}"
+                )
+
+    for row in support_rows:
+        label = f"{row['variant_id']}/{row['task_id']}"
+        tokens = require_nonnegative_integer(
+            row.get("total_tokens"), f"support {label} total_tokens"
+        )
+        if tokens == 0:
+            raise ValueError(
+                f"canonical post-hoc evaluator total_tokens must be positive for {label}"
+            )
+
+
 def _validate_canonical_treatment_cost_provenance(
     main_rows: list[dict[str, str]],
 ) -> None:
@@ -457,6 +500,7 @@ def validate_rows(
     # whichever file an analysis happens to read.
     if require_canonical_matrix:
         _validate_canonical_evaluator_run_identity(support_rows)
+        _validate_canonical_completed_resource_evidence(main_rows, support_rows)
         _validate_canonical_source_exposure(main_rows, support_rows)
         _validate_canonical_posthoc_mirrors(main_rows, support_rows)
         _validate_canonical_treatment_cost_provenance(main_rows)

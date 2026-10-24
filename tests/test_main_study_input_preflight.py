@@ -478,6 +478,38 @@ def test_noncanonical_small_fixture_remains_independent_of_frozen_cost_label():
     validate_rows([_main_row()], [_support_row()])
 
 
+@pytest.mark.parametrize(
+    "field",
+    ("model_calls", "total_tokens", "report_words", "treatment_cost_usd", "latency_seconds"),
+)
+def test_canonical_preflight_rejects_zero_completed_treatment_resources(field):
+    # Completed frozen live runs cannot contribute cost/quality data with
+    # missing usage, empty reports, zero duration, or zero frozen-rate cost.
+    main, support = _canonical_rows()
+    _canonical_cell(main)[field] = "0"
+    with pytest.raises(ValueError, match=f"canonical completed treatment {field} must be positive"):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+def test_canonical_preflight_rejects_zero_token_posthoc_measurement():
+    main, support = _canonical_rows()
+    _canonical_cell(support)["total_tokens"] = "0"
+    with pytest.raises(ValueError, match="canonical post-hoc evaluator total_tokens must be positive"):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+def test_small_noncanonical_zero_usage_control_remains_valid():
+    # Do not turn a frozen-study assumption into a universal pricing policy.
+    validate_rows(
+        [_main_row(
+            total_tokens="0", model_calls="0", report_words="0",
+            treatment_cost_usd="0", latency_seconds="0",
+        )],
+        [_support_row(total_tokens="0", estimated_cost_usd="0")],
+    )
+
+
+
 def test_canonical_preflight_rejects_shared_evaluator_report_reference():
     # Distinct treatment/task cells must not reuse one evaluated report.
     main, support = _canonical_rows()

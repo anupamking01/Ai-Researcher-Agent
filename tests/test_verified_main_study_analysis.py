@@ -1013,6 +1013,29 @@ def test_verified_gate_blocks_repinned_unknown_treatment_cost_method(tmp_path):
     assert analyzer_calls == []
 
 
+def test_verified_gate_blocks_repinned_zero_cost_for_completed_treatment(tmp_path):
+    # Both CSVs remain well-formed and the changed data is re-fingerprinted.
+    # A zero-cost completed live run with positive model usage would otherwise
+    # distort the frozen study's descriptive cost-quality comparison.
+    main, support = _frozen_matrix_study(tmp_path)
+    original = main.read_text(encoding="utf-8")
+    before = "D3,main-01,True,3,2,0,100,0.05,1.2,3,250"
+    after = "D3,main-01,True,3,2,0,100,0,1.2,3,250"
+    assert before in original
+    main.write_text(original.replace(before, after, 1), encoding="utf-8")
+    manifest = build_manifest([main, support], root=tmp_path)
+    calls = []
+    with pytest.raises(ValueError, match="canonical completed treatment treatment_cost_usd must be positive"):
+        verify_and_run(
+            manifest,
+            root=tmp_path,
+            analyze=lambda: calls.append("ran") or 0,
+            require_canonical_matrix=True,
+        )
+    assert calls == []
+
+
+
 def test_verified_gate_blocks_repinned_reused_evaluator_run_id(tmp_path):
     # Even a new manifest of two internally valid-looking CSVs must not make
     # different reports alias the same evaluation/trace reference.
