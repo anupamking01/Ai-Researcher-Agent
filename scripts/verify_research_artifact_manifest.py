@@ -15,7 +15,7 @@ from pathlib import PurePosixPath
 
 from scripts.fingerprint_research_artifacts import (
     REPO_ROOT,
-    fingerprint_regular_file,
+    fingerprint_regular_file_with_identity,
     portable_manifest_path_identity,
 )
 
@@ -62,6 +62,7 @@ def verify_manifest(manifest: dict, *, root: Path = REPO_ROOT) -> list[dict]:
     validated: list[dict] = []
     seen: set[str] = set()
     portable_seen: dict[str, str] = {}
+    physical_seen: dict[tuple[int, int], str] = {}
     for entry in entries:
         if not isinstance(entry, dict) or set(entry) != ARTIFACT_FIELDS:
             raise ValueError("artifact entry must contain the exact fields")
@@ -98,11 +99,19 @@ def verify_manifest(manifest: dict, *, root: Path = REPO_ROOT) -> list[dict]:
             expected_sha
         ):
             raise ValueError(f"invalid SHA-256 digest for artifact: {relative}")
-        actual_sha, actual_bytes = fingerprint_regular_file(candidate)
+        actual_sha, actual_bytes, physical_identity = (
+            fingerprint_regular_file_with_identity(candidate)
+        )
         if actual_bytes != expected_bytes:
             raise ValueError(f"artifact byte-size mismatch: {relative}")
         if actual_sha != expected_sha:
             raise ValueError(f"artifact SHA-256 mismatch: {relative}")
+        if physical_identity in physical_seen:
+            raise ValueError(
+                "research artifact hard-link alias: "
+                f"{physical_seen[physical_identity]!r} and {relative!r}"
+            )
+        physical_seen[physical_identity] = relative
         validated.append({"path": relative, "sha256": expected_sha, "bytes": expected_bytes})
 
     canonical_entries = sorted(validated, key=lambda item: item["path"])

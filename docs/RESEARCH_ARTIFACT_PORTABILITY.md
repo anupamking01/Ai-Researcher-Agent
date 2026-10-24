@@ -20,9 +20,28 @@ created manifest has valid individual hashes and a correctly recomputed
 aggregate digest. The generator applies the same rule to newly selected files.
 Ordinary distinct canonical paths continue to round-trip unchanged.
 
-**Boundary:** This is a portability and *path* identity check, not a claim that
-files with different names came from independent sources, or that SHA-256 proves
-data authenticity. It does not alter frozen study artifacts, measurements,
-human ratings, treatment execution, or the preregistered analysis plan.
+## Physical file aliases (hard links)
 
-Offline regression tests: `python -m pytest -q tests/test_research_artifact_portable_paths.py`.
+Two distinct, portable names can still address **the same underlying file**.
+Both the manifest generator and the independent verifier now reject multiple
+selected artifact paths whose checked file descriptors have the same filesystem
+`(device, inode)` identity. This closes a physical-alias loophole that byte
+hashes and spelling-based path checks cannot detect. A manually recomputed
+aggregate hash does not bypass verification. The original two-value
+`fingerprint_regular_file()` API is unchanged.
+
+Separately stored files with *identical bytes* remain valid: content equality
+alone does not imply the names are aliases. This safeguard assumes a filesystem
+that exposes stable, meaningful file identities; it does not verify historical
+source independence, prove authenticity, or attest that files were originally
+collected from separate systems. Hard links not listed in a manifest are not
+discoverable by this check.
+
+**Boundary:** These are portability, path-identity, and current filesystem
+alias safeguards, not claims that different names came from independent
+sources or that SHA-256 proves data authenticity. No frozen study artifacts,
+measurements, human ratings, treatment execution, or preregistered analysis
+were changed.
+
+Offline regression tests:
+`python -m pytest -q tests/test_research_artifact_portable_paths.py tests/test_research_artifact_hardlink_aliases.py`.

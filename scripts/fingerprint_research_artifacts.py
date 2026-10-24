@@ -97,7 +97,7 @@ def _read_fingerprint(
     return digest.hexdigest(), after.st_size, _identity(after)
 
 
-def _fingerprint_with_directory_descriptors(path: Path) -> tuple[str, int]:
+def _fingerprint_with_directory_descriptors(path: Path) -> tuple[str, int, tuple[int, int]]:
     """Traverse from the filesystem root without following any path component."""
     directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
     directory_flags |= getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -159,7 +159,7 @@ def _fingerprint_with_directory_descriptors(path: Path) -> tuple[str, int]:
                 raise ValueError(
                     f"research artifact changed while it was fingerprinted: {path}"
                 )
-        return digest, byte_count
+        return digest, byte_count, file_identity[:2]
     except FileNotFoundError as exc:
         raise ValueError(f"research artifact is missing or not a file: {path}") from exc
     except OSError as exc:
@@ -169,7 +169,7 @@ def _fingerprint_with_directory_descriptors(path: Path) -> tuple[str, int]:
             os.close(descriptor)
 
 
-def _fingerprint_portably(path: Path) -> tuple[str, int]:
+def _fingerprint_portably(path: Path) -> tuple[str, int, tuple[int, int]]:
     """Portable fallback that rejects symlink components and rechecks identities."""
     components: list[tuple[Path, tuple[int, int, int, int, int], bool]] = []
     current = Path(path.anchor)
@@ -206,7 +206,7 @@ def _fingerprint_portably(path: Path) -> tuple[str, int]:
                 raise ValueError(
                     f"research artifact changed while it was fingerprinted: {path}"
                 )
-        return digest, byte_count
+        return digest, byte_count, file_identity[:2]
     except OSError as exc:
         raise ValueError(
             f"research artifact changed while it was fingerprinted: {path}"
@@ -215,12 +215,25 @@ def _fingerprint_portably(path: Path) -> tuple[str, int]:
         os.close(descriptor)
 
 
-def fingerprint_regular_file(path: Path) -> tuple[str, int]:
-    """Return a digest and size from one stable, non-symlink file snapshot."""
+def fingerprint_regular_file_with_identity(
+    path: Path,
+) -> tuple[str, int, tuple[int, int]]:
+    """Return stable bytes and physical file identity from one checked descriptor.
+
+    The filesystem (device, inode) pair is captured during hashing, not from a
+    separate path lookup after the file could have been replaced. It identifies
+    hard-linked aliases on filesystems exposing meaningful inode identities.
+    """
     path = Path(os.path.abspath(path))
     if SUPPORTS_DESCRIPTOR_TRAVERSAL and path.anchor:
         return _fingerprint_with_directory_descriptors(path)
     return _fingerprint_portably(path)
+
+
+def fingerprint_regular_file(path: Path) -> tuple[str, int]:
+    """Return a digest and size from one stable, non-symlink file snapshot."""
+    digest, byte_count, _ = fingerprint_regular_file_with_identity(path)
+    return digest, byte_count
 
 
 def sha256_file(path: Path) -> str:
@@ -243,6 +256,7 @@ def build_manifest(paths: list[Path], *, root: Path = REPO_ROOT) -> dict:
     entries = []
     seen: set[str] = set()
     portable_seen: dict[str, str] = {}
+    physical_seen: dict[tuple[int, int], str] = {}
     for path in paths:
         candidate = Path(os.path.abspath(path))
         try:
@@ -259,7 +273,15 @@ def build_manifest(paths: list[Path], *, root: Path = REPO_ROOT) -> dict:
                 f"{portable_seen[portable_key]!r} and {relative!r}"
             )
         portable_seen[portable_key] = relative
-        digest, byte_count = fingerprint_regular_file(candidate)
+        digest, byte_count, physical_identity = fingerprint_regular_file_with_identity(
+            candidate
+        )
+        if physical_identity in physical_seen:
+            raise ValueError(
+                "research artifact hard-link alias: "
+                f"{physical_seen[physical_identity]!r} and {relative!r}"
+            )
+        physical_seen[physical_identity] = relative
         entries.append(
             {
                 "path": relative,
