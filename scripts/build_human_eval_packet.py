@@ -220,11 +220,29 @@ def require_loaded_content_validator_unchanged(*, operation: str) -> None:
         )
 
 
+def _is_invisible_audit_mark(character: str) -> bool:
+    """Catch zero-width combining marks that can conceal a treatment marker.
+
+    Keep ordinary accent/diacritic marks: deleting all Mn code points would
+    change genuine report text. These ranges are Unicode format-like marks
+    without an independent visible letter or digit.
+    """
+    codepoint = ord(character)
+    return (
+        codepoint == 0x034F  # Combining Grapheme Joiner
+        or 0x180B <= codepoint <= 0x180D  # Mongolian free variation selectors
+        or codepoint == 0x180F  # Mongolian free variation selector four
+        or 0xFE00 <= codepoint <= 0xFE0F  # Variation selectors 1-16
+        or 0xE0100 <= codepoint <= 0xE01EF  # Supplementary variation selectors
+    )
+
+
 def _canonical_audit_text(text: str) -> str:
     return "".join(
         character
         for character in unicodedata.normalize("NFKC", text)
         if unicodedata.category(character) != "Cf"
+        and not _is_invisible_audit_mark(character)
     )
 
 

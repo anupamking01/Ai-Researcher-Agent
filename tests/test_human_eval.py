@@ -221,6 +221,52 @@ def test_blinding_audit_rejects_rendered_treatment_label_variants(leaked_text):
         )
 
 
+@pytest.mark.parametrize("field", ["question", "report_markdown"])
+@pytest.mark.parametrize(
+    "leaked_text",
+    [
+        "Internal treatment P\\u034f6V must remain hidden.",
+        "Internal treatment D\\ufe003 must remain hidden.",
+        "Internal treatment D\\U000e01003 must remain hidden.",
+        "Internal treatment P\\u180d6V must remain hidden.",
+        "[source](https://example.test/%44%CD%8F%33)",
+    ],
+    ids=[
+        "combining-grapheme-joiner",
+        "basic-variation-selector",
+        "supplementary-variation-selector",
+        "mongolian-variation-selector",
+        "percent-encoded-invisible-link-marker",
+    ],
+)
+def test_blinding_audit_rejects_invisible_combining_mark_leakage(field, leaked_text):
+    # These markers evade the previous NFKC + Cf-only audit, yet can visually
+    # disclose D3/P6V before ratings are frozen.
+    row = {
+        "blind_id": "H001",
+        "question": "Synthetic question?",
+        "report_markdown": "Synthetic report.",
+    }
+    row[field] = leaked_text
+    with pytest.raises(ValueError, match="annotator-facing treatment leakage"):
+        packet_builder.validate_annotator_facing_content(
+            [row], label="synthetic packet"
+        )
+
+
+def test_blinding_audit_preserves_meaningful_combining_diacritics():
+    # Do not delete every Mn character: ordinary user-facing accents remain.
+    assert packet_builder._canonical_audit_text("Cafe\\u0301") == "Café"
+    packet_builder.validate_annotator_facing_content(
+        [{
+            "blind_id": "H001",
+            "question": "Review Cafe\\u0301 source credibility?",
+            "report_markdown": "Cafe\\u0301 results are discussed in detail.",
+        }],
+        label="synthetic packet",
+    )
+
+
 def test_blinding_audit_fails_closed_on_excessive_percent_encoding_depth():
     destination = "https://example.test/%41"
     for _ in range(packet_builder.MAX_METADATA_DECODE_LAYERS + 1):

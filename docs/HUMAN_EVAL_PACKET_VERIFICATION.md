@@ -163,3 +163,19 @@ Packets created before source fingerprints were recorded do not satisfy this
 gate. Because real annotation remains pending, rebuild them from the preserved
 canonical sources before distribution rather than editing a published manifest.
 This adds no treatment run, evaluator output, rating, or research conclusion.
+
+## Invisible combining marks and blinding integrity
+
+The annotator-facing content audit normalizes Unicode and rejects coordinator
+markers in source text, rendered Markdown, and repeatedly decoded link metadata.
+Some visually invisible combining marks are **not** Unicode format characters
+(`Cf`): a Combining Grapheme Joiner or variation selector inserted inside
+`D3` or `P6V` previously obscured the identifier from literal marker detection.
+
+The audit now removes U+034F, Mongolian free variation selectors, and the
+basic/supplementary Unicode variation-selector ranges **for matching only**.
+It does not rewrite the underlying question, report, or archived source bytes.
+Ordinary combining diacritics remain significant, and a passing audit still
+cannot guarantee that humans will never infer treatment identity from style.
+All four experimental conditions, frozen measurements, and the human rubric
+remain unchanged; genuine independent ratings are still outstanding.
