@@ -133,14 +133,71 @@ def verify_manifest(manifest: dict, *, root: Path = REPO_ROOT) -> list[dict]:
     return canonical_entries
 
 
+def verify_manifest_file(
+    manifest_path: Path,
+    *,
+    root: Path = REPO_ROOT,
+    expected_manifest_sha256: str | None = None,
+) -> list[dict]:
+    """Verify source files against a stable manifest, optionally externally pinned.
+
+    Without an independently retained expected manifest SHA-256, an adversary
+    who replaces both artifact bytes and manifest can recompute every in-band
+    hash and still pass. The opt-in pin binds the manifest's exact raw bytes to
+    a separately retained reference. Neither check proves original authorship,
+    nor provides an atomic cross-file snapshot.
+    """
+    if expected_manifest_sha256 is not None and (
+        not isinstance(expected_manifest_sha256, str)
+        or not SHA256_PATTERN.fullmatch(expected_manifest_sha256)
+    ):
+        raise ValueError("expected manifest SHA-256 must be 64 lowercase hex digits")
+
+    path = Path(manifest_path)
+    first_sha, first_size, first_identity = (
+        fingerprint_regular_file_with_identity(path)
+    )
+    raw = path.read_bytes()
+    observed_sha = hashlib.sha256(raw).hexdigest()
+    if len(raw) != first_size or observed_sha != first_sha:
+        raise ValueError("manifest file changed during verification")
+
+    # Bind parsed content to the same checked physical file that was hashed.
+    # A byte-identical inode replacement is not silently accepted.
+    final_sha, final_size, final_identity = (
+        fingerprint_regular_file_with_identity(path)
+    )
+    if (first_sha, first_size, first_identity) != (
+        final_sha, final_size, final_identity
+    ):
+        raise ValueError("manifest file changed during verification")
+
+    if (
+        expected_manifest_sha256 is not None
+        and observed_sha != expected_manifest_sha256
+    ):
+        raise ValueError("external manifest SHA-256 pin mismatch")
+
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("manifest file is not valid UTF-8") from exc
+    return verify_manifest(parse_manifest_json(content), root=root)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("manifest", type=Path, help="JSON fingerprint manifest to verify")
+    parser.add_argument(
+        "--expected-manifest-sha256",
+        help="independently retained lowercase SHA-256 of exact manifest file bytes",
+    )
     args = parser.parse_args()
     path = args.manifest if args.manifest.is_absolute() else REPO_ROOT / args.manifest
     try:
-        payload = parse_manifest_json(path.read_text(encoding="utf-8"))
-        entries = verify_manifest(payload)
+        entries = verify_manifest_file(
+            path, expected_manifest_sha256=args.expected_manifest_sha256
+        )
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise SystemExit(f"RESEARCH ARTIFACT VERIFICATION: FAIL: {exc}") from exc
     print(f"RESEARCH ARTIFACT VERIFICATION: PASS ({len(entries)} artifacts)")

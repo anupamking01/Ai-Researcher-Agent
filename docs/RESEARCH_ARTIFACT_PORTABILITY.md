@@ -88,3 +88,37 @@ inputs or proof that source files were historically authentic. On platforms
 without directory-relative operations, the fallback checks parent symlinks
 but cannot guarantee race-free parent traversal. No real experiment, evaluator,
 human rating, frozen rubric, or analysis has been modified.
+
+
+## Optional independent manifest trust anchor
+
+An artifact manifest is **self-consistent**, not self-authenticating. If a
+mutable dataset and its manifest are both replaced, every artifact SHA-256 and
+the aggregate digest can be recomputed and the unpinned verifier can still
+pass. To detect this class of retrospective replacement, retain the exact
+manifest-file SHA-256 **independently** (for example, in a reviewed,
+access-controlled run record or immutable external log) at the time the
+canonical snapshot is frozen.
+
+Once that independently recorded lowercase 64-hex digest is available:
+
+```bash
+python scripts/verify_research_artifact_manifest.py \\
+  outputs/main_study_analysis_inputs_manifest.json \\
+  --expected-manifest-sha256 <independently-recorded-sha256>
+```
+
+The verifier checks the SHA-256 of the original manifest **file bytes**,
+including JSON whitespace and newline, before accepting its entries; it
+also checks that the manifest file's content and physical identity remain
+stable during capture. This is distinct from the in-band aggregate digest,
+which is calculated from canonicalized artifact entries. The optional pin
+does not change existing manifests, default unpinned verification, treatment
+data, or frozen inference.
+
+**Trust boundary:** A digest copied from the same mutable folder at
+verification time is not an independent pin. An attacker able to change the
+reference digest too can bypass the protection. SHA-256 is byte identity,
+not a digital signature, author attestation, immutable storage guarantee, or
+proof of experimental validity. No canonical-study trust anchor is claimed
+to exist merely because this option is implemented.
