@@ -281,3 +281,14 @@ before any frozen snapshot is published, and the original bytes are not rewritte
 This is a data-integrity safeguard, not verification of actual human identity or
 independent scoring, and it does not alter frozen rubrics or produce ratings.
 
+## Agreement-helper input-domain integrity
+
+The public `build_agreement` and `quadratic_weighted_kappa` helpers now enforce the
+same integer 1–5 rubric domain as the frozen CSV importer, including for
+otherwise-unpaired ratings. Direct helper calls with out-of-range scores,
+non-integer scores, or duplicate annotator/blind-item rows fail closed instead
+of silently overwriting a submission or allowing Python's negative list
+indexing to turn score 0 into rating category 5. Blank dimensions remain
+missing and are never imputed. This is an offline software-integrity boundary:
+the production CSV intake already checked these inputs; no human results,
+rater independence, or agreement outcomes are asserted.

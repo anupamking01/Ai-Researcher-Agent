@@ -927,8 +927,14 @@ def _validate_and_capture_submission_preflights(
 
 
 def _score(row: dict, field: str) -> int | None:
-    value = str(row.get(field) or "").strip()
-    return int(value) if value else None
+    """Validate agreement-helper inputs against the same frozen 1–5 rubric."""
+    raw = row.get(field)
+    return _parse_score(
+        "" if raw is None else str(raw),
+        field=field,
+        annotator_id=str(row.get("annotator_id", "")),
+        blind_id=str(row.get("blind_id", "")),
+    )
 
 
 def quadratic_weighted_kappa(pairs: list[tuple[int, int]]) -> float | None:
@@ -946,7 +952,19 @@ def quadratic_weighted_kappa(pairs: list[tuple[int, int]]) -> float | None:
     second = [0] * 5
     observed = [[0] * 5 for _ in range(5)]
 
-    for left, right in pairs:
+    for pair in pairs:
+        # Python negative indexing otherwise maps a score of zero to category 5,
+        # producing a plausible but invalid agreement estimate. Reject malformed
+        # direct helper inputs even when no CSV importer has been called.
+        if (
+            not isinstance(pair, (tuple, list))
+            or len(pair) != 2
+            or any(type(score) is not int or not 1 <= score <= 5 for score in pair)
+        ):
+            raise ValueError(
+                "quadratic-weighted kappa requires two integer rubric scores from 1 to 5"
+            )
+        left, right = pair
         i, j = left - 1, right - 1
         observed[i][j] += 1
         first[i] += 1
@@ -970,7 +988,20 @@ def build_agreement(rows: list[dict]) -> dict:
     _validate_annotator_identity_spellings(rows)
     by_annotator: dict[str, dict[str, dict]] = {}
     for row in rows:
-        by_annotator.setdefault(row["annotator_id"], {})[row["blind_id"]] = row
+        # The production CSV importer already enforces these invariants, but
+        # callers of this analysis helper must not bypass rubric checks or
+        # silently replace an earlier independent rating for the same item.
+        for field in SCORE_FIELDS:
+            _score(row, field)
+        annotator_id = row["annotator_id"]
+        blind_id = row["blind_id"]
+        ratings_by_item = by_annotator.setdefault(annotator_id, {})
+        if blind_id in ratings_by_item:
+            raise ValueError(
+                "duplicate independent rating for annotator/blind item: "
+                f"{annotator_id}/{blind_id}"
+            )
+        ratings_by_item[blind_id] = row
 
     annotators = sorted(by_annotator)
     pairwise: list[dict] = []
