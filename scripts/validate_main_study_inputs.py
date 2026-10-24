@@ -34,6 +34,11 @@ FROZEN_SOURCE_BUDGETS = {"D3": 3, "D6": 6, "P6": 6, "P6V": 6}
 # Pin this independently of the producer: correctly hashed aggregate CSVs can
 # still contradict that measurement contract when supplied to offline analysis.
 FROZEN_POSTHOC_CLAIM_CAP = 12
+# A frozen cost-quality comparison must never silently treat a cost of unknown
+# provenance as a comparable treatment estimate. This is the exact methodology
+# label emitted by the preserved 40-cell study summarizer; it is NOT a claim of
+# provider billing accuracy or independent pricing-source authentication.
+FROZEN_TREATMENT_COST_STATUS = "estimated_from_frozen_uncached_rates"
 
 
 def _validate_csv_record(record: str, *, path: Path, line_number: int) -> None:
@@ -302,6 +307,27 @@ def _validate_canonical_posthoc_mirrors(
 
 
 
+def _validate_canonical_treatment_cost_provenance(
+    main_rows: list[dict[str, str]],
+) -> None:
+    """Require the frozen cost-estimation method before cost-quality inference.
+
+    The producer records treatment cost estimates using frozen uncached prices.
+    A valid CSV hash cannot justify treating missing or relabeled costs as
+    comparable, even when the numeric amount remains unchanged. This checks
+    the research export contract, not the underlying pricing or provider bill.
+    """
+    for row in main_rows:
+        label = f"{row['variant_id']}/{row['task_id']}"
+        status = row.get("cost_status")
+        if status != FROZEN_TREATMENT_COST_STATUS:
+            raise ValueError(
+                f"treatment cost_status diverges from frozen pricing methodology "
+                f"for {label}: expected {FROZEN_TREATMENT_COST_STATUS!r}, "
+                f"got {status!r}"
+            )
+
+
 def _validate_canonical_evaluator_accounting(
     main_rows: list[dict[str, str]],
     support_rows: list[dict[str, str]],
@@ -403,6 +429,7 @@ def validate_rows(
     if require_canonical_matrix:
         _validate_canonical_source_exposure(main_rows, support_rows)
         _validate_canonical_posthoc_mirrors(main_rows, support_rows)
+        _validate_canonical_treatment_cost_provenance(main_rows)
         _validate_canonical_evaluator_accounting(main_rows, support_rows)
 
 

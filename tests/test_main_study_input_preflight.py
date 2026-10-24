@@ -137,6 +137,7 @@ def _canonical_rows():
             source_budget=str(FROZEN_SOURCE_BUDGETS[variant]), failed_sources="0",
             posthoc_claims_checked="4", posthoc_strict_support_rate="0.5",
             search_calls="1", posthoc_evaluator_cost_usd="0.0125",
+            cost_status="estimated_from_frozen_uncached_rates",
         ))
         support_rows.append(_support_row(
             variant_id=variant, task_id=task, strict_support_rate="0.5",
@@ -444,3 +445,33 @@ def test_canonical_preflight_rejects_agreeing_mirrors_above_frozen_claim_cap():
     )
     with pytest.raises(ValueError, match="frozen claim cap"):
         validate_rows(main, support, require_canonical_matrix=True)
+
+
+
+@pytest.mark.parametrize(
+    "invalid_cost_status",
+    [
+        None,
+        "",
+        "provider_billed",
+        "estimated_from_frozen_cached_rates",
+        "estimated_from_frozen_uncached_rates ",
+        "Estimated_from_frozen_uncached_rates",
+    ],
+)
+def test_canonical_preflight_rejects_unsupported_cost_provenance(invalid_cost_status):
+    # A newly fingerprinted CSV can retain identical numeric treatment costs
+    # while removing or changing the methodological basis for cost comparisons.
+    main, support = _canonical_rows()
+    row = _canonical_cell(main)
+    if invalid_cost_status is None:
+        del row["cost_status"]
+    else:
+        row["cost_status"] = invalid_cost_status
+    with pytest.raises(ValueError, match="treatment cost_status diverges"):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+def test_noncanonical_small_fixture_remains_independent_of_frozen_cost_label():
+    # Unit fixtures outside the preregistered 40-cell matrix remain reusable.
+    validate_rows([_main_row()], [_support_row()])

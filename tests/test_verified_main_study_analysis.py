@@ -802,7 +802,7 @@ def _frozen_matrix_study(tmp_path: Path):
         "variant_id,task_id,completed,source_budget,successful_sources,"
         "failed_sources,total_tokens,treatment_cost_usd,latency_seconds,"
         "model_calls,report_words,posthoc_claims_checked,posthoc_strict_support_rate,"
-        "search_calls,posthoc_evaluator_cost_usd"
+        "search_calls,posthoc_evaluator_cost_usd,cost_status"
     ]
     support_records = [
         "variant_id,task_id,claims_checked,supported,partially_supported,"
@@ -814,7 +814,7 @@ def _frozen_matrix_study(tmp_path: Path):
         for task_index in range(1, 11):
             cell = f"{variant},main-{task_index:02d}"
             main_records.append(
-                f"{cell},True,{budget},2,0,100,0.05,1.2,3,250,4,0.5,1,0.0125"
+                f"{cell},True,{budget},2,0,100,0.05,1.2,3,250,4,0.5,1,0.0125,estimated_from_frozen_uncached_rates"
             )
             support_records.append(
                 f"{cell},4,2,1,1,0,0.5,retrieved_evidence,200,0.0125"
@@ -977,6 +977,33 @@ def test_verified_gate_blocks_mirrored_overcap_measurement_before_inference(tmp_
     manifest = build_manifest([main, support], root=tmp_path)
     analyzer_calls = []
     with pytest.raises(ValueError, match="frozen claim cap"):
+        verify_and_run(
+            manifest,
+            root=tmp_path,
+            analyze=lambda: analyzer_calls.append("ran") or 0,
+            require_canonical_matrix=True,
+        )
+    assert analyzer_calls == []
+
+
+
+def test_verified_gate_blocks_repinned_unknown_treatment_cost_method(tmp_path):
+    # Re-fingerprinting both CSVs is insufficient if treatment costs lose the
+    # frozen estimation provenance needed for descriptive Pareto comparisons.
+    main, support = _frozen_matrix_study(tmp_path)
+    original = main.read_text(encoding="utf-8")
+    assert original.count("estimated_from_frozen_uncached_rates") == 40
+    main.write_text(
+        original.replace(
+            ",estimated_from_frozen_uncached_rates\n",
+            ",provider_billed\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    manifest = build_manifest([main, support], root=tmp_path)
+    analyzer_calls = []
+    with pytest.raises(ValueError, match="treatment cost_status diverges"):
         verify_and_run(
             manifest,
             root=tmp_path,
