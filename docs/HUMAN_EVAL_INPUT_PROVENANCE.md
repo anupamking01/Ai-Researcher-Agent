@@ -155,14 +155,16 @@ only in surrounding whitespace. This enforces the frozen whole-submission
 correction rule; it does not bar the one intentionally combined normalized
 `frozen_ratings.csv`.
 
-Annotator identity comparisons also use Unicode NFC canonical equivalence.
-Visually identical spellings such as a precomposed accented character and the
-same base character plus a combining accent therefore cannot be counted as two
-independent raters or split across submissions. The submitted spelling and raw
-CSV bytes remain unchanged; normalization is used only for identity and
-coverage checks. This is not proof that differently spelled IDs belong to
-different people, so the coordinator must still enforce eligibility and
-independence.
+Annotator identity comparisons use Unicode NFKC compatibility normalization
+before and after casefold. Canonically equivalent accents and compatibility
+spellings (for example fullwidth Latin letters/hyphens or Roman-numeral glyphs)
+therefore cannot be counted as two independent raters or split across
+submissions. The submitted spelling and raw CSV bytes remain unchanged;
+normalization is used only as an identity/coverage key, not to alter ratings,
+rewrite pseudonyms, or authenticate humans. Compatibility aliases may refer to
+different real people, so the coordinator must resolve any collision while
+still blinded rather than silently merging scores or renaming raters after
+scoring. The runtime Unicode database version is retained as provenance.
 
 Annotator IDs must also be visible, auditable text: Unicode control and format
 characters are rejected. This prevents zero-width or bidirectional-control

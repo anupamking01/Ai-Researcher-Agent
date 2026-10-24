@@ -240,8 +240,15 @@ def _reject_spreadsheet_active_text(
 
 
 def _annotator_identity_key(annotator_id: str) -> str:
-    """Collapse canonically and case-equivalent pseudonym spellings."""
-    return unicodedata.normalize("NFC", annotator_id).casefold()
+    """Collapse canonical, compatibility, and case-equivalent rater aliases.
+
+    A fullwidth or compatibility-styled pseudonym must not count as a second
+    independent rater. Preserve submitted spellings/raw bytes elsewhere.
+    Normalize again after casefold because folding can expand a character
+    into a decomposed sequence.
+    """
+    compatible = unicodedata.normalize("NFKC", annotator_id)
+    return unicodedata.normalize("NFKC", compatible.casefold())
 
 
 def _validate_annotator_id_characters(annotator_id: str) -> None:

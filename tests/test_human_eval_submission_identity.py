@@ -271,6 +271,76 @@ def test_hidden_character_cannot_create_a_second_rater_in_coverage_helper():
         freeze._validate_assignment_coverage(rows, ["H001"])
 
 
+
+@pytest.mark.parametrize(
+    "compatible_id",
+    ["ｓｙｎｔｈｅｔｉｃ－ａ", "synthetic-ａ"],
+    ids=["fullwidth-id", "fullwidth-suffix"],
+)
+def test_compatibility_aliases_cannot_inflate_independent_rater_count(
+    submission_inputs, compatible_id
+):
+    paths, options = submission_inputs
+    paths[0].write_bytes(_csv_bytes(["synthetic-a"]))
+    paths[1].write_bytes(_csv_bytes([compatible_id]))
+    write_valid_annotator_attestations(
+        options["annotator_attestations_path"],
+        ("synthetic-a", compatible_id),
+    )
+    raw = [path.read_bytes() for path in paths]
+
+    with pytest.raises(ValueError, match="canonically equivalent annotator_id"):
+        freeze.freeze_ratings(paths, **options)
+
+    assert [path.read_bytes() for path in paths] == raw
+    assert not options["output_root"].exists()
+
+
+def test_compatibility_aliases_cannot_appear_in_attestations(submission_inputs):
+    _paths, options = submission_inputs
+    write_valid_annotator_attestations(
+        options["annotator_attestations_path"],
+        ("annotator-IV", "annotator-Ⅳ"),
+    )
+    with pytest.raises(ValueError, match="canonically equivalent annotator_id"):
+        freeze._load_annotator_attestations(options["annotator_attestations_path"])
+
+
+def test_compatibility_aliases_fail_coverage_and_agreement_checks():
+    rows = [
+        {
+            "annotator_id": identity,
+            "blind_id": "H001",
+            **{field: "3" for field in freeze.SCORE_FIELDS},
+            "notes": "",
+        }
+        for identity in ("synthetic-a", "ｓｙｎｔｈｅｔｉｃ－ａ")
+    ]
+    with pytest.raises(ValueError, match="canonically equivalent annotator_id"):
+        freeze._validate_assignment_coverage(rows, ["H001"])
+    with pytest.raises(ValueError, match="canonically equivalent annotator_id"):
+        freeze.build_agreement(rows)
+
+
+def test_single_compatibility_spelling_preserves_raw_bytes(submission_inputs):
+    paths, options = submission_inputs
+    compatible_id = "ｓｙｎｔｈｅｔｉｃ－ａ"
+    paths[0].write_bytes(_csv_bytes([compatible_id]))
+    write_valid_annotator_attestations(
+        options["annotator_attestations_path"],
+        (compatible_id, "synthetic-b"),
+    )
+    original = paths[0].read_bytes()
+
+    manifest = freeze.freeze_ratings(paths, **options)
+
+    assert (options["output_root"] / manifest["rating_inputs"][0]["archive_path"]).read_bytes() == original
+    assert manifest["frozen_ratings"]["n_annotators"] == 2
+    assert verify.verify_frozen_snapshot(
+        None, **_verify_options(options)
+    )["n_annotators"] == 2
+
+
 def test_single_decomposed_id_preserves_submitted_spelling_and_bytes(
     submission_inputs,
 ):
