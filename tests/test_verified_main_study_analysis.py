@@ -802,7 +802,8 @@ def _frozen_matrix_study(tmp_path: Path):
         "variant_id,task_id,completed,source_budget,successful_sources,"
         "failed_sources,total_tokens,treatment_cost_usd,latency_seconds,"
         "model_calls,report_words,posthoc_claims_checked,posthoc_strict_support_rate,"
-        "search_calls,posthoc_evaluator_cost_usd,cost_status"
+        "search_calls,posthoc_evaluator_cost_usd,cost_status,"
+        "pricing_file,pricing_file_size_bytes,pricing_file_sha256,pricing_unit"
     ]
     support_records = [
         "variant_id,task_id,claims_checked,supported,partially_supported,"
@@ -814,7 +815,9 @@ def _frozen_matrix_study(tmp_path: Path):
         for task_index in range(1, 11):
             cell = f"{variant},main-{task_index:02d}"
             main_records.append(
-                f"{cell},True,{budget},2,0,100,0.05,1.2,3,250,4,0.5,1,0.0125,estimated_from_frozen_uncached_rates"
+                f"{cell},True,{budget},2,0,100,0.05,1.2,3,250,4,0.5,1,0.0125,estimated_from_frozen_uncached_rates,"
+                "experiments/openai_pricing_2026-09-08.json,1090,"
+                "35eb6aea8a4e494ea6b94a0905e893849958d37ac386915aac7958b00c4eeace,per_1m_text_tokens"
             )
             support_records.append(
                 f"{cell},4,2,1,1,0,0.5,retrieved_evidence,200,0.0125,synthetic-run-{variant}-{task_index:02d}"
@@ -995,8 +998,8 @@ def test_verified_gate_blocks_repinned_unknown_treatment_cost_method(tmp_path):
     assert original.count("estimated_from_frozen_uncached_rates") == 40
     main.write_text(
         original.replace(
-            ",estimated_from_frozen_uncached_rates\n",
-            ",provider_billed\n",
+            ",estimated_from_frozen_uncached_rates,experiments/",
+            ",provider_billed,experiments/",
             1,
         ),
         encoding="utf-8",
@@ -1056,3 +1059,28 @@ def test_verified_gate_blocks_repinned_reused_evaluator_run_id(tmp_path):
             require_canonical_matrix=True,
         )
     assert calls == []
+
+
+def test_verified_gate_blocks_repinned_uniform_pricing_source_drift(tmp_path):
+    # Regenerating the CSV manifest cannot establish which pricing schedule
+    # supplied completed-run cost estimates. Reject coherent, rehashed drift
+    # of the frozen pricing digest before calling any analyzer.
+    main, support = _frozen_matrix_study(tmp_path)
+    original = main.read_text(encoding="utf-8")
+    assert original.count("35eb6aea8a4e494ea6b94a0905e893849958d37ac386915aac7958b00c4eeace") == 40
+    main.write_text(
+        original.replace("35eb6aea8a4e494ea6b94a0905e893849958d37ac386915aac7958b00c4eeace", "f" * 64),
+        encoding="utf-8",
+    )
+    manifest = build_manifest([main, support], root=tmp_path)
+    calls = []
+    with pytest.raises(ValueError, match="frozen pricing_file_sha256 mismatch"):
+        verify_and_run(
+            manifest,
+            root=tmp_path,
+            analyze=lambda: calls.append("ran") or 0,
+            require_canonical_matrix=True,
+        )
+    assert calls == []
+
+

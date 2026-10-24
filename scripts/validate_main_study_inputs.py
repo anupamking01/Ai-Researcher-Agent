@@ -39,6 +39,10 @@ FROZEN_POSTHOC_CLAIM_CAP = 12
 # label emitted by the preserved 40-cell study summarizer; it is NOT a claim of
 # provider billing accuracy or independent pricing-source authentication.
 FROZEN_TREATMENT_COST_STATUS = "estimated_from_frozen_uncached_rates"
+FROZEN_PRICING_FILE = "experiments/openai_pricing_2026-09-08.json"
+FROZEN_PRICING_FILE_BYTES = 1090
+FROZEN_PRICING_FILE_SHA256 = "35eb6aea8a4e494ea6b94a0905e893849958d37ac386915aac7958b00c4eeace"
+FROZEN_PRICING_UNIT = "per_1m_text_tokens"
 
 
 def _validate_csv_record(record: str, *, path: Path, line_number: int) -> None:
@@ -393,6 +397,39 @@ def _validate_canonical_completed_resource_evidence(
             )
 
 
+def _validate_canonical_pricing_snapshot(main_rows: list[dict[str, str]]) -> None:
+    """Bind exported treatment costs to the actual frozen pricing-file bytes.
+
+    A manifest of rehashed canonical CSVs alone cannot tell whether their
+    pricing-file identity was silently removed or relabeled. The fixed path,
+    byte count, digest, and units come from the preserved dated study pricing
+    artifact, independently of the input rows. This is source-byte identity,
+    not independent authentication of rates or provider billing.
+    """
+    frozen_fields = {
+        "pricing_file": FROZEN_PRICING_FILE,
+        "pricing_file_sha256": FROZEN_PRICING_FILE_SHA256,
+        "pricing_unit": FROZEN_PRICING_UNIT,
+    }
+    for row in main_rows:
+        label = f"{row['variant_id']}/{row['task_id']}"
+        for field, expected in frozen_fields.items():
+            if row.get(field) != expected:
+                raise ValueError(
+                    f"frozen {field} mismatch for {label}: "
+                    f"expected {expected!r}, got {row.get(field)!r}"
+                )
+        size = require_nonnegative_integer(
+            row.get("pricing_file_size_bytes"),
+            f"main {label} pricing_file_size_bytes",
+        )
+        if size != FROZEN_PRICING_FILE_BYTES:
+            raise ValueError(
+                f"frozen pricing_file_size_bytes mismatch for {label}: "
+                f"expected {FROZEN_PRICING_FILE_BYTES}, got {size}"
+            )
+
+
 def _validate_canonical_treatment_cost_provenance(
     main_rows: list[dict[str, str]],
 ) -> None:
@@ -517,6 +554,7 @@ def validate_rows(
         _validate_canonical_completed_resource_evidence(main_rows, support_rows)
         _validate_canonical_source_exposure(main_rows, support_rows)
         _validate_canonical_posthoc_mirrors(main_rows, support_rows)
+        _validate_canonical_pricing_snapshot(main_rows)
         _validate_canonical_treatment_cost_provenance(main_rows)
         _validate_canonical_evaluator_accounting(main_rows, support_rows)
 

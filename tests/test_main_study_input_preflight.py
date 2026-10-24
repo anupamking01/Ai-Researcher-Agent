@@ -138,6 +138,10 @@ def _canonical_rows():
             posthoc_claims_checked="4", posthoc_strict_support_rate="0.5",
             search_calls="1", posthoc_evaluator_cost_usd="0.0125",
             cost_status="estimated_from_frozen_uncached_rates",
+            pricing_file="experiments/openai_pricing_2026-09-08.json",
+            pricing_file_size_bytes="1090",
+            pricing_file_sha256="35eb6aea8a4e494ea6b94a0905e893849958d37ac386915aac7958b00c4eeace",
+            pricing_unit="per_1m_text_tokens",
         ))
         support_rows.append(_support_row(
             variant_id=variant, task_id=task, strict_support_rate="0.5",
@@ -470,6 +474,41 @@ def test_canonical_preflight_rejects_unsupported_cost_provenance(invalid_cost_st
     else:
         row["cost_status"] = invalid_cost_status
     with pytest.raises(ValueError, match="treatment cost_status diverges"):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid", "error"),
+    [
+        ("pricing_file", "experiments/other_rates.json", "frozen pricing_file mismatch"),
+        ("pricing_file", " experiments/openai_pricing_2026-09-08.json", "frozen pricing_file mismatch"),
+        ("pricing_file_sha256", "f" * 64, "frozen pricing_file_sha256 mismatch"),
+        ("pricing_file_sha256", "", "frozen pricing_file_sha256 mismatch"),
+        ("pricing_unit", "per_1k_text_tokens", "frozen pricing_unit mismatch"),
+        ("pricing_file_size_bytes", "1089", "frozen pricing_file_size_bytes mismatch"),
+        ("pricing_file_size_bytes", "-1", "pricing_file_size_bytes"),
+        ("pricing_file_size_bytes", "1090.0001", "pricing_file_size_bytes"),
+    ],
+)
+def test_canonical_preflight_rejects_relabelled_pricing_snapshot(field, invalid, error):
+    # Mutate all 40 cells coherently: cross-row consistency and new CSV hashes
+    # alone cannot establish the pricing source used for cost-quality analysis.
+    main, support = _canonical_rows()
+    for row in main:
+        row[field] = invalid
+    with pytest.raises(ValueError, match=error):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("pricing_file", "pricing_file_size_bytes", "pricing_file_sha256", "pricing_unit"),
+)
+def test_canonical_preflight_requires_frozen_pricing_snapshot_fields(field):
+    main, support = _canonical_rows()
+    for row in main:
+        del row[field]
+    with pytest.raises(ValueError, match=field):
         validate_rows(main, support, require_canonical_matrix=True)
 
 
