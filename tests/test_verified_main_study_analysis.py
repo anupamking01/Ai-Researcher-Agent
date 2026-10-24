@@ -801,20 +801,24 @@ def _frozen_matrix_study(tmp_path: Path):
     main_records = [
         "variant_id,task_id,completed,source_budget,successful_sources,"
         "failed_sources,total_tokens,treatment_cost_usd,latency_seconds,"
-        "model_calls,report_words,posthoc_claims_checked,posthoc_strict_support_rate"
+        "model_calls,report_words,posthoc_claims_checked,posthoc_strict_support_rate,"
+        "search_calls,posthoc_evaluator_cost_usd"
     ]
     support_records = [
         "variant_id,task_id,claims_checked,supported,partially_supported,"
-        "unsupported,contradicted,strict_support_rate,evidence_status"
+        "unsupported,contradicted,strict_support_rate,evidence_status,"
+        "total_tokens,estimated_cost_usd"
     ]
     for variant in ("D3", "D6", "P6", "P6V"):
         budget = 3 if variant == "D3" else 6
         for task_index in range(1, 11):
             cell = f"{variant},main-{task_index:02d}"
             main_records.append(
-                f"{cell},True,{budget},2,0,100,0.05,1.2,3,250,4,0.5"
+                f"{cell},True,{budget},2,0,100,0.05,1.2,3,250,4,0.5,1,0.0125"
             )
-            support_records.append(f"{cell},4,2,1,1,0,0.5,retrieved_evidence")
+            support_records.append(
+                f"{cell},4,2,1,1,0,0.5,retrieved_evidence,200,0.0125"
+            )
     main.write_text("\n".join(main_records) + "\n", encoding="utf-8")
     support.write_text("\n".join(support_records) + "\n", encoding="utf-8")
     return main, support
@@ -872,6 +876,31 @@ def test_verified_gate_blocks_mirrored_evaluator_drift_before_analyzer(tmp_path)
         )
     assert calls == []
 
+
+
+
+def test_verified_gate_blocks_evaluator_cost_mirror_drift_before_analyzer(tmp_path):
+    # Even if both CSVs and their new manifest are internally SHA-consistent,
+    # contradicting evaluator-overhead measurements must block inference.
+    main, support = _frozen_matrix_study(tmp_path)
+    old = "D3,main-01,4,2,1,1,0,0.5,retrieved_evidence,200,0.0125"
+    assert old in support.read_text(encoding="utf-8")
+    support.write_text(
+        support.read_text(encoding="utf-8").replace(
+            old, old[:-6] + "0.013", 1
+        ),
+        encoding="utf-8",
+    )
+    manifest = build_manifest([main, support], root=tmp_path)
+    calls = []
+    with pytest.raises(ValueError, match="post-hoc evaluator cost differs"):
+        verify_and_run(
+            manifest,
+            root=tmp_path,
+            analyze=lambda: calls.append("ran") or 0,
+            require_canonical_matrix=True,
+        )
+    assert calls == []
 
 def test_verified_gate_blocks_incomplete_matrix_before_analyzer(tmp_path):
     main, support = _frozen_matrix_study(tmp_path)
