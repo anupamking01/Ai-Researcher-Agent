@@ -302,7 +302,7 @@ def test_compatibility_aliases_cannot_appear_in_attestations(submission_inputs):
         options["annotator_attestations_path"],
         ("annotator-IV", "annotator-Ⅳ"),
     )
-    with pytest.raises(ValueError, match="canonically equivalent annotator_id"):
+    with pytest.raises(ValueError, match="canonically equivalent annotator attestations"):
         freeze._load_annotator_attestations(options["annotator_attestations_path"])
 
 
