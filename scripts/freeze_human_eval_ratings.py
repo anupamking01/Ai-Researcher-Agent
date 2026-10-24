@@ -563,6 +563,28 @@ def _load_ratings(
                     path=path,
                     line_number=line_number,
                 )
+                # Free-text explanations are archived and redistributed with the
+                # pre-unblinding snapshot. Do not let a ratings note reintroduce
+                # the treatment/coordinator markers excluded from the packet.
+                # Reuse the exact renderer-aware packet audit, including encoded
+                # Markdown attributes and Unicode compatibility/invisible marks.
+                if notes:
+                    try:
+                        packet_build.validate_annotator_facing_content(
+                            [
+                                {
+                                    "blind_id": blind_id,
+                                    "question": notes,
+                                    "report_markdown": "",
+                                }
+                            ],
+                            label=f"ratings notes {path.name}:{line_number}",
+                        )
+                    except ValueError as exc:
+                        raise ValueError(
+                            f"{path.name}:{line_number}: ratings notes violate "
+                            f"pre-unblinding treatment blinding: {exc}"
+                        ) from exc
                 source_annotators.add(annotator_id)
                 if require_single_annotator and len(source_annotators) > 1:
                     raise ValueError(

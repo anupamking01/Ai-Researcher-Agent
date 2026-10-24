@@ -384,3 +384,72 @@ def test_freeze_fails_closed_until_every_packet_item_is_double_rated(tmp_path: P
             protocol_path=protocol,
             output_root=tmp_path / "freeze",
         )
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        "I saw the condition label P6V on this report.",
+        "Possible baseline D3 from a coordinator message.",
+        "The marker Ｐ６Ｖ appears in the notes.",
+        "A marker P\\u034f6V was visible.",
+        "Metadata copied from run_id should not appear here.",
+        "See [metadata](https://example.invalid/item/P%36V).",
+    ],
+)
+def test_freeze_rejects_treatment_identity_in_rating_notes(
+    tmp_path: Path, note: str
+):
+    """A valid blinded packet cannot license treatment-labelled free-text notes."""
+    packet = _packet(tmp_path)
+    protocol = _protocol(tmp_path)
+    first = _ratings(
+        tmp_path,
+        "annotator-a.csv",
+        [_row("ann-a", "H001", notes=note), _row("ann-a", "H002")],
+    )
+    second = _ratings(
+        tmp_path,
+        "annotator-b.csv",
+        [_row("ann-b", "H001"), _row("ann-b", "H002")],
+    )
+    output = tmp_path / "frozen-v1"
+
+    with pytest.raises(ValueError, match="pre-unblinding treatment blinding"):
+        freeze_ratings(
+            [first, second],
+            packet_path=packet,
+            protocol_path=protocol,
+            output_root=output,
+        )
+
+    assert not output.exists()
+
+
+def test_freeze_preserves_benign_justification_notes(tmp_path: Path):
+    """Neutral reasons for endpoint scores remain verbatim in the blinded freeze."""
+    packet = _packet(tmp_path)
+    protocol = _protocol(tmp_path)
+    note = "Missing attribution for the key claim; source references are weak."
+    first = _ratings(
+        tmp_path,
+        "annotator-a.csv",
+        [_row("ann-a", "H001", (5, 4, 4, 4, 4), notes=note), _row("ann-a", "H002")],
+    )
+    second = _ratings(
+        tmp_path,
+        "annotator-b.csv",
+        [_row("ann-b", "H001"), _row("ann-b", "H002")],
+    )
+    output = tmp_path / "frozen-v1"
+
+    manifest = freeze_ratings(
+        [first, second],
+        packet_path=packet,
+        protocol_path=protocol,
+        output_root=output,
+    )
+
+    assert manifest["status"] == "blinded_human_ratings_frozen"
+    with (output / "frozen_ratings.csv").open(encoding="utf-8", newline="") as handle:
+        retained = list(csv.DictReader(handle))
+    assert next(row for row in retained if row["annotator_id"] == "ann-a" and row["blind_id"] == "H001")["notes"] == note

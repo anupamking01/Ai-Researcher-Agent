@@ -191,6 +191,27 @@ distinct eligible humans or truth of those declarations. Coordinator
 eligibility, independence, and correction responsibilities remain
 those in `paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md`.
 
+## Treatment-blind free-text rating notes
+
+The retained `notes` column can otherwise reintroduce variant identifiers or
+coordinator metadata after the packet itself passed its blinding audit. Each
+nonempty note now undergoes the **same** renderer-aware, Unicode-aware treatment
+marker audit as annotator-visible packet text before the coordinator can freeze
+scores. This rejects exposed D3/D6/P6/P6V labels, coordinator field markers,
+obfuscated Unicode markers, encoded Markdown link attributes, raw HTML, and
+Markdown images instead of silently deleting or editing an annotator's words.
+Valid plain-text justifications are preserved byte-for-byte in the original
+retained CSV and without content edits in the normalized output.
+
+The independent freeze verifier re-parses the archived ratings through this
+same gate; the annotator submission preflight uses it as well. A rejected note
+requires investigation while identifiers remain blinded. Preserve the original
+failed submission, obtain a separately versioned correction under the frozen
+correction rules if appropriate, and document any actual unblinding as a protocol
+deviation. Passing this textual check cannot establish that annotators were
+unaware of treatment identity, independent, or truthful. The rubric, frozen
+scores, experimental treatments, and inference are unchanged.
+
 ## Coordinator responsibilities and limits
 
 Keep the original submitted files under controlled, versioned storage when
