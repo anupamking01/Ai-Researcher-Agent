@@ -164,7 +164,7 @@ def test_annotator_id_rejects_hidden_unicode_characters_before_freeze(
 
 @pytest.mark.parametrize(
     "hidden_character",
-    ["\\u034f", "\\u180b", "\\u180f", "\\ufe0f", "\\U000e0100"],
+    ["\u034f", "\u180b", "\u180f", "\ufe0f", "\U000e0100"],
     ids=["combining-grapheme-joiner", "mongolian-selector-1",
          "mongolian-selector-4", "variation-selector-16", "variation-selector-17"],
 )
@@ -191,7 +191,7 @@ def test_nonformat_invisible_pseudonym_marks_fail_closed_before_freeze(
 
 @pytest.mark.parametrize(
     "hidden_character",
-    ["\\u034f", "\\ufe0f"],
+    ["\u034f", "\ufe0f"],
     ids=["combining-grapheme-joiner", "variation-selector-16"],
 )
 def test_nonformat_invisible_pseudonym_rejected_in_attestations(
@@ -214,7 +214,7 @@ def test_nonformat_invisible_pseudonym_cannot_count_as_second_rater():
             **{field: "3" for field in freeze.SCORE_FIELDS},
             "notes": "",
         }
-        for annotator_id in ("synthetic-a", "synthetic-\\u034fa")
+        for annotator_id in ("synthetic-a", "synthetic-\u034fa")
     ]
     with pytest.raises(ValueError, match="invisible Unicode identity mark"):
         freeze._validate_assignment_coverage(rows, ["H001"])
