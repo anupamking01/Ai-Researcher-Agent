@@ -142,6 +142,7 @@ def _canonical_rows():
         support_rows.append(_support_row(
             variant_id=variant, task_id=task, strict_support_rate="0.5",
             evidence_status="", total_tokens="200", estimated_cost_usd="0.0125",
+            run_id=f"synthetic-run-{variant}-{task}",
         ))
     return main_rows, support_rows
 
@@ -475,3 +476,22 @@ def test_canonical_preflight_rejects_unsupported_cost_provenance(invalid_cost_st
 def test_noncanonical_small_fixture_remains_independent_of_frozen_cost_label():
     # Unit fixtures outside the preregistered 40-cell matrix remain reusable.
     validate_rows([_main_row()], [_support_row()])
+
+
+def test_canonical_preflight_rejects_shared_evaluator_report_reference():
+    # Distinct treatment/task cells must not reuse one evaluated report.
+    main, support = _canonical_rows()
+    support[1]["run_id"] = support[0]["run_id"]
+    with pytest.raises(ValueError, match="duplicate evaluator run_id"):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+@pytest.mark.parametrize("bad_id", [None, "", "  ", " leading", "trailing "])
+def test_canonical_preflight_rejects_invalid_evaluator_report_reference(bad_id):
+    main, support = _canonical_rows()
+    if bad_id is None:
+        del support[0]["run_id"]
+    else:
+        support[0]["run_id"] = bad_id
+    with pytest.raises(ValueError, match="invalid evaluator run_id"):
+        validate_rows(main, support, require_canonical_matrix=True)

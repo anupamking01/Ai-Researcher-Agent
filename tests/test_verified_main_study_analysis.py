@@ -807,7 +807,7 @@ def _frozen_matrix_study(tmp_path: Path):
     support_records = [
         "variant_id,task_id,claims_checked,supported,partially_supported,"
         "unsupported,contradicted,strict_support_rate,evidence_status,"
-        "total_tokens,estimated_cost_usd"
+        "total_tokens,estimated_cost_usd,run_id"
     ]
     for variant in ("D3", "D6", "P6", "P6V"):
         budget = 3 if variant == "D3" else 6
@@ -817,7 +817,7 @@ def _frozen_matrix_study(tmp_path: Path):
                 f"{cell},True,{budget},2,0,100,0.05,1.2,3,250,4,0.5,1,0.0125,estimated_from_frozen_uncached_rates"
             )
             support_records.append(
-                f"{cell},4,2,1,1,0,0.5,retrieved_evidence,200,0.0125"
+                f"{cell},4,2,1,1,0,0.5,retrieved_evidence,200,0.0125,synthetic-run-{variant}-{task_index:02d}"
             )
     main.write_text("\n".join(main_records) + "\n", encoding="utf-8")
     support.write_text("\n".join(support_records) + "\n", encoding="utf-8")
@@ -1011,3 +1011,25 @@ def test_verified_gate_blocks_repinned_unknown_treatment_cost_method(tmp_path):
             require_canonical_matrix=True,
         )
     assert analyzer_calls == []
+
+
+def test_verified_gate_blocks_repinned_reused_evaluator_run_id(tmp_path):
+    # Even a new manifest of two internally valid-looking CSVs must not make
+    # different reports alias the same evaluation/trace reference.
+    main, support = _frozen_matrix_study(tmp_path)
+    original = support.read_text(encoding="utf-8")
+    assert ",synthetic-run-D3-02" in original
+    support.write_text(
+        original.replace(",synthetic-run-D3-02", ",synthetic-run-D3-01", 1),
+        encoding="utf-8",
+    )
+    manifest = build_manifest([main, support], root=tmp_path)
+    calls = []
+    with pytest.raises(ValueError, match="duplicate evaluator run_id"):
+        verify_and_run(
+            manifest,
+            root=tmp_path,
+            analyze=lambda: calls.append("ran") or 0,
+            require_canonical_matrix=True,
+        )
+    assert calls == []

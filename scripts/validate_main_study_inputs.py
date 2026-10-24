@@ -182,6 +182,35 @@ def _validate_canonical_matrix(keys: set[tuple[str, str]], *, label: str) -> Non
 
 
 
+def _validate_canonical_evaluator_run_identity(
+    support_rows: list[dict[str, str]],
+) -> None:
+    """Reject missing or shared report references in the frozen evaluator matrix.
+
+    The common evaluator's run_id links a CSV cell to its treatment trace and
+    report. Distinct (variant_id, task_id) values alone cannot detect two cells
+    referring to the same run. This checks internal export consistency, not
+    authenticity of the referenced traces or reports.
+    """
+    seen: dict[str, str] = {}
+    for row in support_rows:
+        cell = f"{row['variant_id']}/{row['task_id']}"
+        run_id = row.get("run_id")
+        if (
+            not isinstance(run_id, str)
+            or not run_id.strip()
+            or run_id != run_id.strip()
+        ):
+            raise ValueError(f"invalid evaluator run_id for {cell}: {run_id!r}")
+        previous = seen.get(run_id)
+        if previous is not None:
+            raise ValueError(
+                f"duplicate evaluator run_id {run_id!r} for {cell}; "
+                f"already used by {previous}"
+            )
+        seen[run_id] = cell
+
+
 def _validate_canonical_source_exposure(
     main_rows: list[dict[str, str]],
     support_rows: list[dict[str, str]],
@@ -427,6 +456,7 @@ def validate_rows(
     # both CSVs; fail closed on inconsistencies instead of silently choosing
     # whichever file an analysis happens to read.
     if require_canonical_matrix:
+        _validate_canonical_evaluator_run_identity(support_rows)
         _validate_canonical_source_exposure(main_rows, support_rows)
         _validate_canonical_posthoc_mirrors(main_rows, support_rows)
         _validate_canonical_treatment_cost_provenance(main_rows)
