@@ -207,7 +207,7 @@ def test_verified_run_refuses_receipt_when_validator_changes_during_analysis(
         "def read_csv_rows(path):\n"
         "    with path.open(newline='') as handle:\n"
         "        return list(csv.DictReader(handle))\n"
-        "def validate_rows(main_rows, support_rows):\n"
+        "def validate_rows(main_rows, support_rows, *, require_canonical_matrix=False):\n"
         "    return None\n",
         encoding="utf-8",
     )
