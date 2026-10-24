@@ -213,6 +213,24 @@ deviation. Passing this textual check cannot establish that annotators were
 unaware of treatment identity, independent, or truthful. The rubric, frozen
 scores, experimental treatments, and inference are unchanged.
 
+## Rendered-note justification integrity
+
+A syntactically nonempty `notes` cell is not necessarily a justification.
+A required explanation consisting solely of zero-width Unicode, standalone
+combining/variation marks, Markdown formatting, empty-link metadata, or
+punctuation could previously satisfy the endpoint-score or missing-dimension
+note rule while displaying no explanatory content to a reviewer. The freezer
+and independent retained-input verifier now require any nonempty note to
+contain at least one rendered Unicode letter, number, or symbol after the same
+CommonMark parsing used by the blinding audit. This is a deliberately narrow
+presence check, **not** an automated assessment that a rationale is sound,
+accurate, or genuinely human-authored. Benign Markdown explanations and
+international-language text remain supported; original submitted bytes remain
+in the raw archive. Empty optional notes for ordinary scores still remain
+allowed. Invalid submissions must be corrected while blinded rather than
+silently rewritten or backfilled. No frozen ratings or human results exist
+because of this check, and the frozen rubric is unchanged.
+
 ## Coordinator responsibilities and limits
 
 Keep the original submitted files under controlled, versioned storage when

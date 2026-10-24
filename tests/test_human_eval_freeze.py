@@ -425,6 +425,50 @@ def test_freeze_rejects_treatment_identity_in_rating_notes(
     assert not output.exists()
 
 
+@pytest.mark.parametrize(
+    "notes",
+    [
+        "\u200b",  # zero-width space
+        "\u034f",  # combining grapheme joiner
+        "\ufe0f",  # standalone variation selector
+        "**\u200b**",  # Markdown formatting cannot create a reason
+        "[](https://example.invalid/context)",  # link metadata is not visible rationale
+        "**",  # formatting punctuation alone is not an explanation
+    ],
+)
+@pytest.mark.parametrize(
+    "scores",
+    [(5, 4, 4, 4, 4), (4, None, 4, 4, 4)],
+    ids=["endpoint-score", "missing-dimension"],
+)
+def test_freeze_rejects_notes_without_visible_explanation(
+    tmp_path: Path, notes: str, scores: tuple
+):
+    """Neither invisible bytes nor rendered-empty Markdown justify scores."""
+    packet = _packet(tmp_path)
+    protocol = _protocol(tmp_path)
+    first = _ratings(
+        tmp_path,
+        "annotator-a.csv",
+        [_row("ann-a", "H001", scores, notes=notes), _row("ann-a", "H002")],
+    )
+    second = _ratings(
+        tmp_path,
+        "annotator-b.csv",
+        [_row("ann-b", "H001"), _row("ann-b", "H002")],
+    )
+    output = tmp_path / "frozen-v1"
+
+    with pytest.raises(ValueError, match="visible explanatory"):
+        freeze_ratings(
+            [first, second],
+            packet_path=packet,
+            protocol_path=protocol,
+            output_root=output,
+        )
+    assert not output.exists()
+
+
 def test_freeze_preserves_benign_justification_notes(tmp_path: Path):
     """Neutral reasons for endpoint scores remain verbatim in the blinded freeze."""
     packet = _packet(tmp_path)

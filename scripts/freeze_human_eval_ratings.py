@@ -239,6 +239,18 @@ def _reject_spreadsheet_active_text(
         )
 
 
+def _note_has_visible_explanation(notes: str) -> bool:
+    """Require an actual rendered explanation, not just invisible or markup text.
+
+    The frozen rubric requires a reason for endpoint scores or missing dimensions.
+    Raw nonempty CSV text does not establish that the note displays any rationale:
+    zero-width Unicode and Markdown-only syntax can otherwise satisfy the gate.
+    Existing renderer semantics are reused; ordinary international text remains valid.
+    """
+    rendered, _ = packet_build._rendered_markdown_parts(notes)
+    return any(unicodedata.category(character)[0] in {"L", "N", "S"} for character in rendered)
+
+
 def _annotator_identity_key(annotator_id: str) -> str:
     """Collapse canonical, compatibility, and case-equivalent rater aliases.
 
@@ -585,6 +597,11 @@ def _load_ratings(
                             f"{path.name}:{line_number}: ratings notes violate "
                             f"pre-unblinding treatment blinding: {exc}"
                         ) from exc
+                if notes and not _note_has_visible_explanation(notes):
+                    raise ValueError(
+                        f"{path.name}:{line_number}: notes must contain visible explanatory "
+                        "content, not only Markdown syntax, punctuation, or invisible Unicode"
+                    )
                 source_annotators.add(annotator_id)
                 if require_single_annotator and len(source_annotators) > 1:
                     raise ValueError(
