@@ -30,6 +30,10 @@ EXPECTED_CELLS = frozenset((variant, task) for variant in EXPECTED_VARIANTS for 
 # Independently freeze assigned retrieval exposure for the confirmatory treatment
 # CSV. Do not derive this from mutable input rows or later runner configuration.
 FROZEN_SOURCE_BUDGETS = {"D3": 3, "D6": 6, "P6": 6, "P6V": 6}
+# The common post-hoc evaluator was frozen to at most 12 claims per report.
+# Pin this independently of the producer: correctly hashed aggregate CSVs can
+# still contradict that measurement contract when supplied to offline analysis.
+FROZEN_POSTHOC_CLAIM_CAP = 12
 
 
 def _validate_csv_record(record: str, *, path: Path, line_number: int) -> None:
@@ -258,6 +262,12 @@ def _validate_canonical_posthoc_mirrors(
             support.get("claims_checked"),
             f"support {label} claims_checked",
         )
+        if evaluator_claims > FROZEN_POSTHOC_CLAIM_CAP:
+            raise ValueError(
+                f"post-hoc claims exceed frozen claim cap for {label}: "
+                f"claims_checked={evaluator_claims}, "
+                f"max_claims={FROZEN_POSTHOC_CLAIM_CAP}"
+            )
         if main_claims != evaluator_claims:
             raise ValueError(
                 f"post-hoc claim count differs across canonical inputs for {label}"

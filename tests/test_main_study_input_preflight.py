@@ -405,3 +405,42 @@ def test_canonical_preflight_rejects_float_roundable_cost_mirror_drift():
     _canonical_cell(main)["posthoc_evaluator_cost_usd"] = "0.012500000000000001"
     with pytest.raises(ValueError, match="post-hoc evaluator cost differs"):
         validate_rows(main, support, require_canonical_matrix=True)
+
+
+
+def test_canonical_preflight_accepts_frozen_posthoc_claim_cap_boundary():
+    # An exactly 12-claim measurement is allowed by the frozen evaluator.
+    main, support = _canonical_rows()
+    main[0].update(
+        posthoc_claims_checked="12",
+        posthoc_strict_support_rate="1.0",
+    )
+    support[0].update(
+        claims_checked="12",
+        supported="12",
+        partially_supported="0",
+        unsupported="0",
+        contradicted="0",
+        strict_support_rate="1.0",
+    )
+    validate_rows(main, support, require_canonical_matrix=True)
+
+
+def test_canonical_preflight_rejects_agreeing_mirrors_above_frozen_claim_cap():
+    # Both exports conserve 13 classifications and agree on the support rate.
+    # No cross-file mismatch catches this violation without an independent cap.
+    main, support = _canonical_rows()
+    main[0].update(
+        posthoc_claims_checked="13",
+        posthoc_strict_support_rate="1.0",
+    )
+    support[0].update(
+        claims_checked="13",
+        supported="13",
+        partially_supported="0",
+        unsupported="0",
+        contradicted="0",
+        strict_support_rate="1.0",
+    )
+    with pytest.raises(ValueError, match="frozen claim cap"):
+        validate_rows(main, support, require_canonical_matrix=True)

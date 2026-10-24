@@ -947,3 +947,40 @@ def test_production_receipt_passes_strict_validation_to_snapshot_gate(
         )
     assert seen["require_canonical_matrix"] is True
     assert seen["input_validator"] is marker.module
+
+
+
+def test_verified_gate_blocks_mirrored_overcap_measurement_before_inference(tmp_path):
+    # Both independently hash-pinned synthetic CSVs can agree with each other
+    # while violating the preregistered 12-claim post-hoc measurement cap.
+    main, support = _frozen_matrix_study(tmp_path)
+    old_main = "D3,main-01,True,3,2,0,100,0.05,1.2,3,250,4,0.5,1,0.0125"
+    old_support = "D3,main-01,4,2,1,1,0,0.5,retrieved_evidence,200,0.0125"
+    assert old_main in main.read_text(encoding="utf-8")
+    assert old_support in support.read_text(encoding="utf-8")
+    main.write_text(
+        main.read_text(encoding="utf-8").replace(
+            old_main,
+            "D3,main-01,True,3,2,0,100,0.05,1.2,3,250,13,1.0,1,0.0125",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    support.write_text(
+        support.read_text(encoding="utf-8").replace(
+            old_support,
+            "D3,main-01,13,13,0,0,0,1.0,retrieved_evidence,200,0.0125",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    manifest = build_manifest([main, support], root=tmp_path)
+    analyzer_calls = []
+    with pytest.raises(ValueError, match="frozen claim cap"):
+        verify_and_run(
+            manifest,
+            root=tmp_path,
+            analyze=lambda: analyzer_calls.append("ran") or 0,
+            require_canonical_matrix=True,
+        )
+    assert analyzer_calls == []
