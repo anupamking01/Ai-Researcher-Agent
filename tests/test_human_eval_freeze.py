@@ -391,7 +391,7 @@ def test_freeze_fails_closed_until_every_packet_item_is_double_rated(tmp_path: P
         "I saw the condition label P6V on this report.",
         "Possible baseline D3 from a coordinator message.",
         "The marker Ｐ６Ｖ appears in the notes.",
-        "A marker P\\u034f6V was visible.",
+        "A marker P" + chr(0x034F) + "6V was visible.",
         "Metadata copied from run_id should not appear here.",
         "See [metadata](https://example.invalid/item/P%36V).",
     ],
