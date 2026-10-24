@@ -242,6 +242,36 @@ def sha256_file(path: Path) -> str:
     return digest
 
 
+def require_manifest_capture_coherence(
+    entries: list[dict], *, root: Path, identities: dict[str, tuple[int, int]]
+) -> None:
+    """Recheck all selected files after the initial multi-file fingerprint pass.
+
+    Re-read bytes and descriptor-bound physical identity. This detects a source
+    that changes after its first capture while a later source is being scanned.
+    It is not an atomic filesystem snapshot or a historical provenance proof.
+    """
+    for entry in entries:
+        relative = entry["path"]
+        path = root.joinpath(*relative.split("/"))
+        try:
+            digest, byte_count, physical_identity = (
+                fingerprint_regular_file_with_identity(path)
+            )
+        except (ValueError, OSError) as exc:
+            raise ValueError(
+                f"research artifact changed across manifest capture: {relative}"
+            ) from exc
+        if (digest, byte_count, physical_identity) != (
+            entry["sha256"],
+            entry["bytes"],
+            identities[relative],
+        ):
+            raise ValueError(
+                f"research artifact changed across manifest capture: {relative}"
+            )
+
+
 def build_manifest(paths: list[Path], *, root: Path = REPO_ROOT) -> dict:
     """Build an order-independent manifest and aggregate digest.
 
@@ -257,6 +287,7 @@ def build_manifest(paths: list[Path], *, root: Path = REPO_ROOT) -> dict:
     seen: set[str] = set()
     portable_seen: dict[str, str] = {}
     physical_seen: dict[tuple[int, int], str] = {}
+    initial_identities: dict[str, tuple[int, int]] = {}
     for path in paths:
         candidate = Path(os.path.abspath(path))
         try:
@@ -282,6 +313,7 @@ def build_manifest(paths: list[Path], *, root: Path = REPO_ROOT) -> dict:
                 f"{physical_seen[physical_identity]!r} and {relative!r}"
             )
         physical_seen[physical_identity] = relative
+        initial_identities[relative] = physical_identity
         entries.append(
             {
                 "path": relative,
@@ -291,6 +323,9 @@ def build_manifest(paths: list[Path], *, root: Path = REPO_ROOT) -> dict:
         )
 
     entries.sort(key=lambda item: item["path"])
+    require_manifest_capture_coherence(
+        entries, root=root, identities=initial_identities
+    )
     canonical = json.dumps(entries, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return {
         "schema_version": 1,

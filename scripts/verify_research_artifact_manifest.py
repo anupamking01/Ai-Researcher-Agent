@@ -17,6 +17,7 @@ from scripts.fingerprint_research_artifacts import (
     REPO_ROOT,
     fingerprint_regular_file_with_identity,
     portable_manifest_path_identity,
+    require_manifest_capture_coherence,
 )
 
 
@@ -63,6 +64,7 @@ def verify_manifest(manifest: dict, *, root: Path = REPO_ROOT) -> list[dict]:
     seen: set[str] = set()
     portable_seen: dict[str, str] = {}
     physical_seen: dict[tuple[int, int], str] = {}
+    initial_identities: dict[str, tuple[int, int]] = {}
     for entry in entries:
         if not isinstance(entry, dict) or set(entry) != ARTIFACT_FIELDS:
             raise ValueError("artifact entry must contain the exact fields")
@@ -112,6 +114,7 @@ def verify_manifest(manifest: dict, *, root: Path = REPO_ROOT) -> list[dict]:
                 f"{physical_seen[physical_identity]!r} and {relative!r}"
             )
         physical_seen[physical_identity] = relative
+        initial_identities[relative] = physical_identity
         validated.append({"path": relative, "sha256": expected_sha, "bytes": expected_bytes})
 
     canonical_entries = sorted(validated, key=lambda item: item["path"])
@@ -124,6 +127,9 @@ def verify_manifest(manifest: dict, *, root: Path = REPO_ROOT) -> list[dict]:
         raise ValueError("invalid aggregate research-artifact fingerprint")
     if expected_aggregate != aggregate:
         raise ValueError("aggregate research-artifact fingerprint mismatch")
+    require_manifest_capture_coherence(
+        canonical_entries, root=root, identities=initial_identities
+    )
     return canonical_entries
 
 

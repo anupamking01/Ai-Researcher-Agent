@@ -37,6 +37,25 @@ source independence, prove authenticity, or attest that files were originally
 collected from separate systems. Hard links not listed in a manifest are not
 discoverable by this check.
 
+## Multi-artifact capture coherence
+
+The manifest generator and independent verifier both re-read every selected
+artifact after completing the initial scan. The second pass checks the
+descriptor-bound file's SHA-256, byte count, and filesystem identity against
+the first pass. It fails closed when a file was overwritten, replaced with a
+byte-identical different inode, removed, or replaced by a symlink after its
+initial capture while another artifact was inspected. A signed/recomputed
+aggregate manifest cannot turn a demonstrably mixed-time scan into a
+successful verification.
+
+This is a **two-pass consistency check**, not an atomic snapshot, lock, or
+guarantee that all files existed in one unchanged state: concurrent changes
+after an artifact's final recheck, including adversarial swap-and-restore,
+can still escape detection. For strong simultaneous provenance, use an immutable
+snapshot or locked source bundle obtained under an independently documented
+capture procedure. The extra read I/O is deliberate. No existing frozen
+study inputs are modified or re-evaluated.
+
 **Boundary:** These are portability, path-identity, and current filesystem
 alias safeguards, not claims that different names came from independent
 sources or that SHA-256 proves data authenticity. No frozen study artifacts,
