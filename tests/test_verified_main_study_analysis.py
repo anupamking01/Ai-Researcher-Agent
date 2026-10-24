@@ -1039,6 +1039,39 @@ def test_verified_gate_blocks_repinned_zero_cost_for_completed_treatment(tmp_pat
 
 
 
+def test_verified_gate_blocks_repinned_zero_evaluator_cost_before_inference(tmp_path):
+    # Both canonical CSV copies agree, and a fresh manifest pins the altered
+    # bytes. A completed evaluator with positive tokens cannot be zero-cost
+    # under the frozen study's positive uncached pricing schedule.
+    main, support = _frozen_matrix_study(tmp_path)
+    original_main = main.read_text(encoding="utf-8")
+    original_support = support.read_text(encoding="utf-8")
+    before_main = "D3,main-01,True,3,2,0,100,0.05,1.2,3,250,4,0.5,1,0.0125"
+    before_support = "D3,main-01,4,2,1,1,0,0.5,retrieved_evidence,200,0.0125"
+    assert before_main in original_main
+    assert before_support in original_support
+    main.write_text(
+        original_main.replace(before_main, before_main[:-6] + "0", 1),
+        encoding="utf-8",
+    )
+    support.write_text(
+        original_support.replace(before_support, before_support[:-6] + "0", 1),
+        encoding="utf-8",
+    )
+    manifest = build_manifest([main, support], root=tmp_path)
+    calls = []
+    with pytest.raises(
+        ValueError, match="canonical completed post-hoc evaluator cost must be positive"
+    ):
+        verify_and_run(
+            manifest,
+            root=tmp_path,
+            analyze=lambda: calls.append("ran") or 0,
+            require_canonical_matrix=True,
+        )
+    assert calls == []
+
+
 def test_verified_gate_blocks_repinned_reused_evaluator_run_id(tmp_path):
     # Even a new manifest of two internally valid-looking CSVs must not make
     # different reports alias the same evaluation/trace reference.

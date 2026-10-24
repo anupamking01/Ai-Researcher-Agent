@@ -362,7 +362,9 @@ def _validate_canonical_completed_resource_evidence(
 
     Every preserved main-study treatment is a completed live model-generated
     report under a strictly positive frozen uncached pricing schedule. Every
-    retained post-hoc cell contains actual evaluator classifications. A zero
+    retained post-hoc cell contains actual evaluator classifications. The
+    frozen evaluator's positive token rates also preclude zero estimated
+    evaluator overhead for completed token-consuming measurements. A zero
     resource/elapsed/cost value in this *specific* 40-cell export would imply
     missing or incorrectly defaulted accounting and could distort the
     descriptive cost-quality frontier. Do not apply this constraint to generic
@@ -385,6 +387,18 @@ def _validate_canonical_completed_resource_evidence(
                 raise ValueError(
                     f"canonical completed treatment {field} must be positive for {label}"
                 )
+        # Frozen uncached token prices are strictly positive. A completed,
+        # token-consuming evaluation cannot have a zero estimated cost.
+        # This is not a claim about provider billing.
+        evaluator_cost = require_nonnegative(
+            row.get("posthoc_evaluator_cost_usd"),
+            f"main {label} posthoc_evaluator_cost_usd",
+        )
+        if evaluator_cost == 0:
+            raise ValueError(
+                f"canonical completed post-hoc evaluator cost must be positive "
+                f"for {label} (main)"
+            )
 
     for row in support_rows:
         label = f"{row['variant_id']}/{row['task_id']}"
@@ -394,6 +408,15 @@ def _validate_canonical_completed_resource_evidence(
         if tokens == 0:
             raise ValueError(
                 f"canonical post-hoc evaluator total_tokens must be positive for {label}"
+            )
+        evaluator_cost = require_nonnegative(
+            row.get("estimated_cost_usd"),
+            f"support {label} estimated_cost_usd",
+        )
+        if evaluator_cost == 0:
+            raise ValueError(
+                f"canonical completed post-hoc evaluator cost must be positive "
+                f"for {label} (support)"
             )
 
 

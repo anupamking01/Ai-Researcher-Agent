@@ -352,8 +352,8 @@ def test_canonical_preflight_requires_evidence_status_field():
 def test_canonical_preflight_accepts_exact_measurement_overhead_after_row_shuffle():
     main, support = _canonical_rows()
     support.reverse()
-    _canonical_cell(main)["posthoc_evaluator_cost_usd"] = "0.0"
-    _canonical_cell(support)["estimated_cost_usd"] = "0"
+    _canonical_cell(main)["posthoc_evaluator_cost_usd"] = "0.0075"
+    _canonical_cell(support)["estimated_cost_usd"] = "0.0075"
     validate_rows(main, support, require_canonical_matrix=True)
 
 
@@ -535,6 +535,30 @@ def test_canonical_preflight_rejects_zero_token_posthoc_measurement():
     _canonical_cell(support)["total_tokens"] = "0"
     with pytest.raises(ValueError, match="canonical post-hoc evaluator total_tokens must be positive"):
         validate_rows(main, support, require_canonical_matrix=True)
+
+
+@pytest.mark.parametrize("side", ["main", "support", "both"])
+@pytest.mark.parametrize("zero", ["0", "0.0", "-0.0"])
+def test_canonical_preflight_rejects_zero_posthoc_evaluator_cost(side, zero):
+    # A re-fingerprinted 40-cell pair can agree on zero evaluator overhead
+    # while recording actual evaluator tokens and strictly positive rates.
+    main, support = _canonical_rows()
+    if side in {"main", "both"}:
+        _canonical_cell(main)["posthoc_evaluator_cost_usd"] = zero
+    if side in {"support", "both"}:
+        _canonical_cell(support)["estimated_cost_usd"] = zero
+    with pytest.raises(
+        ValueError, match="canonical completed post-hoc evaluator cost must be positive"
+    ):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+def test_canonical_preflight_allows_small_positive_posthoc_evaluator_cost():
+    # No arbitrary dollar floor: any finite positive estimate remains valid.
+    main, support = _canonical_rows()
+    _canonical_cell(main)["posthoc_evaluator_cost_usd"] = "0.0000001"
+    _canonical_cell(support)["estimated_cost_usd"] = "0.0000001"
+    validate_rows(main, support, require_canonical_matrix=True)
 
 
 def test_small_noncanonical_zero_usage_control_remains_valid():
