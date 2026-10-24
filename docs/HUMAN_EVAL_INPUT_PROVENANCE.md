@@ -200,8 +200,9 @@ marker audit as annotator-visible packet text before the coordinator can freeze
 scores. This rejects exposed D3/D6/P6/P6V labels, coordinator field markers,
 obfuscated Unicode markers, encoded Markdown link attributes, raw HTML, and
 Markdown images instead of silently deleting or editing an annotator's words.
-Valid plain-text justifications are preserved byte-for-byte in the original
-retained CSV and without content edits in the normalized output.
+Valid plain-text justifications are retained byte-for-byte in the original
+submitted CSV archive; the normalized output follows the existing whitespace
+trimming rule, without any additional redaction or score modification.
 
 The independent freeze verifier re-parses the archived ratings through this
 same gate; the annotator submission preflight uses it as well. A rejected note
