@@ -794,3 +794,127 @@ def test_verified_analysis_cli_rejects_duplicate_manifest_fields(
         verified.main()
 
     assert not receipt.exists()
+
+# These regression tests use synthetic CSV cells, never frozen research outputs.
+def _frozen_matrix_study(tmp_path: Path):
+    main, support = _study(tmp_path)
+    main_records = [
+        "variant_id,task_id,completed,source_budget,successful_sources,"
+        "failed_sources,total_tokens,treatment_cost_usd,latency_seconds,"
+        "model_calls,report_words,posthoc_claims_checked,posthoc_strict_support_rate"
+    ]
+    support_records = [
+        "variant_id,task_id,claims_checked,supported,partially_supported,"
+        "unsupported,contradicted,strict_support_rate,evidence_status"
+    ]
+    for variant in ("D3", "D6", "P6", "P6V"):
+        budget = 3 if variant == "D3" else 6
+        for task_index in range(1, 11):
+            cell = f"{variant},main-{task_index:02d}"
+            main_records.append(
+                f"{cell},True,{budget},2,0,100,0.05,1.2,3,250,4,0.5"
+            )
+            support_records.append(f"{cell},4,2,1,1,0,0.5,retrieved_evidence")
+    main.write_text("\n".join(main_records) + "\n", encoding="utf-8")
+    support.write_text("\n".join(support_records) + "\n", encoding="utf-8")
+    return main, support
+
+
+def test_verified_gate_accepts_exact_frozen_matrix_before_analyzer(tmp_path):
+    main, support = _frozen_matrix_study(tmp_path)
+    manifest = build_manifest([main, support], root=tmp_path)
+    calls = []
+    assert verify_and_run(
+        manifest,
+        root=tmp_path,
+        analyze=lambda: calls.append("ran") or 0,
+        require_canonical_matrix=True,
+    ) == 0
+    assert calls == ["ran"]
+
+
+def test_verified_gate_blocks_pinned_budget_drift_before_analyzer(tmp_path):
+    main, support = _frozen_matrix_study(tmp_path)
+    old = "D3,main-01,True,3,2,0"
+    assert old in main.read_text(encoding="utf-8")
+    main.write_text(
+        main.read_text(encoding="utf-8").replace(old, "D3,main-01,True,6,2,0", 1),
+        encoding="utf-8",
+    )
+    manifest = build_manifest([main, support], root=tmp_path)
+    calls = []
+    with pytest.raises(ValueError, match="frozen source_budget mismatch"):
+        verify_and_run(
+            manifest,
+            root=tmp_path,
+            analyze=lambda: calls.append("ran") or 0,
+            require_canonical_matrix=True,
+        )
+    assert calls == []
+
+
+def test_verified_gate_blocks_mirrored_evaluator_drift_before_analyzer(tmp_path):
+    main, support = _frozen_matrix_study(tmp_path)
+    old = "D3,main-01,True,3,2,0,100,0.05,1.2,3,250,4,0.5"
+    assert old in main.read_text(encoding="utf-8")
+    main.write_text(
+        main.read_text(encoding="utf-8").replace(old, old[:-3] + "0.75", 1),
+        encoding="utf-8",
+    )
+    manifest = build_manifest([main, support], root=tmp_path)
+    calls = []
+    with pytest.raises(ValueError, match="post-hoc strict support rate differs"):
+        verify_and_run(
+            manifest,
+            root=tmp_path,
+            analyze=lambda: calls.append("ran") or 0,
+            require_canonical_matrix=True,
+        )
+    assert calls == []
+
+
+def test_verified_gate_blocks_incomplete_matrix_before_analyzer(tmp_path):
+    main, support = _frozen_matrix_study(tmp_path)
+    for path in (main, support):
+        rows = path.read_text(encoding="utf-8").splitlines()
+        path.write_text("\n".join(rows[:-1]) + "\n", encoding="utf-8")
+    manifest = build_manifest([main, support], root=tmp_path)
+    calls = []
+    with pytest.raises(ValueError, match="frozen 4x10 main-study matrix"):
+        verify_and_run(
+            manifest,
+            root=tmp_path,
+            analyze=lambda: calls.append("ran") or 0,
+            require_canonical_matrix=True,
+        )
+    assert calls == []
+
+
+def test_production_receipt_passes_strict_validation_to_snapshot_gate(
+    tmp_path, monkeypatch
+):
+    main, support = _study(tmp_path)
+    manifest = build_manifest([main, support], root=tmp_path)
+    marker = SimpleNamespace(module=object(), sha256="0" * 64)
+    monkeypatch.setattr(verified, "_capture_input_validator_binding", lambda **_: marker)
+
+    def fake_builder(payload, *, root):
+        return {"schema_version": 1}
+
+    monkeypatch.setattr(verified, "build_receipt", fake_builder)
+    seen = {}
+
+    def intercept_gate(payload, **kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("synthetic stop before analysis")
+
+    monkeypatch.setattr(verified, "verify_and_run", intercept_gate)
+    with pytest.raises(RuntimeError, match="synthetic stop"):
+        verify_run_and_record(
+            manifest,
+            root=tmp_path,
+            analyze=lambda: 0,
+            receipt_builder=fake_builder,
+        )
+    assert seen["require_canonical_matrix"] is True
+    assert seen["input_validator"] is marker.module

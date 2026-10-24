@@ -558,6 +558,7 @@ def verify_and_run(
     output_json: Path | None = None,
     output_markdown: Path | None = None,
     input_validator: ModuleType | None = None,
+    require_canonical_matrix: bool = False,
 ) -> int:
     """Verify provenance/integrity before invoking the frozen analysis.
 
@@ -565,6 +566,9 @@ def verify_and_run(
     an exact set prevents a valid hash for unrelated files from being mistaken
     for provenance of the data actually consumed by the analysis. Re-hashing the
     captured bytes closes the gap between live-file verification and analysis.
+    The production receipt path sets ``require_canonical_matrix`` to enforce
+    the frozen 4x10 cells, assigned retrieval budgets, and cross-file evaluator
+    mirrors. False is retained for small dependency-injected test fixtures.
     """
     entries = verify_manifest(manifest, root=root)
     manifested = {entry["path"] for entry in entries}
@@ -587,7 +591,11 @@ def verify_and_run(
 
         main_rows = input_validator.read_csv_rows(snapshots[CANONICAL_MAIN])
         support_rows = input_validator.read_csv_rows(snapshots[CANONICAL_SUPPORT])
-        input_validator.validate_rows(main_rows, support_rows)
+        input_validator.validate_rows(
+            main_rows,
+            support_rows,
+            require_canonical_matrix=require_canonical_matrix,
+        )
         if analyze is not None:
             return analyze()
         return _run_analysis_from_snapshots(
@@ -633,7 +641,10 @@ def verify_run_and_record(
     receipt = receipt_builder(manifest, root=root)
     expected_output_sha256 = None
     validator_options = (
-        {"input_validator": validator_binding.module}
+        {
+            "input_validator": validator_binding.module,
+            "require_canonical_matrix": True,
+        }
         if validator_binding is not None
         else {}
     )
