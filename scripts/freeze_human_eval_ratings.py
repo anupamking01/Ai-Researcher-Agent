@@ -280,6 +280,12 @@ def _validate_annotator_id_characters(annotator_id: str) -> None:
                 f"(U+{ord(character):04X}); use a visible stable identifier"
             )
 
+    # Importers report spreadsheet-active text with the input filename/line
+    # immediately after this check. Do not hide that diagnostic behind the
+    # newer pseudonym rule; direct agreement helpers check it separately.
+    if annotator_id.strip().startswith(SPREADSHEET_FORMULA_PREFIXES):
+        return
+
     # These IDs are distributed with the blinded freeze, not a private
     # coordinator identity registry. Reject obvious contact handles and
     # treatment/coordinator hints before a ratings file or attestation is
@@ -320,6 +326,8 @@ def _validate_annotator_identity_spellings(rows: list[dict]) -> None:
     spellings: dict[str, str] = {}
     for row in rows:
         annotator_id = row["annotator_id"]
+        if annotator_id.strip().startswith(SPREADSHEET_FORMULA_PREFIXES):
+            raise ValueError("annotator_id contains a spreadsheet-active formula marker")
         _validate_annotator_id_characters(annotator_id)
         identity_key = _annotator_identity_key(annotator_id)
         previous = spellings.get(identity_key)

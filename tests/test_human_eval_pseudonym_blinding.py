@@ -101,3 +101,17 @@ def test_international_noncontact_pseudonym_remains_allowed(tmp_path):
     assert rows[0]["annotator_id"] == pseudonym
     assert attest_rows[0]["annotator_id"] == pseudonym
     assert freeze.build_agreement(rows)["n_annotators"] == 1
+
+def test_direct_agreement_and_coverage_reject_spreadsheet_formula_pseudonym():
+    rows = [
+        {
+            "annotator_id": '=HYPERLINK("https://example.invalid","rater")',
+            "blind_id": "H001",
+            **{field: "3" for field in freeze.SCORE_FIELDS},
+            "notes": "",
+        },
+    ]
+    with pytest.raises(ValueError, match="spreadsheet-active"):
+        freeze.build_agreement(rows)
+    with pytest.raises(ValueError, match="spreadsheet-active"):
+        freeze._validate_assignment_coverage(rows, ["H001"])
