@@ -103,8 +103,8 @@ canonical snapshot is frozen.
 Once that independently recorded lowercase 64-hex digest is available:
 
 ```bash
-python scripts/verify_research_artifact_manifest.py \\
-  outputs/main_study_analysis_inputs_manifest.json \\
+python scripts/verify_research_artifact_manifest.py \
+  outputs/main_study_analysis_inputs_manifest.json \
   --expected-manifest-sha256 <independently-recorded-sha256>
 ```
 
