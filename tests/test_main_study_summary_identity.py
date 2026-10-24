@@ -1,0 +1,701 @@
+import csv
+import hashlib
+import json
+
+import pytest
+
+from logic.prompts import generate_verification_prompt
+from scripts import evaluate_posthoc_support
+from scripts import summarize_budget_main_study
+
+
+EXPECTED_EVALUATOR_COST = (
+    (100 / 1_000_000) * 2.0 + (20 / 1_000_000) * 12.0
+)
+PRICING = {
+    "effective_date": "2026-09-08",
+    "currency": "USD",
+    "unit": "per_1m_text_tokens",
+    "source": "Test pricing snapshot",
+    "models": {
+        "gpt-test": {"input": 2.0, "output": 12.0},
+        "gpt-other": {"input": 2.0, "output": 12.0},
+    }
+}
+
+
+def _trace_payload(*, task_id="main-01", run_id="run-d3-main-01"):
+    return {
+        "schema_version": 2,
+        "experiment": {
+            "variant_id": "D3",
+            "task_set_id": "main-budget-v1-test",
+            "task_id": task_id,
+            "source_budget": 3,
+        },
+        "trace": {
+            "completed": True,
+            "variant_id": "D3",
+            "task_set_id": "main-budget-v1-test",
+            "task_id": task_id,
+            "question": f"Question for {task_id}",
+            "run_id": run_id,
+            "source_budget": 3,
+            "source_count": 1,
+            "successful_source_count": 1,
+            "failed_source_count": 0,
+            "query_count": 1,
+            "search_call_count": 1,
+            "scheduled_urls": ["https://example.test/source"],
+            "successful_urls": ["https://example.test/source"],
+            "failed_urls": [],
+            "latency_seconds": 1.0,
+            "report_words": 100,
+            "usage_accounting_status": "provider_usage_complete",
+            "provider_usage_by_model": {
+                "gpt-test": {
+                    "model_calls": 1,
+                    "unavailable_calls": 0,
+                    "prompt_tokens": 100,
+                    "completion_tokens": 20,
+                    "total_tokens": 120,
+                }
+            },
+            "model_call_count": 1,
+            "unavailable_usage_call_count": 0,
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+        },
+    }
+
+
+def _evaluation_payload(**overrides):
+    payload = {
+        "variant_id": "D3",
+        "task_id": "main-01",
+        "run_id": "run-d3-main-01",
+        "schema_version": 1,
+        "study_id": "budget-main-v1",
+        "max_claims": 12,
+        "claims_checked": 4,
+        "supported": 2,
+        "partially_supported": 1,
+        "unsupported": 1,
+        "contradicted": 0,
+        "strict_support_rate": 0.5,
+        "examples": [],
+        "evaluator_model": "gpt-test",
+        "temperature": 1.0,
+        "evidence_status": "retrieved_evidence",
+        "provider_usage_by_model": {
+            "gpt-test": {
+                "model_calls": 1,
+                "unavailable_calls": 0,
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+            }
+        },
+        "total_tokens": 120,
+        "estimated_cost_usd": EXPECTED_EVALUATOR_COST,
+        "cost_method": "frozen uncached rates",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _configure_summary(tmp_path, monkeypatch, *, traces, evaluations):
+    trace_root = tmp_path / "outputs" / "experiment_traces"
+    eval_root = tmp_path / "outputs" / "posthoc_evaluations"
+    for filename, payload in traces:
+        path = trace_root / "D3" / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    for variant, filename, payload in evaluations:
+        path = eval_root / variant / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    pricing_file = tmp_path / "experiments" / "pricing.json"
+    pricing_file.parent.mkdir(parents=True)
+    pricing_file.write_text(json.dumps(PRICING), encoding="utf-8")
+    task_file = tmp_path / "experiments" / "tasks.json"
+    task_ids = sorted(
+        {
+            payload["trace"]["task_id"]
+            for _filename, payload in traces
+            if isinstance(payload.get("trace"), dict)
+            and isinstance(payload["trace"].get("task_id"), str)
+        }
+        or {"main-01"}
+    )
+    task_file.write_text(
+        json.dumps(
+            {
+                "task_set_id": "main-budget-v1-test",
+                "tasks": [
+                    {
+                        "id": task_id,
+                        "category": "synthetic",
+                        "question": f"Question for {task_id}",
+                    }
+                    for task_id in task_ids
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(summarize_budget_main_study, "TRACE_ROOT", trace_root)
+    monkeypatch.setattr(summarize_budget_main_study, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(summarize_budget_main_study, "EVAL_ROOT", eval_root)
+    monkeypatch.setattr(summarize_budget_main_study, "PRICING_FILE", pricing_file)
+    monkeypatch.setattr(summarize_budget_main_study, "TASK_FILE", task_file)
+    monkeypatch.setattr(summarize_budget_main_study, "VARIANTS", ("D3",))
+    monkeypatch.setattr(
+        summarize_budget_main_study,
+        "FROZEN_EVALUATOR_MODEL",
+        "gpt-test",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        summarize_budget_main_study,
+        "FROZEN_EVALUATOR_TEMPERATURE",
+        1.0,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        summarize_budget_main_study,
+        "OUT_JSON",
+        tmp_path / "outputs" / "main_study_summary.json",
+    )
+    monkeypatch.setattr(
+        summarize_budget_main_study,
+        "OUT_CSV",
+        tmp_path / "outputs" / "main_study_runs.csv",
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda payload: payload["trace"].update(question="Changed question"),
+            "question must match frozen task definition",
+        ),
+        (
+            lambda payload: payload["trace"].update(task_set_id="other-set"),
+            "task_set_id must match frozen task set",
+        ),
+    ],
+)
+def test_summary_rejects_trace_task_definition_drift_before_outputs(
+    tmp_path, monkeypatch, mutate, message
+):
+    trace = _trace_payload()
+    mutate(trace)
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", trace)],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+
+    with pytest.raises(SystemExit, match=message):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+def test_summary_rejects_schema_v2_cache_for_changed_report_before_outputs(
+    tmp_path, monkeypatch
+):
+    question = "Question for main-01"
+    original_report = "Original report\n"
+    changed_report = "Changed report\n"
+    evidence = "Retrieved evidence\n"
+    prompt = generate_verification_prompt(
+        question,
+        original_report,
+        evidence,
+        max_claims=evaluate_posthoc_support.MAX_CLAIMS,
+    )
+    fingerprints = evaluate_posthoc_support._evaluator_input_fingerprints(
+        question=question,
+        report=original_report,
+        evidence=evidence,
+        prompt=prompt,
+    )
+    trace = _trace_payload()
+    trace["trace"]["question"] = question
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", trace)],
+        evaluations=[
+            (
+                "D3",
+                "main-01.json",
+                _evaluation_payload(
+                    schema_version=2,
+                    input_fingerprints=fingerprints,
+                ),
+            )
+        ],
+    )
+    run_dir = tmp_path / "outputs" / "run-d3-main-01"
+    run_dir.mkdir(parents=True)
+    (run_dir / "research-query-1.txt").write_text(evidence, encoding="utf-8")
+    (run_dir / "research_report.md").write_text(changed_report, encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="input_fingerprints must match"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"variant_id": "D6"}, "variant_id does not match cache path"),
+        ({"task_id": "main-02"}, "task_id does not match cache path"),
+        ({"run_id": "other-run"}, "run_id does not match treatment trace"),
+    ],
+)
+def test_summary_rejects_misbound_evaluator_cache_before_outputs(
+    tmp_path, monkeypatch, overrides, message
+):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[
+            ("D3", "main-01.json", _evaluation_payload(**overrides)),
+        ],
+    )
+
+    with pytest.raises(SystemExit, match=message):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+def test_summary_rejects_duplicate_evaluator_cache_keys_before_outputs(
+    tmp_path, monkeypatch
+):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    cache_path = summarize_budget_main_study.EVAL_ROOT / "D3" / "main-01.json"
+    raw = cache_path.read_text(encoding="utf-8")
+    raw = raw.replace(
+        '"supported": 2',
+        '"supported": 0, "supported": 2',
+        1,
+    )
+    cache_path.write_text(raw, encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="duplicate JSON key: supported"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+def test_summary_rejects_symlinked_evaluator_cache_before_outputs(
+    tmp_path, monkeypatch
+):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    cache_path = summarize_budget_main_study.EVAL_ROOT / "D3" / "main-01.json"
+    outside_cache = tmp_path / "outside-cache.json"
+    outside_cache.write_bytes(cache_path.read_bytes())
+    cache_path.unlink()
+    cache_path.symlink_to(outside_cache)
+
+    with pytest.raises(SystemExit, match="must be a regular non-symlink file"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+def test_summary_rejects_symlinked_treatment_trace_before_outputs(
+    tmp_path, monkeypatch
+):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    trace_path = (
+        summarize_budget_main_study.TRACE_ROOT
+        / "D3"
+        / "run-d3-main-01.json"
+    )
+    outside_trace = tmp_path / "outside-trace.json"
+    outside_trace.write_bytes(trace_path.read_bytes())
+    trace_path.unlink()
+    trace_path.symlink_to(outside_trace)
+
+    with pytest.raises(SystemExit, match="must be a regular non-symlink file"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda payload: payload["trace"].update(variant_id="D6"),
+            "variant_id does not match trace path",
+        ),
+        (
+            lambda payload: payload["experiment"].update(task_id="main-02"),
+            "task_id differs between experiment and trace",
+        ),
+        (
+            lambda payload: payload["trace"].update(run_id="other-run"),
+            "run_id does not match trace filename",
+        ),
+    ],
+)
+def test_summary_rejects_misbound_treatment_trace_before_outputs(
+    tmp_path, monkeypatch, mutate, message
+):
+    trace = _trace_payload()
+    mutate(trace)
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", trace)],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+
+    with pytest.raises(SystemExit, match=message):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+def test_summary_rejects_missing_evaluation_for_completed_trace_before_outputs(
+    tmp_path, monkeypatch
+):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[],
+    )
+
+    with pytest.raises(SystemExit, match="missing evaluator cache for completed trace"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+def test_summary_rejects_duplicate_treatment_cell_before_outputs(
+    tmp_path, monkeypatch
+):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[
+            ("run-d3-main-01.json", _trace_payload()),
+            (
+                "duplicate-run.json",
+                _trace_payload(run_id="duplicate-run"),
+            ),
+        ],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+
+    with pytest.raises(SystemExit, match="duplicate treatment cell"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+def test_summary_rejects_orphan_evaluator_cache_before_outputs(tmp_path, monkeypatch):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[
+            ("D3", "main-01.json", _evaluation_payload()),
+            (
+                "D3",
+                "main-02.json",
+                _evaluation_payload(
+                    task_id="main-02",
+                    run_id="run-d3-main-02",
+                ),
+            ),
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="has no matching treatment trace"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+def test_summary_accepts_one_fully_bound_treatment_evaluator_cell(
+    tmp_path, monkeypatch
+):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+
+    assert summarize_budget_main_study.main() == 0
+
+    summary = json.loads(
+        summarize_budget_main_study.OUT_JSON.read_text(encoding="utf-8")
+    )
+    assert summary["n_runs"] == 1
+    assert summary["n_posthoc_evaluations"] == 1
+
+
+def test_summary_rejects_mixed_posthoc_aggregate_generation_before_outputs(
+    tmp_path, monkeypatch
+):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    outputs = tmp_path / "outputs"
+    support_csv = outputs / "posthoc_support_runs.csv"
+    support_csv.write_bytes(b"generation\nprevious\n")
+    (outputs / "posthoc_support_summary.json").write_text(
+        json.dumps(
+            {
+                "posthoc_support_runs_sha256": hashlib.sha256(
+                    b"generation\nnext\n"
+                ).hexdigest()
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="post-hoc aggregate generation mismatch"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+def test_summary_binds_costs_to_validated_pricing_snapshot(tmp_path, monkeypatch):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    pricing_raw = summarize_budget_main_study.PRICING_FILE.read_bytes()
+
+    assert summarize_budget_main_study.main() == 0
+
+    summary = json.loads(
+        summarize_budget_main_study.OUT_JSON.read_text(encoding="utf-8")
+    )
+    assert summary["pricing_reference"] == {
+        "currency": "USD",
+        "effective_date": "2026-09-08",
+        "file": str(summarize_budget_main_study.PRICING_FILE.resolve()),
+        "method": (
+            "provider-reported prompt/output tokens multiplied by frozen "
+            "uncached text-token rates"
+        ),
+        "sha256": hashlib.sha256(pricing_raw).hexdigest(),
+        "size_bytes": len(pricing_raw),
+        "source": "Test pricing snapshot",
+        "unit": "per_1m_text_tokens",
+    }
+    with summarize_budget_main_study.OUT_CSV.open(
+        encoding="utf-8", newline=""
+    ) as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 1
+    assert rows[0]["pricing_file"] == str(
+        summarize_budget_main_study.PRICING_FILE.resolve()
+    )
+    assert rows[0]["pricing_file_size_bytes"] == str(len(pricing_raw))
+    assert rows[0]["pricing_file_sha256"] == hashlib.sha256(pricing_raw).hexdigest()
+    assert rows[0]["pricing_unit"] == "per_1m_text_tokens"
+
+
+def test_summary_rejects_invalid_pricing_before_outputs(tmp_path, monkeypatch):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    invalid_pricing = dict(PRICING, unit="per_token")
+    summarize_budget_main_study.PRICING_FILE.write_text(
+        json.dumps(invalid_pricing),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="unit must equal per_1m_text_tokens"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+def test_summary_rejects_internally_inconsistent_evaluator_measurements(
+    tmp_path, monkeypatch
+):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[
+            (
+                "D3",
+                "main-01.json",
+                _evaluation_payload(supported=3),
+            ),
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="Verifier label counts must sum"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+def test_summary_rejects_cross_cell_evaluator_configuration_drift(
+    tmp_path, monkeypatch
+):
+    other_usage = {
+        "gpt-other": {
+            "model_calls": 1,
+            "unavailable_calls": 0,
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+        }
+    }
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[
+            ("run-d3-main-01.json", _trace_payload()),
+            (
+                "run-d3-main-02.json",
+                _trace_payload(task_id="main-02", run_id="run-d3-main-02"),
+            ),
+        ],
+        evaluations=[
+            ("D3", "main-01.json", _evaluation_payload()),
+            (
+                "D3",
+                "main-02.json",
+                _evaluation_payload(
+                    task_id="main-02",
+                    run_id="run-d3-main-02",
+                    evaluator_model="gpt-other",
+                    provider_usage_by_model=other_usage,
+                ),
+            ),
+        ],
+    )
+
+    with pytest.raises(
+        SystemExit,
+        match="evaluator_model must equal frozen evaluator model gpt-test",
+    ):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+def test_summary_rejects_coherently_nonfrozen_evaluator_configuration(
+    tmp_path, monkeypatch
+):
+    other_usage = {
+        "gpt-other": {
+            "model_calls": 1,
+            "unavailable_calls": 0,
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+        }
+    }
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[
+            (
+                "D3",
+                "main-01.json",
+                _evaluation_payload(
+                    evaluator_model="gpt-other",
+                    provider_usage_by_model=other_usage,
+                ),
+            )
+        ],
+    )
+
+    with pytest.raises(
+        SystemExit,
+        match="evaluator_model must equal frozen evaluator model gpt-test",
+    ):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("total_tokens", 121, "aggregate token ledger mismatch"),
+        ("model_call_count", 2, "aggregate call ledger mismatch"),
+    ],
+)
+def test_summary_rejects_inconsistent_treatment_usage_ledger_before_outputs(
+    tmp_path, monkeypatch, field, value, message
+):
+    trace = _trace_payload()
+    trace["trace"][field] = value
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", trace)],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+
+    with pytest.raises(SystemExit, match=message):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
