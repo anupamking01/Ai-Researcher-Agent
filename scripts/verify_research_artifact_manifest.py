@@ -16,6 +16,7 @@ from pathlib import PurePosixPath
 from scripts.fingerprint_research_artifacts import (
     REPO_ROOT,
     fingerprint_regular_file,
+    portable_manifest_path_identity,
 )
 
 
@@ -60,6 +61,7 @@ def verify_manifest(manifest: dict, *, root: Path = REPO_ROOT) -> list[dict]:
     root = root.resolve()
     validated: list[dict] = []
     seen: set[str] = set()
+    portable_seen: dict[str, str] = {}
     for entry in entries:
         if not isinstance(entry, dict) or set(entry) != ARTIFACT_FIELDS:
             raise ValueError("artifact entry must contain the exact fields")
@@ -81,6 +83,13 @@ def verify_manifest(manifest: dict, *, root: Path = REPO_ROOT) -> list[dict]:
         if relative in seen:
             raise ValueError(f"duplicate research artifact: {relative}")
         seen.add(relative)
+        portable_key = portable_manifest_path_identity(relative)
+        if portable_key in portable_seen:
+            raise ValueError(
+                "portable research artifact path collision: "
+                f"{portable_seen[portable_key]!r} and {relative!r}"
+            )
+        portable_seen[portable_key] = relative
 
         candidate = root.joinpath(*relative_path.parts)
         if type(expected_bytes) is not int or expected_bytes < 0:

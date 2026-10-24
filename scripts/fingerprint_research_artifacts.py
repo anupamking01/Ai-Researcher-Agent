@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import stat
+import unicodedata
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,47 @@ DEFAULT_ARTIFACTS = (
     REPO_ROOT / "outputs" / "main_study_runs.csv",
     REPO_ROOT / "outputs" / "posthoc_support_runs.csv",
 )
+
+_WINDOWS_DEVICE_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    | {f"COM{number}" for number in range(1, 10)}
+    | {f"LPT{number}" for number in range(1, 10)}
+)
+_WINDOWS_FORBIDDEN_CHARS = frozenset('<>:"\\\\|?*')
+
+
+def portable_manifest_path_identity(relative: str) -> str:
+    """Conservatively identify paths that could alias on another filesystem.
+
+    Research artifacts must remain distinguishable after checkout on platforms
+    with case-insensitive or Unicode-normalizing names. Windows device names,
+    alternate-data-stream separators, and invisible directional controls are
+    rejected. This checks path portability, not independent scientific origin.
+    """
+    if not isinstance(relative, str) or not relative or relative.startswith("/"):
+        raise ValueError(f"non-portable research artifact path: {relative!r}")
+    normalized_parts = []
+    for part in relative.split("/"):
+        normalized = unicodedata.normalize("NFKC", part)
+        if (
+            part in {"", ".", ".."}
+            or normalized in {"", ".", ".."}
+            or normalized.endswith((" ", "."))
+            or any(
+                char in _WINDOWS_FORBIDDEN_CHARS
+                or char == "/"
+                or ord(char) < 32
+                or ord(char) == 127
+                or unicodedata.category(char) == "Cf"
+                for char in normalized
+            )
+            or normalized.split(".", 1)[0].upper() in _WINDOWS_DEVICE_NAMES
+        ):
+            raise ValueError(f"non-portable research artifact path: {relative!r}")
+        normalized_parts.append(normalized)
+    return unicodedata.normalize("NFKC", "/".join(normalized_parts).casefold())
+
+
 SUPPORTS_DESCRIPTOR_TRAVERSAL = (
     os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd
 )
@@ -200,6 +242,7 @@ def build_manifest(paths: list[Path], *, root: Path = REPO_ROOT) -> dict:
     root = Path(root).resolve()
     entries = []
     seen: set[str] = set()
+    portable_seen: dict[str, str] = {}
     for path in paths:
         candidate = Path(os.path.abspath(path))
         try:
@@ -209,6 +252,13 @@ def build_manifest(paths: list[Path], *, root: Path = REPO_ROOT) -> dict:
         if relative in seen:
             raise ValueError(f"duplicate research artifact: {relative}")
         seen.add(relative)
+        portable_key = portable_manifest_path_identity(relative)
+        if portable_key in portable_seen:
+            raise ValueError(
+                "portable research artifact path collision: "
+                f"{portable_seen[portable_key]!r} and {relative!r}"
+            )
+        portable_seen[portable_key] = relative
         digest, byte_count = fingerprint_regular_file(candidate)
         entries.append(
             {
