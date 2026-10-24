@@ -335,6 +335,98 @@ def build_manifest(paths: list[Path], *, root: Path = REPO_ROOT) -> dict:
     }
 
 
+def write_manifest_create_only(destination: Path, rendered: str) -> None:
+    """Create a fingerprint manifest without replacing existing research evidence.
+
+    An existing file (including a symlink) is never opened for writing. On
+    platforms with directory-relative open/mkdir, every parent is traversed
+    through no-follow descriptors, so a symlinked output directory is refused.
+    This protects output creation, not the atomicity of source-file capture.
+    """
+    target = Path(os.path.abspath(destination))
+    payload = rendered.encode("utf-8")
+    if not target.name:
+        raise ValueError("manifest output must name a new file")
+
+    # Some platforms cannot perform directory-relative operations. Their
+    # create-exclusive fallback still refuses existing files, and explicitly
+    # checks each parent for symlinks (without promising race-free traversal).
+    if not (os.open in os.supports_dir_fd and os.mkdir in os.supports_dir_fd):
+        current = Path(target.anchor)
+        created = False
+        completed = False
+        try:
+            for name in target.parts[1:-1]:
+                current = current / name
+                current.mkdir(exist_ok=True)
+                if not stat.S_ISDIR(current.lstat().st_mode):
+                    raise ValueError(f"unsafe manifest output directory: {current}")
+            with target.open("xb") as stream:
+                created = True
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+                completed = True
+        except FileExistsError as exc:
+            raise ValueError(
+                f"manifest output already exists (create-only): {target}"
+            ) from exc
+        except OSError as exc:
+            raise ValueError(f"unsafe or unavailable manifest output: {target}") from exc
+        finally:
+            if created and not completed:
+                try:
+                    target.unlink()
+                except OSError:
+                    pass
+        return
+
+    dir_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    dir_flags |= getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    file_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptors: list[int] = []
+    leaf_created = False
+    completed = False
+    parent_fd = None
+    try:
+        parent_fd = os.open(target.anchor, dir_flags)
+        descriptors.append(parent_fd)
+        for name in target.parts[1:-1]:
+            try:
+                os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+            except FileExistsError:
+                pass
+            child_fd = os.open(name, dir_flags, dir_fd=parent_fd)
+            descriptors.append(child_fd)
+            parent_fd = child_fd
+        leaf_fd = os.open(target.name, file_flags, 0o600, dir_fd=parent_fd)
+        descriptors.append(leaf_fd)
+        leaf_created = True
+        remaining = memoryview(payload)
+        while remaining:
+            count = os.write(leaf_fd, remaining)
+            if count <= 0:
+                raise OSError("zero-byte write while creating manifest")
+            remaining = remaining[count:]
+        os.fsync(leaf_fd)
+        completed = True
+    except FileExistsError as exc:
+        raise ValueError(
+            f"manifest output already exists (create-only): {target}"
+        ) from exc
+    except OSError as exc:
+        raise ValueError(f"unsafe or unavailable manifest output: {target}") from exc
+    finally:
+        if leaf_created and not completed and parent_fd is not None:
+            try:
+                os.unlink(target.name, dir_fd=parent_fd)
+            except OSError:
+                pass
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("paths", nargs="*", type=Path, help="repository-relative artifacts")
@@ -346,8 +438,7 @@ def main() -> int:
     rendered = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
     if args.output:
         output = args.output if args.output.is_absolute() else REPO_ROOT / args.output
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(rendered, encoding="utf-8")
+        write_manifest_create_only(output, rendered)
     else:
         print(rendered, end="")
     return 0

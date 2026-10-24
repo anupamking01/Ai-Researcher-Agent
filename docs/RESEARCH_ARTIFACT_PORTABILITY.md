@@ -64,3 +64,27 @@ were changed.
 
 Offline regression tests:
 `python -m pytest -q tests/test_research_artifact_portable_paths.py tests/test_research_artifact_hardlink_aliases.py`.
+
+
+## Manifest output is create-only
+
+The fingerprint CLI's `--output` is a **new artifact destination**, not a
+replace-in-place export. It previously used an unrestricted `write_text`, so
+an incorrect destination could overwrite a frozen CSV, an existing fingerprint
+manifest, or the target of a symlink. The writer now creates the destination
+exclusively and refuses any existing file, including dangling symlinks.
+It creates nested output directories while rejecting symlinked parent
+components; on systems with directory-relative operations, creation is
+anchored to checked directory descriptors. If a write fails, a newly created
+incomplete destination is removed.
+
+For example, writing `--output outputs/main_study_runs.csv` now fails
+without changing preserved treatment evidence. To retain multiple captures,
+choose a **new** versioned filename each time; no retry overwrites the old one.
+Standard output (without `--output`) remains unchanged.
+
+This is a **destination-safety safeguard**, not an atomic snapshot of changing
+inputs or proof that source files were historically authentic. On platforms
+without directory-relative operations, the fallback checks parent symlinks
+but cannot guarantee race-free parent traversal. No real experiment, evaluator,
+human rating, frozen rubric, or analysis has been modified.
