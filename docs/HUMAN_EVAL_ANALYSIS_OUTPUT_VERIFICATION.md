@@ -5,6 +5,23 @@ This implementation note covers the publication boundary for
 rubric, assignment plan, treatment-level estimands, bootstrap settings, or the
 automated confirmatory analysis.
 
+## Literal data labels in the manuscript view
+
+The canonical analysis JSON retains the exact task identifiers and pseudonymous
+annotator IDs. Those data-derived labels can contain Markdown links, image
+syntax, code delimiters, or raw HTML-like text even when the earlier rating
+inputs satisfy the frozen rubric. In a GitHub-rendered `analysis.md`, ordinary
+table delimiter escaping alone would leave such material active or visually
+misleading. The deterministic renderer now HTML-escapes markup and escapes
+inline Markdown syntax **only when displaying variable labels**, while retaining
+ordinary Unicode text, the original canonical JSON values, and all computed
+statistics. Regression tests exercise active-link, tracking-image, raw-HTML,
+formatting, and multilingual controls through a Markdown parser.
+
+This is publication-display integrity, not proof of annotator independence,
+protection against every downstream renderer, or a scientific-data change.
+Older result bundles must still be verified using their generating commit.
+
 ## Why this gate exists
 
 The human-validation analysis has two manuscript-facing representations:

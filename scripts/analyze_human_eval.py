@@ -10,6 +10,7 @@ import argparse
 import ctypes
 import errno
 import hashlib
+import html
 import json
 import os
 import platform
@@ -56,13 +57,21 @@ def render_markdown(payload):
         return "NA" if value is None else f"{value:.3f}"
 
     def cell(value):
-        return (
+        """Keep task and pseudonym labels inert in rendered Markdown tables."""
+        text = (
             str(value)
-            .replace("\\", "\\\\")
-            .replace("|", "\\|")
             .replace("\r\n", " ")
             .replace("\r", " ")
             .replace("\n", " ")
+            .replace("\t", " ")
+        )
+        # Protect literal HTML first; then escape CommonMark/GFM inline syntax.
+        # Source labels remain untouched in canonical analysis.json.
+        return "".join(
+            chr(92) + character
+            if character in "\\`*_{}[]()#!|~:@."
+            else character
+            for character in html.escape(text, quote=False)
         )
 
     def joined(values):

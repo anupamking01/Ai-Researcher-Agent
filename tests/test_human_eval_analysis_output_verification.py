@@ -200,6 +200,41 @@ def test_markdown_escapes_data_derived_table_labels():
     assert "\ncontinuation" not in markdown
 
 
+
+@pytest.mark.parametrize(
+    "injected_label",
+    [
+        "[external](https://example.invalid/coordinator)",
+        "![pixel](https://example.invalid/track)",
+        '<img src="https://example.invalid/track">',
+        "<script>alert(1)</script>",
+        "`code` **bold**",
+        "plain multilingual label – 日本語",
+    ],
+)
+def test_markdown_keeps_untrusted_rater_and_task_labels_inert(injected_label):
+    """Pseudonyms and task IDs must never become links or HTML in analysis.md."""
+    from html import unescape
+
+    from markdown_it import MarkdownIt
+
+    payload = _payload()
+    contrast = payload["paired_contrasts"][core.CONTRASTS[0][2]][core.DIMS[0]]
+    contrast["task_ids_included"] = [injected_label]
+    contrast["task_differences"] = {injected_label: 1.0}
+    payload["pre_unblinding_agreement"]["pairwise"][0]["annotator_a"] = injected_label
+
+    markdown = analyze_human_eval.render_markdown(payload)
+    rendered = MarkdownIt("default", {"html": True}).render(markdown)
+
+    assert injected_label in unescape(rendered)
+    assert "<a href=" not in rendered
+    assert "<img " not in rendered
+    assert "<script" not in rendered
+    assert "<code>code</code>" not in rendered
+    assert "<strong>bold</strong>" not in rendered
+
+
 def _rewrite_and_rehash(output, payload):
     json_bytes = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
     markdown_bytes = analyze_human_eval.render_markdown(payload).encode("utf-8")
