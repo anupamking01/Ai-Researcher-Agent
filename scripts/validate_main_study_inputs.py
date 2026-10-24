@@ -291,6 +291,50 @@ def _validate_canonical_posthoc_mirrors(
             )
 
 
+
+def _validate_canonical_evaluator_accounting(
+    main_rows: list[dict[str, str]],
+    support_rows: list[dict[str, str]],
+) -> None:
+    """Reconcile the common evaluator's measurement overhead across exports.
+
+    Evaluator cost is research overhead, not treatment cost. Both canonical CSVs
+    record this cost for each cell, but downstream analysis does not consume both
+    copies. Verify exact decimal agreement and reject invalid evaluator token
+    counts before these exports can support a manuscript-facing analysis. This
+    guards export consistency, not correctness of the underlying pricing rates.
+    """
+    support_by_cell = {
+        (row["variant_id"], row["task_id"]): row for row in support_rows
+    }
+    for main in main_rows:
+        variant, task = main["variant_id"], main["task_id"]
+        label = f"{variant}/{task}"
+        if "completed" not in main:
+            raise ValueError(f"missing canonical treatment completion flag for {label}")
+        require_nonnegative_integer(
+            main.get("search_calls"), f"main {label} search_calls"
+        )
+        support = support_by_cell[(variant, task)]
+        require_nonnegative_integer(
+            support.get("total_tokens"), f"support {label} total_tokens"
+        )
+        require_nonnegative(
+            main.get("posthoc_evaluator_cost_usd"),
+            f"main {label} posthoc_evaluator_cost_usd",
+        )
+        require_nonnegative(
+            support.get("estimated_cost_usd"),
+            f"support {label} estimated_cost_usd",
+        )
+        main_cost = Decimal(str(main["posthoc_evaluator_cost_usd"]).strip())
+        support_cost = Decimal(str(support["estimated_cost_usd"]).strip())
+        if main_cost != support_cost:
+            raise ValueError(
+                f"post-hoc evaluator cost differs across canonical inputs for {label}"
+            )
+
+
 def validate_rows(
     main_rows: list[dict[str, str]],
     support_rows: list[dict[str, str]],
@@ -349,6 +393,7 @@ def validate_rows(
     if require_canonical_matrix:
         _validate_canonical_source_exposure(main_rows, support_rows)
         _validate_canonical_posthoc_mirrors(main_rows, support_rows)
+        _validate_canonical_evaluator_accounting(main_rows, support_rows)
 
 
 def main() -> int:

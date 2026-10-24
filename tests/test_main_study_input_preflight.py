@@ -136,10 +136,11 @@ def _canonical_rows():
             variant_id=variant, task_id=task, completed="True",
             source_budget=str(FROZEN_SOURCE_BUDGETS[variant]), failed_sources="0",
             posthoc_claims_checked="4", posthoc_strict_support_rate="0.5",
+            search_calls="1", posthoc_evaluator_cost_usd="0.0125",
         ))
         support_rows.append(_support_row(
             variant_id=variant, task_id=task, strict_support_rate="0.5",
-            evidence_status="",
+            evidence_status="", total_tokens="200", estimated_cost_usd="0.0125",
         ))
     return main_rows, support_rows
 
@@ -339,4 +340,68 @@ def test_canonical_preflight_requires_evidence_status_field():
     main, support = _canonical_rows()
     del _canonical_cell(support)["evidence_status"]
     with pytest.raises(ValueError, match="missing evaluator evidence_status"):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+def test_canonical_preflight_accepts_exact_measurement_overhead_after_row_shuffle():
+    main, support = _canonical_rows()
+    support.reverse()
+    _canonical_cell(main)["posthoc_evaluator_cost_usd"] = "0.0"
+    _canonical_cell(support)["estimated_cost_usd"] = "0"
+    validate_rows(main, support, require_canonical_matrix=True)
+
+
+@pytest.mark.parametrize(
+    ("side", "field"),
+    [
+        ("main", "completed"),
+        ("main", "search_calls"),
+        ("main", "posthoc_evaluator_cost_usd"),
+        ("support", "total_tokens"),
+        ("support", "estimated_cost_usd"),
+    ],
+)
+def test_canonical_preflight_requires_evaluator_accounting_fields(side, field):
+    main, support = _canonical_rows()
+    row = _canonical_cell(main if side == "main" else support)
+    del row[field]
+    with pytest.raises(ValueError, match=field if field != "completed" else "completion flag"):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+@pytest.mark.parametrize(
+    ("side", "field", "value"),
+    [
+        ("main", "search_calls", "-1"),
+        ("main", "search_calls", "1.0000000000000001"),
+        ("support", "total_tokens", "-1"),
+        ("support", "total_tokens", "200.00000000000001"),
+        ("main", "posthoc_evaluator_cost_usd", "-0.01"),
+        ("main", "posthoc_evaluator_cost_usd", "nan"),
+        ("support", "estimated_cost_usd", "-0.01"),
+        ("support", "estimated_cost_usd", "inf"),
+    ],
+)
+def test_canonical_preflight_rejects_invalid_evaluator_overhead(side, field, value):
+    main, support = _canonical_rows()
+    _canonical_cell(main if side == "main" else support)[field] = value
+    with pytest.raises(ValueError, match=field):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+@pytest.mark.parametrize("side", ["main", "support"])
+def test_canonical_preflight_rejects_evaluator_cost_disagreement(side):
+    main, support = _canonical_rows()
+    if side == "main":
+        _canonical_cell(main)["posthoc_evaluator_cost_usd"] = "0.013"
+    else:
+        _canonical_cell(support)["estimated_cost_usd"] = "0.013"
+    with pytest.raises(ValueError, match="post-hoc evaluator cost differs"):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+def test_canonical_preflight_rejects_float_roundable_cost_mirror_drift():
+    main, support = _canonical_rows()
+    _canonical_cell(main)["posthoc_evaluator_cost_usd"] = "0.012500000000000001"
+    with pytest.raises(ValueError, match="post-hoc evaluator cost differs"):
         validate_rows(main, support, require_canonical_matrix=True)
