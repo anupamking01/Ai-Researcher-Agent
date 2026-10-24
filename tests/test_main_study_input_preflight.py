@@ -1,6 +1,11 @@
 import pytest
 
-from scripts.validate_main_study_inputs import EXPECTED_CELLS, read_csv_rows, validate_rows
+from scripts.validate_main_study_inputs import (
+    EXPECTED_CELLS,
+    FROZEN_SOURCE_BUDGETS,
+    read_csv_rows,
+    validate_rows,
+)
 
 
 def _main_row(**overrides):
@@ -129,10 +134,12 @@ def _canonical_rows():
     for variant, task in sorted(EXPECTED_CELLS):
         main_rows.append(_main_row(
             variant_id=variant, task_id=task, completed="True",
+            source_budget=str(FROZEN_SOURCE_BUDGETS[variant]), failed_sources="0",
             posthoc_claims_checked="4", posthoc_strict_support_rate="0.5",
         ))
         support_rows.append(_support_row(
             variant_id=variant, task_id=task, strict_support_rate="0.5",
+            evidence_status="",
         ))
     return main_rows, support_rows
 
@@ -236,4 +243,100 @@ def test_canonical_preflight_rejects_rate_rounding_equivalence(location):
     if location in {"evaluator", "both"}:
         support[0]["strict_support_rate"] = "0.50000000000000001"
     with pytest.raises(ValueError, match="rate differs|rate contradicts"):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+def _canonical_cell(rows, variant="P6V", task="main-10"):
+    return next(row for row in rows if row["variant_id"] == variant and row["task_id"] == task)
+
+
+@pytest.mark.parametrize(
+    ("variant", "wrong_budget"),
+    [("D3", "6"), ("D6", "3"), ("P6", "3"), ("P6V", "3")],
+)
+def test_canonical_preflight_rejects_treatment_assignment_budget_drift(
+    variant, wrong_budget
+):
+    main, support = _canonical_rows()
+    _canonical_cell(main, variant)["source_budget"] = wrong_budget
+    with pytest.raises(ValueError, match="frozen source_budget mismatch"):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+@pytest.mark.parametrize("field", ["source_budget", "failed_sources"])
+def test_canonical_preflight_requires_source_exposure_fields(field):
+    main, support = _canonical_rows()
+    del _canonical_cell(main)[field]
+    with pytest.raises(ValueError, match=field):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [
+        ("source_budget", "6.0000000000000001"),
+        ("failed_sources", "0.0000000000000001"),
+        ("failed_sources", "-1"),
+    ],
+)
+def test_canonical_preflight_does_not_round_source_exposure(field, invalid):
+    main, support = _canonical_rows()
+    _canonical_cell(main)[field] = invalid
+    with pytest.raises(ValueError, match=f"{field}|negative"):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+def test_canonical_preflight_rejects_source_counts_over_scheduled_budget():
+    main, support = _canonical_rows()
+    _canonical_cell(main)["successful_sources"] = "5"
+    _canonical_cell(main)["failed_sources"] = "2"
+    with pytest.raises(ValueError, match="source counts exceed frozen source_budget"):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+def test_canonical_preflight_allows_completed_run_with_unused_browse_slots():
+    main, support = _canonical_rows()
+    # An interrupted/superseded browse schedule can use fewer than six slots
+    # without implying an incomplete treatment or a stronger result.
+    _canonical_cell(main)["successful_sources"] = "1"
+    _canonical_cell(main)["failed_sources"] = "3"
+    _canonical_cell(support)["evidence_status"] = "retrieved_evidence"
+    validate_rows(main, support, require_canonical_matrix=True)
+
+
+def test_canonical_preflight_allows_zero_source_sentinel_with_matching_counts():
+    main, support = _canonical_rows()
+    _canonical_cell(main)["successful_sources"] = "0"
+    _canonical_cell(main)["failed_sources"] = "4"
+    _canonical_cell(main)["posthoc_strict_support_rate"] = "0"
+    evaluator = _canonical_cell(support)
+    evaluator.update(
+        evidence_status="zero_successful_sources",
+        strict_support_rate="0",
+        supported="0",
+        partially_supported="0",
+        unsupported="4",
+    )
+    validate_rows(main, support, require_canonical_matrix=True)
+
+
+def test_canonical_preflight_rejects_missing_zero_source_sentinel():
+    main, support = _canonical_rows()
+    _canonical_cell(main)["successful_sources"] = "0"
+    with pytest.raises(ValueError, match="evidence_status contradicts zero successful"):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+@pytest.mark.parametrize("invalid_status", ["zero_successful_sources", "invented_evidence"])
+def test_canonical_preflight_rejects_false_evidence_status_on_positive_sources(invalid_status):
+    main, support = _canonical_rows()
+    _canonical_cell(support)["evidence_status"] = invalid_status
+    with pytest.raises(ValueError, match="evidence_status contradicts successful"):
+        validate_rows(main, support, require_canonical_matrix=True)
+
+
+def test_canonical_preflight_requires_evidence_status_field():
+    main, support = _canonical_rows()
+    del _canonical_cell(support)["evidence_status"]
+    with pytest.raises(ValueError, match="missing evaluator evidence_status"):
         validate_rows(main, support, require_canonical_matrix=True)

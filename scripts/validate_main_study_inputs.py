@@ -27,6 +27,9 @@ IDENTITY_FIELDS = ("variant_id", "task_id")
 EXPECTED_VARIANTS = frozenset({"D3", "D6", "P6", "P6V"})
 EXPECTED_TASKS = frozenset(f"main-{index:02d}" for index in range(1, 11))
 EXPECTED_CELLS = frozenset((variant, task) for variant in EXPECTED_VARIANTS for task in EXPECTED_TASKS)
+# Independently freeze assigned retrieval exposure for the confirmatory treatment
+# CSV. Do not derive this from mutable input rows or later runner configuration.
+FROZEN_SOURCE_BUDGETS = {"D3": 3, "D6": 6, "P6": 6, "P6V": 6}
 
 
 def _validate_csv_record(record: str, *, path: Path, line_number: int) -> None:
@@ -170,6 +173,60 @@ def _validate_canonical_matrix(keys: set[tuple[str, str]], *, label: str) -> Non
 
 
 
+def _validate_canonical_source_exposure(
+    main_rows: list[dict[str, str]],
+    support_rows: list[dict[str, str]],
+) -> None:
+    """Check that exported treatment exposure respects the frozen assignment.
+
+    A completed run can legitimately stop before filling every retrieval slot,
+    so attempted sources must not exceed the budget; equality is *not* required.
+    The evidence-status cross-check prevents a zero-source report from being
+    mislabeled as supported by retrieved evidence (or vice versa). Legacy
+    recovered evaluator rows can have a blank positive-source status.
+    These are consistency checks, not authentication of upstream traces.
+    """
+    support_by_cell = {
+        (row["variant_id"], row["task_id"]): row for row in support_rows
+    }
+    for main in main_rows:
+        variant, task = main["variant_id"], main["task_id"]
+        label = f"{variant}/{task}"
+        budget = require_nonnegative_integer(
+            main.get("source_budget"), f"main {label} source_budget"
+        )
+        if budget != FROZEN_SOURCE_BUDGETS[variant]:
+            raise ValueError(
+                f"frozen source_budget mismatch for {label}: "
+                f"expected {FROZEN_SOURCE_BUDGETS[variant]}, got {budget}"
+            )
+        successful = require_nonnegative_integer(
+            main.get("successful_sources"), f"main {label} successful_sources"
+        )
+        failed = require_nonnegative_integer(
+            main.get("failed_sources"), f"main {label} failed_sources"
+        )
+        if successful + failed > budget:
+            raise ValueError(
+                f"source counts exceed frozen source_budget for {label}: "
+                f"successful={successful}, failed={failed}, budget={budget}"
+            )
+        support = support_by_cell[(variant, task)]
+        if "evidence_status" not in support:
+            raise ValueError(f"missing evaluator evidence_status for {label}")
+        status = str(support["evidence_status"]).strip()
+        if successful == 0:
+            if status != "zero_successful_sources":
+                raise ValueError(
+                    f"evaluator evidence_status contradicts zero successful sources for {label}"
+                )
+        elif status not in {"", "retrieved_evidence"}:
+            raise ValueError(
+                f"evaluator evidence_status contradicts successful sources for {label}: "
+                f"{status!r}"
+            )
+
+
 def _validate_canonical_posthoc_mirrors(
     main_rows: list[dict[str, str]],
     support_rows: list[dict[str, str]],
@@ -290,6 +347,7 @@ def validate_rows(
     # both CSVs; fail closed on inconsistencies instead of silently choosing
     # whichever file an analysis happens to read.
     if require_canonical_matrix:
+        _validate_canonical_source_exposure(main_rows, support_rows)
         _validate_canonical_posthoc_mirrors(main_rows, support_rows)
 
 
