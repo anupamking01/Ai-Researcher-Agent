@@ -258,6 +258,20 @@ def _validate_canonical_source_exposure(
                 raise ValueError(
                     f"evaluator evidence_status contradicts zero successful sources for {label}"
                 )
+            # The evaluator is restricted to evidence retrieved by this run.
+            # Conservation was checked above: all claims must therefore be
+            # unsupported; a zero-source sentinel supplies no evidence with
+            # which to support, partially support, or contradict a claim.
+            claims = require_nonnegative_integer(
+                support.get("claims_checked"), f"support {label} claims_checked"
+            )
+            unsupported = require_nonnegative_integer(
+                support.get("unsupported"), f"support {label} unsupported"
+            )
+            if unsupported != claims:
+                raise ValueError(
+                    f"zero-source evaluator must classify all claims unsupported for {label}"
+                )
         elif status not in {"", "retrieved_evidence"}:
             raise ValueError(
                 f"evaluator evidence_status contradicts successful sources for {label}: "

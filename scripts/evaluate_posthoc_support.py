@@ -315,6 +315,35 @@ def _normalize_evaluator_output(raw_result: str) -> dict:
     return normalize_verifier_output(raw_result, max_claims=MAX_CLAIMS)
 
 
+
+def _require_zero_evidence_classifications(
+    record: dict, *, evidence_status: str, label: str
+) -> None:
+    """Enforce the frozen evidence-only rubric for a zero-source sentinel.
+
+    Without retrieved evidence, a factual claim cannot be supported, partially
+    supported, or contradicted *by that evidence*. Keep the original report
+    and its valid zero-source outcome; reject an incoherent measurement rather
+    than silently inflating support or rerunning the treatment/evaluator.
+    """
+    if evidence_status != "zero_successful_sources":
+        return
+    checked = record.get("claims_checked")
+    if (
+        type(checked) is not int
+        or checked <= 0
+        or type(record.get("unsupported")) is not int
+        or record["unsupported"] != checked
+        or any(
+            type(record.get(field)) is not int or record[field] != 0
+            for field in ("supported", "partially_supported", "contradicted")
+        )
+    ):
+        raise SystemExit(
+            f"{label}: zero successful sources requires every evaluated "
+            "claim to be unsupported under the evidence-only rubric"
+        )
+
 def _load_cached_evaluation(
     path: Path,
     *,
@@ -450,6 +479,11 @@ def _validate_cached_evaluation(
         raise SystemExit(
             f"Cached post-hoc evaluation {path} claims_checked must be positive"
         )
+    _require_zero_evidence_classifications(
+        payload,
+        evidence_status=expected_evidence_status,
+        label=f"Cached post-hoc evaluation {path}",
+    )
     expected_rate = payload["supported"] / claims_checked
     stored_rate = payload.get("strict_support_rate")
     if (
@@ -871,6 +905,11 @@ def main() -> int:
             request_timeout_seconds=120,
         )
         result = _normalize_evaluator_output(raw)
+        _require_zero_evidence_classifications(
+            result,
+            evidence_status=evidence_status,
+            label=f"Common evaluator {variant}/{task_id}",
+        )
         usage = tracker.snapshot()
         if int(result.get("claims_checked", 0) or 0) <= 0:
             raise SystemExit(f"Common evaluator checked zero claims for {variant}/{task_id}")

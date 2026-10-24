@@ -1258,3 +1258,63 @@ def test_cache_publication_cleans_staging_after_write_sync_failure(
 
     assert not path.exists()
     assert list(path.parent.glob(".main-01.json.*.tmp")) == []
+
+
+def _zero_source_cache(**overrides):
+    record = _cached_evaluation()
+    record.update(
+        evidence_status="zero_successful_sources",
+        supported=0,
+        partially_supported=0,
+        unsupported=12,
+        contradicted=0,
+        strict_support_rate=0.0,
+    )
+    record.update(overrides)
+    return record
+
+
+def test_cached_zero_source_measurement_all_unsupported_is_valid(tmp_path):
+    path = tmp_path / "zero-source.json"
+    expected = _zero_source_cache()
+    path.write_text(json.dumps(expected), encoding="utf-8")
+
+    assert _load_cached(
+        path, expected_evidence_status="zero_successful_sources"
+    ) == expected
+
+
+@pytest.mark.parametrize("false_label", ["supported", "partially_supported", "contradicted"])
+def test_cached_zero_source_measurement_rejects_unavailable_evidence_labels(
+    tmp_path, false_label
+):
+    # Counts and strict-support rate remain internally consistent: only the
+    # no-retrieved-evidence contract detects this scientific contradiction.
+    record = _zero_source_cache(unsupported=11)
+    record[false_label] = 1
+    if false_label == "supported":
+        record["strict_support_rate"] = 1 / 12
+    path = tmp_path / "zero-source.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="zero successful sources requires every"):
+        _load_cached(path, expected_evidence_status="zero_successful_sources")
+
+
+def test_live_evaluator_guard_checks_zero_source_before_persistence():
+    # The same invariant applies to a freshly normalized evaluator response,
+    # before it may be published as a cache or exported into the study.
+    with pytest.raises(SystemExit, match="zero successful sources requires every"):
+        evaluate_posthoc_support._require_zero_evidence_classifications(
+            _zero_source_cache(supported=1, unsupported=11, strict_support_rate=1 / 12),
+            evidence_status="zero_successful_sources",
+            label="test live evaluator",
+        )
+
+
+def test_no_evidence_rule_does_not_relabel_evidence_backed_measurements():
+    evaluate_posthoc_support._require_zero_evidence_classifications(
+        _cached_evaluation(),
+        evidence_status="retrieved_evidence",
+        label="control",
+    )

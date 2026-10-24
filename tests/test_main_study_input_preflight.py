@@ -527,3 +527,28 @@ def test_canonical_preflight_rejects_invalid_evaluator_report_reference(bad_id):
         support[0]["run_id"] = bad_id
     with pytest.raises(ValueError, match="invalid evaluator run_id"):
         validate_rows(main, support, require_canonical_matrix=True)
+
+
+@pytest.mark.parametrize("false_label", ["supported", "partially_supported", "contradicted"])
+def test_canonical_preflight_rejects_positive_evidence_labels_from_zero_sources(false_label):
+    # Both aggregate CSVs may be coherently updated, fingerprinted and still
+    # claim evidence support in a run where no evidence was retrieved.
+    main, support = _canonical_rows()
+    treatment = _canonical_cell(main)
+    evaluation = _canonical_cell(support)
+    treatment["successful_sources"] = "0"
+    evaluation.update(
+        evidence_status="zero_successful_sources",
+        supported="0",
+        partially_supported="0",
+        unsupported="3",
+        contradicted="0",
+        strict_support_rate="0",
+    )
+    evaluation[false_label] = "1"
+    if false_label == "supported":
+        treatment["posthoc_strict_support_rate"] = "0.25"
+        evaluation["strict_support_rate"] = "0.25"
+
+    with pytest.raises(ValueError, match="zero-source evaluator must classify all claims unsupported"):
+        validate_rows(main, support, require_canonical_matrix=True)

@@ -183,6 +183,11 @@ A failed source fetch is not equivalent to a missing experiment. Likewise, zero 
 Important rules:
 
 - zero retrieved evidence remains an observable outcome;
+- under the frozen evidence-only post-hoc rubric, a zero-source sentinel
+  cannot support, partially support, or contradict a factual claim; all
+  checked claims must be labeled unsupported. Fresh results, retained caches,
+  and canonical CSV inference fail closed on that inconsistency. This
+  measures absence of *retrieved support*, not whether the report is false;
 - treatment failures/timeouts are preserved rather than silently rerun until success;
 - duplicate treatment executions are not substituted because their outcomes look better;
 - if treatment execution is complete but measurement is interrupted, evaluator-only recovery may fill missing evaluator records without replacing the original treatment output;
