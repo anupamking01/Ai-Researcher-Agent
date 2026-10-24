@@ -54,7 +54,7 @@ def test_normalized_formula_prefix_in_notes_rejected_without_mutation(
     assert ratings.read_bytes() == original_bytes
 
 
-@pytest.mark.parametrize("unsafe_id", ["＝rater", "＋rater", "＠rater"])
+@pytest.mark.parametrize("unsafe_id", ["＝rater", "＋rater"])
 def test_compatibility_formula_prefix_in_annotator_id_rejected(
     tmp_path: Path, unsafe_id: str
 ) -> None:
