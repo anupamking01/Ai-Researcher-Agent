@@ -172,6 +172,23 @@ characters from creating identifiers that look identical while counting as
 independent raters. Ordinary Unicode letters and combining marks remain valid,
 and accepted raw CSV bytes are still retained unchanged.
 
+The same pseudonym gate now rejects **obvious contact handles** (email/URL
+forms) and **treatment/coordinator markers** in annotator IDs, including
+compatibility-Unicode spellings, raw HTML, Markdown images, and encoded Markdown
+link metadata. Both raw ratings and coordinator attestations, as well as direct
+agreement/coverage helpers, use this one validation function. A pseudonym such
+as `rater-P6V` could otherwise carry an experimental label into archived
+`frozen_ratings.csv`, `agreement.json`, and analysis even though report
+content and notes were screened. An address-shaped ID could likewise retain
+avoidable personal/contact information in the research artifact. No submitted
+value is silently redacted or replaced: a rejected pre-freeze submission must
+be corrected under the existing blinded correction process, with its original
+bytes retained outside the failed freeze. This is a textual safeguard, **not**
+proof that a pseudonym is anonymous, an attestation is true, or an annotator is
+independent. It does not alter the frozen rubric, assignment, estimands,
+statistical calculations, or any collected ratings.
+
+
 ## Spreadsheet-active text gate
 
 The importer rejects `annotator_id` or `notes` values whose normalized text

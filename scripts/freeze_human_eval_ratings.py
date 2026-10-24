@@ -280,6 +280,40 @@ def _validate_annotator_id_characters(annotator_id: str) -> None:
                 f"(U+{ord(character):04X}); use a visible stable identifier"
             )
 
+    # These IDs are distributed with the blinded freeze, not a private
+    # coordinator identity registry. Reject obvious contact handles and
+    # treatment/coordinator hints before a ratings file or attestation is
+    # accepted. Reuse the packet audit so Unicode compatibility spellings,
+    # rendered Markdown metadata, and inline HTML cannot bypass blinding.
+    normalized = packet_build._canonical_audit_text(annotator_id)
+    lowered = normalized.casefold()
+    if (
+        "@" in normalized
+        or "://" in normalized
+        or "www." in lowered
+        or lowered.startswith(("mailto:", "tel:"))
+    ):
+        raise ValueError(
+            "annotator_id must be a non-contact pseudonym; "
+            "email addresses and URL/contact-like identifiers are not allowed"
+        )
+    try:
+        packet_build.validate_annotator_facing_content(
+            [
+                {
+                    "blind_id": "annotator pseudonym",
+                    "question": annotator_id,
+                    "report_markdown": "",
+                }
+            ],
+            label="annotator pseudonym",
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "annotator_id must remain treatment-blind and inert: "
+            f"{exc}"
+        ) from exc
+
 
 def _validate_annotator_identity_spellings(rows: list[dict]) -> None:
     """Reject multiple display spellings for one canonical annotator identity."""
