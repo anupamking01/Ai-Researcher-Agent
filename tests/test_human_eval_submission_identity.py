@@ -161,6 +161,67 @@ def test_annotator_id_rejects_hidden_unicode_characters_before_freeze(
     assert not options["output_root"].exists()
 
 
+
+@pytest.mark.parametrize(
+    "hidden_character",
+    ["\\u034f", "\\u180b", "\\u180f", "\\ufe0f", "\\U000e0100"],
+    ids=["combining-grapheme-joiner", "mongolian-selector-1",
+         "mongolian-selector-4", "variation-selector-16", "variation-selector-17"],
+)
+def test_nonformat_invisible_pseudonym_marks_fail_closed_before_freeze(
+    submission_inputs, hidden_character
+):
+    paths, options = submission_inputs
+    disguised_id = f"synthetic-{hidden_character}a"
+    # Matching self-reported coordinator attestations must not turn an
+    # invisible spelling variant into evidence of an independent human rater.
+    paths[0].write_bytes(_csv_bytes([disguised_id]))
+    write_valid_annotator_attestations(
+        options["annotator_attestations_path"],
+        (disguised_id, "synthetic-b"),
+    )
+    originals = [path.read_bytes() for path in paths]
+
+    with pytest.raises(ValueError, match="invisible Unicode identity mark"):
+        freeze.freeze_ratings(paths, **options)
+
+    assert originals == [path.read_bytes() for path in paths]
+    assert not options["output_root"].exists()
+
+
+@pytest.mark.parametrize(
+    "hidden_character",
+    ["\\u034f", "\\ufe0f"],
+    ids=["combining-grapheme-joiner", "variation-selector-16"],
+)
+def test_nonformat_invisible_pseudonym_rejected_in_attestations(
+    submission_inputs, hidden_character
+):
+    _paths, options = submission_inputs
+    write_valid_annotator_attestations(
+        options["annotator_attestations_path"],
+        (f"synthetic-{hidden_character}a", "synthetic-b"),
+    )
+    with pytest.raises(ValueError, match="invisible Unicode identity mark"):
+        freeze._load_annotator_attestations(options["annotator_attestations_path"])
+
+
+def test_nonformat_invisible_pseudonym_cannot_count_as_second_rater():
+    rows = [
+        {
+            "annotator_id": annotator_id,
+            "blind_id": "H001",
+            **{field: "3" for field in freeze.SCORE_FIELDS},
+            "notes": "",
+        }
+        for annotator_id in ("synthetic-a", "synthetic-\\u034fa")
+    ]
+    with pytest.raises(ValueError, match="invisible Unicode identity mark"):
+        freeze._validate_assignment_coverage(rows, ["H001"])
+    with pytest.raises(ValueError, match="invisible Unicode identity mark"):
+        freeze.build_agreement(rows)
+
+
 def test_annotator_id_rejects_control_character_before_whitespace_normalization(
     submission_inputs,
 ):

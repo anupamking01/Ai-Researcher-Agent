@@ -245,11 +245,19 @@ def _annotator_identity_key(annotator_id: str) -> str:
 
 
 def _validate_annotator_id_characters(annotator_id: str) -> None:
-    """Require visible, auditable text for an independent-rater identifier."""
+    """Reject visually hidden pseudonym aliases before counting independent raters."""
     for character in annotator_id:
         if unicodedata.category(character) in {"Cc", "Cf"}:
             raise ValueError(
                 "annotator_id contains a Unicode control or format character "
+                f"(U+{ord(character):04X}); use a visible stable identifier"
+            )
+        # Mn is not categorically safe: CGJ and variation selectors can make
+        # two visually identical pseudonyms count as separate human raters.
+        # Keep ordinary combining accents valid (NFC/casefold handles aliases).
+        if packet_build._is_invisible_audit_mark(character):
+            raise ValueError(
+                "annotator_id contains an invisible Unicode identity mark "
                 f"(U+{ord(character):04X}); use a visible stable identifier"
             )
 

@@ -223,3 +223,19 @@ fragmented aggregate coverage, valid multi-annotator normalized output,
 optional external verification, and CLI rejection before publication. The
 snapshot fixtures keep each synthetic annotator in a separate raw file without
 weakening their byte-capture checks.
+
+
+### Invisible-mark pseudonym gate
+
+Human-evaluation rater IDs are not identities verified by this software; they
+are coordinator-assigned pseudonyms. To prevent visually identical aliases from
+inflating the independent-rater count, both original ratings and coordinator
+attestations reject invisible Unicode combining format-like marks (including
+U+034F and Unicode variation selectors) even though those marks are categorized
+as `Mn` rather than `Cf`. The same check applies when calculating blinded
+assignment coverage and two-rater agreement. Ordinary diacritics are retained;
+existing NFC/casefold equivalence checks remain in effect. Submissions fail
+before any frozen snapshot is published, and the original bytes are not rewritten.
+This is a data-integrity safeguard, not verification of actual human identity or
+independent scoring, and it does not alter frozen rubrics or produce ratings.
+
