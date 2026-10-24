@@ -937,13 +937,16 @@ def test_resume_rejects_cache_bound_to_different_report_before_model_call(
     assert model_calls == []
 
 
-def _evaluator_result(supported=7):
+def _evaluator_result():
+    # Resume-main fixtures intentionally have zero successfully retrieved
+    # sources: the evidence-only rubric must not invent support or partial
+    # support while testing unrelated cache/publication mechanics.
     return json.dumps(
         {
             "claims_checked": 12,
-            "supported": supported,
-            "partially_supported": 12 - supported,
-            "unsupported": 0,
+            "supported": 0,
+            "partially_supported": 0,
+            "unsupported": 12,
             "contradicted": 0,
             "examples": [],
         }
@@ -1047,7 +1050,7 @@ def test_aggregate_summary_binds_exact_published_csv_bytes(tmp_path, monkeypatch
     cache_path.parent.mkdir(parents=True)
     cache_path.write_text(
         json.dumps(
-            _cached_evaluation(evidence_status="zero_successful_sources")
+            _zero_source_cache()
         ),
         encoding="utf-8",
     )
@@ -1082,7 +1085,7 @@ def test_aggregate_publication_stages_every_file_before_replacing_existing_outpu
     cache_path.parent.mkdir(parents=True)
     cache_path.write_text(
         json.dumps(
-            _cached_evaluation(evidence_status="zero_successful_sources")
+            _zero_source_cache()
         ),
         encoding="utf-8",
     )
@@ -1135,7 +1138,7 @@ def test_interrupted_second_replacement_leaves_detectable_mixed_generation(
     cache_path.parent.mkdir(parents=True)
     cache_path.write_text(
         json.dumps(
-            _cached_evaluation(evidence_status="zero_successful_sources")
+            _zero_source_cache()
         ),
         encoding="utf-8",
     )
