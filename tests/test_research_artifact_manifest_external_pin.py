@@ -14,11 +14,11 @@ from scripts.fingerprint_research_artifacts import build_manifest
 
 def _example(tmp_path: Path) -> tuple[Path, Path, str]:
     artifact = tmp_path / "preserved.csv"
-    artifact.write_bytes(b"task,result\\nT001,original\\n")
+    artifact.write_bytes(b"task,result\nT001,original\n")
     manifest = build_manifest([artifact], root=tmp_path)
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_bytes(
-        (json.dumps(manifest, indent=2, sort_keys=True) + "\\n").encode("utf-8")
+        (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
     )
     return (
         artifact,
@@ -38,10 +38,10 @@ def test_independent_raw_manifest_pin_accepts_exact_frozen_bytes(tmp_path):
 
 def test_simultaneous_rehash_of_artifact_and_manifest_requires_external_pin(tmp_path):
     artifact, manifest_path, independent_pin = _example(tmp_path)
-    artifact.write_bytes(b"task,result\\nT001,replaced\\n")
+    artifact.write_bytes(b"task,result\nT001,replaced\n")
     attacker_manifest = build_manifest([artifact], root=tmp_path)
     manifest_path.write_bytes(
-        (json.dumps(attacker_manifest, indent=2, sort_keys=True) + "\\n").encode("utf-8")
+        (json.dumps(attacker_manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
     )
     # Every internal hash checks out, but the separately held pin detects drift.
     assert len(verifier.verify_manifest_file(manifest_path, root=tmp_path)) == 1
@@ -71,7 +71,7 @@ def test_manifest_bytes_changed_during_initial_capture_fail_closed(tmp_path, mon
         if Path(path) == manifest_path:
             calls += 1
             if calls == 1:
-                manifest_path.write_bytes(b'{"rewritten":true}\\n')
+                manifest_path.write_bytes(b'{"rewritten":true}\n')
         return fingerprint
 
     monkeypatch.setattr(verifier, "fingerprint_regular_file_with_identity", change_after_hash)
@@ -104,6 +104,6 @@ def test_byte_identical_manifest_inode_replacement_fail_closed(tmp_path, monkeyp
 
 def test_manifest_invalid_utf8_is_a_declared_validation_failure(tmp_path):
     path = tmp_path / "bad.json"
-    path.write_bytes(b"\\xff")
+    path.write_bytes(b"\xff")
     with pytest.raises(ValueError, match="manifest file is not valid UTF-8"):
         verifier.verify_manifest_file(path, root=tmp_path)
