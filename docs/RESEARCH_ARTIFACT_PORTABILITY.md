@@ -75,8 +75,13 @@ manifest, or the target of a symlink. The writer now creates the destination
 exclusively and refuses any existing file, including dangling symlinks.
 It creates nested output directories while rejecting symlinked parent
 components; on systems with directory-relative operations, creation is
-anchored to checked directory descriptors. If a write fails, a newly created
-incomplete destination is removed.
+anchored to checked directory descriptors. If a write fails, cleanup only removes the incomplete destination when its
+physical filesystem identity still matches the file this writer created.
+If another process has replaced that pathname, the replacement is retained;
+this avoids deleting a displaced evidence file or symlink during error cleanup.
+As with any separate identity-check/unlink operations, a hostile concurrent
+replacement **after** the final identity check is outside this safeguard. This
+does not make manifest creation an atomic multi-process transaction.
 
 For example, writing `--output outputs/main_study_runs.csv` now fails
 without changing preserved treatment evidence. To retain multiple captures,

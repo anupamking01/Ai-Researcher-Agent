@@ -354,6 +354,7 @@ def write_manifest_create_only(destination: Path, rendered: str) -> None:
     if not (os.open in os.supports_dir_fd and os.mkdir in os.supports_dir_fd):
         current = Path(target.anchor)
         created = False
+        created_inode = None
         completed = False
         try:
             for name in target.parts[1:-1]:
@@ -363,6 +364,8 @@ def write_manifest_create_only(destination: Path, rendered: str) -> None:
                     raise ValueError(f"unsafe manifest output directory: {current}")
             with target.open("xb") as stream:
                 created = True
+                opened = os.fstat(stream.fileno())
+                created_inode = (opened.st_dev, opened.st_ino)
                 stream.write(payload)
                 stream.flush()
                 os.fsync(stream.fileno())
@@ -374,9 +377,11 @@ def write_manifest_create_only(destination: Path, rendered: str) -> None:
         except OSError as exc:
             raise ValueError(f"unsafe or unavailable manifest output: {target}") from exc
         finally:
-            if created and not completed:
+            if created and not completed and created_inode is not None:
                 try:
-                    target.unlink()
+                    current_leaf = target.lstat()
+                    if (current_leaf.st_dev, current_leaf.st_ino) == created_inode:
+                        target.unlink()
                 except OSError:
                     pass
         return
@@ -419,8 +424,18 @@ def write_manifest_create_only(destination: Path, rendered: str) -> None:
         raise ValueError(f"unsafe or unavailable manifest output: {target}") from exc
     finally:
         if leaf_created and not completed and parent_fd is not None:
+            # Never remove a different file/symlink installed at the pathname
+            # after our exclusive create. The opened leaf is still available
+            # for this identity comparison until descriptor cleanup below.
             try:
-                os.unlink(target.name, dir_fd=parent_fd)
+                created_stat = os.fstat(leaf_fd)
+                current_leaf = os.stat(
+                    target.name, dir_fd=parent_fd, follow_symlinks=False
+                )
+                if (created_stat.st_dev, created_stat.st_ino) == (
+                    current_leaf.st_dev, current_leaf.st_ino
+                ):
+                    os.unlink(target.name, dir_fd=parent_fd)
             except OSError:
                 pass
         for descriptor in reversed(descriptors):
