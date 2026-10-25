@@ -785,8 +785,8 @@ def _snapshot_freeze_tree(freeze_root, blind_freeze):
 
 
 def score(row, field):
-    value = str(row.get(field) or "").strip()
-    return int(value) if value else None
+    """Apply the frozen 1–5/blank importer domain at every analysis boundary."""
+    return freeze._score(row, field)
 
 
 def _percentile(sorted_values, q):
@@ -817,6 +817,20 @@ def _bootstrap_mean_ci(diffs, *, seed):
 def _paired_summary(left, right, *, seed):
     if len(left) != len(right) or not left:
         raise ValueError("paired vectors must be non-empty and equal length")
+    # The analysis unit is a report mean of observed 1–5 scores. This also
+    # guards direct/offline helper callers that bypass the ratings freeze.
+    for label, values in (("left", left), ("right", right)):
+        for index, value in enumerate(values):
+            if (
+                type(value) not in (int, float)
+                or not math.isfinite(value)
+                or not 1 <= value <= 5
+            ):
+                raise ValueError(
+                    f"{label} report score {index} must be finite and within the 1–5 rubric"
+                )
+    if type(seed) is not int:
+        raise ValueError("paired bootstrap seed must be an integer")
     diffs = [b - a for a, b in zip(left, right)]
     sd = statistics.stdev(diffs) if len(diffs) > 1 else 0.0
     return {
@@ -835,8 +849,34 @@ def _paired_summary(left, right, *, seed):
 
 
 def report_scores(rows):
-    grouped = {}
+    """Aggregate only distinct, rubric-valid independent annotator rows.
+
+    The normal pipeline verifies the freeze before calling this helper. Keep
+    the same protections here so a direct caller cannot overweight one rater
+    or manufacture an out-of-range treatment summary.
+    """
     for row in rows:
+        if (
+            not isinstance(row, dict)
+            or not isinstance(row.get("annotator_id"), str)
+            or not row["annotator_id"].strip()
+            or not isinstance(row.get("blind_id"), str)
+            or not row["blind_id"].strip()
+        ):
+            raise ValueError("report score rows require nonempty annotator_id and blind_id")
+    freeze._validate_annotator_identity_spellings(rows)
+    grouped = {}
+    seen = set()
+    for row in rows:
+        identity = (freeze._annotator_identity_key(row["annotator_id"]), row["blind_id"])
+        if identity in seen:
+            raise ValueError(
+                "duplicate independent rating for annotator/blind item: "
+                f"{row['annotator_id']}/{row['blind_id']}"
+            )
+        seen.add(identity)
+        for field in DIMS:
+            score(row, field)
         grouped.setdefault(row["blind_id"], []).append(row)
     scores, counts = {}, {}
     for blind_id, items in grouped.items():
