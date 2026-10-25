@@ -9,7 +9,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import stat
 from pathlib import Path
 from pathlib import PurePosixPath
 
@@ -24,6 +26,58 @@ from scripts.fingerprint_research_artifacts import (
 ROOT_FIELDS = {"schema_version", "algorithm", "artifacts", "aggregate_sha256"}
 ARTIFACT_FIELDS = {"path", "sha256", "bytes"}
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+
+
+
+# Bound the metadata JSON read, not the size of the research artifacts it names.
+# This permits tens of thousands of inputs while avoiding unbounded memory use.
+MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+
+
+def _read_regular_manifest_bytes(path: Path) -> bytes:
+    """Capture JSON from one checked regular-file descriptor, never Path.read_bytes.
+
+    In particular, opening a substituted FIFO nonblocking avoids an indefinite
+    read; no-follow rejects leaf symlinks where supported. The surrounding
+    before/after fingerprints also bind pathname identity and source coherence.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError("manifest capture requires a regular file") from exc
+    try:
+        try:
+            before = os.fstat(descriptor)
+            if not stat.S_ISREG(before.st_mode):
+                raise ValueError("manifest capture requires a regular file")
+            if before.st_size > MAX_MANIFEST_BYTES:
+                raise ValueError("manifest exceeds the 16 MiB safety limit")
+
+            parts = []
+            total = 0
+            while True:
+                chunk = os.read(
+                    descriptor, min(1024 * 1024, MAX_MANIFEST_BYTES - total + 1)
+                )
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_MANIFEST_BYTES:
+                    raise ValueError("manifest exceeds the 16 MiB safety limit")
+                parts.append(chunk)
+            after = os.fstat(descriptor)
+            identity = lambda st: (
+                st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
+            )
+            if identity(before) != identity(after) or total != after.st_size:
+                raise ValueError("manifest file changed during descriptor capture")
+            return b"".join(parts)
+        except OSError as exc:
+            raise ValueError("manifest file changed during descriptor capture") from exc
+    finally:
+        os.close(descriptor)
 
 
 def parse_manifest_json(content: str) -> object:
@@ -157,7 +211,9 @@ def verify_manifest_file(
     first_sha, first_size, first_identity = (
         fingerprint_regular_file_with_identity(path)
     )
-    raw = path.read_bytes()
+    if first_size > MAX_MANIFEST_BYTES:
+        raise ValueError("manifest exceeds the 16 MiB safety limit")
+    raw = _read_regular_manifest_bytes(path)
     observed_sha = hashlib.sha256(raw).hexdigest()
     if len(raw) != first_size or observed_sha != first_sha:
         raise ValueError("manifest file changed during verification")
