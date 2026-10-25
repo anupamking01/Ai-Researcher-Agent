@@ -1283,3 +1283,100 @@ def test_rejects_missing_manifest(tmp_path):
 
     with pytest.raises(ValueError, match="output manifest must be a regular file"):
         verify.verify_bundle(output)
+
+
+@pytest.mark.parametrize(
+    "artifact",
+    [
+        analyze_human_eval.ANALYSIS_JSON,
+        analyze_human_eval.ANALYSIS_MARKDOWN,
+        analyze_human_eval.ANALYSIS_MANIFEST,
+    ],
+)
+def test_candidate_post_verification_mutation_cannot_be_published(
+    tmp_path, artifact
+):
+    """Synthetic post-verifier byte changes must not inherit a PASS receipt."""
+    output = tmp_path / "analysis"
+
+    def modify_candidate_after_verification(candidate):
+        source = candidate / artifact
+        source.write_bytes(source.read_bytes() + b"synthetic post-verify drift")
+        return {"status": "synthetic_verifier_pass"}
+
+    with pytest.raises(ValueError, match="changed during independent recomputation"):
+        analyze_human_eval.write_bundle(
+            _payload(), output, verify_candidate=modify_candidate_after_verification
+        )
+    assert not output.exists()
+
+
+def test_same_byte_inode_replacement_after_candidate_verification_is_rejected(
+    tmp_path,
+):
+    """Hash equality does not excuse a swapped staged-file identity."""
+    output = tmp_path / "analysis"
+
+    def replace_candidate(candidate):
+        original = candidate / analyze_human_eval.ANALYSIS_MARKDOWN
+        replacement = tmp_path / "synthetic-replacement.md"
+        replacement.write_bytes(original.read_bytes())
+        os.replace(replacement, original)
+        return {"status": "synthetic_verifier_pass"}
+
+    with pytest.raises(ValueError, match="changed during independent recomputation"):
+        analyze_human_eval.write_bundle(
+            _payload(), output, verify_candidate=replace_candidate
+        )
+    assert not output.exists()
+
+
+def test_candidate_inventory_mutation_after_verification_is_rejected(tmp_path):
+    """Unannounced additions to a verified candidate invalidate its directory."""
+    output = tmp_path / "analysis"
+
+    def add_candidate_sidecar(candidate):
+        (candidate / "synthetic-unverified-sidecar").write_text(
+            "not part of the verified bundle", encoding="utf-8"
+        )
+        return {"status": "synthetic_verifier_pass"}
+
+    with pytest.raises(ValueError, match="output root changed"):
+        analyze_human_eval.write_bundle(
+            _payload(), output, verify_candidate=add_candidate_sidecar
+        )
+    assert not output.exists()
+
+
+def test_candidate_changes_inside_semantic_verifier_are_rejected(
+    tmp_path, monkeypatch
+):
+    """A successful semantic check cannot be reused after its candidate drifts."""
+    output = tmp_path / "analysis"
+    original_verify = verify.verify_bundle
+
+    def verify_then_mutate(candidate):
+        receipt = original_verify(candidate)
+        path = candidate / analyze_human_eval.ANALYSIS_JSON
+        path.write_bytes(path.read_bytes() + b"synthetic post-check mutation")
+        return receipt
+
+    monkeypatch.setattr(verify, "verify_bundle", verify_then_mutate)
+    with pytest.raises(ValueError, match="changed during independent recomputation"):
+        analyze_human_eval.write_bundle(_payload(), output)
+    assert not output.exists()
+
+
+def test_unchanged_candidate_remains_publishable_with_second_verifier(tmp_path):
+    """The custody gate does not require real ratings or alter valid results."""
+    output = tmp_path / "analysis"
+
+    def synthetic_second_verifier(candidate):
+        assert (candidate / analyze_human_eval.ANALYSIS_JSON).is_file()
+        return verify.verify_bundle(candidate)
+
+    receipt = analyze_human_eval.write_bundle(
+        _payload(), output, verify_candidate=synthetic_second_verifier
+    )
+    assert receipt["status"] == "human_validation_analysis_bundle_verified"
+    assert verify.verify_bundle(output)["status"] == receipt["status"]

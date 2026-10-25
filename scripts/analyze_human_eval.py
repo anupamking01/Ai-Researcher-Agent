@@ -500,9 +500,36 @@ def write_bundle(payload, output_root, *, verify_candidate=None):
         os.fsync(candidate_fd)
         os.fsync(staging_container_fd)
 
-        receipt = verify_bundle(anchored_candidate)
-        if verify_candidate is not None:
-            receipt = verify_candidate(anchored_candidate)
+        # Pin the exact prepared candidate generations across both verification
+        # passes. A verifier callback must not publish later, unverified bytes.
+        from scripts.verify_human_eval_analysis_outputs import (
+            _open_output_snapshot,
+            _require_output_snapshot_stable,
+        )
+
+        with ExitStack() as pinned_candidate:
+            candidate_root_fd, candidate_files, candidate_identity = (
+                _open_output_snapshot(pinned_candidate, anchored_candidate)
+            )
+            prepared = {
+                ANALYSIS_JSON: json_bytes,
+                ANALYSIS_MARKDOWN: markdown_bytes,
+                ANALYSIS_MANIFEST: manifest_bytes,
+            }
+            for name, expected in prepared.items():
+                if candidate_files[name][1][0] != expected:
+                    raise ValueError(
+                        f"human-analysis staged {name} differs from prepared output"
+                    )
+            receipt = verify_bundle(anchored_candidate)
+            if verify_candidate is not None:
+                receipt = verify_candidate(anchored_candidate)
+            _require_output_snapshot_stable(
+                anchored_candidate,
+                candidate_root_fd,
+                candidate_files,
+                candidate_identity,
+            )
         _require_directory_entry_binding(
             staging_container_fd,
             candidate_name,
