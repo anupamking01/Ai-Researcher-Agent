@@ -203,3 +203,115 @@ def test_standalone_bundle_rejects_template_order_mismatch(tmp_path):
     )
     with pytest.raises(ValueError, match="order"):
         exporter.verify_annotator_bundle(root)
+
+
+def test_window_custody_accepts_unchanged_synthetic_bundle(tmp_path):
+    root = _write_bundle(tmp_path / "bundle", _rows())
+    receipt = exporter.verify_annotator_bundle(root)
+    assert receipt["status"] == "human_eval_annotator_distribution_verified"
+
+
+def test_window_custody_rejects_same_byte_replacement_of_earlier_packet(
+    tmp_path, monkeypatch
+):
+    root = _write_bundle(tmp_path / "bundle", _rows())
+    target = root / "packet.jsonl"
+    detached = tmp_path / "detached_packet.jsonl"
+    original_reader = exporter._regular_bytes
+    replaced = []
+
+    def replace_after_packet_capture(path, *, label):
+        content = original_reader(path, label=label)
+        if label == "annotator ratings template" and not replaced:
+            original = target.read_bytes()
+            target.rename(detached)
+            target.write_bytes(original)
+            replaced.append(True)
+        return content
+
+    monkeypatch.setattr(exporter, "_regular_bytes", replace_after_packet_capture)
+    with pytest.raises(ValueError, match="packet.jsonl changed during verification window"):
+        exporter.verify_annotator_bundle(root)
+    assert replaced == [True]
+
+
+def test_window_custody_rejects_late_in_place_instruction_change(
+    tmp_path, monkeypatch
+):
+    root = _write_bundle(tmp_path / "bundle", _rows())
+    original_reader = exporter._regular_bytes
+    modified = []
+
+    def alter_after_instruction_capture(path, *, label):
+        content = original_reader(path, label=label)
+        if label == "annotator instructions" and not modified:
+            (root / "annotator_instructions.md").write_bytes(content + b"\nsynthetic change\n")
+            modified.append(True)
+        return content
+
+    monkeypatch.setattr(exporter, "_regular_bytes", alter_after_instruction_capture)
+    with pytest.raises(ValueError, match="annotator_instructions.md changed during verification window"):
+        exporter.verify_annotator_bundle(root)
+    assert modified == [True]
+
+
+def test_window_custody_rejects_late_undeclared_artifact(tmp_path, monkeypatch):
+    root = _write_bundle(tmp_path / "bundle", _rows())
+    original_reader = exporter._regular_bytes
+    introduced = []
+
+    def introduce_after_instruction_capture(path, *, label):
+        content = original_reader(path, label=label)
+        if label == "annotator instructions" and not introduced:
+            (root / "unexpected.txt").write_text("synthetic", encoding="utf-8")
+            introduced.append(True)
+        return content
+
+    monkeypatch.setattr(exporter, "_regular_bytes", introduce_after_instruction_capture)
+    with pytest.raises(ValueError, match="artifact set mismatch"):
+        exporter.verify_annotator_bundle(root)
+    assert introduced == [True]
+
+
+def test_window_custody_rejects_same_byte_bundle_root_replacement(
+    tmp_path, monkeypatch
+):
+    import shutil
+
+    root = _write_bundle(tmp_path / "bundle", _rows())
+    detached = tmp_path / "detached_bundle"
+    original_reader = exporter._regular_bytes
+    replaced = []
+
+    def swap_root_after_instruction_capture(path, *, label):
+        content = original_reader(path, label=label)
+        if label == "annotator instructions" and not replaced:
+            root.rename(detached)
+            shutil.copytree(detached, root)
+            replaced.append(True)
+        return content
+
+    monkeypatch.setattr(exporter, "_regular_bytes", swap_root_after_instruction_capture)
+    with pytest.raises(ValueError, match="bundle root changed during verification window"):
+        exporter.verify_annotator_bundle(root)
+    assert replaced == [True]
+
+
+def test_window_custody_rejects_late_template_mutation(tmp_path, monkeypatch):
+    root = _write_bundle(tmp_path / "bundle", _rows())
+    original_reader = exporter._regular_bytes
+    modified = []
+
+    def alter_after_manifest_capture(path, *, label):
+        content = original_reader(path, label=label)
+        if label == "annotator manifest" and not modified:
+            (root / "ratings_template.csv").write_bytes(
+                (root / "ratings_template.csv").read_bytes() + b"\n"
+            )
+            modified.append(True)
+        return content
+
+    monkeypatch.setattr(exporter, "_regular_bytes", alter_after_manifest_capture)
+    with pytest.raises(ValueError, match="ratings_template.csv changed during verification window"):
+        exporter.verify_annotator_bundle(root)
+    assert modified == [True]

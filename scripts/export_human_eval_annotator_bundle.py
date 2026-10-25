@@ -365,6 +365,60 @@ def _ordered_artifacts(
     return packet_bytes, output.getvalue().encode("utf-8")
 
 
+def _evidence_stat_signature(path: Path) -> tuple[int, ...]:
+    """Observable pathname identity, including in-place metadata changes."""
+    value = os.stat(path, follow_symlinks=False)
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _require_annotator_verification_window_unchanged(
+    output_root: Path,
+    *,
+    initial_root: tuple[int, ...],
+    initial_files: dict[str, tuple[int, ...]],
+    captured_bytes: dict[str, bytes],
+) -> None:
+    """Fail closed if any verified input changed before issuing a receipt.
+
+    A per-file captured read cannot detect an earlier file being changed while
+    later inputs are checked. Compare all four paths, bytes and the artifact
+    inventory at the end, then recheck identities once more after the rereads.
+    """
+    def check_visible_identity() -> None:
+        _require_annotator_artifact_set(output_root)
+        if _evidence_stat_signature(output_root) != initial_root:
+            raise ValueError(
+                "annotator bundle root changed during verification window"
+            )
+        for name in ANNOTATOR_ARTIFACTS:
+            if _evidence_stat_signature(output_root / name) != initial_files[name]:
+                raise ValueError(
+                    f"annotator {name} changed during verification window"
+                )
+
+    try:
+        check_visible_identity()
+        for name in ANNOTATOR_ARTIFACTS:
+            if _regular_bytes(
+                output_root / name, label=f"annotator window recheck {name}"
+            ) != captured_bytes[name]:
+                raise ValueError(
+                    f"annotator {name} bytes changed during verification window"
+                )
+        check_visible_identity()
+    except OSError as exc:
+        raise ValueError(
+            "annotator bundle input disappeared during verification window"
+        ) from exc
+
+
 def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
     """Verify that a published bundle contains only annotator-safe artifacts."""
     output_root = Path(output_root)
@@ -372,6 +426,17 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
         raise ValueError(f"annotator bundle root must be a regular directory: {output_root}")
 
     _require_annotator_artifact_set(output_root)
+    # Freeze visible identities before the first content read. The shared
+    # reader validates each file individually, but a later read alone cannot
+    # reveal replacement of an earlier successfully captured file.
+    try:
+        initial_root = _evidence_stat_signature(output_root)
+        initial_files = {
+            name: _evidence_stat_signature(output_root / name)
+            for name in ANNOTATOR_ARTIFACTS
+        }
+    except OSError as exc:
+        raise ValueError("annotator bundle changed before verification") from exc
 
     packet_bytes = _regular_bytes(output_root / "packet.jsonl", label="annotator packet")
     template_bytes = _regular_bytes(
@@ -504,7 +569,7 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
     if type(declared_count) is not int or declared_count != len(packet_rows):
         raise ValueError("annotator manifest n_reports must equal the packet count as an integer")
 
-    return {
+    receipt = {
         "schema_version": 1,
         "study_id": "budget-main-v1",
         "status": "human_eval_annotator_distribution_verified",
@@ -515,6 +580,18 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
         "annotator_guide_sha256": _fingerprint(guide_bytes)["sha256"],
         "presentation_order": presentation_order,
     }
+    _require_annotator_verification_window_unchanged(
+        output_root,
+        initial_root=initial_root,
+        initial_files=initial_files,
+        captured_bytes={
+            "packet.jsonl": packet_bytes,
+            "ratings_template.csv": template_bytes,
+            "annotator_instructions.md": guide_bytes,
+            "annotator_manifest.json": manifest_bytes,
+        },
+    )
+    return receipt
 
 
 def verify_annotator_bundle_against_source(
