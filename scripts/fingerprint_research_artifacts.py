@@ -20,6 +20,17 @@ DEFAULT_ARTIFACTS = (
     REPO_ROOT / "outputs" / "posthoc_support_runs.csv",
 )
 
+# The verifier's maximum *serialized JSON* size is a producer contract too:
+# never emit a manifest that the independent verifier cannot subsequently read.
+MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+
+
+def require_manifest_payload_size(payload: bytes) -> None:
+    """Reject unverifyable manifest JSON before creating any output path."""
+    if len(payload) > MAX_MANIFEST_BYTES:
+        raise ValueError("manifest exceeds the 16 MiB safety limit")
+
+
 _WINDOWS_DEVICE_NAMES = frozenset(
     {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
     | {f"COM{number}" for number in range(1, 10)}
@@ -345,6 +356,7 @@ def write_manifest_create_only(destination: Path, rendered: str) -> None:
     """
     target = Path(os.path.abspath(destination))
     payload = rendered.encode("utf-8")
+    require_manifest_payload_size(payload)
     if not target.name:
         raise ValueError("manifest output must name a new file")
 
@@ -451,6 +463,7 @@ def main() -> int:
     paths = [REPO_ROOT / path for path in args.paths] if args.paths else list(DEFAULT_ARTIFACTS)
     manifest = build_manifest(paths)
     rendered = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    require_manifest_payload_size(rendered.encode("utf-8"))
     if args.output:
         output = args.output if args.output.is_absolute() else REPO_ROOT / args.output
         write_manifest_create_only(output, rendered)

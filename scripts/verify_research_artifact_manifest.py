@@ -16,6 +16,7 @@ from pathlib import Path
 from pathlib import PurePosixPath
 
 from scripts.fingerprint_research_artifacts import (
+    MAX_MANIFEST_BYTES,
     REPO_ROOT,
     fingerprint_regular_file_with_identity,
     portable_manifest_path_identity,
@@ -29,9 +30,20 @@ SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 
-# Bound the metadata JSON read, not the size of the research artifacts it names.
-# This permits tens of thousands of inputs while avoiding unbounded memory use.
-MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+# Bound the *initial and closing hash passes*, not just the JSON load: before
+# this preflight, an oversized manifest could be read completely several times
+# only to be rejected after SHA-256 computation. The checked descriptor read
+# still enforces its own limit when a file changes after this stat check.
+def _bounded_manifest_fingerprint(path: Path) -> tuple[str, int, tuple[int, int]]:
+    try:
+        current = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError("manifest capture requires a regular file") from exc
+    if not stat.S_ISREG(current.st_mode):
+        raise ValueError("manifest capture requires a regular file")
+    if current.st_size > MAX_MANIFEST_BYTES:
+        raise ValueError("manifest exceeds the 16 MiB safety limit")
+    return fingerprint_regular_file_with_identity(path)
 
 
 def _read_regular_manifest_bytes(path: Path) -> bytes:
@@ -208,9 +220,7 @@ def verify_manifest_file(
         raise ValueError("expected manifest SHA-256 must be 64 lowercase hex digits")
 
     path = Path(manifest_path)
-    first_sha, first_size, first_identity = (
-        fingerprint_regular_file_with_identity(path)
-    )
+    first_sha, first_size, first_identity = _bounded_manifest_fingerprint(path)
     if first_size > MAX_MANIFEST_BYTES:
         raise ValueError("manifest exceeds the 16 MiB safety limit")
     raw = _read_regular_manifest_bytes(path)
@@ -220,9 +230,7 @@ def verify_manifest_file(
 
     # Bind parsed content to the same checked physical file that was hashed.
     # A byte-identical inode replacement is not silently accepted.
-    final_sha, final_size, final_identity = (
-        fingerprint_regular_file_with_identity(path)
-    )
+    final_sha, final_size, final_identity = _bounded_manifest_fingerprint(path)
     if (first_sha, first_size, first_identity) != (
         final_sha, final_size, final_identity
     ):
@@ -243,9 +251,7 @@ def verify_manifest_file(
     # Keep the exact manifest bytes and physical identity pinned through the
     # entire artifact scan, not only through the initial manifest capture.
     try:
-        closing_sha, closing_size, closing_identity = (
-            fingerprint_regular_file_with_identity(path)
-        )
+        closing_sha, closing_size, closing_identity = _bounded_manifest_fingerprint(path)
     except (ValueError, OSError) as exc:
         raise ValueError(
             "manifest file changed during artifact verification"

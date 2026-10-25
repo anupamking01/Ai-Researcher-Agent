@@ -183,3 +183,27 @@ an atomic snapshot or immutability after the final read. A malicious
 swap-and-restore between observations can evade it. Independent custody of
 the external pin and immutable input storage remain stronger provenance
 requirements.
+
+## Producer–verifier manifest-size agreement
+
+The independent verifier caps a **serialized manifest JSON file** at 16 MiB.
+Previously, a very large manifest was fully SHA-256-hashed before its size was
+rejected, and the manifest producer could write a JSON file that the verifier
+would never accept. Both tools now share a single 16 MiB metadata bound:
+
+- the fingerprint CLI refuses to emit an oversized serialized JSON manifest,
+  including standard output, before creating any destination or parent path;
+- direct create-only writes apply the same UTF-8 **byte** count (rather than
+  Python character count) before making new filesystem entries;
+- the verifier checks current regular-file metadata and the cap before each
+  full manifest SHA-256 pass. Its descriptor-bound read separately enforces
+  the cap if the file changes or grows during reading.
+
+This is a metadata-resource and cross-tool reproducibility control; research
+**artifact file sizes themselves are not capped**. A concurrent replacement
+between a stat preflight and a hash read can still cause extra I/O; these
+checks are not an adversarial filesystem lock or a guarantee of atomic
+multi-file capture. None of the frozen inputs or analyses is changed.
+
+The synthetic regression suite is
+`python -m pytest -q tests/test_research_manifest_size_contract.py`.
