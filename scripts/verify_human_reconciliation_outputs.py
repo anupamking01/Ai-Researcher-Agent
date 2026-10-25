@@ -76,19 +76,29 @@ def _regular_snapshot_from_descriptor(
     *,
     label: str,
 ) -> tuple[bytes, tuple[int, int, int, int, int]]:
-    """Read a stable byte snapshot while retaining the original file descriptor."""
+    """Capture a stable, size-bounded source or output byte snapshot."""
     before = os.fstat(descriptor)
     if not stat.S_ISREG(before.st_mode):
         raise ValueError(f"{label} must be a regular file")
+    limit = reconcile.MAX_RECONCILIATION_ARTIFACT_BYTES
+    if before.st_size > limit:
+        raise ValueError(f"{label} exceeds {limit} byte reconciliation artifact limit")
     chunks = []
     offset = 0
     while True:
-        chunk = os.pread(descriptor, 1024 * 1024, offset)
+        remaining = limit - offset
+        # One extra byte detects growth beyond the budget without an
+        # unbounded read, including when the original file fit exactly.
+        chunk = os.pread(descriptor, min(1024 * 1024, remaining + 1), offset)
         if not chunk:
             break
+        if len(chunk) > remaining:
+            raise ValueError(f"{label} exceeds {limit} byte reconciliation artifact limit")
         chunks.append(chunk)
         offset += len(chunk)
     after = os.fstat(descriptor)
+    if after.st_size > limit:
+        raise ValueError(f"{label} exceeds {limit} byte reconciliation artifact limit")
     before_identity = (
         before.st_dev,
         before.st_ino,
@@ -103,10 +113,9 @@ def _regular_snapshot_from_descriptor(
         after.st_mtime_ns,
         after.st_ctime_ns,
     )
-    if before_identity != after_identity:
+    if before_identity != after_identity or offset != before.st_size:
         raise ValueError(f"{label} changed while it was being read")
     return b"".join(chunks), after_identity
-
 
 def _open_regular_snapshot_at(
     directory_descriptor: int,
