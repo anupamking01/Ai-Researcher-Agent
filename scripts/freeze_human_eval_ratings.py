@@ -1122,7 +1122,16 @@ def build_agreement(rows) -> dict:
         iterator = iter(rows)
     except TypeError as exc:
         raise ValueError("direct agreement rows must be iterable") from exc
-    rows = list(islice(iterator, MAX_DIRECT_AGREEMENT_ROWS + 1))
+    # Iterators may yield the same mutable dictionary buffer repeatedly. A
+    # plain list would retain aliases and later buffer rewrites would erase
+    # earlier independent ratings before the schema/identity/statistics passes.
+    # Copy flat string-valued rating rows at yield time, once and within the
+    # existing bound. Preserve non-dicts so the frozen row validator rejects
+    # them with its established explicit error.
+    rows = [
+        dict.copy(row) if isinstance(row, dict) else row
+        for row in islice(iterator, MAX_DIRECT_AGREEMENT_ROWS + 1)
+    ]
     if not rows:
         raise ValueError("direct agreement rows must not be empty")
     if len(rows) > MAX_DIRECT_AGREEMENT_ROWS:
