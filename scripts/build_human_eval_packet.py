@@ -85,6 +85,15 @@ MARKDOWN_RENDERER_DISTRIBUTION = "markdown-it-py"
 MARKDOWN_RENDERER_PRESET = "commonmark"
 MARKDOWN_RENDERER_OPTIONS = {"html": True}
 MAX_METADATA_DECODE_LAYERS = 64
+# Bound research evidence capture, including the verifier's packet rereads.
+MAX_PACKET_CAPTURE_BYTES = 64 * 1024 * 1024
+
+
+def _require_packet_byte_limit(size: int, *, label: str) -> None:
+    if size > MAX_PACKET_CAPTURE_BYTES:
+        raise ValueError(
+            f"{label} exceeds {MAX_PACKET_CAPTURE_BYTES} byte packet-capture limit"
+        )
 _MARKDOWN_RENDERER = MarkdownIt(MARKDOWN_RENDERER_PRESET, MARKDOWN_RENDERER_OPTIONS)
 _BLOCK_TAGS = frozenset(
     {
@@ -409,17 +418,28 @@ def _read_regular_file_captured(path: Path, *, label: str) -> bytes:
     try:
         parent_fd = os.open(path.parent, directory_flags | nofollow)
         parent_before = os.fstat(parent_fd)
-        file_fd = os.open(path.name, os.O_RDONLY | nofollow, dir_fd=parent_fd)
+        # Avoid blocking on a substituted FIFO before rejecting its inode type.
+        file_fd = os.open(
+            path.name,
+            os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | nofollow,
+            dir_fd=parent_fd,
+        )
         file_before = os.fstat(file_fd)
         if not stat.S_ISREG(file_before.st_mode):
             raise ValueError(f"{label} must be a regular file: {path}")
+        _require_packet_byte_limit(file_before.st_size, label=label)
 
+        # Capture only the stat-pinned generation, with one growth probe.
         chunks = []
-        while True:
-            chunk = os.read(file_fd, 1024 * 1024)
+        remaining = file_before.st_size
+        while remaining:
+            chunk = os.read(file_fd, min(1024 * 1024, remaining))
             if not chunk:
-                break
+                raise ValueError(f"{label} changed during capture: {path}")
             chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(file_fd, 1):
+            raise ValueError(f"{label} changed during capture: {path}")
 
         file_after = os.fstat(file_fd)
         path_after = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
@@ -548,6 +568,7 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
 
     records: list[dict] = []
     seen_cells: set[tuple[str, str]] = set()
+    total_source_bytes = 0
 
     for trace_path in sorted(trace_root.glob("*/*.json")):
         if trace_path.is_symlink() or trace_path.parent.is_symlink():
@@ -556,6 +577,10 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
             )
         trace_content = _read_regular_file_captured(
             trace_path, label=f"Experiment trace {trace_path}"
+        )
+        total_source_bytes += len(trace_content)
+        _require_packet_byte_limit(
+            total_source_bytes, label="aggregate packet source evidence"
         )
         payload = _load_json_object(trace_content, label=f"Experiment trace {trace_path}")
         experiment, trace = _validated_trace_sections(payload, trace_path=trace_path)
@@ -608,6 +633,10 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
         )
         report_content = _read_regular_file_captured(
             report_md, label=f"Markdown report {report_md}"
+        )
+        total_source_bytes += len(report_content)
+        _require_packet_byte_limit(
+            total_source_bytes, label="aggregate packet source evidence"
         )
         report_text = report_content.decode("utf-8").strip()
         if not report_text:
@@ -681,7 +710,9 @@ def _write_csv(path: Path, fieldnames: tuple[str, ...] | list[str], rows: list[d
 
 
 def _artifact_fingerprint(path: Path) -> dict:
-    content = path.read_bytes()
+    content = _read_regular_file_captured(
+        path, label=f"human-evaluation packet artifact {path.name}"
+    )
     return {"path": path.name, **_byte_fingerprint(content)}
 
 
@@ -753,6 +784,15 @@ def build_packet(
             }
         )
 
+    # Before reserving the create-only output, ensure packet.jsonl can be
+    # independently captured under the same limit by the verifier.
+    packet_text = (
+        "\n".join(json.dumps(row, ensure_ascii=False, sort_keys=True) for row in packet_rows)
+        + "\n"
+    )
+    _require_packet_byte_limit(
+        len(packet_text.encode("utf-8")), label="annotator-facing packet.jsonl"
+    )
     validate_annotator_facing_content(packet_rows, label="packet")
     require_loaded_content_validator_unchanged(operation="packet construction")
 
@@ -776,11 +816,7 @@ def build_packet(
     ratings_template_path = output_root / "ratings_template.csv"
     # packet.jsonl is the reservation point. Exclusive creation is the decisive
     # guard against two builders passing the preflight check concurrently.
-    _write_text_exclusive(
-        packet_path,
-        "\n".join(json.dumps(row, ensure_ascii=False, sort_keys=True) for row in packet_rows)
-        + "\n",
-    )
+    _write_text_exclusive(packet_path, packet_text)
 
     _write_csv(
         key_path,
