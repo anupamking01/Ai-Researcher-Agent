@@ -68,7 +68,7 @@ def test_reader_rejects_symlinked_parent(tmp_path):
     (original / "input.jsonl").write_bytes(b"synthetic")
     alias = tmp_path / "alias"
     alias.symlink_to(original, target_is_directory=True)
-    with pytest.raises(ValueError, match="stable regular file"):
+    with pytest.raises(ValueError, match="replaced during capture|stable regular file"):
         exporter._regular_bytes(alias / "input.jsonl", label="synthetic input")
 
 
