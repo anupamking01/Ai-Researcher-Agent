@@ -44,6 +44,10 @@ FROZEN_ANNOTATOR_GUIDE_SHA256 = (
     "3e27ef38231ed70fe36370af31ced7762a253a72dc5cc4997d8ef62d0a6e3370"
 )
 MIN_RATERS_PER_ITEM = 2
+# Bound every externally supplied or retained freeze input before allocation.
+# The packet builder permits up to 64 MiB per capture; use the same ceiling
+# for packet, ratings, attestations, provenance, and independent verification.
+MAX_HUMAN_FREEZE_INPUT_BYTES = 64 * 1024 * 1024
 PACKET_FIELDS = ("blind_id", "task_id", "question", "report_markdown")
 GOVERNING_INPUT_PATHS = {
     "packet": "governing_inputs/packet.jsonl",
@@ -468,15 +472,33 @@ def _capture_regular_input(path: Path, *, label: str) -> bytes:
             before = os.fstat(file_fd)
             if not stat.S_ISREG(before.st_mode):
                 raise ValueError(f"{label} must be a regular file: {path}")
+            if before.st_size > MAX_HUMAN_FREEZE_INPUT_BYTES:
+                raise ValueError(
+                    f"{label} exceeds {MAX_HUMAN_FREEZE_INPUT_BYTES} byte "
+                    "human-evaluation input capture limit"
+                )
             chunks = []
             offset = 0
-            while True:
-                chunk = os.pread(file_fd, 1024 * 1024, offset)
+            # Never follow an unbounded EOF loop over an adversarially growing
+            # ratings/packet file. Capture exactly the initially observed length.
+            while offset < before.st_size:
+                chunk = os.pread(
+                    file_fd, min(1024 * 1024, before.st_size - offset), offset
+                )
                 if not chunk:
-                    break
+                    raise ValueError(f"{label} truncated while it was being read")
                 chunks.append(chunk)
                 offset += len(chunk)
+            # One additional byte detects append-only growth before checking
+            # metadata and the visible pathname below.
+            if os.pread(file_fd, 1, before.st_size):
+                raise ValueError(f"{label} grew while it was being read")
             after = os.fstat(file_fd)
+            if after.st_size > MAX_HUMAN_FREEZE_INPUT_BYTES:
+                raise ValueError(
+                    f"{label} exceeds {MAX_HUMAN_FREEZE_INPUT_BYTES} byte "
+                    "human-evaluation input capture limit"
+                )
             before_identity = (
                 before.st_dev,
                 before.st_ino,
