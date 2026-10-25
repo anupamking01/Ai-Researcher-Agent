@@ -63,6 +63,18 @@ CATEGORIES = (
     "both_tie",
 )
 
+# This ten-task descriptive output bundle is metadata, not an arbitrary-size
+# research dataset. Keep the producer and independent verifier in agreement.
+MAX_RECONCILIATION_ARTIFACT_BYTES = 16 * 1024 * 1024
+
+
+def _require_reconciliation_artifact_size(content: bytes, *, label: str) -> None:
+    if len(content) > MAX_RECONCILIATION_ARTIFACT_BYTES:
+        raise ValueError(
+            f"{label} exceeds {MAX_RECONCILIATION_ARTIFACT_BYTES} byte "
+            "reconciliation artifact limit"
+        )
+
 
 def analysis_runtime_contract() -> dict:
     """Describe the interpreter contract for descriptive numeric outputs."""
@@ -545,6 +557,8 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
     except ValueError as exc:
         raise ValueError("non-finite reconciliation values are invalid JSON") from exc
     markdown_bytes = render_markdown(payload).encode("utf-8")
+    _require_reconciliation_artifact_size(json_bytes, label="canonical reconciliation JSON")
+    _require_reconciliation_artifact_size(markdown_bytes, label="reconciliation Markdown")
 
     verified_inputs = payload.get("verified_input_fingerprints")
     if not isinstance(verified_inputs, dict) or not verified_inputs:
@@ -593,6 +607,7 @@ def write_bundle(payload: dict, output_root: Path, *, root: Path = ROOT) -> dict
         "integrity_note": MANIFEST_INTEGRITY_NOTE,
     }
     manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    _require_reconciliation_artifact_size(manifest_bytes, label="reconciliation output manifest")
 
     output_verifier._verify_producer_commit_implementation(
         producer_git_commit,
