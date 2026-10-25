@@ -11,7 +11,9 @@ import argparse
 import csv
 import io
 import json
+import os
 import random
+import stat
 from pathlib import Path
 
 from scripts import build_human_eval_packet as build
@@ -34,6 +36,54 @@ def _require_regular_file(path: Path, *, label: str) -> bytes:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"{label} must be a regular file: {path}")
     return build._read_regular_file_captured(path, label=label)
+
+
+def _file_generation(path: Path, *, label: str) -> tuple[int, ...]:
+    """Observe the current regular-file generation without following a leaf link."""
+    try:
+        entry = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError(f"packet evidence changed during verification: {label}") from exc
+    if not stat.S_ISREG(entry.st_mode):
+        raise ValueError(f"packet evidence changed during verification: {label}")
+    return (
+        entry.st_dev, entry.st_ino, entry.st_mode, entry.st_size,
+        entry.st_mtime_ns, entry.st_ctime_ns,
+    )
+
+
+def _capture_window_file(
+    path: Path,
+    *,
+    label: str,
+    snapshots: dict,
+) -> bytes:
+    """Pin a file generation and its exact bytes for the full verification pass."""
+    path = Path(os.path.abspath(path))
+    before = _file_generation(path, label=label)
+    content = _require_regular_file(path, label=label)
+    after = _file_generation(path, label=label)
+    if before != after:
+        raise ValueError(f"packet evidence changed during verification: {label}")
+    receipt = (after, build._byte_fingerprint(content))
+    if path in snapshots and snapshots[path] != receipt:
+        raise ValueError(f"packet evidence changed during verification: {label}")
+    snapshots[path] = receipt
+    return content
+
+
+def _recheck_window_files(snapshots: dict) -> None:
+    """Refuse a PASS if any previously checked input drifted in the meantime."""
+    for path, (generation, fingerprint) in snapshots.items():
+        label = str(path)
+        if _file_generation(path, label=label) != generation:
+            raise ValueError(f"packet evidence changed during verification: {label}")
+        content = _require_regular_file(path, label=label)
+        if (
+            build._byte_fingerprint(content) != fingerprint
+            or _file_generation(path, label=label) != generation
+        ):
+            raise ValueError(f"packet evidence changed during verification: {label}")
 
 
 def _load_json_object(content: bytes, *, label: str) -> dict:
@@ -178,9 +228,20 @@ def verify_packet(
     if output_root.is_symlink() or not output_root.is_dir():
         raise ValueError(f"human-evaluation output root must be a regular directory: {output_root}")
 
-    manifest_content = _require_regular_file(output_root / "manifest.json", label="packet manifest")
+    snapshots = {}
+    manifest_content = _capture_window_file(
+        output_root / "manifest.json", label="packet manifest", snapshots=snapshots
+    )
     manifest = _load_json_object(manifest_content, label="packet manifest")
+    task_content = _capture_window_file(
+        task_manifest_path, label="frozen task manifest", snapshots=snapshots
+    )
     task_manifest = build._load_task_manifest(task_manifest_path)
+    _require_equal(
+        build._byte_fingerprint(task_content),
+        {"bytes": task_manifest["bytes"], "sha256": task_manifest["sha256"]},
+        label="frozen task manifest capture",
+    )
 
     _require_equal(set(manifest), build.MANIFEST_FIELDS, label="packet manifest schema")
     _require_equal(manifest.get("schema_version"), 2, label="packet manifest schema_version")
@@ -214,7 +275,9 @@ def verify_packet(
     contents = {}
     for key, filename in filenames.items():
         _require_equal(manifest.get(key), filename, label=f"{key} filename")
-        artifact_content = _require_regular_file(output_root / filename, label=key)
+        artifact_content = _capture_window_file(
+            output_root / filename, label=key, snapshots=snapshots
+        )
         contents[key] = artifact_content
         _require_equal(
             artifacts.get(key),
@@ -287,7 +350,9 @@ def verify_packet(
         if Path(row["trace_path"]) != expected_trace:
             raise ValueError(f"trace source mapping does not match variant/run for {blind_id}")
         trace_path = _repo_file(repo_root, row["trace_path"], label=f"trace for {blind_id}")
-        trace_content = _require_regular_file(trace_path, label=f"trace for {blind_id}")
+        trace_content = _capture_window_file(
+            trace_path, label=f"trace for {blind_id}", snapshots=snapshots
+        )
         source_entry = source_by_blind[blind_id]
         _require_equal(
             set(source_entry), {"blind_id", "trace", "report"},
@@ -343,7 +408,9 @@ def verify_packet(
         _require_equal(
             report_path, expected_report.resolve(), label=f"report source mapping for {blind_id}"
         )
-        report_content = _require_regular_file(report_path, label=f"report for {blind_id}")
+        report_content = _capture_window_file(
+            report_path, label=f"report for {blind_id}", snapshots=snapshots
+        )
         try:
             report_text = report_content.decode("utf-8").strip()
         except UnicodeDecodeError as exc:
@@ -405,6 +472,10 @@ def verify_packet(
         label="task coverage",
     )
     build.require_loaded_content_validator_unchanged(operation="packet verification")
+    # Capture-time file checks alone cannot detect an earlier artifact being
+    # replaced while a later source is under review. Revisit every generation
+    # before issuing a successful independent provenance receipt.
+    _recheck_window_files(snapshots)
 
     return {
         "schema_version": 1,
