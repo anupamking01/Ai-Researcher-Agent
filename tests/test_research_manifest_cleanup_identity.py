@@ -40,7 +40,7 @@ def test_failed_write_preserves_replaced_destination(
 
     monkeypatch.setattr(producer.os, "write", interrupt_after_replacement)
     with pytest.raises(ValueError, match="unsafe or unavailable"):
-        producer.write_manifest_create_only(destination, "{\\"synthetic\\": true}\\n")
+        producer.write_manifest_create_only(destination, '{"synthetic": true}\n')
 
     assert displaced.read_bytes() == b'{"sy'
     assert preserved.read_bytes() == expected
@@ -70,5 +70,5 @@ def test_failed_write_cleans_unreplaced_partial_file(
 
     monkeypatch.setattr(producer.os, "write", interrupt)
     with pytest.raises(ValueError, match="unsafe or unavailable"):
-        producer.write_manifest_create_only(destination, "{\\"synthetic\\": true}\\n")
+        producer.write_manifest_create_only(destination, '{"synthetic": true}\n')
     assert not destination.exists()
