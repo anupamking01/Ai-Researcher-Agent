@@ -6,11 +6,14 @@ from scripts import freeze_human_eval_ratings as freeze
 
 
 def _row(annotator, blind_id, score="3"):
+    # Synthetic endpoint/missingness fixtures satisfy the frozen rubric note
+    # requirement unless a test explicitly exercises missing explanations.
+    notes = "Synthetic evidence explanation." if score in ("1", "5", "") else ""
     return {
         "annotator_id": annotator,
         "blind_id": blind_id,
         **{field: score for field in freeze.SCORE_FIELDS},
-        "notes": "",
+        "notes": notes,
     }
 
 

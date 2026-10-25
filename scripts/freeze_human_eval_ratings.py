@@ -1055,7 +1055,60 @@ def quadratic_weighted_kappa(pairs: list[tuple[int, int]]) -> float | None:
     return 1.0 - (observed_disagreement / expected_disagreement)
 
 
+def _validate_direct_agreement_row(row: dict) -> None:
+    """Enforce the normalized blinded-rating contract for direct agreement calls.
+
+    The canonical ratings importer checks these fields before freezing, but a
+    notebook can call build_agreement directly. Missing dimensions must not
+    silently become missing scores; extra treatment columns must not pass
+    through the pre-unblinding reliability helper.
+    """
+    if not isinstance(row, dict):
+        raise ValueError("direct agreement rating must be a dictionary")
+    expected = set(RATING_FIELDS)
+    observed = set(row)
+    if observed != expected:
+        raise ValueError(
+            "direct agreement rating schema mismatch: "
+            f"missing={sorted(expected - observed)}, "
+            f"unexpected={sorted(observed - expected)}"
+        )
+    if any(not isinstance(row[field], str) for field in RATING_FIELDS):
+        raise ValueError("direct agreement rating fields must all be strings")
+    for field in ("annotator_id", "blind_id"):
+        value = row[field]
+        if not value.strip() or value != value.strip():
+            raise ValueError(
+                f"direct agreement {field} must be nonempty and trimmed"
+            )
+
+    scores = [_score(row, field) for field in SCORE_FIELDS]
+    notes = row["notes"].strip()
+    if notes:
+        _reject_spreadsheet_active_text(
+            notes,
+            field="notes",
+            path=Path("<direct-agreement>"),
+            line_number=0,
+        )
+        packet_build.validate_annotator_facing_content(
+            [{"blind_id": row["blind_id"], "question": notes, "report_markdown": ""}],
+            label="direct agreement notes",
+        )
+        if not _note_has_visible_explanation(notes):
+            raise ValueError(
+                "direct agreement notes require visible explanatory content"
+            )
+    elif any(value is None or value in (1, 5) for value in scores):
+        raise ValueError(
+            "direct agreement endpoint scores (1 or 5) and unscored "
+            "dimensions require explanatory notes"
+        )
+
+
 def build_agreement(rows: list[dict]) -> dict:
+    for row in rows:
+        _validate_direct_agreement_row(row)
     _validate_annotator_identity_spellings(rows)
     by_annotator: dict[str, dict[str, dict]] = {}
     for row in rows:
