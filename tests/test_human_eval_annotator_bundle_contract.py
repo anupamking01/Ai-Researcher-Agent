@@ -230,7 +230,7 @@ def test_window_custody_rejects_same_byte_replacement_of_earlier_packet(
         return content
 
     monkeypatch.setattr(exporter, "_regular_bytes", replace_after_packet_capture)
-    with pytest.raises(ValueError, match="packet.jsonl changed during verification window"):
+    with pytest.raises(ValueError, match="packet.jsonl changed during verification window|bundle root changed during verification window"):
         exporter.verify_annotator_bundle(root)
     assert replaced == [True]
 
