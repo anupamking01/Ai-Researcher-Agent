@@ -39,6 +39,38 @@ FROZEN_ANALYSIS_PLAN_SHA256 = (
 )
 
 
+# Applies to each external document, blinded submission, retained freeze
+# artifact, and coordinator mapping read during human-analysis preparation.
+# Frozen ratings and manuscript conclusions are not altered by this limit.
+MAX_HUMAN_ANALYSIS_SNAPSHOT_FILE_BYTES = 16 * 1024 * 1024
+
+
+def _bounded_snapshot_bytes(descriptor, expected_size, *, label):
+    """Read one stat-pinned generation without allocating past its byte bound.
+
+    A single trailing-byte probe detects observed growth without following an
+    unbounded stream of appends. The caller still checks metadata and path
+    binding after capture; this is not an atomic filesystem snapshot.
+    """
+    if expected_size > MAX_HUMAN_ANALYSIS_SNAPSHOT_FILE_BYTES:
+        raise ValueError(
+            f"{label} exceeds {MAX_HUMAN_ANALYSIS_SNAPSHOT_FILE_BYTES}-byte "
+            "human-analysis snapshot limit"
+        )
+    chunks = []
+    offset = 0
+    while offset < expected_size:
+        requested = min(1024 * 1024, expected_size - offset)
+        chunk = os.pread(descriptor, requested, offset)
+        if not chunk or len(chunk) > requested:
+            raise ValueError(f"{label} changed while it was being read")
+        chunks.append(chunk)
+        offset += len(chunk)
+    if os.pread(descriptor, 1, offset):
+        raise ValueError(f"{label} changed while it was being read")
+    return b"".join(chunks)
+
+
 def fingerprint(path, *, logical_path=None):
     path = Path(path)
     if path.is_symlink() or not path.is_file():
@@ -84,14 +116,9 @@ def _snapshot_file(source, destination, *, label):
             if not stat.S_ISREG(before.st_mode):
                 raise ValueError(f"{label} must be a regular file: {source}")
 
-            chunks = []
-            offset = 0
-            while True:
-                chunk = os.pread(descriptor, 1024 * 1024, offset)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                offset += len(chunk)
+            content = _bounded_snapshot_bytes(
+                descriptor, before.st_size, label=label
+            )
             after = os.fstat(descriptor)
             before_identity = (
                 before.st_dev,
@@ -129,7 +156,6 @@ def _snapshot_file(source, destination, *, label):
                 != (parent.st_dev, parent.st_ino)
             ):
                 raise ValueError(f"{label} changed while it was being snapshotted")
-            content = b"".join(chunks)
         finally:
             os.close(descriptor)
     finally:
@@ -203,14 +229,9 @@ def _snapshot_tree_file(directory_descriptor, name, destination, *, label, expec
         ):
             raise ValueError(f"{label} changed while it was being snapshotted")
 
-        chunks = []
-        offset = 0
-        while True:
-            chunk = os.pread(descriptor, 1024 * 1024, offset)
-            if not chunk:
-                break
-            chunks.append(chunk)
-            offset += len(chunk)
+        content = _bounded_snapshot_bytes(
+            descriptor, before.st_size, label=label
+        )
         after = os.fstat(descriptor)
         before_identity = (
             before.st_dev,
@@ -243,7 +264,6 @@ def _snapshot_tree_file(directory_descriptor, name, destination, *, label, expec
             or (current.st_dev, current.st_ino) != after_identity[:2]
         ):
             raise ValueError(f"{label} changed while it was being snapshotted")
-        content = b"".join(chunks)
     finally:
         os.close(descriptor)
 

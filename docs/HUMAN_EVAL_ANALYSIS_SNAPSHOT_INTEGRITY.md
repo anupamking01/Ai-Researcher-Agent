@@ -46,3 +46,28 @@ not a replacement for retaining the original archived ratings, packet bundle,
 freeze bundle, or Git-tracked analysis plan. Source trace and report provenance
 continues to be checked by the packet verifier against the repository; treatment
 and evaluator runs are not regenerated.
+
+
+## Resource-bounded snapshot capture
+
+The human-analysis snapshotter rejects an individual input larger than
+**16 MiB**, before copying it into scratch space. This applies consistently to
+direct captures (including submitted ratings, the blinded packet, governing
+documents, the frozen analysis plan, and the coordinator mapping/task files)
+and to every file within the retained freeze-artifact tree, including nested
+submission preflight receipts. The limit is a defensive input-snapshot rule,
+not a requirement on research treatment outputs or a change to the frozen
+statistical analysis plan.
+
+Reads are limited to the size observed on the opened regular-file descriptor.
+An extra one-byte probe detects growth beyond that observed size; premature
+EOF fails closed. Existing inode/metadata/path and recursive directory-inventory
+checks still run after capture. Consequently an unexpectedly oversized,
+truncated, or growing source cannot be silently copied as verified evidence
+or consume unbounded snapshot memory. These checks do not provide an atomic
+filesystem snapshot or authenticate historical source origins; hostile
+same-size in-place edits remain subject to observable metadata checks.
+
+This hardening uses synthetic-only regression fixtures. No ratings, paired
+effects, agreement statistics, treatment runs, or existing published results
+are generated or changed.
