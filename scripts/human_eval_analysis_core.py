@@ -47,6 +47,12 @@ MAX_HUMAN_ANALYSIS_SNAPSHOT_FILE_BYTES = 16 * 1024 * 1024
 # Frozen 40-report packet x exactly two annotators for treatment-level analysis.
 # Direct helper streams are capped before any partial aggregates are produced.
 MAX_DIRECT_RATING_ROWS = 80
+# A valid two-rater freeze has a small, finite archive. Bound the recursive
+# inventory and copied scratch footprint independently of the per-file ceiling.
+# These are defensive capture limits, not changes to the frozen rating protocol.
+MAX_HUMAN_ANALYSIS_SNAPSHOT_TREE_ENTRIES = 256
+MAX_HUMAN_ANALYSIS_SNAPSHOT_TREE_BYTES = 64 * 1024 * 1024
+MAX_HUMAN_ANALYSIS_SNAPSHOT_TREE_DEPTH = 8
 
 
 def _bounded_snapshot_bytes(descriptor, expected_size, *, label):
@@ -275,6 +281,34 @@ def _snapshot_tree_file(directory_descriptor, name, destination, *, label, expec
     destination.write_bytes(content)
 
 
+def _new_snapshot_tree_budget():
+    return {"entries": 0, "bytes": 0}
+
+
+def _charge_snapshot_tree_entry(budget, metadata, *, label):
+    budget["entries"] += 1
+    if budget["entries"] > MAX_HUMAN_ANALYSIS_SNAPSHOT_TREE_ENTRIES:
+        raise ValueError(
+            f"{label} exceeds {MAX_HUMAN_ANALYSIS_SNAPSHOT_TREE_ENTRIES}-entry "
+            "human-analysis freeze snapshot limit"
+        )
+    if stat.S_ISREG(metadata.st_mode):
+        budget["bytes"] += metadata.st_size
+        if budget["bytes"] > MAX_HUMAN_ANALYSIS_SNAPSHOT_TREE_BYTES:
+            raise ValueError(
+                f"{label} exceeds {MAX_HUMAN_ANALYSIS_SNAPSHOT_TREE_BYTES}-byte "
+                "aggregate human-analysis freeze snapshot limit"
+            )
+
+
+def _require_snapshot_tree_depth(depth, *, label):
+    if depth > MAX_HUMAN_ANALYSIS_SNAPSHOT_TREE_DEPTH:
+        raise ValueError(
+            f"{label} exceeds {MAX_HUMAN_ANALYSIS_SNAPSHOT_TREE_DEPTH}-level "
+            "human-analysis freeze snapshot depth limit"
+        )
+
+
 def _snapshot_directory_descriptor(
     source_root,
     destination_root,
@@ -283,7 +317,12 @@ def _snapshot_directory_descriptor(
     label,
     parent_descriptor=None,
     entry_name=None,
+    budget=None,
+    depth=0,
 ):
+    if budget is None:
+        budget = _new_snapshot_tree_budget()
+    _require_snapshot_tree_depth(depth, label=label)
     opened = os.fstat(descriptor)
     if not stat.S_ISDIR(opened.st_mode):
         raise ValueError(f"{label} must be a regular directory: {source_root}")
@@ -292,6 +331,8 @@ def _snapshot_directory_descriptor(
     except OSError as exc:
         raise ValueError(f"{label} could not be enumerated: {source_root}") from exc
 
+    if len(names_before) > MAX_HUMAN_ANALYSIS_SNAPSHOT_TREE_ENTRIES - budget["entries"]:
+        raise ValueError(f"{label} exceeds human-analysis freeze snapshot entry limit")
     metadata_by_name = {}
     for name in names_before:
         child_label = f"{label} {name}"
@@ -305,6 +346,9 @@ def _snapshot_directory_descriptor(
             raise ValueError(
                 f"{child_label} changed while it was being snapshotted"
             ) from exc
+        _charge_snapshot_tree_entry(
+            budget, metadata_by_name[name], label=child_label
+        )
 
     destination_root.mkdir(parents=True, exist_ok=False)
     directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
@@ -336,6 +380,8 @@ def _snapshot_directory_descriptor(
                     label=child_label,
                     parent_descriptor=descriptor,
                     entry_name=name,
+                    budget=budget,
+                    depth=depth + 1,
                 )
             finally:
                 os.close(child_descriptor)
@@ -608,8 +654,13 @@ def _snapshot_directory_inventory(
     label,
     parent_descriptor=None,
     entry_name=None,
+    budget=None,
+    depth=0,
 ):
-    """Capture a stable recursive inode/metadata inventory without file bytes."""
+    """Capture a bounded, stable recursive inode/metadata inventory without bytes."""
+    if budget is None:
+        budget = _new_snapshot_tree_budget()
+    _require_snapshot_tree_depth(depth, label=label)
     opened = os.fstat(descriptor)
     if not stat.S_ISDIR(opened.st_mode):
         raise ValueError(f"{label} must be a regular directory: {source_root}")
@@ -618,6 +669,8 @@ def _snapshot_directory_inventory(
     except OSError as exc:
         raise ValueError(f"{label} could not be enumerated: {source_root}") from exc
 
+    if len(names) > MAX_HUMAN_ANALYSIS_SNAPSHOT_TREE_ENTRIES - budget["entries"]:
+        raise ValueError(f"{label} exceeds human-analysis freeze snapshot entry limit")
     metadata = {}
     for name in names:
         try:
@@ -630,6 +683,7 @@ def _snapshot_directory_inventory(
             raise ValueError(
                 f"{label} {name} changed while it was being snapshotted"
             ) from exc
+        _charge_snapshot_tree_entry(budget, metadata[name], label=f"{label} {name}")
 
     entries = []
     directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
@@ -657,6 +711,8 @@ def _snapshot_directory_inventory(
                     label=child_label,
                     parent_descriptor=descriptor,
                     entry_name=name,
+                    budget=budget,
+                    depth=depth + 1,
                 )
             finally:
                 os.close(child_descriptor)
