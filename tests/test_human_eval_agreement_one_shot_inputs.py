@@ -113,9 +113,13 @@ def test_unbounded_iterator_is_rejected_without_exhaustion():
 
 def test_exact_bound_does_not_trigger_safety_limit():
     rows = (
-        row(f"synthetic-rater-{index // 40:03d}", f"H{index % 40:03d}")
+        row(
+            "rater-a" if index % 2 == 0 else "rater-b",
+            f"H{index // 2:04d}",
+        )
         for index in range(freeze.MAX_DIRECT_AGREEMENT_ROWS)
     )
     result = freeze.build_agreement(rows)
-    assert result["n_annotators"] == freeze.MAX_DIRECT_AGREEMENT_ROWS // 40
-    assert result["requires_predeclared_multi_rater_statistic"] is True
+    assert result["n_annotators"] == 2
+    assert result["pairwise"][0]["n_shared_items"] == freeze.MAX_DIRECT_AGREEMENT_ROWS // 2
+    assert result["requires_predeclared_multi_rater_statistic"] is False
