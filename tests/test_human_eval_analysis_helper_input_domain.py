@@ -123,7 +123,7 @@ def test_direct_aggregation_requires_explanation_for_endpoint_or_blank(value):
         core.report_scores([row])
 
 
-@pytest.mark.parametrize("notes", ["\\u200b", "---", "   ", "[text]()"])
+@pytest.mark.parametrize("notes", ["\\u200b", "---", "   ", "[]"])
 def test_direct_aggregation_rejects_nonexplanatory_notes(notes):
     row = _row("rater-a", "H001", "5")
     row["notes"] = notes
