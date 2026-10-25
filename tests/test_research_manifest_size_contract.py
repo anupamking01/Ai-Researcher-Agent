@@ -13,10 +13,10 @@ from scripts import verify_research_artifact_manifest as verifier
 
 def _manifest(tmp_path: Path) -> Path:
     artifact = tmp_path / "synthetic.csv"
-    artifact.write_bytes(b"task,score\\nSYN-1,1\\n")
+    artifact.write_bytes(b"task,score\nSYN-1,1\n")
     record = producer.build_manifest([artifact], root=tmp_path)
     manifest = tmp_path / "synthetic-manifest.json"
-    manifest.write_text(json.dumps(record, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+    manifest.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return manifest
 
 
@@ -65,7 +65,7 @@ def test_oversize_replacement_after_artifact_scan_skips_closing_hash(tmp_path, m
 
 def test_direct_writer_rejects_over_limit_before_creating_parent(tmp_path, monkeypatch):
     # Multi-byte UTF-8 makes character count smaller than byte count.
-    rendered = '{"note":"ααα"}\\n'
+    rendered = '{"note":"ααα"}\n'
     assert len(rendered) < len(rendered.encode("utf-8"))
     monkeypatch.setattr(producer, "MAX_MANIFEST_BYTES", len(rendered.encode("utf-8")) - 1)
     output = tmp_path / "uncreated" / "manifest.json"
@@ -75,7 +75,7 @@ def test_direct_writer_rejects_over_limit_before_creating_parent(tmp_path, monke
 
 
 def test_direct_writer_accepts_exact_utf8_byte_boundary(tmp_path, monkeypatch):
-    rendered = '{"note":"α"}\\n'
+    rendered = '{"note":"α"}\n'
     monkeypatch.setattr(producer, "MAX_MANIFEST_BYTES", len(rendered.encode("utf-8")))
     output = tmp_path / "new" / "manifest.json"
     producer.write_manifest_create_only(output, rendered)
