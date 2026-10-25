@@ -38,6 +38,10 @@ STUDY = "budget-main-v1"
 CONTRASTS = tuple(name for _, _, name in analyze_main_study.PRIMARY_CONTRASTS)
 DIMS = tuple(human_core.DIMS)
 
+# Frozen 10-task readiness receipts are metadata, not arbitrary-size datasets.
+# Bound untrusted JSON/contract reads before buffering them in memory.
+MAX_READINESS_INPUT_BYTES = 16 * 1024 * 1024
+
 
 def _require(ok, message):
     if not ok:
@@ -48,15 +52,30 @@ def _snapshot_regular_descriptor(descriptor: int, *, label: str):
     before = os.fstat(descriptor)
     if not stat.S_ISREG(before.st_mode):
         raise ValueError(f"{label} must be a regular file")
+    if before.st_size > MAX_READINESS_INPUT_BYTES:
+        raise ValueError(
+            f"{label} exceeds {MAX_READINESS_INPUT_BYTES} byte readiness input limit"
+        )
+
     chunks = []
     offset = 0
     while True:
-        chunk = os.pread(descriptor, 1024 * 1024, offset)
+        remaining = MAX_READINESS_INPUT_BYTES - offset
+        # A final extra byte detects growth even when the first stat was small.
+        chunk = os.pread(descriptor, min(1024 * 1024, remaining + 1), offset)
         if not chunk:
             break
+        if len(chunk) > remaining:
+            raise ValueError(
+                f"{label} exceeds {MAX_READINESS_INPUT_BYTES} byte readiness input limit"
+            )
         chunks.append(chunk)
         offset += len(chunk)
     after = os.fstat(descriptor)
+    if after.st_size > MAX_READINESS_INPUT_BYTES:
+        raise ValueError(
+            f"{label} exceeds {MAX_READINESS_INPUT_BYTES} byte readiness input limit"
+        )
     before_identity = (
         before.st_dev,
         before.st_ino,
@@ -71,10 +90,9 @@ def _snapshot_regular_descriptor(descriptor: int, *, label: str):
         after.st_mtime_ns,
         after.st_ctime_ns,
     )
-    if before_identity != after_identity:
+    if before_identity != after_identity or offset != before.st_size:
         raise ValueError(f"{label} changed while it was being read")
     return b"".join(chunks), after_identity
-
 
 def _open_bound_input(stack: ExitStack, path: Path, *, label: str):
     path = Path(path)
