@@ -182,7 +182,23 @@ def verify_manifest_file(
         content = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("manifest file is not valid UTF-8") from exc
-    return verify_manifest(parse_manifest_json(content), root=root)
+    entries = verify_manifest(parse_manifest_json(content), root=root)
+    # Source verification can take much longer than parsing the manifest.
+    # Keep the exact manifest bytes and physical identity pinned through the
+    # entire artifact scan, not only through the initial manifest capture.
+    try:
+        closing_sha, closing_size, closing_identity = (
+            fingerprint_regular_file_with_identity(path)
+        )
+    except (ValueError, OSError) as exc:
+        raise ValueError(
+            "manifest file changed during artifact verification"
+        ) from exc
+    if (closing_sha, closing_size, closing_identity) != (
+        first_sha, first_size, first_identity
+    ):
+        raise ValueError("manifest file changed during artifact verification")
+    return entries
 
 
 def main() -> int:

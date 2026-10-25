@@ -122,3 +122,32 @@ reference digest too can bypass the protection. SHA-256 is byte identity,
 not a digital signature, author attestation, immutable storage guarantee, or
 proof of experimental validity. No canonical-study trust anchor is claimed
 to exist merely because this option is implemented.
+
+
+## Manifest identity through the source scan
+
+The verifier originally checked the manifest file twice **before** scanning its
+referenced artifacts. A manifest replaced or rewritten while a slow source
+scan was in progress could therefore result in a successful verification of
+the earlier parsed manifest even though the current manifest on disk no longer
+matched those bytes. The artifact recheck cannot detect changes to the
+*manifest file* itself.
+
+The verifier now fingerprints the manifest a **third time, after all selected
+artifacts and the aggregate digest pass**. It requires the exact original
+SHA-256, byte count, and descriptor-bound filesystem (device, inode) identity
+to match. A changed, removed, symlink-substituted, or byte-identically replaced
+manifest fails closed rather than reporting a successful provenance check.
+The rule applies equally to default and independently pinned verification;
+existing manifest JSON and command-line interfaces are unchanged.
+
+Synthetic regression tests deliberately rewrite, remove, and replace the
+manifest during artifact verification, with and without a separately supplied
+manifest pin. An unchanged manifest remains accepted. No canonical treatment
+outputs, human ratings, frozen analysis, or evaluator measurements are touched.
+
+**Limit:** This checks observable coherence over the verification window, not
+an atomic snapshot or immutability after the final read. A malicious
+swap-and-restore between observations can evade it. Independent custody of
+the external pin and immutable input storage remain stronger provenance
+requirements.
