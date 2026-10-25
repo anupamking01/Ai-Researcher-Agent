@@ -848,6 +848,48 @@ def _paired_summary(left, right, *, seed):
     }
 
 
+def _validate_direct_rating_row(row):
+    """Enforce the frozen CSV row contract for direct/notebook aggregation.
+
+    The normal analysis path consumes independently verified, normalized freeze
+    rows. Direct callers must not turn a missing CSV column into an unscored
+    dimension, smuggle treatment identity into the row, or discard the rubric's
+    mandatory explanations for endpoint/unscored ratings.
+    """
+    expected = set(freeze.RATING_FIELDS)
+    observed = set(row)
+    if observed != expected:
+        raise ValueError(
+            "direct rating row schema mismatch: "
+            f"missing={sorted(expected - observed)}, "
+            f"unexpected={sorted(observed - expected)}"
+        )
+    if any(not isinstance(row[field], str) for field in freeze.RATING_FIELDS):
+        raise ValueError("direct rating row fields must be strings")
+    if (
+        row["annotator_id"] != row["annotator_id"].strip()
+        or row["blind_id"] != row["blind_id"].strip()
+    ):
+        raise ValueError("direct rating identifiers must be trimmed")
+    scores = [score(row, field) for field in DIMS]
+    notes = row["notes"].strip()
+    if notes:
+        freeze._reject_spreadsheet_active_text(
+            notes, field="notes", path=Path("<direct-ratings>"), line_number=0
+        )
+        packet.validate_annotator_facing_content(
+            [{"blind_id": row["blind_id"], "question": notes, "report_markdown": ""}],
+            label="direct rating notes",
+        )
+        if not freeze._note_has_visible_explanation(notes):
+            raise ValueError("direct rating notes must contain visible explanatory content")
+    if not notes and any(value is None or value in (1, 5) for value in scores):
+        raise ValueError(
+            "unscored dimensions and endpoint scores (1 or 5) "
+            "require explanatory notes"
+        )
+
+
 def report_scores(rows):
     """Aggregate only distinct, rubric-valid independent annotator rows.
 
@@ -875,8 +917,7 @@ def report_scores(rows):
                 f"{row['annotator_id']}/{row['blind_id']}"
             )
         seen.add(identity)
-        for field in DIMS:
-            score(row, field)
+        _validate_direct_rating_row(row)
         grouped.setdefault(row["blind_id"], []).append(row)
     scores, counts = {}, {}
     for blind_id, items in grouped.items():

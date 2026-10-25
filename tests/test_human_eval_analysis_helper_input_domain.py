@@ -54,6 +54,7 @@ def test_direct_report_aggregation_rejects_missing_identity(missing_identity):
 def test_direct_report_scores_preserve_observed_mean_and_missingness():
     rows = [_row("annotator-a", "H001", "2"), _row("annotator-b", "H001", "4")]
     rows[0][core.DIMS[0]] = ""
+    rows[0]["notes"] = "The source is insufficient to rate correctness."
     scores, counts = core.report_scores(rows)
     assert scores[("H001", core.DIMS[0])] == 4
     assert counts[("H001", core.DIMS[0])] == 1
@@ -80,3 +81,73 @@ def test_direct_paired_summary_preserves_fractional_report_means():
     assert result["mean_difference"] == 1.0
     assert result["bootstrap_95pct_ci_mean_difference"] == [1.0, 1.0]
     assert result["paired_dz"] is None
+
+
+@pytest.mark.parametrize("missing", ["notes", *core.DIMS])
+def test_direct_aggregation_refuses_missing_frozen_columns(missing):
+    row = _row("rater-a", "H001")
+    del row[missing]
+    with pytest.raises(ValueError, match="direct rating row schema mismatch"):
+        core.report_scores([row])
+
+
+@pytest.mark.parametrize("extra", ["variant_id", "source_path", "treatment"])
+def test_direct_aggregation_refuses_unblinding_or_extra_columns(extra):
+    row = _row("rater-a", "H001")
+    row[extra] = "P6V"
+    with pytest.raises(ValueError, match="direct rating row schema mismatch"):
+        core.report_scores([row])
+
+
+@pytest.mark.parametrize("field", ["notes", *core.DIMS])
+def test_direct_aggregation_requires_textual_frozen_fields(field):
+    row = _row("rater-a", "H001")
+    row[field] = None if field == "notes" else 3
+    with pytest.raises(ValueError, match="row fields must be strings"):
+        core.report_scores([row])
+
+
+@pytest.mark.parametrize("identity", ["annotator_id", "blind_id"])
+def test_direct_aggregation_rejects_whitespace_identity_aliases(identity):
+    row = _row("rater-a", "H001")
+    row[identity] += " "
+    with pytest.raises(ValueError, match="identifiers must be trimmed"):
+        core.report_scores([row])
+
+
+@pytest.mark.parametrize("value", ["1", "5", ""])
+def test_direct_aggregation_requires_explanation_for_endpoint_or_blank(value):
+    row = _row("rater-a", "H001")
+    row[core.DIMS[0]] = value
+    with pytest.raises(ValueError, match="require explanatory notes"):
+        core.report_scores([row])
+
+
+@pytest.mark.parametrize("notes", ["\\u200b", "---", "   ", "[text]()"])
+def test_direct_aggregation_rejects_nonexplanatory_notes(notes):
+    row = _row("rater-a", "H001", "5")
+    row["notes"] = notes
+    with pytest.raises(ValueError, match="require explanatory notes|visible explanatory content"):
+        core.report_scores([row])
+
+
+@pytest.mark.parametrize("notes", ["=SUM(1,1)", "Review: P6V appears best", "<b>Looks fine</b>"])
+def test_direct_aggregation_rejects_unsafe_notes(notes):
+    row = _row("rater-a", "H001", "5")
+    row["notes"] = notes
+    with pytest.raises(ValueError, match="spreadsheet-active|treatment leakage"):
+        core.report_scores([row])
+
+
+def test_direct_aggregation_keeps_explained_endpoints_and_blanks():
+    first = _row("rater-a", "H001", "1")
+    first["notes"] = "Several claims lack citations."
+    second = _row("rater-b", "H001", "3")
+    scores, counts = core.report_scores([first, second])
+    assert scores[("H001", core.DIMS[0])] == 2
+    assert counts[("H001", core.DIMS[0])] == 2
+    first[core.DIMS[0]] = ""
+    first["notes"] = "This dimension could not be scored."
+    scores, counts = core.report_scores([first, second])
+    assert scores[("H001", core.DIMS[0])] == 3
+    assert counts[("H001", core.DIMS[0])] == 1
