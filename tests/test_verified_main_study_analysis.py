@@ -746,8 +746,15 @@ def test_receipt_rejects_semantically_equivalent_post_publication_byte_drift(
     _stage_analysis(monkeypatch, candidate_json, candidate_markdown)
     real_publish = verified._publish_verified_outputs
 
-    def publish_then_drift(candidate_json_path, candidate_markdown_path, *, root):
-        real_publish(candidate_json_path, candidate_markdown_path, root=root)
+    def publish_then_drift(
+        candidate_json_path, candidate_markdown_path, *, root, expected_sha256=None
+    ):
+        real_publish(
+            candidate_json_path,
+            candidate_markdown_path,
+            root=root,
+            expected_sha256=expected_sha256,
+        )
         canonical = root / verified.DEFAULT_JSON
         canonical.write_bytes(canonical.read_bytes() + b"\n")
 
