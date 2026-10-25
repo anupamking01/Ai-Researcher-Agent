@@ -1161,12 +1161,21 @@ def build_agreement(rows) -> dict:
 
         for field in SCORE_FIELDS:
             pairs: list[tuple[int, int]] = []
+            # Agreement is computed only on complete pairs. Preserve the
+            # denominator's missingness partition so an apparently high
+            # agreement cannot conceal asymmetric dimension nonresponse.
+            a_only = b_only = neither = 0
             for blind_id in common:
                 left_score = _score(left[blind_id], field)
                 right_score = _score(right[blind_id], field)
-                if left_score is None or right_score is None:
-                    continue
-                pairs.append((left_score, right_score))
+                if left_score is None and right_score is None:
+                    neither += 1
+                elif left_score is None:
+                    b_only += 1
+                elif right_score is None:
+                    a_only += 1
+                else:
+                    pairs.append((left_score, right_score))
 
             if pairs:
                 exact = sum(a == b for a, b in pairs) / len(pairs)
@@ -1177,6 +1186,9 @@ def build_agreement(rows) -> dict:
 
             dimensions[field] = {
                 "n_double_rated": len(pairs),
+                "n_annotator_a_only_rated": a_only,
+                "n_annotator_b_only_rated": b_only,
+                "n_neither_rated": neither,
                 "raw_exact_agreement": exact,
                 "mean_absolute_difference": mean_abs,
                 "quadratic_weighted_cohen_kappa": quadratic_weighted_kappa(pairs),

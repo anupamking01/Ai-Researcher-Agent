@@ -143,8 +143,8 @@ def render_markdown(payload):
         f"Frozen agreement artifact status: `{cell(agreement['status'])}`; "
         f"annotators: {agreement['n_annotators']}.",
         "",
-        "| Annotator pair | Dimension | Double-rated | Exact agreement | Mean absolute difference | Quadratic-weighted kappa |",
-        "|---|---|---:|---:|---:|---:|",
+        "| Annotator pair | Dimension | Double-rated | Exact agreement | Mean absolute difference | Quadratic-weighted kappa | A-only rated | B-only rated | Neither rated |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for pair in agreement["pairwise"]:
         pair_label = f"{cell(pair['annotator_a'])} / {cell(pair['annotator_b'])}"
@@ -154,12 +154,17 @@ def render_markdown(payload):
                 f"| {pair_label} | {field} | {block['n_double_rated']} | "
                 f"{fmt(block['raw_exact_agreement'])} | "
                 f"{fmt(block['mean_absolute_difference'])} | "
-                f"{fmt(block['quadratic_weighted_cohen_kappa'])} |"
+                f"{fmt(block['quadratic_weighted_cohen_kappa'])} | "
+                f"{block['n_annotator_a_only_rated']} | "
+                f"{block['n_annotator_b_only_rated']} | "
+                f"{block['n_neither_rated']} |"
             )
 
     lines += [
         "",
-        "Missing scores and incomplete task pairs are retained explicitly and are not "
+        "For each annotator pair and rubric dimension, double-rated, A-only, "
+        "B-only, and neither-rated counts partition the shared blinded IDs. "
+        "Agreement metrics use double-rated items only; missingness is never "
         "imputed. Raw distributions and task-level differences remain visible so "
         "ordinal scores and cross-task consistency are not reduced to means alone. "
         "No human-validation null-hypothesis p-values are computed.",

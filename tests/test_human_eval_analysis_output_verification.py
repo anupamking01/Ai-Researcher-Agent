@@ -100,6 +100,9 @@ def _payload():
                 "dimensions": {
                     field: {
                         "n_double_rated": 8,
+                        "n_annotator_a_only_rated": 0,
+                        "n_annotator_b_only_rated": 0,
+                        "n_neither_rated": 0,
                         "raw_exact_agreement": 0.75,
                         "mean_absolute_difference": 0.25,
                         "quadratic_weighted_cohen_kappa": 0.8,
@@ -142,7 +145,23 @@ def test_markdown_reports_every_predeclared_descriptive_layer():
     assert "D6_minus_D3_retrieval_depth | correctness_1_5 | task-a, task-b | — | 2.500 | 3.000 | 0.500 | 0.500 | 0.707 | [0.000, 1.000] | 1/0/1 | task-a:1.000; task-b:0.000" in markdown
     assert "## Pre-unblinding agreement" in markdown
     assert "annotator-a / annotator-b | correctness_1_5 | 8 | 0.750 | 0.250 | 0.800" in markdown
+    assert "A-only rated | B-only rated | Neither rated" in markdown
+    assert "annotator-a / annotator-b | correctness_1_5 | 8 | 0.750 | 0.250 | 0.800 | 0 | 0 | 0 |" in markdown
     assert "No human-validation null-hypothesis p-values are computed" in markdown
+
+
+def test_markdown_renders_asymmetric_nonresponse_without_imputation():
+    payload = _payload()
+    dimension = payload["pre_unblinding_agreement"]["pairwise"][0]["dimensions"][core.DIMS[0]]
+    dimension.update(
+        n_double_rated=2,
+        n_annotator_a_only_rated=2,
+        n_annotator_b_only_rated=1,
+        n_neither_rated=3,
+    )
+    markdown = analyze_human_eval.render_markdown(payload)
+    assert "annotator-a / annotator-b | correctness_1_5 | 2 | 0.750 | 0.250 | 0.800 | 2 | 1 | 3 |" in markdown
+    assert "Agreement metrics use double-rated items only" in markdown
 
 
 def test_markdown_keeps_missingness_and_undefined_statistics_visible():
