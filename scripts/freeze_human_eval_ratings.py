@@ -22,7 +22,7 @@ import os
 import stat
 import tempfile
 import unicodedata
-from itertools import combinations
+from itertools import combinations, islice
 from pathlib import Path
 
 from scripts import build_human_eval_packet as packet_build
@@ -44,6 +44,10 @@ FROZEN_ANNOTATOR_GUIDE_SHA256 = (
     "3e27ef38231ed70fe36370af31ced7762a253a72dc5cc4997d8ef62d0a6e3370"
 )
 MIN_RATERS_PER_ITEM = 2
+# Resource guard for independent notebook diagnostics, not a new protocol
+# limit on eligible annotators. Canonical analysis still requires a verified
+# blinded freeze; a direct helper cannot establish readiness or authenticity.
+MAX_DIRECT_AGREEMENT_ROWS = 4096
 # Bound every externally supplied or retained freeze input before allocation.
 # The packet builder permits up to 64 MiB per capture; use the same ceiling
 # for packet, ratings, attestations, provenance, and independent verification.
@@ -1106,7 +1110,26 @@ def _validate_direct_agreement_row(row: dict) -> None:
         )
 
 
-def build_agreement(rows: list[dict]) -> dict:
+def build_agreement(rows) -> dict:
+    """Compute blinded diagnostics without exhausting single-use row sources.
+
+    The production freeze imports normalized CSV rows, but independent
+    notebook users may supply iterators. Capture the iterable exactly once
+    before separate schema, identity, and aggregation scans. The generous
+    resource ceiling is an API safety bound, not an analysis inclusion rule.
+    """
+    try:
+        iterator = iter(rows)
+    except TypeError as exc:
+        raise ValueError("direct agreement rows must be iterable") from exc
+    rows = list(islice(iterator, MAX_DIRECT_AGREEMENT_ROWS + 1))
+    if not rows:
+        raise ValueError("direct agreement rows must not be empty")
+    if len(rows) > MAX_DIRECT_AGREEMENT_ROWS:
+        raise ValueError(
+            "direct agreement rows exceed the "
+            f"{MAX_DIRECT_AGREEMENT_ROWS}-record safety limit"
+        )
     for row in rows:
         _validate_direct_agreement_row(row)
     _validate_annotator_identity_spellings(rows)
