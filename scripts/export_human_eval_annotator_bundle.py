@@ -52,10 +52,14 @@ PRESENTATION_ORDERS = ("canonical", "reverse")
 
 
 def _regular_bytes(path: Path, *, label: str) -> bytes:
-    path = Path(path)
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"{label} must be a regular file: {path}")
-    return path.read_bytes()
+    """Capture one bounded, descriptor-bound generation of an evidence file.
+
+    Reuse the packet producer's 64 MiB capture contract rather than reading a
+    potentially growing coordinator or annotator artifact into memory without
+    a bound. The shared reader also rejects symlinks, non-regular files,
+    truncation, growth, and path/parent replacement during capture.
+    """
+    return build._read_regular_file_captured(Path(path), label=label)
 
 
 def _fingerprint(content: bytes) -> dict:
