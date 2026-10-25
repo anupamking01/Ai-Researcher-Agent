@@ -129,6 +129,33 @@ proof of experimental validity. No canonical-study trust anchor is claimed
 to exist merely because this option is implemented.
 
 
+## Bounded, descriptor-bound manifest JSON capture
+
+The verifier's manifest path is untrusted input. The earlier two checked
+fingerprints were separated by a `Path.read_bytes()` call, which could open a
+*different* filesystem object after an intervening path substitution. In
+particular, replacing a JSON pathname with a named pipe could block that
+middle read indefinitely, even though the surrounding fingerprint calls
+reject non-regular files.
+
+Manifest JSON is now read from a single `os.open` descriptor using
+nonblocking/no-follow flags where supported, with regular-file checks
+before reading and stable file-identity/size/mtime/ctime checks afterwards.
+The read is capped at **16 MiB** of *manifest JSON* (not source artifact
+bytes). It fails closed if the pathname is replaced by a FIFO or, on
+no-follow platforms, a leaf symlink, or if the opened file mutates during
+the read. The existing independent first, second, and post-source-scan
+fingerprints still bind the content, file identity, and artifacts throughout
+verification. The manifest schema and existing digests are unchanged.
+
+This is an I/O-safety and reproducibility safeguard, not a filesystem
+lock, atomic snapshot, guarantee against adversarial swap-and-restore, or
+proof of input authenticity. Platforms lacking descriptor no-follow may
+require stronger filesystem isolation. The size cap is intentionally
+conservative and is not an experimental sampling or evaluation limit.
+Synthetic tests are in
+`tests/test_research_manifest_descriptor_capture.py`.
+
 ## Manifest identity through the source scan
 
 The verifier originally checked the manifest file twice **before** scanning its
