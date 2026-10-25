@@ -219,23 +219,74 @@ def _open_output_directory(path: Path) -> int:
     return directory_fd
 
 
+MAX_VERIFIED_OUTPUT_BYTES = 16 * 1024 * 1024
+
+
+def _output_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
 def _read_output_at(directory_fd: int, name: str, *, label: str) -> bytes | None:
+    """Capture a bounded, identity-stable output through its parent descriptor."""
     try:
         metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
     except FileNotFoundError:
         return None
     if not stat.S_ISREG(metadata.st_mode):
         raise ValueError(f"published {label} must be a regular file")
+    if metadata.st_size > MAX_VERIFIED_OUTPUT_BYTES:
+        raise ValueError(f"published {label} exceeds the 16 MiB output safety limit")
     try:
         file_fd = os.open(
             name,
-            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            os.O_RDONLY
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
             dir_fd=directory_fd,
         )
     except OSError as exc:
         raise ValueError(f"unable to read published {label}") from exc
-    with os.fdopen(file_fd, "rb") as handle:
-        return handle.read()
+    try:
+        opened = os.fstat(file_fd)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or _output_identity(opened) != _output_identity(metadata)
+        ):
+            raise ValueError(f"published {label} changed during capture")
+        chunks = []
+        remaining = metadata.st_size
+        while True:
+            chunk = os.read(file_fd, min(1024 * 1024, remaining + 1))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            if remaining < 0:
+                raise ValueError(f"published {label} exceeded its original byte count")
+            chunks.append(chunk)
+        closed = os.fstat(file_fd)
+        if remaining != 0 or _output_identity(closed) != _output_identity(opened):
+            raise ValueError(f"published {label} changed during capture")
+    except OSError as exc:
+        raise ValueError(f"unable to read published {label}") from exc
+    finally:
+        os.close(file_fd)
+    try:
+        current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError(f"published {label} changed during capture") from exc
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or _output_identity(current) != _output_identity(metadata)
+    ):
+        raise ValueError(f"published {label} changed during capture")
+    return b"".join(chunks)
 
 
 def _require_directory_binding(path: Path, directory_fd: int) -> None:
@@ -429,21 +480,49 @@ def _publish_receipt(destination: Path, content: bytes) -> None:
         os.close(directory_fd)
 
 
+def _read_candidate_output(path: Path, *, label: str) -> bytes:
+    path = Path(path)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"verified candidate {label} is missing: {path}")
+    directory_fd = _open_output_directory(path.parent)
+    try:
+        content = _read_output_at(directory_fd, path.name, label=label)
+        if content is None:
+            raise ValueError(f"verified candidate {label} is missing: {path}")
+        _require_directory_binding(path.parent, directory_fd)
+        return content
+    finally:
+        os.close(directory_fd)
+
+
+def _candidate_output_digests(json_path: Path, markdown_path: Path) -> dict[str, str]:
+    return {
+        "canonical_inference": hashlib.sha256(
+            _read_candidate_output(json_path, label="JSON")
+        ).hexdigest(),
+        "manuscript_rendering": hashlib.sha256(
+            _read_candidate_output(markdown_path, label="Markdown")
+        ).hexdigest(),
+    }
+
+
 def _publish_verified_outputs(
     candidate_json: Path,
     candidate_markdown: Path,
     *,
     root: Path,
+    expected_sha256: dict[str, str] | None = None,
 ) -> None:
-    """Publish once, or prove a rerun is byte-identical to canonical results."""
+    """Publish only the exact candidate bytes that passed output verification."""
     candidate_json = Path(candidate_json)
     candidate_markdown = Path(candidate_markdown)
-    if candidate_json.is_symlink() or not candidate_json.is_file():
-        raise ValueError(f"verified candidate JSON is missing: {candidate_json}")
-    if candidate_markdown.is_symlink() or not candidate_markdown.is_file():
-        raise ValueError(f"verified candidate Markdown is missing: {candidate_markdown}")
-    expected_json = candidate_json.read_bytes()
-    expected_markdown = candidate_markdown.read_bytes()
+    expected_json = _read_candidate_output(candidate_json, label="JSON")
+    expected_markdown = _read_candidate_output(candidate_markdown, label="Markdown")
+    if expected_sha256 is not None and {
+        "canonical_inference": hashlib.sha256(expected_json).hexdigest(),
+        "manuscript_rendering": hashlib.sha256(expected_markdown).hexdigest(),
+    } != expected_sha256:
+        raise ValueError("verified analysis candidate changed after output verification")
 
     json_parent = root / DEFAULT_JSON.parent
     markdown_parent = root / DEFAULT_MARKDOWN.parent
@@ -747,24 +826,29 @@ def verify_run_and_record(
                 return result
             if validator_binding is not None:
                 _require_input_validator_unchanged(validator_binding)
+            # Bind candidate bytes before semantic verification, and refuse
+            # publication if those bytes change while/after it runs.
+            candidate_digests = _candidate_output_digests(
+                candidate_json, candidate_markdown
+            )
             output_verifier(
                 root=root,
                 json_path=candidate_json,
                 markdown_path=candidate_markdown,
             )
+            if _candidate_output_digests(
+                candidate_json, candidate_markdown
+            ) != candidate_digests:
+                raise ValueError(
+                    "verified analysis candidate changed during output verification"
+                )
             _publish_verified_outputs(
                 candidate_json,
                 candidate_markdown,
                 root=root,
+                expected_sha256=candidate_digests,
             )
-            expected_output_sha256 = {
-                "canonical_inference": hashlib.sha256(
-                    candidate_json.read_bytes()
-                ).hexdigest(),
-                "manuscript_rendering": hashlib.sha256(
-                    candidate_markdown.read_bytes()
-                ).hexdigest(),
-            }
+            expected_output_sha256 = candidate_digests
     else:
         result = verify_and_run(
             manifest,

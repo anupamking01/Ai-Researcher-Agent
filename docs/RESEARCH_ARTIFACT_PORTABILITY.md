@@ -234,3 +234,40 @@ any canonical results. This closes detectable blocking, replacement and
 unbounded-middle-read behavior, **not** every concurrent swap-and-restore,
 filesystem race, or attack on independent input custody. Synthetic coverage:
 `tests/test_verified_main_study_snapshot_capture.py`.
+
+
+
+## Verified main-study output custody and publication
+
+The frozen analyzer's candidate JSON/Markdown and already-published canonical
+results are *outputs*, not the manifest-pinned inputs. They previously crossed a
+distinct unchecked boundary: candidate publication and provenance receipt
+generation used unbounded path-based reads, while descriptor-relative canonical
+reads performed an unbounded read after a separate pathname stat. Substitution
+with a FIFO between those operations could hang; inode replacement or file
+growth could escape the initial file-type check.
+
+The runner now captures candidate and published bytes through a checked parent
+directory descriptor and a nonblocking/no-follow regular-file descriptor.
+Captures enforce a **16 MiB per-output safety limit**, match the pre-open and
+post-read file identity/size/timestamps, detect growth with an extra byte, and
+recheck the pathname's identity after reading. Missing canonical outputs remain
+distinguishable from changed or nonregular files; no canonical output is
+silently repaired or replaced.
+
+Before the candidate passes the existing semantic output verifier, the runner
+pins SHA-256 digests of the exact candidate bytes. It checks those digests again
+after semantic verification and requires the identical pinned bytes at
+publication. The final receipt compares the independently reread published
+outputs to these pre-verification digests, **not** to a later unchecked candidate
+read. Consequently, mutation during verification, between verification and
+publication, or before receipt binding fails closed. Existing published results
+are not overwritten to make a rerun pass.
+
+The size bound applies to the **two manuscript-facing output files** (not
+the 40 study treatment reports, canonical input CSVs, or model budgets).
+These are current-filesystem coherence checks, not an atomic snapshot,
+signature, historical-authenticity proof, or defense against every adversarial
+swap-and-restore race. No treatment or evaluator rerun, human score, frozen
+analysis rule, or canonical measurement is changed. Tests are in
+`tests/test_verified_main_study_output_custody.py`.
