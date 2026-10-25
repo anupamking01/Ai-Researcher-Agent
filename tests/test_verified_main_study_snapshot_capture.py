@@ -16,8 +16,8 @@ def _inputs(root: Path):
     output.mkdir()
     main = output / "main_study_runs.csv"
     support = output / "posthoc_support_runs.csv"
-    main.write_bytes(b"variant_id,task_id\\nD3,main-01\\n")
-    support.write_bytes(b"claims_checked,supported\\n1,1\\n")
+    main.write_bytes(b"variant_id,task_id\nD3,main-01\n")
+    support.write_bytes(b"claims_checked,supported\n1,1\n")
     manifest = build_manifest([main, support], root=root)
     return main, support, manifest["artifacts"]
 
@@ -143,7 +143,7 @@ def test_validator_capture_does_not_use_unchecked_path_read_bytes(
 ):
     validator = tmp_path / verified.INPUT_VALIDATOR
     validator.parent.mkdir(parents=True)
-    validator.write_text("SOURCE_MARKER = 'pinned'\\n", encoding="utf-8")
+    validator.write_text("SOURCE_MARKER = 'pinned'\n", encoding="utf-8")
     original_read = Path.read_bytes
 
     def forbid_validator_path_read(path):
@@ -155,5 +155,5 @@ def test_validator_capture_does_not_use_unchecked_path_read_bytes(
     binding = verified._capture_input_validator_binding(root=tmp_path)
     assert binding.module.SOURCE_MARKER == "pinned"
     assert binding.sha256 == hashlib.sha256(
-        b"SOURCE_MARKER = 'pinned'\\n"
+        b"SOURCE_MARKER = 'pinned'\n"
     ).hexdigest()
