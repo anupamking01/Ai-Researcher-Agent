@@ -73,6 +73,24 @@ swap fails closed instead of silently rebinding the adapted provenance hash.
 This is a verifier-input integrity safeguard, not a new experiment, human
 rating, or claim about automated or human outcomes.
 
+## Reconciliation artifact resource bounds
+
+The producer and independent verifier share a **16 MiB maximum per artifact** for
+`reconciliation.json`, `reconciliation.md`, and
+`reconciliation_manifest.json`. The producer measures serialized UTF-8 **byte
+length**, rejecting an oversized JSON, Markdown, or manifest before creating the
+staging/publication directory. It does not truncate a result to meet the cap.
+
+The independent verifier checks regular-file descriptor metadata before
+allocating or reading each artifact, reads in bounded chunks with a one-byte
+growth probe, and rejects unexpected truncation, observable metadata changes,
+or growth beyond the limit. The same defensive descriptor reader covers its
+repository-local implementation and environment provenance snapshots. These
+are small, ten-task reconciliation receipts and source files, **not a cap on
+raw experiment datasets**. The checks do not establish an atomic snapshot in
+the presence of a hostile concurrent writer or prove historical authenticity.
+Tests use only synthetic and sparse local files; they are not human ratings.
+
 ## Frozen scientific boundary
 
 The reconciliation remains descriptive. It does not add reconciliation p-values, multiplicity procedures, correlations, composite scores, or treatment-validation thresholds. Automated strict support and human report quality remain different constructs, and pilot, automated-confirmatory, exploratory, and human-validation claims remain separate.
