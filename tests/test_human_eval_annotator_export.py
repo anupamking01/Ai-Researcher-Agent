@@ -399,7 +399,12 @@ def test_export_rejects_output_root_replacement_before_success(
         replace_root_before_snapshot,
     )
 
-    with pytest.raises(ValueError, match="annotator bundle output root changed"):
+    # The bounded descriptor read can reject the replaced root before the
+    # later publication-level root-identity guard runs.
+    with pytest.raises(
+        ValueError,
+        match="annotator bundle output root changed|annotator packet.jsonl was replaced during capture",
+    ):
         _export(packet_case)
 
     assert swapped == [True]
