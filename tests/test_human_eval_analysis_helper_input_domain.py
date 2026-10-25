@@ -29,8 +29,8 @@ def test_direct_report_aggregation_rejects_outside_frozen_rubric(bad_score):
 
 def test_direct_report_aggregation_rejects_duplicate_annotator_weighting():
     rows = [
-        _row("annotator-a", "H001", "1"),
-        _row("annotator-a", "H001", "5"),
+        _row("annotator-a", "H001", "3"),
+        _row("annotator-a", "H001", "4"),
         _row("annotator-b", "H001", "3"),
     ]
     with pytest.raises(ValueError, match="duplicate independent rating"):
@@ -123,11 +123,11 @@ def test_direct_aggregation_requires_explanation_for_endpoint_or_blank(value):
         core.report_scores([row])
 
 
-@pytest.mark.parametrize("notes", ["\\u200b", "---", "   ", "[]"])
+@pytest.mark.parametrize("notes", ["\u200b", "---", "   ", "[]"])
 def test_direct_aggregation_rejects_nonexplanatory_notes(notes):
     row = _row("rater-a", "H001", "5")
     row["notes"] = notes
-    with pytest.raises(ValueError, match="require explanatory notes|visible explanatory content"):
+    with pytest.raises(ValueError, match="require explanatory notes|visible explanatory content|spreadsheet-active"):
         core.report_scores([row])
 
 
