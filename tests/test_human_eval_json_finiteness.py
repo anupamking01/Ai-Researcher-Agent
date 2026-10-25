@@ -66,6 +66,9 @@ def _synthetic_payload():
     }
     agreement_dimension = {
         "n_double_rated": 1,
+        "n_annotator_a_only_rated": 0,
+        "n_annotator_b_only_rated": 0,
+        "n_neither_rated": 0,
         "raw_exact_agreement": 1.0,
         "mean_absolute_difference": 0.0,
         "quadratic_weighted_cohen_kappa": None,
