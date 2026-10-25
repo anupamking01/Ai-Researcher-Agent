@@ -103,17 +103,25 @@ def _regular_snapshot_from_descriptor(
     *,
     label: str,
 ) -> tuple[bytes, tuple[int, int, int, int, int]]:
+    """Capture a stat-pinned regular file within the producer's byte budget."""
     before = os.fstat(descriptor)
     if not stat.S_ISREG(before.st_mode):
         raise ValueError(f"{label} must be a regular file")
+    limit = analyze_human_eval.MAX_HUMAN_ANALYSIS_ARTIFACT_BYTES
+    if before.st_size > limit:
+        raise ValueError(f"{label} exceeds {limit} bytes")
     chunks = []
     offset = 0
-    while True:
-        chunk = os.pread(descriptor, 1024 * 1024, offset)
+    # Read the length observed on this descriptor, not to an unbounded EOF.
+    while offset < before.st_size:
+        chunk = os.pread(descriptor, min(1024 * 1024, before.st_size - offset), offset)
         if not chunk:
-            break
+            raise ValueError(f"{label} changed while it was being read")
         chunks.append(chunk)
         offset += len(chunk)
+    # A concurrent append must not be silently accepted as the older snapshot.
+    if os.pread(descriptor, 1, offset):
+        raise ValueError(f"{label} changed while it was being read")
     after = os.fstat(descriptor)
     before_identity = (
         before.st_dev,
@@ -132,7 +140,6 @@ def _regular_snapshot_from_descriptor(
     if before_identity != after_identity:
         raise ValueError(f"{label} changed while it was being read")
     return b"".join(chunks), after_identity
-
 
 _regular_source_snapshot_from_descriptor = _regular_snapshot_from_descriptor
 

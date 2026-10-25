@@ -26,6 +26,8 @@ OUTPUT_ROOT = core.PACKET_ROOT / "analysis-v1"
 ANALYSIS_JSON = "analysis.json"
 ANALYSIS_MARKDOWN = "analysis.md"
 ANALYSIS_MANIFEST = "analysis_manifest.json"
+# Shared with the independent output verifier; limits published receipts only.
+MAX_HUMAN_ANALYSIS_ARTIFACT_BYTES = 16 * 1024 * 1024
 ANALYSIS_VERIFIER_SOURCE = Path(__file__).with_name(
     "verify_human_eval_analysis_outputs.py"
 )
@@ -186,6 +188,14 @@ def _implementation_fingerprint(path, *, logical_path):
         "path": logical_path,
         **_fingerprint_bytes(content),
     }
+
+
+def _require_artifact_size(content: bytes, *, label: str) -> None:
+    """Reject output bytes that the independent verifier cannot safely capture."""
+    if len(content) > MAX_HUMAN_ANALYSIS_ARTIFACT_BYTES:
+        raise ValueError(
+            f"{label} exceeds {MAX_HUMAN_ANALYSIS_ARTIFACT_BYTES} bytes"
+        )
 
 
 def _write_exclusive(path, content):
@@ -359,7 +369,9 @@ def write_bundle(payload, output_root, *, verify_candidate=None):
         raise ValueError(
             "non-finite human-analysis values are invalid; use null for missing scores"
         ) from exc
+    _require_artifact_size(json_bytes, label="human-analysis JSON")
     markdown_bytes = render_markdown(payload).encode("utf-8")
+    _require_artifact_size(markdown_bytes, label="human-analysis Markdown")
 
     from scripts.verify_human_eval_analysis_outputs import (
         _validate_analysis_identity,
@@ -434,6 +446,7 @@ def write_bundle(payload, output_root, *, verify_candidate=None):
         "integrity_note": ANALYSIS_INTEGRITY_NOTE,
     }
     manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    _require_artifact_size(manifest_bytes, label="human-analysis output manifest")
 
     _ensure_output_parent(output_root.parent)
     # The private random 0700 container and retained dirfds isolate normal
