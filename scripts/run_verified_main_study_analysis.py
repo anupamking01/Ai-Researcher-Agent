@@ -27,7 +27,10 @@ from typing import Callable
 
 from scripts import analyze_main_study
 from scripts.build_analysis_provenance import build_receipt
-from scripts.fingerprint_research_artifacts import fingerprint_regular_file
+from scripts.fingerprint_research_artifacts import (
+    fingerprint_regular_file,
+    fingerprint_regular_file_with_identity,
+)
 from scripts.verify_main_study_outputs import DEFAULT_JSON, DEFAULT_MARKDOWN, verify_outputs
 from scripts.verify_research_artifact_manifest import (
     REPO_ROOT,
@@ -62,22 +65,98 @@ class InputValidatorBinding:
     module: ModuleType
 
 
+def _capture_manifest_pinned_regular_bytes(
+    path: Path, *, expected_sha256: str, expected_size: int
+) -> bytes:
+    """Capture pinned research input bytes without a second unchecked path read.
+
+    Recheck the source with the established no-symlink descriptor fingerprint,
+    open the data descriptor nonblocking, and accept at most the manifest-declared
+    number of bytes. Bind the opened inode, byte count, timestamps and digest,
+    then repeat the safe path fingerprint. This is not an atomic filesystem
+    snapshot; it blocks observable substitutions and unbounded middle reads.
+    """
+    if type(expected_size) is not int or expected_size < 0:
+        raise ValueError("invalid pinned research input size")
+    before_sha, before_size, before_inode = fingerprint_regular_file_with_identity(path)
+    if (before_sha, before_size) != (expected_sha256, expected_size):
+        raise ValueError(f"pinned research input changed before capture: {path}")
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(f"pinned research input changed during capture: {path}") from exc
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (opened.st_dev, opened.st_ino) != before_inode
+            or opened.st_size != expected_size
+        ):
+            raise ValueError(f"pinned research input changed during capture: {path}")
+
+        chunks = []
+        byte_count = 0
+        digest = hashlib.sha256()
+        while True:
+            # The extra byte detects concurrent growth, including at size zero.
+            chunk = os.read(
+                descriptor, min(1024 * 1024, expected_size - byte_count + 1)
+            )
+            if not chunk:
+                break
+            byte_count += len(chunk)
+            if byte_count > expected_size:
+                raise ValueError(f"pinned research input exceeded declared size: {path}")
+            digest.update(chunk)
+            chunks.append(chunk)
+
+        closed = os.fstat(descriptor)
+        def identity(metadata):
+            return (
+                metadata.st_dev, metadata.st_ino, metadata.st_size,
+                metadata.st_mtime_ns, metadata.st_ctime_ns,
+            )
+
+        if (
+            identity(opened) != identity(closed)
+            or byte_count != expected_size
+            or digest.hexdigest() != expected_sha256
+        ):
+            raise ValueError(f"pinned research input changed during capture: {path}")
+    except OSError as exc:
+        raise ValueError(f"pinned research input changed during capture: {path}") from exc
+    finally:
+        os.close(descriptor)
+
+    after_sha, after_size, after_inode = fingerprint_regular_file_with_identity(path)
+    if (after_sha, after_size, after_inode) != (
+        expected_sha256, expected_size, before_inode
+    ):
+        raise ValueError(f"pinned research input changed after capture: {path}")
+    return b"".join(chunks)
+
+
 def _capture_verified_inputs(
     entries: list[dict], *, root: Path, snapshot_root: Path
 ) -> dict[str, Path]:
-    """Capture and re-bind the exact bytes that the analysis will consume."""
+    """Capture exact manifest-bound bytes for isolated inferential analysis."""
     by_path = {entry["path"]: entry for entry in entries}
     captured = {}
     for relative in sorted(REQUIRED_INPUTS):
-        content = (root / relative).read_bytes()
         expected = by_path[relative]
-        if (
-            len(content) != expected["bytes"]
-            or hashlib.sha256(content).hexdigest() != expected["sha256"]
-        ):
+        try:
+            content = _capture_manifest_pinned_regular_bytes(
+                root / relative,
+                expected_sha256=expected["sha256"],
+                expected_size=expected["bytes"],
+            )
+        except (OSError, ValueError) as exc:
             raise ValueError(
                 f"research artifact changed while capturing verified analysis input: {relative}"
-            )
+            ) from exc
         destination = snapshot_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(content)
@@ -437,7 +516,9 @@ def _capture_input_validator_binding(*, root: Path) -> InputValidatorBinding:
     path = Path(os.path.abspath(Path(root) / INPUT_VALIDATOR))
     try:
         before_sha256, before_size = fingerprint_regular_file(path)
-        source = path.read_bytes()
+        source = _capture_manifest_pinned_regular_bytes(
+            path, expected_sha256=before_sha256, expected_size=before_size
+        )
         after_sha256, after_size = fingerprint_regular_file(path)
     except (OSError, ValueError) as exc:
         raise ValueError(f"input validator must be a stable regular file: {path}") from exc

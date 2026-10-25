@@ -207,3 +207,30 @@ multi-file capture. None of the frozen inputs or analyses is changed.
 
 The synthetic regression suite is
 `python -m pytest -q tests/test_research_manifest_size_contract.py`.
+
+## Manifest-bound main-study snapshot capture
+
+The verified main-study runner previously verified its two CSV artifacts with
+checked file descriptors, but copied them into its isolated analysis directory
+using an unrestricted second `Path.read_bytes()` call. It likewise loaded the
+source code for its pinned numeric validator through an unchecked middle read.
+A pathname swapped to a FIFO between verification and this second read could
+block the analysis indefinitely; concurrent file growth could also allocate
+unbounded bytes before a hash mismatch was discovered.
+
+Both capture paths now use `_capture_manifest_pinned_regular_bytes`. They first
+take a checked research-file fingerprint, then open a **nonblocking, no-follow**
+descriptor where the platform supports those flags. The opened object must be
+a regular file with the checked inode and expected size. Streaming reads are
+bounded to the pinned byte length plus one detection byte. Content SHA-256,
+byte count, inode, mtime and ctime are checked, followed by another
+directory-traversal-safe pathname fingerprint. The isolated frozen analysis
+continues to consume only the copied, validated bytes.
+
+The source-size bound comes from the previously verified manifest; the
+validator's bound comes from its checked source fingerprint. Neither adds a
+new experiment-data sampling cap, reruns a treatment/evaluator, or modifies
+any canonical results. This closes detectable blocking, replacement and
+unbounded-middle-read behavior, **not** every concurrent swap-and-restore,
+filesystem race, or attack on independent input custody. Synthetic coverage:
+`tests/test_verified_main_study_snapshot_capture.py`.
