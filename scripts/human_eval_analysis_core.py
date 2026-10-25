@@ -13,6 +13,7 @@ import random
 import stat
 import statistics
 import tempfile
+from itertools import islice
 from pathlib import Path
 
 from scripts import build_human_eval_packet as packet
@@ -43,6 +44,9 @@ FROZEN_ANALYSIS_PLAN_SHA256 = (
 # artifact, and coordinator mapping read during human-analysis preparation.
 # Frozen ratings and manuscript conclusions are not altered by this limit.
 MAX_HUMAN_ANALYSIS_SNAPSHOT_FILE_BYTES = 16 * 1024 * 1024
+# Frozen 40-report packet x exactly two annotators for treatment-level analysis.
+# Direct helper streams are capped before any partial aggregates are produced.
+MAX_DIRECT_RATING_ROWS = 80
 
 
 def _bounded_snapshot_bytes(descriptor, expected_size, *, label):
@@ -895,8 +899,21 @@ def report_scores(rows):
 
     The normal pipeline verifies the freeze before calling this helper. Keep
     the same protections here so a direct caller cannot overweight one rater
-    or manufacture an out-of-range treatment summary.
+    or manufacture an out-of-range treatment summary. Accept one-shot
+    iterables only by materializing them once, with the frozen 80-row ceiling;
+    otherwise a preliminary identity scan would silently consume generators.
     """
+    try:
+        iterator = iter(rows)
+    except TypeError as exc:
+        raise ValueError("direct rating rows must be iterable") from exc
+    rows = list(islice(iterator, MAX_DIRECT_RATING_ROWS + 1))
+    if not rows:
+        raise ValueError("direct rating rows must not be empty")
+    if len(rows) > MAX_DIRECT_RATING_ROWS:
+        raise ValueError(
+            f"direct rating rows exceed the frozen {MAX_DIRECT_RATING_ROWS}-record limit"
+        )
     for row in rows:
         if (
             not isinstance(row, dict)
