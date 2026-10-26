@@ -594,6 +594,64 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
     return receipt
 
 
+def _source_bound_original_paths(
+    packet_root: Path,
+    output_root: Path,
+    task_manifest_path: Path,
+    annotator_guide_path: Path,
+) -> dict[str, Path]:
+    """Enumerate original evidence independently of temporary verified copies."""
+    paths = {
+        "coordinator root": packet_root,
+        "annotator root": output_root,
+        "task manifest": task_manifest_path,
+        "frozen annotator guide": annotator_guide_path,
+    }
+    for name in COORDINATOR_ARTIFACTS:
+        paths[f"coordinator {name}"] = packet_root / name
+    for name in ANNOTATOR_ARTIFACTS:
+        paths[f"annotator {name}"] = output_root / name
+    return paths
+
+
+def _require_source_bound_originals_unchanged(
+    *,
+    paths: dict[str, Path],
+    original_signatures: dict[str, tuple[int, ...]],
+    original_bytes: dict[str, bytes],
+    output_root: Path,
+) -> None:
+    """Close the original-source window, not just the temporary snapshot window.
+
+    A verified temporary copy cannot certify that its live original still names
+    the same file. Compare all original paths, re-read captured bytes, then
+    compare identities again so later reads cannot silently mask replacements.
+    """
+    def check_identities() -> None:
+        _require_annotator_artifact_set(output_root)
+        for label, path in paths.items():
+            try:
+                actual = _evidence_stat_signature(path)
+            except OSError as exc:
+                raise ValueError(
+                    f"{label} disappeared during source-bound verification window"
+                ) from exc
+            if actual != original_signatures[label]:
+                raise ValueError(
+                    f"{label} changed during source-bound verification window"
+                )
+
+    check_identities()
+    for label, captured in original_bytes.items():
+        if _regular_bytes(
+            paths[label], label=f"source-bound original recheck {label}"
+        ) != captured:
+            raise ValueError(
+                f"{label} bytes changed during source-bound verification window"
+            )
+    check_identities()
+
+
 def verify_annotator_bundle_against_source(
     *,
     expected_presentation_order: str,
@@ -603,16 +661,31 @@ def verify_annotator_bundle_against_source(
     repo_root: Path = REPO_ROOT,
     annotator_guide_path: Path = DEFAULT_ANNOTATOR_GUIDE,
 ) -> dict:
-    """Verify a distribution bundle against one verified coordinator snapshot."""
+    """Verify one distribution bundle against still-unchanged live originals."""
     packet_root = Path(packet_root)
     output_root = Path(output_root)
     task_manifest_path = Path(task_manifest_path)
     repo_root = Path(repo_root)
-    guide_bytes = _frozen_guide_bytes(Path(annotator_guide_path))
+    annotator_guide_path = Path(annotator_guide_path)
     if packet_root.is_symlink() or not packet_root.is_dir():
         raise ValueError(f"coordinator packet root must be a regular directory: {packet_root}")
     if output_root.is_symlink() or not output_root.is_dir():
         raise ValueError(f"annotator bundle root must be a regular directory: {output_root}")
+
+    # Observe both original directories and every file BEFORE any original is
+    # copied. Source-bound receipts must not silently attest to stale copies if
+    # a live file is rewritten while the captured copy is being validated.
+    paths = _source_bound_original_paths(
+        packet_root, output_root, task_manifest_path, annotator_guide_path
+    )
+    original_signatures = {
+        label: _evidence_stat_signature(path) for label, path in paths.items()
+    }
+    original_task_manifest = _regular_bytes(
+        task_manifest_path, label="source-bound task manifest"
+    )
+    guide_bytes = _frozen_guide_bytes(annotator_guide_path)
+
     with tempfile.TemporaryDirectory(prefix="vera-annotator-source-verify-") as tmp_name:
         tmp_root = Path(tmp_name)
         coordinator_snapshot = tmp_root / "coordinator"
@@ -627,14 +700,32 @@ def verify_annotator_bundle_against_source(
             repo_root=repo_root,
         )
         receipt = verify_annotator_bundle(annotator_snapshot)
-        return _source_bound_receipt(
+        result = _source_bound_receipt(
             receipt=receipt,
             coordinator_bytes=coordinator_bytes,
             annotator_bytes=annotator_bytes,
             guide_bytes=guide_bytes,
             expected_presentation_order=expected_presentation_order,
         )
-
+        expected_original_bytes = {
+            "task manifest": original_task_manifest,
+            "frozen annotator guide": guide_bytes,
+        }
+        expected_original_bytes.update({
+            f"coordinator {name}": content
+            for name, content in coordinator_bytes.items()
+        })
+        expected_original_bytes.update({
+            f"annotator {name}": content
+            for name, content in annotator_bytes.items()
+        })
+        _require_source_bound_originals_unchanged(
+            paths=paths,
+            original_signatures=original_signatures,
+            original_bytes=expected_original_bytes,
+            output_root=output_root,
+        )
+        return result
 
 def export_annotator_bundle(
     *,

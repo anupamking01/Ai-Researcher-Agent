@@ -1036,3 +1036,97 @@ def test_verify_against_source_cli_requires_expected_order(packet_case):
     assert result.returncode != 0
     assert "--presentation-order is required" in result.stderr
     assert "PASS" not in result.stdout
+
+
+def _verify_source_bound_originals(case, *, annotator_guide_path=None):
+    options = {
+        "packet_root": case["packet_root"],
+        "output_root": case["export_root"],
+        "task_manifest_path": case["task_manifest"],
+        "repo_root": case["repo_root"],
+        "expected_presentation_order": "canonical",
+    }
+    if annotator_guide_path is not None:
+        options["annotator_guide_path"] = annotator_guide_path
+    return exporter.verify_annotator_bundle_against_source(**options)
+
+
+def test_source_bound_original_window_accepts_unchanged_synthetic_inputs(packet_case):
+    _export(packet_case)
+    result = _verify_source_bound_originals(packet_case)
+    assert result["source_bound_to_verified_coordinator"] is True
+
+
+def test_source_bound_original_window_rejects_late_coordinator_change(
+    packet_case, monkeypatch
+):
+    """A verified captured copy must not attest to a changed live manifest."""
+    _export(packet_case)
+    target = packet_case["packet_root"] / "manifest.json"
+    original_receipt = exporter._source_bound_receipt
+
+    def modify_after_snapshots(**kwargs):
+        result = original_receipt(**kwargs)
+        target.write_bytes(target.read_bytes() + b"\n")
+        return result
+
+    monkeypatch.setattr(exporter, "_source_bound_receipt", modify_after_snapshots)
+    with pytest.raises(ValueError, match="changed during source-bound verification window"):
+        _verify_source_bound_originals(packet_case)
+
+
+def test_source_bound_original_window_rejects_same_byte_annotator_replacement(
+    packet_case, monkeypatch, tmp_path
+):
+    """Rehashing cannot conceal replacement of a published original inode."""
+    _export(packet_case)
+    target = packet_case["export_root"] / "packet.jsonl"
+    old_path = tmp_path / "old-annotator-packet.jsonl"
+    original_receipt = exporter._source_bound_receipt
+
+    def replace_after_snapshots(**kwargs):
+        result = original_receipt(**kwargs)
+        target.rename(old_path)
+        target.write_bytes(old_path.read_bytes())
+        return result
+
+    monkeypatch.setattr(exporter, "_source_bound_receipt", replace_after_snapshots)
+    with pytest.raises(ValueError, match="changed during source-bound verification window"):
+        _verify_source_bound_originals(packet_case)
+
+
+def test_source_bound_original_window_rejects_late_task_manifest_change(
+    packet_case, monkeypatch
+):
+    """The frozen task source is also part of the original-source window."""
+    _export(packet_case)
+    target = packet_case["task_manifest"]
+    original_receipt = exporter._source_bound_receipt
+
+    def modify_after_snapshots(**kwargs):
+        result = original_receipt(**kwargs)
+        target.write_bytes(target.read_bytes() + b" ")
+        return result
+
+    monkeypatch.setattr(exporter, "_source_bound_receipt", modify_after_snapshots)
+    with pytest.raises(ValueError, match="changed during source-bound verification window"):
+        _verify_source_bound_originals(packet_case)
+
+
+def test_source_bound_original_window_rejects_late_frozen_guide_change(
+    packet_case, monkeypatch, tmp_path
+):
+    """A changed source guide must not be validated from its earlier copy."""
+    _export(packet_case)
+    guide = tmp_path / "frozen-annotator-guide.md"
+    guide.write_bytes(exporter.DEFAULT_ANNOTATOR_GUIDE.read_bytes())
+    original_receipt = exporter._source_bound_receipt
+
+    def modify_after_snapshots(**kwargs):
+        result = original_receipt(**kwargs)
+        guide.write_bytes(guide.read_bytes() + b"\n")
+        return result
+
+    monkeypatch.setattr(exporter, "_source_bound_receipt", modify_after_snapshots)
+    with pytest.raises(ValueError, match="changed during source-bound verification window"):
+        _verify_source_bound_originals(packet_case, annotator_guide_path=guide)

@@ -185,3 +185,31 @@ they cannot detect every transient staging rename/replacement that is restored
 between point-in-time checks, or prevent replacement of the published path
 after the final check. Retain the verified bundle bytes or distribute them
 immediately through the controlled annotation workflow.
+
+
+## Original-source verification-window custody
+
+The source-bound verification path previously validated temporary copies of the
+coordinator packet and annotator distribution. If the originals changed after
+their capture but before the receipt was returned, the receipt could describe
+an obsolete live source. This is different from standalone bundle verification
+and from checking returned rating submissions.
+
+The source-bound verifier now observes the original coordinator and annotator
+directory identities, the four original coordinator files, the four original
+annotator files, the frozen task manifest, and the frozen annotator guide
+before snapshotting. Following verification of the captured copies, it
+requires the original path identities to remain stable, independently re-reads
+every original through the existing bounded regular-file capture, compares exact
+bytes, and rechecks identities. Late edits, source replacements (even when
+bytes match), and task/guide changes fail closed. These reads do not open or
+return blinding-key contents, create ratings, or modify evidence.
+
+Synthetic regression tests in tests/test_human_eval_annotator_export.py exercise
+unchanged originals, a late coordinator-manifest edit, same-byte annotator-packet
+inode replacement, task-manifest drift, and guide drift. This is an observational
+integrity check, not a transaction, external fingerprint escrow, proof of
+annotator independence, or historical tamper-proof storage. A transient change
+that is restored between observations may escape detection. Frozen automated
+confirmatory findings, exploratory diagnostics, and pending human validation
+remain distinct.
