@@ -6,7 +6,8 @@ import json
 import math
 import os
 import re
-import tempfile
+import stat
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -246,8 +247,8 @@ def save_run_trace(
 ) -> str:
     """Publish a complete, create-only trace without replacing earlier evidence.
 
-    Stage and fsync a serialized trace in its destination directory before
-    atomically hard-linking its final name. A duplicate run ID fails closed
+    Stage and fsync a serialized trace in a descriptor-bound destination
+    directory before atomically hard-linking its final name. A duplicate run ID fails closed
     even with concurrent writers; a partially written staging file is never
     exposed at the canonical trace path. This is not a complete filesystem
     snapshot, nor an authentication claim about trace contents.
@@ -272,36 +273,92 @@ def save_run_trace(
     if trace_root.is_symlink():
         raise ValueError("trace_root must not be a symlink")
     trace_root.mkdir(parents=True, exist_ok=True)
-    if trace_root.is_symlink() or not trace_root.is_dir():
-        raise ValueError("trace_root must be a regular directory")
 
-    variant_root = trace_root / variant_id
-    if variant_root.is_symlink():
-        raise ValueError("Trace variant directory must not be a symlink")
-    variant_root.mkdir(exist_ok=True)
-    if variant_root.is_symlink() or not variant_root.is_dir():
-        raise ValueError("Trace variant directory must be a regular directory")
-
-    output_path = variant_root / f"{trace_id}.json"
-    staging_path: Path | None = None
+    # Open the directories exactly once and anchor all subsequent file
+    # operations to their descriptors. A pathname-only link/unlink could be
+    # redirected if another process replaced the variant directory between
+    # staging and publication.
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            prefix=f".{trace_id}.",
-            suffix=".tmp",
-            dir=variant_root,
-            delete=False,
-        ) as staging:
-            staging_path = Path(staging.name)
-            staging.write(serialized)
-            staging.flush()
-            os.fsync(staging.fileno())
-        # An atomic create-only publication: never overwrite a previous run.
-        # Unlike os.replace, os.link fails if the target exists, even if it
-        # is a symlink; competing writers cannot both win the same run_id.
-        os.link(staging_path, output_path)
+        root_fd = os.open(trace_root, directory_flags)
+    except OSError as exc:
+        raise ValueError("trace_root must be a regular directory") from exc
+    try:
+        root_stat = os.fstat(root_fd)
+        try:
+            os.mkdir(variant_id, dir_fd=root_fd)
+        except FileExistsError:
+            pass
+        try:
+            variant_fd = os.open(variant_id, directory_flags, dir_fd=root_fd)
+        except OSError as exc:
+            raise ValueError(
+                "Trace variant directory must be a regular directory"
+            ) from exc
+        try:
+            variant_stat = os.fstat(variant_fd)
+            final_name = f"{trace_id}.json"
+            staging_name = f".{trace_id}.{uuid.uuid4().hex}.tmp"
+            stage_fd = os.open(
+                staging_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=variant_fd,
+            )
+            try:
+                with os.fdopen(stage_fd, "w", encoding="utf-8") as staging:
+                    staging.write(serialized)
+                    staging.flush()
+                    os.fsync(staging.fileno())
+                # Both names resolve inside the already-open directory, not
+                # through a mutable pathname. The canonical trace is still
+                # create-only, including on concurrent or symlink collisions.
+                os.link(
+                    staging_name,
+                    final_name,
+                    src_dir_fd=variant_fd,
+                    dst_dir_fd=variant_fd,
+                    follow_symlinks=False,
+                )
+                os.fsync(variant_fd)
+            finally:
+                os.unlink(staging_name, dir_fd=variant_fd)
+                os.fsync(variant_fd)
+
+            # Do not report success for a trace left inside a directory that
+            # was renamed/replaced during publication. These checks cannot
+            # provide a fully atomic filesystem snapshot after return.
+            try:
+                named_root = os.stat(trace_root, follow_symlinks=False)
+                named_variant = os.stat(
+                    variant_id, dir_fd=root_fd, follow_symlinks=False
+                )
+                complete_variant = os.stat(
+                    trace_root / variant_id, follow_symlinks=False
+                )
+            except OSError as exc:
+                raise ValueError(
+                    "Trace directory namespace changed during publication"
+                ) from exc
+
+            def same_object(first: os.stat_result, second: os.stat_result) -> bool:
+                return (first.st_dev, first.st_ino) == (
+                    second.st_dev, second.st_ino
+                )
+
+            if (
+                not stat.S_ISDIR(named_root.st_mode)
+                or not stat.S_ISDIR(named_variant.st_mode)
+                or not stat.S_ISDIR(complete_variant.st_mode)
+                or not same_object(named_root, root_stat)
+                or not same_object(named_variant, variant_stat)
+                or not same_object(complete_variant, variant_stat)
+            ):
+                raise ValueError(
+                    "Trace directory namespace changed during publication"
+                )
+        finally:
+            os.close(variant_fd)
     finally:
-        if staging_path is not None:
-            staging_path.unlink(missing_ok=True)
-    return os.fspath(output_path)
+        os.close(root_fd)
+    return os.fspath(trace_root / variant_id / final_name)
