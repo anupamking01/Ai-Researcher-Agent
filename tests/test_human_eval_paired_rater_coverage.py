@@ -317,6 +317,23 @@ def test_independent_end_arms_do_not_need_cross_contrast_duplication():
 
 def test_analysis_preflight_rejects_conflicting_shared_arm_counts():
     payload = _synthetic_payload()
+    # This focused synthetic fixture intentionally omits publication provenance,
+    # but must satisfy the complete static identity contract before exercising
+    # the cross-contrast preflight.
+    payload.update(
+        schema_version=1,
+        study_id="budget-main-v1",
+        status="human_validation_analysis",
+        analysis_scope="complementary_not_main_confirmatory",
+        human_ratings_generated=False,
+        treatment_outputs_rerun=False,
+        hypothesis_tests="none_predeclared_for_human_validation",
+        report_score_aggregation="mean_observed_rater_scores_per_report_dimension",
+        bootstrap_seed=core.SEED,
+        bootstrap_draws=core.BOOTSTRAP_DRAWS,
+        variants=list(core.VARIANTS),
+        dimensions=list(core.DIMS),
+    )
     _move_synthetic_task_coverage(
         payload, core.CONTRASTS[1][2], core.DIMS[0], "task-a", "1/2"
     )
