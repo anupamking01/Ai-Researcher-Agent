@@ -18,10 +18,10 @@ inference even though the canonical scientific contract was not satisfied.
 
 ```bash
 mkdir -p outputs/diagnostics
-python -m scripts.analyze_main_study_with_preflight \\
+python -m scripts.analyze_main_study_with_preflight \
   --output-dir outputs/diagnostics/local-check-001
 # Or, from the repository root:
-python scripts/analyze_main_study_with_preflight.py \\
+python scripts/analyze_main_study_with_preflight.py \
   --output-dir outputs/diagnostics/local-check-002
 ```
 
