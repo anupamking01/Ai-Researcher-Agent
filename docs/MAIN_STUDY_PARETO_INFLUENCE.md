@@ -45,3 +45,27 @@ This is **distinct** from the existing paired-mean task-influence diagnostic. Pi
 Synthetic tests cover complete enumeration, a deliberately constructed frontier change, unchanged inputs, duplicate/missing cells, contradictory evaluator counts, non-finite evidence, invalid treatment completion, published-result divergence, unbound input hashes, and observable changes during upstream verification. They are engineering controls and not real research findings.
 
 The audit's SHA-256 fields identify retained bytes, not legal authenticity, ground truth, external generalizability, or the validity of automated support judgments. It makes no model or network calls.
+
+## Canonical read-only CI execution
+
+The dedicated `.github/workflows/exploratory-pareto-stability.yml` workflow runs
+`python -m scripts.analyze_main_study_pareto_influence` **against the
+already-committed canonical evidence**, not just synthetic fixtures. It triggers
+when its code, frozen input/provenance snapshots, manuscript rendering, or this
+methodology note changes, and it can also be manually dispatched.
+
+The workflow requires the existing independently recomputed execution-bound
+provenance and canonical-output verification to succeed **before** evaluating
+the ten single-task omissions. Its additional coverage checks reject omitted,
+duplicated, or selectively reported task omissions. It uploads only an
+exploratory diagnostic JSON and a SHA-256/checkout/run-identity receipt as a
+GitHub Actions artifact; neither is promoted into the frozen confirmatory
+outputs. Artifacts have finite retention and should be separately preserved
+with verified hashes if needed for a manuscript audit.
+
+An operational workflow success establishes that this deterministic offline
+audit ran against the checked-out, provenance-verified retained corpus. It does
+**not** make the exploratory omission counts confirmatory, establish
+generalization, re-run treatments, validate automated judgments with humans,
+or authorize task exclusion. Human evaluation remains an independent pending
+research gate.

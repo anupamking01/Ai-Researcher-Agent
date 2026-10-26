@@ -1,0 +1,126 @@
+name: exploratory-pareto-stability
+
+# Offline, read-only execution of the existing exploratory analysis against
+# committed canonical evidence; never runs treatment or evaluator models.
+on:
+  push:
+    branches:
+      - research-paper-eval-2027
+    paths:
+      - ".github/workflows/exploratory-pareto-stability.yml"
+      - "scripts/analyze_main_study_pareto_influence.py"
+      - "scripts/analyze_main_study_task_influence.py"
+      - "scripts/analyze_main_study.py"
+      - "scripts/verify_analysis_provenance.py"
+      - "scripts/verify_main_study_execution.py"
+      - "scripts/verify_main_study_outputs.py"
+      - "outputs/main_study_runs.csv"
+      - "outputs/posthoc_support_runs.csv"
+      - "outputs/main_study_analysis_provenance.json"
+      - "outputs/main_study_inference.json"
+      - "paper/MAIN_STUDY_INFERENCE.md"
+      - "docs/MAIN_STUDY_PARETO_INFLUENCE.md"
+  pull_request:
+    paths:
+      - ".github/workflows/exploratory-pareto-stability.yml"
+      - "scripts/analyze_main_study_pareto_influence.py"
+      - "scripts/analyze_main_study_task_influence.py"
+      - "scripts/analyze_main_study.py"
+      - "scripts/verify_analysis_provenance.py"
+      - "scripts/verify_main_study_execution.py"
+      - "scripts/verify_main_study_outputs.py"
+      - "outputs/main_study_runs.csv"
+      - "outputs/posthoc_support_runs.csv"
+      - "outputs/main_study_analysis_provenance.json"
+      - "outputs/main_study_inference.json"
+      - "paper/MAIN_STUDY_INFERENCE.md"
+      - "docs/MAIN_STUDY_PARETO_INFLUENCE.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-exploratory-pareto:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout unchanged canonical source snapshot
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up frozen Python interpreter
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+
+      - name: Independently verify canonical inputs and enumerate every omission
+        env:
+          AUDIT_PATH: ${{ runner.temp }}/vera-pareto-stability.json
+          RECEIPT_PATH: ${{ runner.temp }}/vera-pareto-stability-receipt.json
+        run: |
+          set -euo pipefail
+          python -m scripts.analyze_main_study_pareto_influence > "$AUDIT_PATH"
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          audit_path = Path(os.environ["AUDIT_PATH"])
+          raw = audit_path.read_bytes()
+          result = json.loads(raw)
+          tasks = result["task_ids"]
+          omissions = result["all_task_omissions"]
+          if not (
+              result["status"] == "post_hoc_exploratory_pareto_stability_only"
+              and result["source_provenance_independently_recomputed"] is True
+              and result["confirmatory_analysis_replaced"] is False
+              and result["human_validation_performed"] is False
+              and result["inferential_p_values_or_intervals_added"] is False
+              and len(tasks) == 10
+              and len(set(tasks)) == 10
+              and len(omissions) == 10
+              and [entry["omitted_task_id"] for entry in omissions] == tasks
+              and all(entry["retained_task_count"] == 9 for entry in omissions)
+              and sum(bool(entry["frontier_differs_from_full_sample"]) for entry in omissions)
+                  == result["omissions_with_changed_frontier"]
+          ):
+              raise SystemExit("Canonical Pareto audit does not meet exploratory coverage contract")
+          receipt = {
+              "schema_version": 1,
+              "status": "verified_exploratory_pareto_audit_only",
+              "checkout_sha": os.environ["GITHUB_SHA"],
+              "workflow_run_id": os.environ["GITHUB_RUN_ID"],
+              "pareto_diagnostic_sha256": hashlib.sha256(raw).hexdigest(),
+              "verified_canonical_inference_sha256":
+                  result["verified_canonical_inference_sha256"],
+              "verified_provenance_receipt_sha256":
+                  result["verified_provenance_receipt_sha256"],
+              "verified_input_sha256": result["verified_input_sha256"],
+              "number_of_single_task_omissions": len(omissions),
+              "omissions_with_changed_frontier":
+                  result["omissions_with_changed_frontier"],
+              "confirmatory_analysis_replaced": False,
+              "human_validation_performed": False,
+          }
+          Path(os.environ["RECEIPT_PATH"]).write_text(
+              json.dumps(receipt, indent=2, sort_keys=True, allow_nan=False) + "\n",
+              encoding="utf-8",
+          )
+          print("Exploratory Pareto audit verified against canonical evidence.")
+          print("All 10 paired-task omissions enumerated; no model or evaluator runs.")
+          print("Full-sample frontier:", result["full_sample_frontier"])
+          print("Omissions changing frontier:", result["omissions_with_changed_frontier"])
+          print("Canonical diagnostic SHA-256:", receipt["pareto_diagnostic_sha256"])
+          print("Frozen analysis and human-validation boundaries unchanged.")
+          PY
+
+      - name: Retain standalone exploratory audit and byte-identity receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-pareto-stability-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/vera-pareto-stability.json
+            ${{ runner.temp }}/vera-pareto-stability-receipt.json
+          if-no-files-found: error
+          retention-days: 90
