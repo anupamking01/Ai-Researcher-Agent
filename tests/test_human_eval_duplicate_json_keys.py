@@ -61,6 +61,16 @@ def _synthetic_payload():
         "task_differences": {"task-a": 0.0},
         "task_ids_included": ["task-a"],
         "missing_pair_tasks": [],
+        "rater_coverage": {
+            "count_by_rater_pair": {
+                cell: 1 if cell == "2/2" else 0
+                for cell in core.RATER_COVERAGE_CELLS
+            },
+            "task_ids_by_rater_pair": {
+                cell: ["task-a"] if cell == "2/2" else []
+                for cell in core.RATER_COVERAGE_CELLS
+            },
+        },
     }
     agreement_dimension = {
         "n_double_rated": 1,

@@ -77,8 +77,77 @@ def test_coverage_rejects_empty_task_matrix():
 
 
 def _synthetic_payload():
-    from tests.test_human_eval_analysis_output_verification import _payload
-    return _payload()
+    # Keep this synthetic manuscript fixture self-contained; tests/ is not a
+    # package on every Python test runner, and imports between test modules
+    # must not be required for research-integrity regression coverage.
+    tasks = ["task-a", "task-b"]
+    summary = {
+        "n_reports_total": 2,
+        "n_reports_scored": 2,
+        "n_raw_scores": 4,
+        "mean_report_score": 3.0,
+        "median_report_score": 3.0,
+        "raw_score_distribution": {"1": 0, "2": 0, "3": 4, "4": 0, "5": 0},
+    }
+    coverage = {
+        "count_by_rater_pair": {
+            cell: 2 if cell == "2/2" else 0
+            for cell in core.RATER_COVERAGE_CELLS
+        },
+        "task_ids_by_rater_pair": {
+            cell: list(tasks) if cell == "2/2" else []
+            for cell in core.RATER_COVERAGE_CELLS
+        },
+    }
+    pair = {
+        "n_pairs": 2,
+        "left_mean": 2.5,
+        "right_mean": 3.0,
+        "mean_difference": 0.5,
+        "median_difference": 0.5,
+        "bootstrap_95pct_ci_mean_difference": [0.0, 1.0],
+        "paired_dz": 0.707,
+        "positive_tasks": 1,
+        "negative_tasks": 0,
+        "tied_tasks": 1,
+        "task_differences": {"task-a": 1.0, "task-b": 0.0},
+        "task_ids_included": list(tasks),
+        "missing_pair_tasks": [],
+        "rater_coverage": coverage,
+    }
+    agreement_dimension = {
+        "n_double_rated": 8,
+        "n_annotator_a_only_rated": 0,
+        "n_annotator_b_only_rated": 0,
+        "n_neither_rated": 0,
+        "raw_exact_agreement": 0.75,
+        "mean_absolute_difference": 0.25,
+        "quadratic_weighted_cohen_kappa": 0.8,
+    }
+    return {
+        "bootstrap_draws": core.BOOTSTRAP_DRAWS,
+        "bootstrap_seed": core.SEED,
+        "task_ids": tasks,
+        "variant_summary": {
+            variant: {field: dict(summary) for field in core.DIMS}
+            for variant in core.VARIANTS
+        },
+        "paired_contrasts": {
+            name: {field: copy.deepcopy(pair) for field in core.DIMS}
+            for _, _, name in core.CONTRASTS
+        },
+        "pre_unblinding_agreement": {
+            "status": "pre-unblinding_pairwise_agreement",
+            "n_annotators": 2,
+            "pairwise": [{
+                "annotator_a": "annotator-a",
+                "annotator_b": "annotator-b",
+                "dimensions": {
+                    field: dict(agreement_dimension) for field in core.DIMS
+                },
+            }],
+        },
+    }
 
 
 def test_manuscript_displays_rater_coverage_without_changing_paired_estimate():
