@@ -1049,7 +1049,7 @@ def test_independent_verifier_uses_type_strict_payload_comparison(
     expected = _payload()
     analyze_human_eval.write_bundle(expected, output)
     changed = json.loads(json.dumps(expected))
-    changed["n_tasks"] = 2.0
+    # Preserve the numeric value but change its JSON type. New denominator\n    # checks correctly reject n_tasks=2.0 before recomputation.\n    changed["variant_summary"]["D3"][core.DIMS[0]]["mean_report_score"] = 3
     _rewrite_and_rehash(output, changed)
     monkeypatch.setattr(core, "analyze", lambda *_args, **_kwargs: expected)
 

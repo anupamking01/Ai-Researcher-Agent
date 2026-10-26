@@ -73,7 +73,7 @@ def _synthetic_payload():
         },
     }
     agreement_dimension = {
-        "n_double_rated": 1,
+        "n_double_rated": len(core.VARIANTS),  # one synthetic task per arm
         "n_annotator_a_only_rated": 0,
         "n_annotator_b_only_rated": 0,
         "n_neither_rated": 0,
