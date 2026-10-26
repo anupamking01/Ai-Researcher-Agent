@@ -571,6 +571,137 @@ def _validate_paired_rater_coverage(payload: dict) -> None:
                         shared_arm_counts[key] = count
 
 
+
+def _validate_rating_denominator_lineage(payload: dict) -> None:
+    """Reconcile original-rating counts across the blinded and unblinded layers.
+
+    A 0/1/2 post-unblinding report count loses which annotator supplied a
+    singleton. Consequently A-only and B-only are checked in aggregate, not
+    attributed to treatments or individual tasks. Exact source authenticity
+    remains the responsibility of independent frozen-input recomputation.
+    """
+    tasks = payload["task_ids"]
+    expected_reports = len(tasks) * len(core.VARIANTS)
+    if type(payload.get("n_tasks")) is not int or payload["n_tasks"] != len(tasks):
+        raise ValueError("analysis rating lineage frozen task denominator mismatch")
+
+    # Each treatment/task/dimension appears in a paired contrast. Shared arms
+    # have already been checked for equality by _validate_paired_rater_coverage.
+    original_counts = {}
+    for left, right, contrast in core.CONTRASTS:
+        for field in core.DIMS:
+            groups = payload["paired_contrasts"][contrast][field][
+                "rater_coverage"
+            ]["task_ids_by_rater_pair"]
+            for cell in core.RATER_COVERAGE_CELLS:
+                left_count, right_count = (int(n) for n in cell.split("/"))
+                for task in groups[cell]:
+                    for variant, count in ((left, left_count), (right, right_count)):
+                        key = (variant, task, field)
+                        previous = original_counts.get(key)
+                        if previous is not None and previous != count:
+                            raise ValueError(
+                                "analysis rating lineage shared-arm count mismatch"
+                            )
+                        original_counts[key] = count
+
+    summaries = payload.get("variant_summary")
+    if not isinstance(summaries, dict):
+        raise ValueError("analysis rating lineage requires variant summaries")
+    agreement = payload.get("pre_unblinding_agreement")
+    if (
+        not isinstance(agreement, dict)
+        or type(agreement.get("n_annotators")) is not int
+        or agreement["n_annotators"] != 2
+        or not isinstance(agreement.get("pairwise"), list)
+        or len(agreement["pairwise"]) != 1
+        or not isinstance(agreement["pairwise"][0], dict)
+    ):
+        raise ValueError("analysis rating lineage requires one blinded two-rater pair")
+    pair = agreement["pairwise"][0]
+    if (
+        "n_shared_items" in pair
+        and (type(pair["n_shared_items"]) is not int
+             or pair["n_shared_items"] != expected_reports)
+    ):
+        raise ValueError("analysis rating lineage blinded shared-report count mismatch")
+    dimensions = pair.get("dimensions")
+    if not isinstance(dimensions, dict):
+        raise ValueError("analysis rating lineage missing blinded dimensions")
+
+    for field in core.DIMS:
+        observed_counts = []
+        for variant in core.VARIANTS:
+            try:
+                counts = [original_counts[(variant, task, field)] for task in tasks]
+                summary = summaries[variant][field]
+            except (KeyError, TypeError) as exc:
+                raise ValueError(
+                    f"analysis rating lineage missing variant/task counts: {variant}/{field}"
+                ) from exc
+            if not isinstance(summary, dict):
+                raise ValueError(f"analysis rating lineage invalid variant summary: {variant}/{field}")
+            expected = {
+                "n_reports_total": len(tasks),
+                "n_reports_scored": sum(count > 0 for count in counts),
+                "n_raw_scores": sum(counts),
+            }
+            for key, count in expected.items():
+                actual = summary.get(key)
+                if type(actual) is not int or actual != count:
+                    raise ValueError(
+                        f"analysis rating lineage variant summary {variant}/{field}/{key} "
+                        f"disagrees with original-rating coverage: expected {count}, got {actual!r}"
+                    )
+            distribution = summary.get("raw_score_distribution")
+            if (
+                not isinstance(distribution, dict)
+                or set(distribution) != {str(n) for n in range(1, 6)}
+                or any(type(n) is not int or n < 0 for n in distribution.values())
+                or sum(distribution.values()) != expected["n_raw_scores"]
+            ):
+                raise ValueError(
+                    f"analysis rating lineage variant summary raw-score distribution "
+                    f"disagrees with coverage: {variant}/{field}"
+                )
+            observed_counts.extend(counts)
+
+        try:
+            dimension = dimensions[field]
+        except KeyError as exc:
+            raise ValueError(
+                f"analysis rating lineage missing blinded agreement for {field}"
+            ) from exc
+        if not isinstance(dimension, dict):
+            raise ValueError(f"analysis rating lineage invalid blinded agreement for {field}")
+        keys = (
+            "n_double_rated",
+            "n_annotator_a_only_rated",
+            "n_annotator_b_only_rated",
+            "n_neither_rated",
+        )
+        if any(
+            type(dimension.get(key)) is not int or dimension[key] < 0 for key in keys
+        ):
+            raise ValueError(
+                f"analysis rating lineage invalid blinded missingness counts: {field}"
+            )
+        double = sum(n == 2 for n in observed_counts)
+        singleton = sum(n == 1 for n in observed_counts)
+        neither = sum(n == 0 for n in observed_counts)
+        if (
+            len(observed_counts) != expected_reports
+            or dimension["n_double_rated"] != double
+            or dimension["n_neither_rated"] != neither
+            or (dimension["n_annotator_a_only_rated"]
+                + dimension["n_annotator_b_only_rated"]) != singleton
+        ):
+            raise ValueError(
+                f"analysis rating lineage pre-unblinding agreement missingness "
+                f"disagrees with post-unblinding coverage: {field}"
+            )
+
+
 def _validate_analysis_identity(payload: dict, source_snapshots=None) -> None:
     required = {
         "schema_version": 1,
@@ -590,6 +721,7 @@ def _validate_analysis_identity(payload: dict, source_snapshots=None) -> None:
     _require_equal(payload.get("variants"), list(core.VARIANTS), label="analysis variants")
     _require_equal(payload.get("dimensions"), list(core.DIMS), label="analysis dimensions")
     _validate_paired_rater_coverage(payload)
+    _validate_rating_denominator_lineage(payload)
 
     verification = payload.get("verification")
     if not isinstance(verification, dict):
