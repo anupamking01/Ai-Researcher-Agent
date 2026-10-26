@@ -479,6 +479,23 @@ def verify_readiness(root=ROOT, human_root=None, contract=None):
             _verify_automated_provenance(before["automated_provenance"], root=root)
             verify_main_study_outputs.verify_outputs(root=root)
             human_verification = _verify_human_analysis_bundle(human_root, root=root)
+            # An independent recomputation is a *requirement*, not an optional
+            # diagnostic. Do not mint a readiness receipt when the upstream
+            # verifier returned its ordinary non-recomputed receipt or a
+            # partial/non-boolean attestation after a refactor.
+            required_human_proofs = (
+                "independent_recomputation_verified",
+                "recomputed_from_retained_ratings",
+                "outputs_stable_during_independent_recomputation",
+            )
+            _require(
+                isinstance(human_verification, dict)
+                and all(
+                    human_verification.get(proof) is True
+                    for proof in required_human_proofs
+                ),
+                "human analysis was not independently recomputed from stable retained ratings",
+            )
 
             receipt = validate_payloads(
                 _load(before["automated_analysis"], "automated analysis"),
@@ -491,10 +508,9 @@ def verify_readiness(root=ROOT, human_root=None, contract=None):
                 "automated_provenance_verified": True,
                 "automated_output_consistency_verified": True,
                 "human_analysis_bundle_verified": True,
-                "human_analysis_independently_recomputed": human_verification.get(
-                    "independent_recomputation_verified"
-                )
-                is True,
+                "human_analysis_independently_recomputed": True,
+                "human_recomputed_from_retained_ratings": True,
+                "human_outputs_stable_during_recomputation": True,
                 "cross_analysis_identity_verified": True,
                 "inputs_stable_during_verification": True,
                 "inputs_descriptor_bound_during_verification": True,

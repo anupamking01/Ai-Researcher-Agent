@@ -108,7 +108,7 @@ def test_selected_checkout_guide_bytes_are_forwarded_for_independent_recomputati
         selected = kwargs["annotator_guide_path"]
         assert selected == guide
         observed.append(selected.read_bytes())
-        return {"independent_recomputation_verified": True}
+        return {"independent_recomputation_verified": True, "recomputed_from_retained_ratings": True, "outputs_stable_during_independent_recomputation": True}
 
     monkeypatch.setattr(
         readiness.verify_human_eval_analysis_outputs,
@@ -131,7 +131,7 @@ def test_missing_selected_checkout_guide_cannot_fall_back_to_ambient_checkout(
         assert kwargs["annotator_guide_path"] == expected
         if not expected.is_file():
             raise ValueError("selected checkout guide missing")
-        return {"independent_recomputation_verified": True}
+        return {"independent_recomputation_verified": True, "recomputed_from_retained_ratings": True, "outputs_stable_during_independent_recomputation": True}
 
     monkeypatch.setattr(
         readiness.verify_human_eval_analysis_outputs,
@@ -342,7 +342,7 @@ def _readiness_case(tmp_path, monkeypatch, *, redirected_human_root=False):
     monkeypatch.setattr(
         readiness,
         "_verify_human_analysis_bundle",
-        lambda *a, **k: {"independent_recomputation_verified": True},
+        lambda *a, **k: {"independent_recomputation_verified": True, "recomputed_from_retained_ratings": True, "outputs_stable_during_independent_recomputation": True},
     )
     return root, human_root, actual_human_root, contract
 
@@ -360,7 +360,7 @@ def test_readiness_rejects_same_byte_input_replacement_during_verification(
         replacement = actual_human_root / "replacement.json"
         replacement.write_bytes(original)
         os.replace(replacement, analysis)
-        return {"independent_recomputation_verified": True}
+        return {"independent_recomputation_verified": True, "recomputed_from_retained_ratings": True, "outputs_stable_during_independent_recomputation": True}
 
     monkeypatch.setattr(
         readiness,
@@ -496,3 +496,70 @@ def test_posthoc_dimension_or_contrast_selection_is_rejected():
     human["paired_contrasts"].pop(readiness.CONTRASTS[-1])
     with pytest.raises(ValueError, match="human contrast set mismatch"):
         readiness.validate_payloads(automated, human)
+
+
+# These are deliberately synthetic preflight receipts: they do not assert
+# that genuine human annotations exist or that reconciliation has been run.
+_HUMAN_RECOMPUTATION_PROOFS = {
+    "independent_recomputation_verified": True,
+    "recomputed_from_retained_ratings": True,
+    "outputs_stable_during_independent_recomputation": True,
+}
+
+
+def test_readiness_exposes_verified_retained_rating_recomputation(tmp_path, monkeypatch):
+    root, human_root, _, contract = _readiness_case(tmp_path, monkeypatch)
+    receipt = readiness.verify_readiness(
+        root=root, human_root=human_root, contract=contract
+    )
+    verification = receipt["verification"]
+    assert verification["human_analysis_independently_recomputed"] is True
+    assert verification["human_recomputed_from_retained_ratings"] is True
+    assert verification["human_outputs_stable_during_recomputation"] is True
+
+
+@pytest.mark.parametrize("proof", tuple(_HUMAN_RECOMPUTATION_PROOFS))
+@pytest.mark.parametrize("invalid", (False, None, 1))
+def test_readiness_rejects_unverified_human_recomputation_attestation(
+    tmp_path, monkeypatch, proof, invalid
+):
+    root, human_root, _, contract = _readiness_case(tmp_path, monkeypatch)
+    receipt = dict(_HUMAN_RECOMPUTATION_PROOFS)
+    receipt[proof] = invalid
+    monkeypatch.setattr(
+        readiness, "_verify_human_analysis_bundle", lambda *a, **k: receipt
+    )
+    with pytest.raises(ValueError, match="not independently recomputed from stable retained ratings"):
+        readiness.verify_readiness(
+            root=root, human_root=human_root, contract=contract
+        )
+
+
+@pytest.mark.parametrize("proof", tuple(_HUMAN_RECOMPUTATION_PROOFS))
+def test_readiness_rejects_omitted_human_recomputation_attestation(
+    tmp_path, monkeypatch, proof
+):
+    root, human_root, _, contract = _readiness_case(tmp_path, monkeypatch)
+    receipt = dict(_HUMAN_RECOMPUTATION_PROOFS)
+    del receipt[proof]
+    monkeypatch.setattr(
+        readiness, "_verify_human_analysis_bundle", lambda *a, **k: receipt
+    )
+    with pytest.raises(ValueError, match="not independently recomputed from stable retained ratings"):
+        readiness.verify_readiness(
+            root=root, human_root=human_root, contract=contract
+        )
+
+
+@pytest.mark.parametrize("invalid", (None, [], True))
+def test_readiness_rejects_non_mapping_human_recomputation_receipt(
+    tmp_path, monkeypatch, invalid
+):
+    root, human_root, _, contract = _readiness_case(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        readiness, "_verify_human_analysis_bundle", lambda *a, **k: invalid
+    )
+    with pytest.raises(ValueError, match="not independently recomputed from stable retained ratings"):
+        readiness.verify_readiness(
+            root=root, human_root=human_root, contract=contract
+        )
