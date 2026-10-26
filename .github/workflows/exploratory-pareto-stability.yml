@@ -105,7 +105,7 @@ jobs:
             paper/MAIN_STUDY_INFERENCE.md \
             scripts/analyze_main_study_task_influence.py \
             scripts/analyze_main_study_pareto_influence.py \
-            scripts/verify_main_study_task_influence_artifact.py
+            scripts/verify_main_study_task_influence_artifact.py \
             scripts/verify_main_study_pareto_artifact.py
           do
             mkdir -p "$FROZEN_WORKTREE/$(dirname "$path")"
