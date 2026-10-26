@@ -496,7 +496,11 @@ def _validate_paired_rater_coverage(payload: dict) -> None:
     if not isinstance(contrasts, dict):
         raise ValueError("analysis paired contrasts must be an object")
     expected_cells = set(core.RATER_COVERAGE_CELLS)
-    for _, _, contrast in core.CONTRASTS:
+    # D6 appears on both sides of adjacent contrasts, as does P6. Each
+    # report/dimension is the SAME original two-rater observation wherever
+    # that treatment arm occurs; category partitions alone do not enforce it.
+    shared_arm_counts = {}
+    for left_variant, right_variant, contrast in core.CONTRASTS:
         for field in core.DIMS:
             try:
                 block = contrasts[contrast][field]
@@ -544,6 +548,27 @@ def _validate_paired_rater_coverage(payload: dict) -> None:
                 or block["n_pairs"] != len(included)
             ):
                 raise ValueError("analysis rater coverage paired denominator mismatch")
+
+            # Reconcile every repeated treatment/report count across contrasts.
+            # A locally well-formed 2/2 or 1/2 bucket cannot silently revise
+            # the original-rater denominator for a shared D6 or P6 report.
+            # These are diagnostic counts, not score imputations or new tests.
+            for category, category_tasks in task_ids_by_pair.items():
+                left_count, right_count = (int(value) for value in category.split("/"))
+                for task in category_tasks:
+                    for variant, count in (
+                        (left_variant, left_count),
+                        (right_variant, right_count),
+                    ):
+                        key = (variant, task, field)
+                        previous = shared_arm_counts.get(key)
+                        if previous is not None and previous != count:
+                            raise ValueError(
+                                "analysis rater coverage cross-contrast shared-arm mismatch: "
+                                f"{variant}/{task}/{field} claims both {previous} and {count} "
+                                "original ratings"
+                            )
+                        shared_arm_counts[key] = count
 
 
 def _validate_analysis_identity(payload: dict, source_snapshots=None) -> None:

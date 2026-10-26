@@ -182,14 +182,43 @@ def test_identity_gate_rejects_misleading_coverage_claim(mutation):
         verify._validate_paired_rater_coverage(payload)
 
 
+def _move_synthetic_task_coverage(payload, contrast, field, task, new_cell):
+    """Change one synthetic coverage bucket while retaining local validity."""
+    tasks = payload["task_ids"]
+    block = payload["paired_contrasts"][contrast][field]
+    coverage = block["rater_coverage"]
+    groups = coverage["task_ids_by_rater_pair"]
+    assert sum(task in ids for ids in groups.values()) == 1
+    assert new_cell in groups
+    for ids in groups.values():
+        if task in ids:
+            ids.remove(task)
+    groups[new_cell].append(task)
+    for cell, ids in groups.items():
+        ids.sort(key=tasks.index)
+        coverage["count_by_rater_pair"][cell] = len(ids)
+    included_cells = ("1/1", "1/2", "2/1", "2/2")
+    included = [
+        task_id for task_id in tasks
+        if any(task_id in groups[cell] for cell in included_cells)
+    ]
+    block["task_ids_included"] = included
+    block["missing_pair_tasks"] = [task_id for task_id in tasks if task_id not in included]
+    block["n_pairs"] = len(included)
+    return block
+
+
 def test_one_rater_coverage_can_remain_included_under_frozen_rule():
     payload = _synthetic_payload()
-    block = payload["paired_contrasts"][core.CONTRASTS[0][2]][core.DIMS[0]]
-    coverage = block["rater_coverage"]
-    coverage["task_ids_by_rater_pair"]["2/2"] = ["task-a"]
-    coverage["count_by_rater_pair"]["2/2"] = 1
-    coverage["task_ids_by_rater_pair"]["1/1"] = ["task-b"]
-    coverage["count_by_rater_pair"]["1/1"] = 1
+    field = core.DIMS[0]
+    block = _move_synthetic_task_coverage(
+        payload, core.CONTRASTS[0][2], field, "task-b", "1/1"
+    )
+    # D6 is the right arm above and the left arm below: its original count
+    # must remain one for this task in both predeclared comparisons.
+    _move_synthetic_task_coverage(
+        payload, core.CONTRASTS[1][2], field, "task-b", "1/2"
+    )
     verify._validate_paired_rater_coverage(payload)
     assert block["n_pairs"] == 2
     assert block["mean_difference"] == 0.5
@@ -205,3 +234,91 @@ def test_zero_rating_side_cannot_be_claimed_as_paired():
     coverage["count_by_rater_pair"]["0/1"] = 1
     with pytest.raises(ValueError, match="paired denominator mismatch"):
         verify._validate_paired_rater_coverage(payload)
+
+
+@pytest.mark.parametrize(
+    ("contrast_index", "contradictory_cell"),
+    [
+        (1, "1/2"),  # D6: two ratings in retrieval, one in planning.
+        (1, "0/2"),  # D6: scored in retrieval, missing in planning.
+        (2, "1/2"),  # P6: two ratings in planning, one in verification.
+        (2, "0/2"),  # P6: scored in planning, missing in verification.
+    ],
+)
+def test_rejects_inconsistent_original_rater_counts_for_shared_treatment(
+    contrast_index, contradictory_cell
+):
+    payload = _synthetic_payload()
+    contrast = core.CONTRASTS[contrast_index][2]
+    _move_synthetic_task_coverage(
+        payload, contrast, core.DIMS[0], "task-a", contradictory_cell
+    )
+    # Both contrast-local partitions and inclusion counts are sound. The
+    # contradictory evidence is visible only after shared-arm reconciliation.
+    with pytest.raises(ValueError, match="cross-contrast shared-arm mismatch"):
+        verify._validate_paired_rater_coverage(payload)
+
+
+def test_consistent_one_rater_shared_arm_remains_valid_without_imputation():
+    payload = _synthetic_payload()
+    field = core.DIMS[0]
+    _move_synthetic_task_coverage(
+        payload, core.CONTRASTS[0][2], field, "task-a", "2/1"
+    )
+    _move_synthetic_task_coverage(
+        payload, core.CONTRASTS[1][2], field, "task-a", "1/2"
+    )
+    verify._validate_paired_rater_coverage(payload)
+    assert payload["paired_contrasts"][core.CONTRASTS[0][2]][field]["n_pairs"] == 2
+    assert payload["paired_contrasts"][core.CONTRASTS[1][2]][field]["n_pairs"] == 2
+
+
+def test_consistent_zero_rater_shared_arm_excludes_only_affected_pairs():
+    payload = _synthetic_payload()
+    field = core.DIMS[0]
+    _move_synthetic_task_coverage(
+        payload, core.CONTRASTS[0][2], field, "task-a", "2/0"
+    )
+    _move_synthetic_task_coverage(
+        payload, core.CONTRASTS[1][2], field, "task-a", "0/2"
+    )
+    verify._validate_paired_rater_coverage(payload)
+    assert payload["paired_contrasts"][core.CONTRASTS[0][2]][field]["n_pairs"] == 1
+    assert payload["paired_contrasts"][core.CONTRASTS[1][2]][field]["n_pairs"] == 1
+    assert payload["paired_contrasts"][core.CONTRASTS[2][2]][field]["n_pairs"] == 2
+
+
+def test_shared_arm_consistency_is_rubric_dimension_specific():
+    payload = _synthetic_payload()
+    field = core.DIMS[1]
+    _move_synthetic_task_coverage(
+        payload, core.CONTRASTS[1][2], field, "task-b", "2/1"
+    )
+    _move_synthetic_task_coverage(
+        payload, core.CONTRASTS[2][2], field, "task-b", "1/2"
+    )
+    verify._validate_paired_rater_coverage(payload)
+    assert payload["paired_contrasts"][core.CONTRASTS[0][2]][core.DIMS[0]][
+        "rater_coverage"
+    ]["count_by_rater_pair"]["2/2"] == 2
+
+
+def test_independent_end_arms_do_not_need_cross_contrast_duplication():
+    payload = _synthetic_payload()
+    field = core.DIMS[0]
+    _move_synthetic_task_coverage(
+        payload, core.CONTRASTS[0][2], field, "task-a", "1/2"
+    )
+    _move_synthetic_task_coverage(
+        payload, core.CONTRASTS[2][2], field, "task-b", "2/1"
+    )
+    verify._validate_paired_rater_coverage(payload)
+
+
+def test_analysis_preflight_rejects_conflicting_shared_arm_counts():
+    payload = _synthetic_payload()
+    _move_synthetic_task_coverage(
+        payload, core.CONTRASTS[1][2], core.DIMS[0], "task-a", "1/2"
+    )
+    with pytest.raises(ValueError, match="cross-contrast shared-arm mismatch"):
+        verify._validate_analysis_identity(payload)
