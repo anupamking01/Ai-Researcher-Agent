@@ -584,7 +584,12 @@ def test_frozen_cross_analysis_metadata_rejects_numeric_boolean_aliases(
     automated, human = _payloads()
     target = automated if section == "automated" else human
     target[field] = numeric_alias
-    with pytest.raises(ValueError, match=f"{section} {field} mismatch"):
+    expected_error = (
+        "automated schema mismatch"
+        if section == "automated"
+        else f"human {field} mismatch"
+    )
+    with pytest.raises(ValueError, match=expected_error):
         readiness.validate_payloads(automated, human)
 
 
