@@ -963,7 +963,16 @@ def report_scores(rows):
         iterator = iter(rows)
     except TypeError as exc:
         raise ValueError("direct rating rows must be iterable") from exc
-    rows = list(islice(iterator, MAX_DIRECT_RATING_ROWS + 1))
+    # A streaming producer may reuse one mutable dictionary and rewrite it
+    # between yields. Capture each flat string-valued rating record before
+    # advancing the iterator, or earlier observations can be overwritten and
+    # treatment-level report means/validation may use the wrong records.
+    # Invoke the built-in copy rather than a subclass override; the strict
+    # schema validator below still rejects non-dicts and non-string fields.
+    rows = [
+        dict.copy(row) if isinstance(row, dict) else row
+        for row in islice(iterator, MAX_DIRECT_RATING_ROWS + 1)
+    ]
     if not rows:
         raise ValueError("direct rating rows must not be empty")
     if len(rows) > MAX_DIRECT_RATING_ROWS:
