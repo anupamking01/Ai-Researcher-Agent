@@ -20,6 +20,10 @@ on:
       - "outputs/main_study_inference.json"
       - "paper/MAIN_STUDY_INFERENCE.md"
       - "docs/MAIN_STUDY_PARETO_INFLUENCE.md"
+      - "docs/MAIN_STUDY_TASK_INFLUENCE.md"
+      - "scripts/verify_main_study_task_influence_artifact.py"
+      - "tests/test_main_study_task_influence_artifact_verification.py"
+      - "tests/test_exploratory_task_influence_workflow.py"
   pull_request:
     paths:
       - ".github/workflows/exploratory-pareto-stability.yml"
@@ -35,6 +39,10 @@ on:
       - "outputs/main_study_inference.json"
       - "paper/MAIN_STUDY_INFERENCE.md"
       - "docs/MAIN_STUDY_PARETO_INFLUENCE.md"
+      - "docs/MAIN_STUDY_TASK_INFLUENCE.md"
+      - "scripts/verify_main_study_task_influence_artifact.py"
+      - "tests/test_main_study_task_influence_artifact_verification.py"
+      - "tests/test_exploratory_task_influence_workflow.py"
   workflow_dispatch:
 
 permissions:
@@ -92,7 +100,8 @@ jobs:
             outputs/main_study_inference.json \
             paper/MAIN_STUDY_INFERENCE.md \
             scripts/analyze_main_study_task_influence.py \
-            scripts/analyze_main_study_pareto_influence.py
+            scripts/analyze_main_study_pareto_influence.py \
+            scripts/verify_main_study_task_influence_artifact.py
           do
             mkdir -p "$FROZEN_WORKTREE/$(dirname "$path")"
             cp -- "$path" "$FROZEN_WORKTREE/$path"
@@ -164,6 +173,25 @@ jobs:
           print("Frozen analysis and human-validation boundaries unchanged.")
           PY
 
+      - name: Verify and retain every exploratory paired-mean task omission
+        env:
+          TASK_AUDIT_PATH: ${{ runner.temp }}/vera-task-influence.json
+          TASK_RECEIPT_PATH: ${{ runner.temp }}/vera-task-influence-receipt.json
+        run: |
+          set -euo pipefail
+          (cd "$FROZEN_WORKTREE" &&
+            python -m scripts.analyze_main_study_task_influence --root "$FROZEN_WORKTREE") > "$TASK_AUDIT_PATH"
+          (cd "$FROZEN_WORKTREE" &&
+            python -m scripts.verify_main_study_task_influence_artifact \
+              --root "$FROZEN_WORKTREE" \
+              --diagnostic "$TASK_AUDIT_PATH" \
+              --checkout-sha "$GITHUB_SHA" \
+              --receipt-implementation-commit "$RECEIPT_IMPLEMENTATION_COMMIT" \
+              --source-selection-commit "$FROZEN_SOURCE_COMMIT" \
+              --run-id "$GITHUB_RUN_ID") > "$TASK_RECEIPT_PATH"
+          python -m json.tool "$TASK_RECEIPT_PATH" >/dev/null
+          echo "Exploratory task-influence: all 30 paired omissions independently checked."
+
       - name: Retain standalone exploratory audit and byte-identity receipt
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -171,5 +199,15 @@ jobs:
           path: |
             ${{ runner.temp }}/vera-pareto-stability.json
             ${{ runner.temp }}/vera-pareto-stability-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Retain independent task-influence diagnostic and verification receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-task-influence-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/vera-task-influence.json
+            ${{ runner.temp }}/vera-task-influence-receipt.json
           if-no-files-found: error
           retention-days: 90

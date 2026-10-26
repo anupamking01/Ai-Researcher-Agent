@@ -39,3 +39,29 @@ For original frozen task differences `d[1] ... d[10]` (right minus left), the fu
 The upstream provenance verifier independently recomputes the frozen automated inference using retained evidence; the Markdown verifier checks the published rendering. The exploratory CLI now captures each canonical inference/provenance input through a directory-bound, non-symlink, nonblocking regular-file descriptor, checks its inode/size/timestamps before and after bounded reads, and rejects a replaced parent or input path. This prevents a symlink/FIFO swap between an initial file check and opening a source, and prevents observed same-byte inode replacement from passing the local custody check. It does not authenticate source data or lock the filesystem. The before/after read is an additional point-in-time custody check, not a filesystem lock or cryptographic proof of real-world authenticity. A SHA-256 records byte identity, not measurement validity. If source verification fails or the frozen cardinality, mean, or strict-support range conflicts, the diagnostic fails closed. The original experimental tasks and main-study outcomes are never rewritten.
 
 **Scope discipline:** This script exists as a transparent diagnostic after automated results were available. It is not a preregistered test or a reason to redefine the hypotheses or stop human validation.
+
+## Retained canonical CI artifact (post-hoc only)
+
+The existing `.github/workflows/exploratory-pareto-stability.yml` workflow
+also runs this **distinct paired-mean task-influence diagnostic**, reusing its
+isolated, receipt-era implementation worktree. That checkout first replays the
+execution-bound provenance verifier against retained canonical evidence.
+It neither calls an LLM nor resumes the common evaluator.
+
+The workflow separately uploads `vera-task-influence-<run-id>`, containing
+`vera-task-influence.json` and
+`vera-task-influence-receipt.json`. The standalone, stdlib-only
+`scripts/verify_main_study_task_influence_artifact.py` independently
+recomputes **all 30** nine-task paired means and their changes directly
+from the original ten-task canonical differences. It refuses missing,
+reordered, duplicated, numerically inconsistent or extra claimed results,
+and binds the artifact to the exact canonical inference and execution-bound
+provenance bytes using SHA-256. The receipt identifies both the current
+checkout and the historical analysis implementation commit. The workflow
+fails before publication if either the producer or independent verifier
+fails. The artifact is retained for 90 days unless deliberately preserved
+elsewhere with its checksums.
+
+This is verification of an exploratory calculation on the original ten
+tasks, **not** a revised confirmatory estimate, an independent human
+assessment, or a basis to remove any task from the manuscript analysis.
