@@ -135,6 +135,39 @@ def render_markdown(payload):
                 f"{differences} |"
             )
 
+
+    lines += [
+        "",
+        "## Original-rater coverage underlying paired scores",
+        "",
+        "This is a post-unblinding completeness diagnostic, not additional "
+        "agreement or a different estimand. A/B means the **left/right "
+        "treatment report**, not annotator A/B. Each side has 0, 1, or 2 "
+        "observed original independent scores; 1/1, 1/2, and 2/1 pairs "
+        "remain included under the frozen observed-mean rule.",
+        "",
+        "| Contrast | Dimension | 2/2 tasks | 2/1 tasks | 1/2 tasks | 1/1 tasks | Any side unscored | Tasks by observed left/right counts |",
+        "|---|---|---:|---:|---:|---:|---:|---|",
+    ]
+    for _, _, contrast in core.CONTRASTS:
+        for field in core.DIMS:
+            coverage = payload["paired_contrasts"][contrast][field]["rater_coverage"]
+            counts = coverage["count_by_rater_pair"]
+            per_cell = coverage["task_ids_by_rater_pair"]
+            missing = sum(
+                counts[cell] for cell in core.RATER_COVERAGE_CELLS
+                if "0" in cell.split("/")
+            )
+            details = "; ".join(
+                f"{cell}:{joined(per_cell[cell])}"
+                for cell in core.RATER_COVERAGE_CELLS if per_cell[cell]
+            ) or "—"
+            lines.append(
+                f"| {contrast} | {field} | {counts['2/2']} | "
+                f"{counts['2/1']} | {counts['1/2']} | {counts['1/1']} | "
+                f"{missing} | {details} |"
+            )
+
     agreement = payload["pre_unblinding_agreement"]
     lines += [
         "",

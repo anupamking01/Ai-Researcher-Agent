@@ -33,6 +33,11 @@ CONTRASTS = (
     ("D6", "P6", "P6_minus_D6_planning"),
     ("P6", "P6V", "P6V_minus_P6_verification"),
 )
+# Descriptive post-unblinding counts: observed scores on left/right report.
+# Each side can have zero, one, or two of the two frozen independent raters.
+RATER_COVERAGE_CELLS = tuple(
+    f"{left}/{right}" for left in (0, 1, 2) for right in (0, 1, 2)
+)
 SEED = 20260925
 BOOTSTRAP_DRAWS = 20_000
 FROZEN_ANALYSIS_PLAN_SHA256 = (
@@ -1010,6 +1015,42 @@ def report_scores(rows):
     return scores, counts
 
 
+
+def _paired_rater_coverage(counts, cells, tasks, left, right, field):
+    """Describe how many independent ratings underlie each paired report score.
+
+    This does not determine inclusion or change the frozen means/bootstrap.
+    A 1/1 task remains in the paired estimand, but is transparently identified
+    as relying on one observed rater per treatment rather than two.
+    """
+    by_cell = {cell: [] for cell in RATER_COVERAGE_CELLS}
+    seen_tasks = set()
+    for task_id in tasks:
+        if not isinstance(task_id, str) or not task_id or task_id in seen_tasks:
+            raise ValueError("rater coverage requires unique nonempty task IDs")
+        seen_tasks.add(task_id)
+        try:
+            observed = (
+                counts[(cells[(left, task_id)], field)],
+                counts[(cells[(right, task_id)], field)],
+            )
+        except KeyError as exc:
+            raise ValueError(
+                f"rater coverage is missing a report/score count for {task_id}"
+            ) from exc
+        if any(type(count) is not int or not 0 <= count <= 2 for count in observed):
+            raise ValueError(
+                f"rater coverage requires 0, 1, or 2 original ratings per report: {task_id}"
+            )
+        by_cell[f"{observed[0]}/{observed[1]}"].append(task_id)
+    if not seen_tasks:
+        raise ValueError("rater coverage requires at least one frozen task")
+    return {
+        "count_by_rater_pair": {key: len(ids) for key, ids in by_cell.items()},
+        "task_ids_by_rater_pair": by_cell,
+    }
+
+
 def _empty_pair():
     return {
         "n_pairs": 0,
@@ -1231,6 +1272,11 @@ def analyze(
                 result["missing_pair_tasks"] = [
                     task_id for task_id in tasks if task_id not in complete
                 ]
+                # Treatment-aware diagnostic only. Pre-unblinding agreement is
+                # preserved separately and the paired estimates are unchanged.
+                result["rater_coverage"] = _paired_rater_coverage(
+                    counts, cells, tasks, left, right, field
+                )
                 contrasts[name][field] = result
 
         agreement_path = blind_freeze / "agreement.json"

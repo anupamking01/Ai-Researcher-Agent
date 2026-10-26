@@ -481,6 +481,71 @@ def _verify_exact_entry(entry, *, expected_path: str, content: bytes, label: str
     )
 
 
+def _validate_paired_rater_coverage(payload: dict) -> None:
+    """Refuse internally contradictory completeness claims in a published result.
+
+    This checks category partition/denominator consistency. Independent
+    recomputation against the verified frozen inputs remains the stronger audit.
+    """
+    tasks = payload.get("task_ids")
+    if not isinstance(tasks, list) or not tasks or any(
+        not isinstance(task, str) or not task for task in tasks
+    ) or len(tasks) != len(set(tasks)):
+        raise ValueError("analysis rater coverage requires unique task IDs")
+    contrasts = payload.get("paired_contrasts")
+    if not isinstance(contrasts, dict):
+        raise ValueError("analysis paired contrasts must be an object")
+    expected_cells = set(core.RATER_COVERAGE_CELLS)
+    for _, _, contrast in core.CONTRASTS:
+        for field in core.DIMS:
+            try:
+                block = contrasts[contrast][field]
+                coverage = block["rater_coverage"]
+                count_by_pair = coverage["count_by_rater_pair"]
+                task_ids_by_pair = coverage["task_ids_by_rater_pair"]
+            except (KeyError, TypeError) as exc:
+                raise ValueError(
+                    f"analysis rater coverage missing for {contrast}/{field}"
+                ) from exc
+            if not isinstance(count_by_pair, dict) or not isinstance(task_ids_by_pair, dict):
+                raise ValueError("analysis rater coverage must be objects")
+            if set(count_by_pair) != expected_cells or set(task_ids_by_pair) != expected_cells:
+                raise ValueError("analysis rater coverage categories mismatch")
+            all_ids = []
+            for key in core.RATER_COVERAGE_CELLS:
+                ids = task_ids_by_pair[key]
+                count = count_by_pair[key]
+                if (
+                    not isinstance(ids, list)
+                    or type(count) is not int
+                    or count != len(ids)
+                    or any(not isinstance(item, str) for item in ids)
+                ):
+                    raise ValueError("analysis rater coverage counts mismatch")
+                # Category members retain the same canonical task order.
+                if ids != [task for task in tasks if task in ids]:
+                    raise ValueError("analysis rater coverage task ordering mismatch")
+                all_ids.extend(ids)
+            if len(all_ids) != len(tasks) or set(all_ids) != set(tasks):
+                raise ValueError("analysis rater coverage must partition frozen tasks")
+            included = [
+                task for task in tasks
+                if any(
+                    task in task_ids_by_pair[key]
+                    for key in ("1/1", "1/2", "2/1", "2/2")
+                )
+            ]
+            if (
+                block.get("task_ids_included") != included
+                or block.get("missing_pair_tasks") != [
+                    task for task in tasks if task not in included
+                ]
+                or type(block.get("n_pairs")) is not int
+                or block["n_pairs"] != len(included)
+            ):
+                raise ValueError("analysis rater coverage paired denominator mismatch")
+
+
 def _validate_analysis_identity(payload: dict, source_snapshots=None) -> None:
     required = {
         "schema_version": 1,
@@ -499,6 +564,7 @@ def _validate_analysis_identity(payload: dict, source_snapshots=None) -> None:
 
     _require_equal(payload.get("variants"), list(core.VARIANTS), label="analysis variants")
     _require_equal(payload.get("dimensions"), list(core.DIMS), label="analysis dimensions")
+    _validate_paired_rater_coverage(payload)
 
     verification = payload.get("verification")
     if not isinstance(verification, dict):

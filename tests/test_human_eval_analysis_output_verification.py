@@ -82,6 +82,16 @@ def _payload():
                 "task_differences": {"task-a": 1.0, "task-b": 0.0},
                 "task_ids_included": ["task-a", "task-b"],
                 "missing_pair_tasks": [],
+                "rater_coverage": {
+                    "count_by_rater_pair": {
+                        cell: 2 if cell == "2/2" else 0
+                        for cell in core.RATER_COVERAGE_CELLS
+                    },
+                    "task_ids_by_rater_pair": {
+                        cell: ["task-a", "task-b"] if cell == "2/2" else []
+                        for cell in core.RATER_COVERAGE_CELLS
+                    },
+                },
             }
             for field in core.DIMS
         }
