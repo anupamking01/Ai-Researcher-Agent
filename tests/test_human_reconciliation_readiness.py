@@ -86,10 +86,62 @@ def test_human_recomputation_uses_requested_checkout_paths(tmp_path, monkeypatch
         "packet_path": root / "outputs" / "human_eval" / "packet.jsonl",
         "protocol_path": root / "paper" / "HUMAN_EVAL_PROTOCOL.md",
         "assignment_plan_path": root / "paper" / "HUMAN_EVAL_ASSIGNMENT_PLAN.md",
+        "annotator_guide_path": root / "paper" / "HUMAN_EVAL_ANNOTATOR_GUIDE.md",
         "analysis_plan_path": root / "paper" / "HUMAN_EVAL_ANALYSIS_PLAN.md",
         "task_manifest_path": root / "experiments" / "main_budget_tasks.json",
         "repo_root": root,
     }
+
+
+def test_selected_checkout_guide_bytes_are_forwarded_for_independent_recomputation(
+    tmp_path, monkeypatch
+):
+    # This guide is a synthetic sentinel, not a collected annotation or a
+    # replacement for the frozen research protocol.
+    root = tmp_path / "selected-checkout"
+    guide = root / "paper" / "HUMAN_EVAL_ANNOTATOR_GUIDE.md"
+    guide.parent.mkdir(parents=True)
+    guide.write_bytes(b"synthetic selected-checkout guide\\n")
+    observed = []
+
+    def fake_verify(output_root, **kwargs):
+        selected = kwargs["annotator_guide_path"]
+        assert selected == guide
+        observed.append(selected.read_bytes())
+        return {"independent_recomputation_verified": True}
+
+    monkeypatch.setattr(
+        readiness.verify_human_eval_analysis_outputs,
+        "verify_bundle_against_inputs",
+        fake_verify,
+    )
+    readiness._verify_human_analysis_bundle(
+        root / "outputs" / "human_eval" / "analysis-v1", root=root
+    )
+    assert observed == [b"synthetic selected-checkout guide\\n"]
+
+
+def test_missing_selected_checkout_guide_cannot_fall_back_to_ambient_checkout(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "checkout-with-missing-guide"
+    expected = root / "paper" / "HUMAN_EVAL_ANNOTATOR_GUIDE.md"
+
+    def fake_verify(output_root, **kwargs):
+        assert kwargs["annotator_guide_path"] == expected
+        if not expected.is_file():
+            raise ValueError("selected checkout guide missing")
+        return {"independent_recomputation_verified": True}
+
+    monkeypatch.setattr(
+        readiness.verify_human_eval_analysis_outputs,
+        "verify_bundle_against_inputs",
+        fake_verify,
+    )
+    with pytest.raises(ValueError, match="selected checkout guide missing"):
+        readiness._verify_human_analysis_bundle(
+            root / "outputs" / "human_eval" / "analysis-v1", root=root
+        )
 
 
 def test_future_automated_receipt_requires_execution_layer_verification(

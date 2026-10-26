@@ -375,6 +375,8 @@ def _verify_human_analysis_bundle(human_root, *, root):
         packet_path=packet_root / "packet.jsonl",
         protocol_path=root / "paper" / "HUMAN_EVAL_PROTOCOL.md",
         assignment_plan_path=root / "paper" / "HUMAN_EVAL_ASSIGNMENT_PLAN.md",
+        # Never fall back to the importing checkout for the frozen guide.
+        annotator_guide_path=root / "paper" / "HUMAN_EVAL_ANNOTATOR_GUIDE.md",
         analysis_plan_path=root / "paper" / "HUMAN_EVAL_ANALYSIS_PLAN.md",
         task_manifest_path=root / "experiments" / "main_budget_tasks.json",
         repo_root=root,
