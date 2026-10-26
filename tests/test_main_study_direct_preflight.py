@@ -89,11 +89,14 @@ def test_direct_analyzer_accepts_same_valid_frozen_matrix(direct_inputs):
 
 def test_direct_analyzer_can_render_valid_synthetic_matrix(direct_inputs, monkeypatch):
     monkeypatch.setattr(analyze_main_study, "BOOTSTRAP_DRAWS", 8)
-    assert validated.main() == 0
-    output = json.loads(analyze_main_study.OUT_JSON.read_text(encoding="utf-8"))
+    destination = analyze_main_study.OUT_JSON.parent / "isolated-diagnostic"
+    assert validated.main(output_dir=destination) == 0
+    output = json.loads((destination / validated.DIAGNOSTIC_JSON).read_text(encoding="utf-8"))
     assert output["n_tasks"] == 10
     assert set(output["variant_summary"]) == {"D3", "D6", "P6", "P6V"}
-    assert analyze_main_study.OUT_MD.is_file()
+    assert (destination / validated.DIAGNOSTIC_MD).is_file()
+    assert not analyze_main_study.OUT_JSON.exists()
+    assert not analyze_main_study.OUT_MD.exists()
 
 
 @pytest.mark.parametrize(
@@ -144,6 +147,66 @@ def test_direct_analyzer_rejects_bad_input_before_output_publication(direct_inpu
     main[0]["source_budget"] = "99"
     write()
     with pytest.raises(ValueError, match="frozen source_budget mismatch"):
+        validated.main(output_dir=analyze_main_study.OUT_JSON.parent / "invalid-diagnostic")
+    assert not (analyze_main_study.OUT_JSON.parent / "invalid-diagnostic").exists()
+    assert not analyze_main_study.OUT_JSON.exists()
+    assert not analyze_main_study.OUT_MD.exists()
+
+
+
+def test_diagnostic_requires_explicit_output_destination(direct_inputs):
+    with pytest.raises(TypeError, match="output_dir"):
         validated.main()
     assert not analyze_main_study.OUT_JSON.exists()
     assert not analyze_main_study.OUT_MD.exists()
+
+
+def test_diagnostic_rejects_existing_destination_without_overwrite(direct_inputs):
+    directory = analyze_main_study.OUT_JSON.parent / "already-exists"
+    directory.mkdir()
+    sentinel = directory / validated.DIAGNOSTIC_JSON
+    sentinel.write_text("retained", encoding="utf-8")
+    with pytest.raises(FileExistsError, match="already exists"):
+        validated.main(output_dir=directory)
+    assert sentinel.read_text(encoding="utf-8") == "retained"
+    assert not (directory / validated.DIAGNOSTIC_MD).exists()
+
+
+def test_diagnostic_does_not_modify_preexisting_canonical_outputs(direct_inputs, monkeypatch):
+    original_json, original_md = analyze_main_study.OUT_JSON, analyze_main_study.OUT_MD
+    original_reader = analyze_main_study._read_csv
+    original_json.write_text("frozen-json-sentinel", encoding="utf-8")
+    original_md.write_text("frozen-md-sentinel", encoding="utf-8")
+    monkeypatch.setattr(analyze_main_study, "BOOTSTRAP_DRAWS", 8)
+    directory = original_json.parent / "separate-run"
+    assert validated.main(output_dir=directory) == 0
+    assert original_json.read_text(encoding="utf-8") == "frozen-json-sentinel"
+    assert original_md.read_text(encoding="utf-8") == "frozen-md-sentinel"
+    assert analyze_main_study.OUT_JSON == original_json
+    assert analyze_main_study.OUT_MD == original_md
+    assert analyze_main_study._read_csv is original_reader
+    assert (directory / validated.DIAGNOSTIC_JSON).exists()
+    assert (directory / validated.DIAGNOSTIC_MD).exists()
+
+
+def test_failed_rendering_publishes_no_diagnostic_files(direct_inputs, monkeypatch):
+    directory = analyze_main_study.OUT_JSON.parent / "failed-render"
+    original_json, original_md = analyze_main_study.OUT_JSON, analyze_main_study.OUT_MD
+    monkeypatch.setattr(analyze_main_study, "BOOTSTRAP_DRAWS", 8)
+
+    def fail_markdown(_):
+        raise RuntimeError("synthetic markdown rendering failure")
+
+    monkeypatch.setattr(analyze_main_study, "_markdown", fail_markdown)
+    with pytest.raises(RuntimeError, match="synthetic markdown"):
+        validated.main(output_dir=directory)
+    assert not directory.exists()
+    assert analyze_main_study.OUT_JSON == original_json
+    assert analyze_main_study.OUT_MD == original_md
+
+
+def test_diagnostic_requires_existing_parent_directory(direct_inputs):
+    directory = analyze_main_study.OUT_JSON.parent / "no-parent" / "diagnostic"
+    with pytest.raises(ValueError, match="parent directory"):
+        validated.main(output_dir=directory)
+    assert not directory.exists()

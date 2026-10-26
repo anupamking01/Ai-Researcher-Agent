@@ -17,9 +17,12 @@ inference even though the canonical scientific contract was not satisfied.
 ## Optional local diagnostic command
 
 ```bash
-python -m scripts.analyze_main_study_with_preflight
+mkdir -p outputs/diagnostics
+python -m scripts.analyze_main_study_with_preflight \\
+  --output-dir outputs/diagnostics/local-check-001
 # Or, from the repository root:
-python scripts/analyze_main_study_with_preflight.py
+python scripts/analyze_main_study_with_preflight.py \\
+  --output-dir outputs/diagnostics/local-check-002
 ```
 
 This **new** wrapper uses the existing strict canonical CSV reader and
@@ -34,6 +37,32 @@ canonical result, or original pinned analyzer byte is changed.
 A synthetic 40-cell control reproduces successful local inference; negative
 regressions cover representative scientific contract violations and require
 fail-closed behavior before result files appear.
+
+### Isolated create-only diagnostic results
+
+The wrapper requires an explicit `--output-dir` whose parent already exists and
+whose final directory **does not exist**. It is an error to reuse a destination.
+The unchanged analyzer runs with its result paths temporarily redirected to a
+private sibling scratch directory. Only after validation and successful JSON
+and Markdown rendering are the two files published under the new destination:
+
+- `main_study_diagnostic_inference.json`
+- `main_study_diagnostic_inference.md`
+
+The canonical analyzer defaults (`outputs/main_study_inference.json` and
+`paper/MAIN_STUDY_INFERENCE.md`) are never written by this wrapper, even if
+they already contain preserved results. Failed validation or rendering does not
+publish a diagnostic directory. Same-filesystem create-only linking prevents
+overwriting a previously published file in the new directory; publication of
+the **pair** is not an atomic transaction under abrupt process termination,
+so an incomplete directory must not be treated as a valid receipt. The
+temporary analyzer globals are restored after both success and failure; do
+not run this global-patching helper concurrently in a shared process.
+
+This safeguards local exploratory/diagnostic outputs from accidental
+canonical-result replacement. It does **not** cryptographically authenticate
+input origin, preserve an immutable filesystem, or authorize any change to
+frozen confirmatory reports.
 
 ## Critical provenance and research boundaries
 
