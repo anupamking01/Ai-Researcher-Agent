@@ -173,3 +173,59 @@ def test_verifier_does_not_modify_any_original_evidence(case):
     before = [path.read_bytes() for path in evidence]
     pair.verify_counterbalanced_submission_pair(**case)
     assert [path.read_bytes() for path in evidence] == before
+
+
+def test_mutating_first_submission_during_second_preflight_fails(case, monkeypatch):
+    """Previous serial verification could return a stale first-submission hash."""
+    original = pair.preflight.verify_preflight_receipt
+
+    def mutate_first(*, receipt_root, rating_path, annotator_bundle_root):
+        if Path(receipt_root) == case["reverse_receipt_root"]:
+            first = case["canonical_submission"]
+            first.write_bytes(first.read_bytes() + b"\\n")
+        return original(
+            receipt_root=receipt_root, rating_path=rating_path,
+            annotator_bundle_root=annotator_bundle_root,
+        )
+
+    monkeypatch.setattr(pair.preflight, "verify_preflight_receipt", mutate_first)
+    with pytest.raises(ValueError, match="changed during pair verification"):
+        pair.verify_counterbalanced_submission_pair(**case)
+
+
+def test_same_bytes_replaced_inode_during_second_preflight_fails(case, monkeypatch):
+    """A byte-identical pathname replacement is still a different retained file."""
+    original = pair.preflight.verify_preflight_receipt
+
+    def replace_first(*, receipt_root, rating_path, annotator_bundle_root):
+        if Path(receipt_root) == case["reverse_receipt_root"]:
+            first = case["canonical_submission"]
+            old = first.with_name("superseded-original.csv")
+            first.rename(old)
+            first.write_bytes(old.read_bytes())
+        return original(
+            receipt_root=receipt_root, rating_path=rating_path,
+            annotator_bundle_root=annotator_bundle_root,
+        )
+
+    monkeypatch.setattr(pair.preflight, "verify_preflight_receipt", replace_first)
+    with pytest.raises(ValueError, match="changed during pair verification"):
+        pair.verify_counterbalanced_submission_pair(**case)
+
+
+def test_first_receipt_mutated_during_second_preflight_fails(case, monkeypatch):
+    """Do not issue a pair receipt after the first retained receipt was altered."""
+    original = pair.preflight.verify_preflight_receipt
+
+    def mutate_first_receipt(*, receipt_root, rating_path, annotator_bundle_root):
+        if Path(receipt_root) == case["reverse_receipt_root"]:
+            first = case["canonical_receipt_root"] / "preflight_receipt.json"
+            first.write_bytes(first.read_bytes() + b" ")
+        return original(
+            receipt_root=receipt_root, rating_path=rating_path,
+            annotator_bundle_root=annotator_bundle_root,
+        )
+
+    monkeypatch.setattr(pair.preflight, "verify_preflight_receipt", mutate_first_receipt)
+    with pytest.raises(ValueError, match="changed during pair verification"):
+        pair.verify_counterbalanced_submission_pair(**case)
