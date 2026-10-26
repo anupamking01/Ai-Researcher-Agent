@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
+import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -226,16 +228,34 @@ def normalize_verifier_output(
     return normalized
 
 
+def _safe_trace_path_component(value: str, *, field: str) -> str:
+    """Keep trace names within one portable, unambiguous directory component."""
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", value) is None
+    ):
+        raise ValueError(f"{field} must be a safe ASCII trace path component")
+    return value
+
+
 def save_run_trace(
     *,
     trace: dict[str, Any],
     config: ExperimentConfig,
     run_id: str,
 ) -> str:
-    """Persist one trace as deterministic, human-readable JSON."""
-    root = Path(config.trace_root) / config.variant_id
-    root.mkdir(parents=True, exist_ok=True)
-    output_path = root / f"{run_id}.json"
+    """Publish a complete, create-only trace without replacing earlier evidence.
+
+    Stage and fsync a serialized trace in its destination directory before
+    atomically hard-linking its final name. A duplicate run ID fails closed
+    even with concurrent writers; a partially written staging file is never
+    exposed at the canonical trace path. This is not a complete filesystem
+    snapshot, nor an authentication claim about trace contents.
+    """
+    variant_id = _safe_trace_path_component(
+        config.variant_id, field="variant_id"
+    )
+    trace_id = _safe_trace_path_component(run_id, field="run_id")
 
     payload = {
         "schema_version": 2,
@@ -243,8 +263,45 @@ def save_run_trace(
         "experiment": config.to_dict(),
         "trace": trace,
     }
-    output_path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True),
-        encoding="utf-8",
+    # Reject unserializable and non-finite inputs before making trace folders.
+    serialized = json.dumps(
+        payload, indent=2, ensure_ascii=False, sort_keys=True, allow_nan=False
     )
+
+    trace_root = Path(config.trace_root)
+    if trace_root.is_symlink():
+        raise ValueError("trace_root must not be a symlink")
+    trace_root.mkdir(parents=True, exist_ok=True)
+    if trace_root.is_symlink() or not trace_root.is_dir():
+        raise ValueError("trace_root must be a regular directory")
+
+    variant_root = trace_root / variant_id
+    if variant_root.is_symlink():
+        raise ValueError("Trace variant directory must not be a symlink")
+    variant_root.mkdir(exist_ok=True)
+    if variant_root.is_symlink() or not variant_root.is_dir():
+        raise ValueError("Trace variant directory must be a regular directory")
+
+    output_path = variant_root / f"{trace_id}.json"
+    staging_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=f".{trace_id}.",
+            suffix=".tmp",
+            dir=variant_root,
+            delete=False,
+        ) as staging:
+            staging_path = Path(staging.name)
+            staging.write(serialized)
+            staging.flush()
+            os.fsync(staging.fileno())
+        # An atomic create-only publication: never overwrite a previous run.
+        # Unlike os.replace, os.link fails if the target exists, even if it
+        # is a symlink; competing writers cannot both win the same run_id.
+        os.link(staging_path, output_path)
+    finally:
+        if staging_path is not None:
+            staging_path.unlink(missing_ok=True)
     return os.fspath(output_path)
