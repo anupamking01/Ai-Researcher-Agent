@@ -53,21 +53,63 @@ jobs:
         with:
           python-version: "3.11.17"
 
+      - name: Restore frozen analysis implementation without altering retained evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          FROZEN_SOURCE_COMMIT="$(python - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+          source = json.loads(Path("outputs/canonical_analysis_source.json").read_text())
+          commit = source.get("analysis_commit")
+          if (
+              source.get("schema_version") != 1
+              or source.get("repository") != "anupamking01/Ai-Researcher-Agent"
+              or not isinstance(commit, str)
+              or re.fullmatch(r"[a-f0-9]{40}", commit) is None
+          ):
+              raise SystemExit("Canonical source selection is missing or invalid")
+          print(commit)
+          PY
+          )"
+          echo "FROZEN_SOURCE_COMMIT=$FROZEN_SOURCE_COMMIT" >> "$GITHUB_ENV"
+          FROZEN_WORKTREE="$RUNNER_TEMP/vera-frozen-analysis"
+          echo "FROZEN_WORKTREE=$FROZEN_WORKTREE" >> "$GITHUB_ENV"
+          git fetch --no-tags --depth=1 origin "$FROZEN_SOURCE_COMMIT"
+          git worktree add --detach "$FROZEN_WORKTREE" "$FROZEN_SOURCE_COMMIT"
+          # Preserve receipt-pinned runner/verifiers. Overlay only retained
+          # input/output bytes and the newer unpinned exploratory modules.
+          for path in \
+            outputs/main_study_runs.csv \
+            outputs/posthoc_support_runs.csv \
+            outputs/main_study_analysis_inputs_manifest.json \
+            outputs/main_study_analysis_provenance.json \
+            outputs/main_study_inference.json \
+            paper/MAIN_STUDY_INFERENCE.md \
+            scripts/analyze_main_study_task_influence.py \
+            scripts/analyze_main_study_pareto_influence.py
+          do
+            mkdir -p "$FROZEN_WORKTREE/$(dirname "$path")"
+            cp -- "$path" "$FROZEN_WORKTREE/$path"
+          done
+          echo "Canonical receipt will be checked using frozen code $FROZEN_SOURCE_COMMIT"
+
       - name: Independently verify canonical inputs and enumerate every omission
         env:
           AUDIT_PATH: ${{ runner.temp }}/vera-pareto-stability.json
           RECEIPT_PATH: ${{ runner.temp }}/vera-pareto-stability-receipt.json
         run: |
           set -euo pipefail
-          python -m scripts.analyze_main_study_pareto_influence > "$AUDIT_PATH"
+          (cd "$FROZEN_WORKTREE" &&
+            python -m scripts.analyze_main_study_pareto_influence --root "$FROZEN_WORKTREE") > "$AUDIT_PATH"
           python - <<'PY'
           import hashlib
           import json
           import os
           from pathlib import Path
 
-          audit_path = Path(os.environ["AUDIT_PATH"])
-          raw = audit_path.read_bytes()
+          raw = Path(os.environ["AUDIT_PATH"]).read_bytes()
           result = json.loads(raw)
           tasks = result["task_ids"]
           omissions = result["all_task_omissions"]
@@ -90,6 +132,7 @@ jobs:
               "schema_version": 1,
               "status": "verified_exploratory_pareto_audit_only",
               "checkout_sha": os.environ["GITHUB_SHA"],
+              "frozen_analysis_implementation_commit": os.environ["FROZEN_SOURCE_COMMIT"],
               "workflow_run_id": os.environ["GITHUB_RUN_ID"],
               "pareto_diagnostic_sha256": hashlib.sha256(raw).hexdigest(),
               "verified_canonical_inference_sha256":
@@ -107,8 +150,9 @@ jobs:
               json.dumps(receipt, indent=2, sort_keys=True, allow_nan=False) + "\n",
               encoding="utf-8",
           )
-          print("Exploratory Pareto audit verified against canonical evidence.")
+          print("Exploratory Pareto audit verified against frozen-code canonical evidence.")
           print("All 10 paired-task omissions enumerated; no model or evaluator runs.")
+          print("Historical analysis commit:", receipt["frozen_analysis_implementation_commit"])
           print("Full-sample frontier:", result["full_sample_frontier"])
           print("Omissions changing frontier:", result["omissions_with_changed_frontier"])
           print("Canonical diagnostic SHA-256:", receipt["pareto_diagnostic_sha256"])

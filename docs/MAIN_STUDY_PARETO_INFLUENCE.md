@@ -54,9 +54,17 @@ already-committed canonical evidence**, not just synthetic fixtures. It triggers
 when its code, frozen input/provenance snapshots, manuscript rendering, or this
 methodology note changes, and it can also be manually dispatched.
 
-The workflow requires the existing independently recomputed execution-bound
-provenance and canonical-output verification to succeed **before** evaluating
-the ten single-task omissions. Its additional coverage checks reject omitted,
+The canonical analysis receipt pins historical source code. Because research
+implementation and verification files have evolved since that receipt was
+produced, replaying against the current branch would fail the original source
+hash checks. The workflow therefore creates a **detached historical
+implementation worktree** at the commit named by
+`outputs/canonical_analysis_source.json`, copying only the preserved
+published analysis inputs/outputs and the two newer post-hoc diagnostic
+modules into it. Every receipt-pinned analysis, runner, and verifier file
+remains at its original byte identity. Its independently recomputed
+execution-bound provenance and canonical-output verification must pass
+**before** any of the ten task omissions is evaluated. Its additional coverage checks reject omitted,
 duplicated, or selectively reported task omissions. It uploads only an
 exploratory diagnostic JSON and a SHA-256/checkout/run-identity receipt as a
 GitHub Actions artifact; neither is promoted into the frozen confirmatory
