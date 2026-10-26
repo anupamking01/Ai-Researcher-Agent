@@ -953,7 +953,10 @@ def test_source_bound_verifier_rejects_different_valid_coordinator_packet(packet
         )
 
 
-def test_source_bound_verifier_uses_captured_coordinator_snapshot(packet_case, monkeypatch):
+def test_source_bound_verifier_rejects_live_drift_after_captured_snapshot(
+    packet_case, monkeypatch
+):
+    """Snapshot semantics remain, but the live original must still be unchanged."""
     _export(packet_case)
     live_packet = packet_case["packet_root"] / "packet.jsonl"
     original = live_packet.read_bytes()
@@ -965,17 +968,18 @@ def test_source_bound_verifier_uses_captured_coordinator_snapshot(packet_case, m
         return receipt
 
     monkeypatch.setattr(exporter, "verify_packet", verify_snapshot)
-    receipt = exporter.verify_annotator_bundle_against_source(
-        expected_presentation_order="canonical",
-        packet_root=packet_case["packet_root"],
-        output_root=packet_case["export_root"],
-        task_manifest_path=packet_case["task_manifest"],
-        repo_root=packet_case["repo_root"],
-    )
+    with pytest.raises(
+        ValueError, match="coordinator packet.jsonl changed during source-bound verification window"
+    ):
+        exporter.verify_annotator_bundle_against_source(
+            expected_presentation_order="canonical",
+            packet_root=packet_case["packet_root"],
+            output_root=packet_case["export_root"],
+            task_manifest_path=packet_case["task_manifest"],
+            repo_root=packet_case["repo_root"],
+        )
 
-    assert receipt["source_bound_to_verified_coordinator"] is True
     assert live_packet.read_bytes() != original
-
 
 def test_verify_against_source_cli(packet_case):
     _export(packet_case)
