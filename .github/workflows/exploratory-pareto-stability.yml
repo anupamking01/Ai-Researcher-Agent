@@ -22,6 +22,8 @@ on:
       - "docs/MAIN_STUDY_PARETO_INFLUENCE.md"
       - "docs/MAIN_STUDY_TASK_INFLUENCE.md"
       - "scripts/verify_main_study_task_influence_artifact.py"
+      - "scripts/verify_main_study_pareto_artifact.py"
+      - "tests/test_main_study_pareto_artifact_verification.py"
       - "tests/test_main_study_task_influence_artifact_verification.py"
       - "tests/test_exploratory_task_influence_workflow.py"
   pull_request:
@@ -41,6 +43,8 @@ on:
       - "docs/MAIN_STUDY_PARETO_INFLUENCE.md"
       - "docs/MAIN_STUDY_TASK_INFLUENCE.md"
       - "scripts/verify_main_study_task_influence_artifact.py"
+      - "scripts/verify_main_study_pareto_artifact.py"
+      - "tests/test_main_study_pareto_artifact_verification.py"
       - "tests/test_main_study_task_influence_artifact_verification.py"
       - "tests/test_exploratory_task_influence_workflow.py"
   workflow_dispatch:
@@ -102,6 +106,7 @@ jobs:
             scripts/analyze_main_study_task_influence.py \
             scripts/analyze_main_study_pareto_influence.py \
             scripts/verify_main_study_task_influence_artifact.py
+            scripts/verify_main_study_pareto_artifact.py
           do
             mkdir -p "$FROZEN_WORKTREE/$(dirname "$path")"
             cp -- "$path" "$FROZEN_WORKTREE/$path"
@@ -116,62 +121,16 @@ jobs:
           set -euo pipefail
           (cd "$FROZEN_WORKTREE" &&
             python -m scripts.analyze_main_study_pareto_influence --root "$FROZEN_WORKTREE") > "$AUDIT_PATH"
-          python - <<'PY'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-
-          raw = Path(os.environ["AUDIT_PATH"]).read_bytes()
-          result = json.loads(raw)
-          tasks = result["task_ids"]
-          omissions = result["all_task_omissions"]
-          if not (
-              result["status"] == "post_hoc_exploratory_pareto_stability_only"
-              and result["source_provenance_independently_recomputed"] is True
-              and result["confirmatory_analysis_replaced"] is False
-              and result["human_validation_performed"] is False
-              and result["inferential_p_values_or_intervals_added"] is False
-              and len(tasks) == 10
-              and len(set(tasks)) == 10
-              and len(omissions) == 10
-              and [entry["omitted_task_id"] for entry in omissions] == tasks
-              and all(entry["retained_task_count"] == 9 for entry in omissions)
-              and sum(bool(entry["frontier_differs_from_full_sample"]) for entry in omissions)
-                  == result["omissions_with_changed_frontier"]
-          ):
-              raise SystemExit("Canonical Pareto audit does not meet exploratory coverage contract")
-          receipt = {
-              "schema_version": 1,
-              "status": "verified_exploratory_pareto_audit_only",
-              "checkout_sha": os.environ["GITHUB_SHA"],
-              "frozen_analysis_implementation_commit": os.environ["RECEIPT_IMPLEMENTATION_COMMIT"],
-              "original_source_selection_commit": os.environ["FROZEN_SOURCE_COMMIT"],
-              "workflow_run_id": os.environ["GITHUB_RUN_ID"],
-              "pareto_diagnostic_sha256": hashlib.sha256(raw).hexdigest(),
-              "verified_canonical_inference_sha256":
-                  result["verified_canonical_inference_sha256"],
-              "verified_provenance_receipt_sha256":
-                  result["verified_provenance_receipt_sha256"],
-              "verified_input_sha256": result["verified_input_sha256"],
-              "number_of_single_task_omissions": len(omissions),
-              "omissions_with_changed_frontier":
-                  result["omissions_with_changed_frontier"],
-              "confirmatory_analysis_replaced": False,
-              "human_validation_performed": False,
-          }
-          Path(os.environ["RECEIPT_PATH"]).write_text(
-              json.dumps(receipt, indent=2, sort_keys=True, allow_nan=False) + "\n",
-              encoding="utf-8",
-          )
-          print("Exploratory Pareto audit verified against frozen-code canonical evidence.")
-          print("All 10 paired-task omissions enumerated; no model or evaluator runs.")
-          print("Historical analysis commit:", receipt["frozen_analysis_implementation_commit"])
-          print("Full-sample frontier:", result["full_sample_frontier"])
-          print("Omissions changing frontier:", result["omissions_with_changed_frontier"])
-          print("Canonical diagnostic SHA-256:", receipt["pareto_diagnostic_sha256"])
-          print("Frozen analysis and human-validation boundaries unchanged.")
-          PY
+          (cd "$FROZEN_WORKTREE" &&
+            python -m scripts.verify_main_study_pareto_artifact \
+              --root "$FROZEN_WORKTREE" \
+              --diagnostic "$AUDIT_PATH" \
+              --checkout-sha "$GITHUB_SHA" \
+              --receipt-implementation-commit "$RECEIPT_IMPLEMENTATION_COMMIT" \
+              --source-selection-commit "$FROZEN_SOURCE_COMMIT" \
+              --run-id "$GITHUB_RUN_ID") > "$RECEIPT_PATH"
+          python -m json.tool "$RECEIPT_PATH" >/dev/null
+          echo "Exploratory Pareto audit: all 10 omitted-task frontiers independently recomputed."
 
       - name: Verify and retain every exploratory paired-mean task omission
         env:

@@ -79,3 +79,19 @@ audit ran against the checked-out, provenance-verified retained corpus. It does
 generalization, re-run treatments, validate automated judgments with humans,
 or authorize task exclusion. Human evaluation remains an independent pending
 research gate.
+
+## Independent canonical artifact recomputation
+
+The archived Pareto diagnostic is now checked by
+`scripts/verify_main_study_pareto_artifact.py` before uploading its receipt. This
+separate, read-only stdlib verifier does **not** import the exploratory Pareto
+producer. It re-reads the original 40 treatment and 40 common-evaluator cells,
+requires their hashes to match execution-bound provenance, recomputes strict
+support from the retained claim counts and treatment cost from the retained
+treatment CSV, and checks the frozen ten-task means/frontier. It then recomputes
+all ten nine-task variant means, every dominance relationship, all frontier
+memberships, and the count of changed frontiers. The verifier rejects modified
+or missing output rows, duplicate JSON keys, non-finite/boolean numerics,
+unbound source bytes, and contradictory claims about inference/human validation.
+A successful verification is a *numerical/provenance engineering check*, not
+human validation or independent replication. No experimental inputs are changed.
