@@ -106,11 +106,11 @@ def test_normal_verification_is_mandatory_and_happens_before_analysis(tmp_path, 
     root = tmp_path
     (root / "outputs").mkdir()
     (root / "outputs" / "main_study_inference.json").write_text(json.dumps(_payload()))
-    (root / "outputs" / "main_study_analysis_provenance.json").write_text("{}")
+    (root / "outputs" / "main_study_analysis_provenance.json").write_text(json.dumps({"verified_execution": {}}))
     calls = []
     monkeypatch.setattr(
-        influence.verify_analysis_provenance, "verify_receipt",
-        lambda *a, **k: calls.append("receipt"),
+        influence.verify_main_study_execution, "verify_execution_receipt",
+        lambda *a, **k: calls.append("execution"),
     )
     monkeypatch.setattr(
         influence.verify_analysis_provenance, "verify_recomputed_outputs",
@@ -121,19 +121,27 @@ def test_normal_verification_is_mandatory_and_happens_before_analysis(tmp_path, 
         lambda **k: calls.append("markdown"),
     )
     out = influence.run_verified(root)
-    assert calls == ["receipt", "recompute", "markdown"]
+    assert calls == ["execution", "recompute", "markdown"]
     assert len(out["verified_canonical_inference_sha256"]) == 64
     assert len(out["verified_provenance_receipt_sha256"]) == 64
     assert out["source_provenance_independently_recomputed"] is True
 
 
-def test_failed_upstream_verification_prevents_diagnostic(tmp_path, monkeypatch):
+def test_missing_execution_binding_fails_before_diagnostic(tmp_path):
     (tmp_path / "outputs").mkdir()
     (tmp_path / "outputs" / "main_study_inference.json").write_text(json.dumps(_payload()))
     (tmp_path / "outputs" / "main_study_analysis_provenance.json").write_text("{}")
+    with pytest.raises(ValueError, match="must include verified treatment execution"):
+        influence.run_verified(tmp_path)
+
+
+def test_failed_upstream_verification_prevents_diagnostic(tmp_path, monkeypatch):
+    (tmp_path / "outputs").mkdir()
+    (tmp_path / "outputs" / "main_study_inference.json").write_text(json.dumps(_payload()))
+    (tmp_path / "outputs" / "main_study_analysis_provenance.json").write_text(json.dumps({"verified_execution": {}}))
     def reject(*a, **k):
         raise ValueError("source not independently verified")
-    monkeypatch.setattr(influence.verify_analysis_provenance, "verify_receipt", reject)
+    monkeypatch.setattr(influence.verify_main_study_execution, "verify_execution_receipt", reject)
     with pytest.raises(ValueError, match="source not independently verified"):
         influence.run_verified(tmp_path)
 
@@ -142,9 +150,9 @@ def test_observed_input_replacement_during_verification_fails_closed(tmp_path, m
     (tmp_path / "outputs").mkdir()
     source = tmp_path / "outputs" / "main_study_inference.json"
     source.write_text(json.dumps(_payload()))
-    (tmp_path / "outputs" / "main_study_analysis_provenance.json").write_text("{}")
+    (tmp_path / "outputs" / "main_study_analysis_provenance.json").write_text(json.dumps({"verified_execution": {}}))
     monkeypatch.setattr(
-        influence.verify_analysis_provenance, "verify_receipt", lambda *a, **k: None
+        influence.verify_main_study_execution, "verify_execution_receipt", lambda *a, **k: None
     )
     def mutate(*a, **k):
         source.write_text(json.dumps(_payload([0.5] * 10)))
@@ -160,7 +168,7 @@ def test_observed_input_replacement_during_verification_fails_closed(tmp_path, m
 
 def test_symlinked_or_oversize_source_not_read(tmp_path):
     actual = tmp_path / "real.json"
-    actual.write_text("{}")
+    actual.write_text(json.dumps({"verified_execution": {}}))
     link = tmp_path / "alias.json"
     link.symlink_to(actual)
     with pytest.raises(ValueError, match="regular"):

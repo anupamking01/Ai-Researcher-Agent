@@ -15,7 +15,7 @@ python -m scripts.analyze_main_study_task_influence > /tmp/vera-task-influence.j
 python -m pytest -q tests/test_main_study_task_influence.py
 ```
 
-The CLI prints deterministic JSON to stdout; it does not publish a new canonical result or overwrite any research output. The output file in the example is a **caller-selected local diagnostic**, not a committed result. The CLI invokes the existing automated provenance receipt verifier, the independent offline frozen-analysis recomputation, and the exact manuscript-output verifier before calculating the diagnostic. It records SHA-256 identifiers of the two verified canonical inputs and rechecks their bytes after verification. No treatment/evaluator or human-rating collection occurs.
+The CLI prints deterministic JSON to stdout; it does not publish a new canonical result or overwrite any research output. The output file in the example is a **caller-selected local diagnostic**, not a committed result. The CLI requires an execution-bound provenance receipt and invokes the existing verified-execution gate (including receipt provenance), the independent offline frozen-analysis recomputation, and the exact manuscript-output verifier before calculating the diagnostic. A legacy receipt without verified execution is deliberately not sufficient for this newer exploratory diagnostic. It records SHA-256 identifiers of the two verified canonical inputs and rechecks their bytes after verification. No treatment/evaluator or human-rating collection occurs.
 
 ## Definitions and interpretation
 

@@ -17,6 +17,7 @@ from pathlib import Path
 from scripts import analyze_main_study
 from scripts import verify_analysis_provenance
 from scripts import verify_main_study_outputs
+from scripts import verify_main_study_execution
 
 ROOT = Path(__file__).resolve().parents[1]
 INFERENCE = Path("outputs/main_study_inference.json")
@@ -167,7 +168,12 @@ def run_verified(root: Path = ROOT) -> dict:
         receipt_before.decode("utf-8")
     )
     _require(type(receipt) is dict, "analysis provenance must be an object")
-    verify_analysis_provenance.verify_receipt(receipt, root=root)
+    _require(
+        "verified_execution" in receipt,
+        "canonical provenance must include verified treatment execution",
+    )
+    # Execution-bound verification includes the underlying provenance check.
+    verify_main_study_execution.verify_execution_receipt(receipt, root=root)
     verify_analysis_provenance.verify_recomputed_outputs(receipt, root=root)
     verify_main_study_outputs.verify_outputs(root=root)
     if (
