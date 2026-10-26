@@ -157,6 +157,59 @@ def test_verifier_accepts_json_code_fence():
     assert parsed["claims_checked"] == 1
 
 
+
+def test_verifier_output_rejects_duplicate_classification_before_normalization():
+    # Without strict parsing, Python silently chooses the last 'supported'
+    # value; the resulting counts still conserve one claim.
+    raw = (
+        '{"claims_checked":1,"supported":1,"supported":0,'
+        '"partially_supported":1,"unsupported":0,"contradicted":0,"examples":[]}'
+    )
+    with pytest.raises(ValueError, match="duplicate JSON key 'supported'"):
+        normalize_verifier_output(raw)
+
+
+def test_verifier_output_rejects_nested_duplicate_evidence_labels():
+    # Ambiguous evidence excerpts are still untrustworthy when the top-level
+    # aggregate happens to be internally consistent.
+    raw = (
+        '{"claims_checked":1,"supported":1,"partially_supported":0,'
+        '"unsupported":0,"contradicted":0,'
+        '"examples":[{"label":"supported","label":"contradicted"}]}'
+    )
+    with pytest.raises(ValueError, match="duplicate JSON key 'label'"):
+        normalize_verifier_output(raw)
+
+
+@pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity", "1e309", "-1e309"])
+def test_verifier_output_rejects_nonfinite_numeric_examples(token):
+    # Both nonstandard constants and syntactically valid overflowing floats
+    # must fail, even when only illustrative examples contain the values.
+    raw = (
+        '{"claims_checked":1,"supported":1,"partially_supported":0,'
+        '"unsupported":0,"contradicted":0,'
+        '"examples":[{"confidence":' + token + '}]}'
+    )
+    with pytest.raises(ValueError, match="non-finite"):
+        normalize_verifier_output(raw)
+
+
+def test_verifier_output_preserves_valid_finite_nested_examples():
+    raw = json.dumps(
+        _verifier_payload(
+            claims_checked=1,
+            supported=1,
+            partially_supported=0,
+            unsupported=0,
+            contradicted=0,
+            examples=[{"claim": "source-backed", "confidence": 0.75}],
+        )
+    )
+    result = normalize_verifier_output(raw, max_claims=1)
+    assert result["claims_checked"] == 1
+    assert result["examples"] == [{"claim": "source-backed", "confidence": 0.75}]
+
+
 def test_posthoc_verifier_claim_cap_is_parameterized():
     prompt = generate_verification_prompt("q", "report", "evidence", max_claims=12)
     assert "up to 12 important atomic factual claims" in prompt

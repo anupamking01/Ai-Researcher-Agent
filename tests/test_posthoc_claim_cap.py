@@ -83,6 +83,18 @@ def _load_cached(path, **overrides):
     return evaluate_posthoc_support._load_cached_evaluation(path, **kwargs)
 
 
+
+def test_posthoc_common_evaluator_rejects_ambiguous_raw_label_counts():
+    # Enforce the same raw-JSON integrity on the common measurement path,
+    # before any result can be normalized into an evaluator cache.
+    raw = (
+        '{"claims_checked":1,"supported":1,"supported":0,'
+        '"partially_supported":1,"unsupported":0,"contradicted":0,"examples":[]}'
+    )
+    with pytest.raises(ValueError, match="duplicate JSON key 'supported'"):
+        evaluate_posthoc_support._normalize_evaluator_output(raw)
+
+
 def test_posthoc_normalizer_enforces_frozen_claim_cap():
     raw = json.dumps(
         _cached_evaluation(

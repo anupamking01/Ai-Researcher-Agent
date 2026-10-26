@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -122,10 +123,33 @@ def allocate_source_budgets(total_budget: int, n_queries: int) -> list[int]:
     return [base + (1 if index < remainder else 0) for index in range(n_queries)]
 
 
+def _unique_verifier_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject ambiguous object members at every depth of model JSON."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"Verifier output contains duplicate JSON key {key!r}")
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite_verifier_json_constant(token: str) -> None:
+    """Python's default JSON decoder otherwise accepts NaN/Infinity extensions."""
+    raise ValueError(f"Verifier output contains non-finite JSON token {token!r}")
+
+
+def _finite_verifier_json_float(token: str) -> float:
+    """Also reject finite-looking JSON exponent syntax that overflows to infinity."""
+    value = float(token)
+    if not math.isfinite(value):
+        raise ValueError(f"Verifier output contains non-finite JSON number {token!r}")
+    return value
+
+
 def normalize_verifier_output(
     raw_result: str, *, max_claims: int = 20
 ) -> dict[str, Any]:
-    """Parse and normalize the bounded verifier's JSON response."""
+    """Parse unambiguous finite JSON, then enforce the bounded verification rubric."""
     if (
         isinstance(max_claims, bool)
         or not isinstance(max_claims, int)
@@ -142,7 +166,15 @@ def normalize_verifier_output(
             lines = lines[:-1]
         text = "\n".join(lines).strip()
 
-    data = json.loads(text)
+    # Parse model text strictly *before* keeping only the normalized counts.
+    # Last-key-wins parsing would silently erase a conflicting classification;
+    # NaN/Infinity can also survive in retained illustrative examples.
+    data = json.loads(
+        text,
+        object_pairs_hook=_unique_verifier_json_object,
+        parse_constant=_reject_nonfinite_verifier_json_constant,
+        parse_float=_finite_verifier_json_float,
+    )
     if not isinstance(data, dict):
         raise ValueError("Verifier output must be a JSON object")
 
