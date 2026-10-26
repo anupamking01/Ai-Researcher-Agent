@@ -15,6 +15,18 @@ _VALID_PLANNING_MODES = {"direct", "planner"}
 _VALID_VERIFICATION_MODES = {"none", "verify"}
 
 
+def _require_positive_finite_timeout(value: int | float, *, field: str) -> None:
+    """Reject nonnumeric, non-finite or unusably large runtime timeout values."""
+    if type(value) not in (int, float):
+        raise ValueError(f"{field} must be a positive finite number")
+    try:
+        valid = value > 0 and math.isfinite(value)
+    except OverflowError:
+        valid = False
+    if not valid:
+        raise ValueError(f"{field} must be a positive finite number")
+
+
 @dataclass(frozen=True)
 class ExperimentConfig:
     """Controls one experimental agent variant.
@@ -53,18 +65,20 @@ class ExperimentConfig:
                 "verification_mode must be one of "
                 f"{sorted(_VALID_VERIFICATION_MODES)}"
             )
-        if self.source_budget <= 0:
+        if type(self.source_budget) is not int or self.source_budget <= 0:
             raise ValueError("source_budget must be a positive integer")
         if not self.variant_id.strip():
             raise ValueError("variant_id must be non-empty")
-        if self.search_candidate_multiplier <= 0:
-            raise ValueError("search_candidate_multiplier must be positive")
-        if self.browse_timeout_seconds <= 0:
-            raise ValueError("browse_timeout_seconds must be positive")
-        if self.run_timeout_seconds <= 0:
-            raise ValueError("run_timeout_seconds must be positive")
-        if self.max_concurrent_browses <= 0:
-            raise ValueError("max_concurrent_browses must be positive")
+        if type(self.search_candidate_multiplier) is not int or self.search_candidate_multiplier <= 0:
+            raise ValueError("search_candidate_multiplier must be a positive integer")
+        _require_positive_finite_timeout(
+            self.browse_timeout_seconds, field="browse_timeout_seconds"
+        )
+        _require_positive_finite_timeout(
+            self.run_timeout_seconds, field="run_timeout_seconds"
+        )
+        if type(self.max_concurrent_browses) is not int or self.max_concurrent_browses <= 0:
+            raise ValueError("max_concurrent_browses must be a positive integer")
 
     @classmethod
     def from_variant(cls, variant_id: str) -> "ExperimentConfig":
@@ -112,10 +126,10 @@ class ExperimentConfig:
 
 def allocate_source_budgets(total_budget: int, n_queries: int) -> list[int]:
     """Spread a fixed external browsing-call budget across planned queries."""
-    if total_budget < 0:
-        raise ValueError("total_budget cannot be negative")
-    if n_queries < 0:
-        raise ValueError("n_queries cannot be negative")
+    if type(total_budget) is not int or total_budget < 0:
+        raise ValueError("total_budget must be a non-negative integer")
+    if type(n_queries) is not int or n_queries < 0:
+        raise ValueError("n_queries must be a non-negative integer")
     if n_queries == 0:
         return []
 
