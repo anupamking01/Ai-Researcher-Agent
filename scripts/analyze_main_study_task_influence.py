@@ -11,6 +11,8 @@ import argparse
 import hashlib
 import json
 import math
+import os
+import stat
 import statistics
 from pathlib import Path
 
@@ -43,14 +45,97 @@ def _reject_non_json_number(token):
     raise ValueError(f"non-JSON finite number: {token}")
 
 
+def _source_identity(metadata: os.stat_result) -> tuple:
+    """Track the exact inode generation across metadata/read/path checks."""
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
 def _read_regular_bounded(path: Path, *, label: str) -> bytes:
+    """Capture bounded canonical bytes from one path-bound regular-file inode.
+
+    O_NOFOLLOW/O_NONBLOCK reject symlink and FIFO races; opening the parent
+    directory first prevents a renamed path from silently selecting a different
+    source. This is a read-time custody safeguard, not file authenticity proof.
+    """
     path = Path(path)
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"{label} must be a regular file: {path}")
-    with path.open("rb") as handle:
-        data = handle.read(MAX_SOURCE_BYTES + 1)
-    _require(len(data) <= MAX_SOURCE_BYTES, f"{label} exceeds source-byte limit")
-    return data
+    parent_flags = (
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    file_flags = (
+        os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        parent_fd = os.open(path.parent, parent_flags)
+    except OSError as exc:
+        raise ValueError(f"{label} parent must be a regular directory: {path.parent}") from exc
+    try:
+        parent_before = os.fstat(parent_fd)
+        _require(stat.S_ISDIR(parent_before.st_mode),
+                 f"{label} parent must be a regular directory: {path.parent}")
+        try:
+            candidate = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError(f"{label} must be a regular file: {path}") from exc
+        _require(stat.S_ISREG(candidate.st_mode),
+                 f"{label} must be a regular file: {path}")
+        _require(candidate.st_size <= MAX_SOURCE_BYTES,
+                 f"{label} exceeds source-byte limit")
+        try:
+            source_fd = os.open(path.name, file_flags, dir_fd=parent_fd)
+        except OSError as exc:
+            raise ValueError(f"{label} changed during source capture: {path}") from exc
+        try:
+            opened = os.fstat(source_fd)
+            _require(stat.S_ISREG(opened.st_mode),
+                     f"{label} must be a regular file: {path}")
+            _require(_source_identity(opened) == _source_identity(candidate),
+                     f"{label} changed during source capture: {path}")
+            _require(opened.st_size <= MAX_SOURCE_BYTES,
+                     f"{label} exceeds source-byte limit")
+            chunks = []
+            offset = 0
+            while offset < opened.st_size:
+                chunk = os.pread(
+                    source_fd, min(1024 * 1024, opened.st_size - offset), offset
+                )
+                _require(bool(chunk),
+                         f"{label} changed during source capture: {path}")
+                chunks.append(chunk)
+                offset += len(chunk)
+            _require(not os.pread(source_fd, 1, offset),
+                     f"{label} changed during source capture: {path}")
+            after = os.fstat(source_fd)
+            _require(_source_identity(after) == _source_identity(opened),
+                     f"{label} changed during source capture: {path}")
+            try:
+                visible = os.stat(
+                    path.name, dir_fd=parent_fd, follow_symlinks=False
+                )
+                parent_visible = os.stat(path.parent, follow_symlinks=False)
+            except OSError as exc:
+                raise ValueError(
+                    f"{label} changed during source capture: {path}"
+                ) from exc
+            _require(_source_identity(visible) == _source_identity(opened),
+                     f"{label} changed during source capture: {path}")
+            _require(stat.S_ISDIR(parent_visible.st_mode) and
+                     (parent_visible.st_dev, parent_visible.st_ino) ==
+                     (parent_before.st_dev, parent_before.st_ino),
+                     f"{label} parent changed during source capture: {path.parent}")
+            return b"".join(chunks)
+        finally:
+            os.close(source_fd)
+    finally:
+        os.close(parent_fd)
 
 
 def _parse_analysis(data: bytes) -> dict:
