@@ -563,3 +563,46 @@ def test_readiness_rejects_non_mapping_human_recomputation_receipt(
         readiness.verify_readiness(
             root=root, human_root=human_root, contract=contract
         )
+
+@pytest.mark.parametrize(
+    ("section", "field", "numeric_alias"),
+    [
+        ("automated", "schema_version", True),
+        ("human", "schema_version", True),
+        ("human", "schema_version", 1.0),
+        ("human", "human_ratings_generated", 0),
+        ("human", "human_ratings_generated", 0.0),
+        ("human", "treatment_outputs_rerun", 0),
+        ("human", "treatment_outputs_rerun", 0.0),
+    ],
+)
+def test_frozen_cross_analysis_metadata_rejects_numeric_boolean_aliases(
+    section, field, numeric_alias
+):
+    # Python considers True == 1 and False == 0, but they are different JSON
+    # declarations. Passing equality is not enough for provenance claims.
+    automated, human = _payloads()
+    target = automated if section == "automated" else human
+    target[field] = numeric_alias
+    with pytest.raises(ValueError, match=f"{section} {field} mismatch"):
+        readiness.validate_payloads(automated, human)
+
+
+@pytest.mark.parametrize("field", ["human_ratings_generated", "treatment_outputs_rerun"])
+def test_numeric_false_alias_cannot_mint_readiness_receipt(tmp_path, monkeypatch, field):
+    # Exercise the complete readiness entry point with synthetic local inputs.
+    # Other expensive evidence verifiers are explicitly stubbed by this fixture;
+    # this proves only the cross-analysis metadata boundary.
+    root, human_root, actual_human_root, contract = _readiness_case(
+        tmp_path, monkeypatch
+    )
+    analysis_path = actual_human_root / "analysis.json"
+    payload = json.loads(analysis_path.read_text(encoding="utf-8"))
+    payload[field] = 0
+    analysis_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match=f"human {field} mismatch"):
+        readiness.verify_readiness(
+            root=root,
+            human_root=human_root,
+            contract=contract,
+        )

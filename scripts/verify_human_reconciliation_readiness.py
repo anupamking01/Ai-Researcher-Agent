@@ -250,7 +250,13 @@ def _validate_summary(result, diffs, label):
 
 def validate_payloads(automated, human):
     """Validate the frozen cross-analysis identity without comparing outcomes."""
-    _require(automated.get("schema_version") == 1, "automated schema mismatch")
+    # JSON booleans are Python integers for equality purposes (True == 1).
+    # Freeze/version identity must not be satisfied by a coerced boolean.
+    _require(
+        type(automated.get("schema_version")) is int
+        and automated["schema_version"] == 1,
+        "automated schema mismatch",
+    )
     _require(automated.get("study_id") == STUDY, "automated study mismatch")
     _require(
         automated.get("primary_outcome") == "strict_support_rate",
@@ -294,7 +300,14 @@ def validate_payloads(automated, human):
         "hypothesis_tests": "none_predeclared_for_human_validation",
     }
     for key, value in expected.items():
-        _require(human.get(key) == value, f"human {key} mismatch")
+        # A JSON numeric zero must not masquerade as a provenance declaration
+        # of False (nor True as the integer schema version). The frozen
+        # metadata contract requires the declared value *and* its JSON type.
+        actual = human.get(key)
+        _require(
+            type(actual) is type(value) and actual == value,
+            f"human {key} mismatch",
+        )
     human_tasks = _task_ids(human, "human")
     _require(human_tasks == tasks, "ordered task identity mismatch")
     _require(human.get("dimensions") == list(DIMS), "human dimension set/order mismatch")
