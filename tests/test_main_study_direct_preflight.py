@@ -8,6 +8,7 @@ import json
 import pytest
 
 from scripts import analyze_main_study
+from scripts import analyze_main_study_with_preflight as validated
 from scripts.validate_main_study_inputs import EXPECTED_CELLS, FROZEN_SOURCE_BUDGETS
 
 
@@ -81,14 +82,14 @@ def direct_inputs(tmp_path, monkeypatch):
 
 def test_direct_analyzer_accepts_same_valid_frozen_matrix(direct_inputs):
     _, _, _, _, _ = direct_inputs
-    dataset, task_ids = analyze_main_study._build_dataset()
+    dataset, task_ids = validated.build_dataset()
     assert len(dataset) == 40
     assert task_ids == [f"main-{i:02d}" for i in range(1, 11)]
 
 
 def test_direct_analyzer_can_render_valid_synthetic_matrix(direct_inputs, monkeypatch):
     monkeypatch.setattr(analyze_main_study, "BOOTSTRAP_DRAWS", 8)
-    assert analyze_main_study.main() == 0
+    assert validated.main() == 0
     output = json.loads(analyze_main_study.OUT_JSON.read_text(encoding="utf-8"))
     assert output["n_tasks"] == 10
     assert set(output["variant_summary"]) == {"D3", "D6", "P6", "P6V"}
@@ -114,7 +115,7 @@ def test_direct_analyzer_fails_closed_on_frozen_contract_drift(
     (main if side == "main" else support)[0][field] = invalid
     write()
     with pytest.raises(ValueError, match=message):
-        analyze_main_study._build_dataset()
+        validated.build_dataset()
 
 
 def test_direct_analyzer_rejects_coherently_relabelled_frozen_task(direct_inputs):
@@ -127,7 +128,7 @@ def test_direct_analyzer_rejects_coherently_relabelled_frozen_task(direct_inputs
                 row["task_id"] = "main-99"
     write()
     with pytest.raises(ValueError, match="frozen 4x10 main-study matrix"):
-        analyze_main_study._build_dataset()
+        validated.build_dataset()
 
 
 def test_direct_analyzer_rejects_ambiguous_duplicate_csv_header(direct_inputs):
@@ -135,7 +136,7 @@ def test_direct_analyzer_rejects_ambiguous_duplicate_csv_header(direct_inputs):
     data = main_path.read_text(encoding="utf-8")
     main_path.write_text(data.replace("variant_id,task_id", "variant_id,variant_id,task_id", 1), encoding="utf-8")
     with pytest.raises(ValueError, match="duplicate CSV header"):
-        analyze_main_study._build_dataset()
+        validated.build_dataset()
 
 
 def test_direct_analyzer_rejects_bad_input_before_output_publication(direct_inputs):
@@ -143,6 +144,6 @@ def test_direct_analyzer_rejects_bad_input_before_output_publication(direct_inpu
     main[0]["source_budget"] = "99"
     write()
     with pytest.raises(ValueError, match="frozen source_budget mismatch"):
-        analyze_main_study.main()
+        validated.main()
     assert not analyze_main_study.OUT_JSON.exists()
     assert not analyze_main_study.OUT_MD.exists()

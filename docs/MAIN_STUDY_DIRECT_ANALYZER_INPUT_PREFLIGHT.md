@@ -1,39 +1,50 @@
-# Direct main-study analyzer: frozen input preflight
+# Frozen main-study analyzer: validated local diagnostic entrypoint
 
-The canonical, manuscript-facing path is
-`scripts/run_verified_main_study_analysis.py`, which independently pins and
-snapshots the original treatment and evaluator artifacts before analysis.
-The smaller offline `scripts/analyze_main_study.py` entrypoint is also
-invocable directly and is used by the isolated snapshot analysis driver.
+The historical analyzer `scripts/analyze_main_study.py` is **byte-pinned**
+in the published canonical analysis provenance receipt. Editing it would break
+independent verification of preserved results, so the original implementation
+is intentionally retained byte-for-byte.
 
-## Closed evaluation-validity gap
+## Previously uncovered local misuse path
 
-Before this change, the direct analyzer used permissive `csv.DictReader` and
-converted evaluator counts through `round(float(...))`. It required a balanced
-10-by-4 matrix, but did not independently require the **frozen task IDs**,
-budget assignments, exact integer counts, claim cap, consistent evaluator
-mirrors, pricing snapshot or treatment-cost methodology. Aligned, re-exported
-but scientifically invalid CSVs could therefore yield numeric estimates when
-the direct entrypoint was used outside its verified wrapper.
+The historical command-line analyzer can also be invoked directly, outside
+`scripts/run_verified_main_study_analysis.py`. In that unguarded mode its
+permissive CSV parser and float-rounded claim counts can accept coherently
+relabeled but scientifically invalid exports (for example, altered frozen task
+IDs or browse budgets). That would yield numbers which look like preregistered
+inference even though the canonical scientific contract was not satisfied.
 
-The direct analyzer now uses the **existing canonical strict CSV reader and
-frozen scientific preflight** before it joins or analyzes data. The validation
-runs on the *same in-memory rows* used for inference, avoiding a redundant
-preflight read of potentially different source bytes. No frozen statistical
-estimator, contrast, seed, task, or observed result changes.
+## Optional local diagnostic command
 
-Synthetic regression tests exercise valid 40-cell inference and reject
-fractional counts, nonfinite costs, cost/provenance relabeling, source-budget
-drift, contradictory evidence status, cross-export accounting mismatch,
-coherently changed task IDs, malformed duplicate CSV headers, and premature
-result publication. They are not new treatment/evaluator runs.
+```bash
+python -m scripts.analyze_main_study_with_preflight
+# Or, from the repository root:
+python scripts/analyze_main_study_with_preflight.py
+```
 
-## Boundary
+This **new** wrapper uses the existing strict canonical CSV reader and
+`validate_rows(..., require_canonical_matrix=True)` on the exact in-memory
+records that the byte-identical historical analyzer subsequently consumes.
+It rejects malformed CSV structure, inconsistent evaluator mirrors, invalid
+counts or resource measures, altered task identities, frozen budgets, claim
+caps, pricing-source relabeling, and cost/accounting contradictions before
+analysis output publication. No treatment, bootstrap rule, contrast, seed,
+canonical result, or original pinned analyzer byte is changed.
 
-This is scientific-domain validation, **not** a cryptographic source-of-truth
-check. A direct caller supplying internally valid but unpinned CSV files still
-has no independent artifact provenance. For paper/report claims use the
-existing manifest-bound verified runner, not this direct entrypoint alone.
-The original diagnostic pilot, frozen automated confirmatory analysis,
-post-hoc exploratory studies, and pending independent human ratings remain
-separate. No human-evaluation result is implied.
+A synthetic 40-cell control reproduces successful local inference; negative
+regressions cover representative scientific contract violations and require
+fail-closed behavior before result files appear.
+
+## Critical provenance and research boundaries
+
+This convenience command is **not** a manifest-pinned proof of canonical
+artifact origin. It cannot authenticate the original input CSVs or protect
+against every concurrent source-file edit while reading. It uses a temporary
+module-level reader binding and should not be invoked concurrently from a
+shared notebook/kernel. For manuscript-facing canonical inference **always
+use the existing independently SHA-256-pinned verified runner**, which
+snapshots and verifies the source artifacts and outputs.
+
+The diagnostic pilot, frozen confirmatory study, post-hoc exploratory
+analyses, and pending blinded human validation are separate. Synthetic tests
+do not constitute experiments or human ratings.

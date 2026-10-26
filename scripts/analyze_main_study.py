@@ -6,21 +6,13 @@ network/model calls and reads only the completed treatment/evaluator CSVs.
 
 from __future__ import annotations
 
-import sys
+import csv
 import itertools
 import json
 import math
 import random
 import statistics
 from pathlib import Path
-
-# Keep both documented invocation forms working:
-#   python scripts/analyze_main_study.py
-#   python -m scripts.analyze_main_study
-if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from scripts.validate_main_study_inputs import read_csv_rows, validate_rows
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MAIN_CSV = REPO_ROOT / "outputs" / "main_study_runs.csv"
@@ -40,9 +32,10 @@ EXPECTED_TASKS = 10
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
-    # Use the exact canonical CSV reader; DictReader alone can silently
-    # discard duplicate headers, extra cells and blank physical records.
-    return read_csv_rows(path)
+    if not path.is_file():
+        raise SystemExit(f"Missing required input: {path}")
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        return list(csv.DictReader(handle))
 
 
 def _float(row: dict[str, str], key: str) -> float:
@@ -139,12 +132,6 @@ def _holm_adjust(items: list[tuple[str, float]]) -> dict[str, float]:
 def _build_dataset() -> tuple[dict[tuple[str, str], dict], list[str]]:
     main_rows = _read_csv(MAIN_CSV)
     support_rows = _read_csv(SUPPORT_CSV)
-    # The verified manifest-bound runner already performs this preflight.
-    # Enforce the same frozen 40-cell scientific contract here too, since
-    # direct CLI/notebook callers can otherwise bypass the guardrail.
-    # Validate the exact in-memory rows that will feed inference, not a
-    # second read that could differ from the analysis input.
-    validate_rows(main_rows, support_rows, require_canonical_matrix=True)
 
     main: dict[tuple[str, str], dict[str, str]] = {}
     for row in main_rows:
