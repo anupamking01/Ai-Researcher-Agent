@@ -202,8 +202,9 @@ before snapshotting. Following verification of the captured copies, it
 requires the original path identities to remain stable, independently re-reads
 every original through the existing bounded regular-file capture, compares exact
 bytes, and rechecks identities. Late edits, source replacements (even when
-bytes match), and task/guide changes fail closed. These reads do not open or
-return blinding-key contents, create ratings, or modify evidence.
+bytes match), and task/guide changes fail closed. The custody recheck reads original coordinator-only evidence, including
+blinding-key bytes, but never discloses those bytes in the receipt or
+annotator bundle, creates ratings, or modifies evidence.
 
 Synthetic regression tests in tests/test_human_eval_annotator_export.py exercise
 unchanged originals, a late coordinator-manifest edit, same-byte annotator-packet
