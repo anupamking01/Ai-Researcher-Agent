@@ -77,3 +77,21 @@ snapshots and verifies the source artifacts and outputs.
 The diagnostic pilot, frozen confirmatory study, post-hoc exploratory
 analyses, and pending blinded human validation are separate. Synthetic tests
 do not constitute experiments or human ratings.
+
+## Diagnostic destination namespace integrity
+
+The local diagnostic publisher now retains POSIX directory descriptors for the
+private staging directory, the requested destination parent and the newly
+created output directory. It creates both files using descriptor-relative,
+create-only hard links, syncs the output directory entries, and verifies
+source, parent and destination directory identities before reporting success.
+A destination symlink swap or same-name directory replacement during
+publication is rejected without writing into the replacement. Regression tests
+cover these races, descriptor-bound links and symlinked parent rejection.
+
+These checks reduce path-redirection risk for **local diagnostic output only**;
+they do not turn the diagnostic into a canonical SHA-pinned analysis, prevent
+post-return filesystem mutation, or make a two-file publication atomic during
+abrupt termination. The frozen historical analyzer and its analysis receipts
+remain unchanged. POSIX `dir_fd`, `O_DIRECTORY`, and `O_NOFOLLOW` support
+is required.

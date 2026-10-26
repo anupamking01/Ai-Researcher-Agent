@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import stat
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -66,6 +67,100 @@ DIAGNOSTIC_JSON = "main_study_diagnostic_inference.json"
 DIAGNOSTIC_MD = "main_study_diagnostic_inference.md"
 
 
+def _same_directory(first: os.stat_result, second: os.stat_result) -> bool:
+    return (
+        stat.S_ISDIR(first.st_mode)
+        and stat.S_ISDIR(second.st_mode)
+        and (first.st_dev, first.st_ino) == (second.st_dev, second.st_ino)
+    )
+
+
+def _publish_diagnostic_pair(staging: Path, destination: Path) -> None:
+    """Bind both diagnostic links to opened directories; fail on namespace drift.
+
+    POSIX-only, not an atomic two-file transaction or immutable snapshot.
+    """
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        parent_fd = os.open(destination.parent, flags)
+    except OSError as exc:
+        raise ValueError("diagnostic parent must be a non-symlink directory") from exc
+    try:
+        parent_identity = os.fstat(parent_fd)
+        source_fd = os.open(staging, flags)
+        try:
+            source_identity = os.fstat(source_fd)
+            os.mkdir(destination.name, mode=0o700, dir_fd=parent_fd)
+            output_fd = os.open(destination.name, flags, dir_fd=parent_fd)
+            try:
+                output_identity = os.fstat(output_fd)
+                linked = []
+                try:
+                    for name in (DIAGNOSTIC_JSON, DIAGNOSTIC_MD):
+                        source = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+                        if not stat.S_ISREG(source.st_mode):
+                            raise ValueError("diagnostic staged output must be a regular file")
+                        os.link(
+                            name, name, src_dir_fd=source_fd,
+                            dst_dir_fd=output_fd, follow_symlinks=False,
+                        )
+                        linked.append(name)
+                        published = os.stat(
+                            name, dir_fd=output_fd, follow_symlinks=False
+                        )
+                        if (source.st_dev, source.st_ino) != (
+                            published.st_dev, published.st_ino
+                        ):
+                            raise ValueError("diagnostic staged-file identity changed")
+                    os.fsync(output_fd)
+                    os.fsync(parent_fd)
+                    try:
+                        parent_now = os.stat(destination.parent, follow_symlinks=False)
+                        source_now = os.stat(staging, follow_symlinks=False)
+                        output_now = os.stat(
+                            destination.name, dir_fd=parent_fd,
+                            follow_symlinks=False,
+                        )
+                        absolute_now = os.stat(destination, follow_symlinks=False)
+                    except OSError as exc:
+                        raise ValueError(
+                            "diagnostic directory namespace changed during publication"
+                        ) from exc
+                    if not (
+                        _same_directory(parent_identity, parent_now)
+                        and _same_directory(source_identity, source_now)
+                        and _same_directory(output_identity, output_now)
+                        and _same_directory(output_identity, absolute_now)
+                    ):
+                        raise ValueError(
+                            "diagnostic directory namespace changed during publication"
+                        )
+                except BaseException:
+                    # Clean only the descriptor-bound original, never an
+                    # unrelated replacement appearing at the output path.
+                    for name in linked:
+                        try:
+                            os.unlink(name, dir_fd=output_fd)
+                        except FileNotFoundError:
+                            pass
+                    try:
+                        named = os.stat(
+                            destination.name, dir_fd=parent_fd,
+                            follow_symlinks=False,
+                        )
+                        if _same_directory(output_identity, named):
+                            os.rmdir(destination.name, dir_fd=parent_fd)
+                    except OSError:
+                        pass
+                    raise
+            finally:
+                os.close(output_fd)
+        finally:
+            os.close(source_fd)
+    finally:
+        os.close(parent_fd)
+
+
 def main(*, output_dir: Path) -> int:
     """Run validated inference into a new, explicitly selected diagnostic folder.
 
@@ -74,7 +169,7 @@ def main(*, output_dir: Path) -> int:
     rendering failures leave no published diagnostic directory. Publication
     requires an absent destination and creates files without overwriting them.
     This is not a manifest-verified canonical analysis or an atomic two-file
-    filesystem transaction.
+    filesystem transaction, even with descriptor-bound publication.
     """
     destination = Path(output_dir)
     if destination.exists() or destination.is_symlink():
@@ -97,22 +192,7 @@ def main(*, output_dir: Path) -> int:
             if status != 0:
                 return status
 
-            # mkdir is exclusive even if a second invocation races this one.
-            # The output names are separate from the canonical result names.
-            destination.mkdir(mode=0o700)
-            published = []
-            try:
-                for name in (DIAGNOSTIC_JSON, DIAGNOSTIC_MD):
-                    os.link(staging / name, destination / name)
-                    published.append(name)
-            except BaseException:
-                for name in published:
-                    (destination / name).unlink()
-                try:
-                    destination.rmdir()
-                except OSError:
-                    pass
-                raise
+            _publish_diagnostic_pair(staging, destination)
             return status
 
 

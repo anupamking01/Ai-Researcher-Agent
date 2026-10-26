@@ -210,3 +210,94 @@ def test_diagnostic_requires_existing_parent_directory(direct_inputs):
     with pytest.raises(ValueError, match="parent directory"):
         validated.main(output_dir=directory)
     assert not directory.exists()
+
+
+def test_diagnostic_publication_uses_directory_descriptors(direct_inputs, monkeypatch):
+    monkeypatch.setattr(analyze_main_study, "BOOTSTRAP_DRAWS", 8)
+    original_link = validated.os.link
+    observed = []
+
+    def capture(source, target, **kwargs):
+        observed.append((source, target, dict(kwargs)))
+        return original_link(source, target, **kwargs)
+
+    monkeypatch.setattr(validated.os, "link", capture)
+    destination = analyze_main_study.OUT_JSON.parent / "fd-bound"
+    assert validated.main(output_dir=destination) == 0
+    assert len(observed) == 2
+    assert [record[0] for record in observed] == [
+        validated.DIAGNOSTIC_JSON, validated.DIAGNOSTIC_MD
+    ]
+    assert all(
+        record[0] == record[1]
+        and isinstance(record[2].get("src_dir_fd"), int)
+        and isinstance(record[2].get("dst_dir_fd"), int)
+        and record[2].get("follow_symlinks") is False
+        for record in observed
+    )
+
+
+def test_diagnostic_rejects_destination_symlink_swap(direct_inputs, monkeypatch):
+    monkeypatch.setattr(analyze_main_study, "BOOTSTRAP_DRAWS", 8)
+    parent = analyze_main_study.OUT_JSON.parent
+    destination = parent / "symlink-swap"
+    displaced = parent / "displaced-original"
+    unrelated = parent / "unrelated"
+    unrelated.mkdir()
+    (unrelated / "sentinel").write_text("preserve", encoding="utf-8")
+    original_link = validated.os.link
+    swapped = False
+
+    def attack(source, target, **kwargs):
+        nonlocal swapped
+        result = original_link(source, target, **kwargs)
+        if not swapped:
+            swapped = True
+            destination.rename(displaced)
+            destination.symlink_to(unrelated, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(validated.os, "link", attack)
+    with pytest.raises(ValueError, match="namespace changed"):
+        validated.main(output_dir=destination)
+    assert (unrelated / "sentinel").read_text(encoding="utf-8") == "preserve"
+    assert not (unrelated / validated.DIAGNOSTIC_JSON).exists()
+    assert not (unrelated / validated.DIAGNOSTIC_MD).exists()
+
+
+def test_diagnostic_rejects_directory_replacement(direct_inputs, monkeypatch):
+    monkeypatch.setattr(analyze_main_study, "BOOTSTRAP_DRAWS", 8)
+    parent = analyze_main_study.OUT_JSON.parent
+    destination = parent / "directory-replacement"
+    displaced = parent / "original-directory"
+    original_link = validated.os.link
+    replaced = False
+
+    def attack(source, target, **kwargs):
+        nonlocal replaced
+        result = original_link(source, target, **kwargs)
+        if not replaced:
+            replaced = True
+            destination.rename(displaced)
+            destination.mkdir()
+            (destination / "sentinel").write_text("preserve", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(validated.os, "link", attack)
+    with pytest.raises(ValueError, match="namespace changed"):
+        validated.main(output_dir=destination)
+    assert (destination / "sentinel").read_text(encoding="utf-8") == "preserve"
+    assert not (destination / validated.DIAGNOSTIC_JSON).exists()
+    assert not (destination / validated.DIAGNOSTIC_MD).exists()
+
+
+def test_diagnostic_rejects_symlinked_parent(direct_inputs, monkeypatch):
+    monkeypatch.setattr(analyze_main_study, "BOOTSTRAP_DRAWS", 8)
+    base = analyze_main_study.OUT_JSON.parent
+    real_parent = base / "real-parent"
+    real_parent.mkdir()
+    alias = base / "parent-alias"
+    alias.symlink_to(real_parent, target_is_directory=True)
+    with pytest.raises(ValueError, match="non-symlink directory"):
+        validated.main(output_dir=alias / "new-result")
+    assert not (real_parent / "new-result").exists()
