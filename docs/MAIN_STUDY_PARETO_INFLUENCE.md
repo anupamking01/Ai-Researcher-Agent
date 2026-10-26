@@ -57,11 +57,13 @@ methodology note changes, and it can also be manually dispatched.
 The canonical analysis receipt pins historical source code. Because research
 implementation and verification files have evolved since that receipt was
 produced, replaying against the current branch would fail the original source
-hash checks. The workflow therefore creates a **detached historical
-implementation worktree** at the commit named by
-`outputs/canonical_analysis_source.json`, copying only the preserved
-published analysis inputs/outputs and the two newer post-hoc diagnostic
-modules into it. Every receipt-pinned analysis, runner, and verifier file
+hash checks. The source-selection commit in `outputs/canonical_analysis_source.json`
+records the *original study/analysis selection*, which predates the later
+execution-bound provenance receipt. The workflow therefore creates an isolated
+**receipt-era historical implementation worktree** pinned to the commit that
+published the current canonical receipt (`${impl}`), recording both
+historical refs separately. It overlays only the preserved published analysis
+inputs/outputs and the two newer post-hoc diagnostic modules. Every receipt-pinned analysis, runner, and verifier file
 remains at its original byte identity. Its independently recomputed
 execution-bound provenance and canonical-output verification must pass
 **before** any of the ten task omissions is evaluated. Its additional coverage checks reject omitted,

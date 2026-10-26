@@ -76,8 +76,12 @@ jobs:
           echo "FROZEN_SOURCE_COMMIT=$FROZEN_SOURCE_COMMIT" >> "$GITHUB_ENV"
           FROZEN_WORKTREE="$RUNNER_TEMP/vera-frozen-analysis"
           echo "FROZEN_WORKTREE=$FROZEN_WORKTREE" >> "$GITHUB_ENV"
-          git fetch --no-tags --depth=1 origin "$FROZEN_SOURCE_COMMIT"
-          git worktree add --detach "$FROZEN_WORKTREE" "$FROZEN_SOURCE_COMMIT"
+          # The source-selection commit predates the later execution-bound
+          # receipt: use the exact code snapshot that published that receipt.
+          RECEIPT_IMPLEMENTATION_COMMIT="f333623380526fa05dcb14110e7ec1fb72d2d0e2"
+          echo "RECEIPT_IMPLEMENTATION_COMMIT=$RECEIPT_IMPLEMENTATION_COMMIT" >> "$GITHUB_ENV"
+          git fetch --no-tags --depth=1 origin "$RECEIPT_IMPLEMENTATION_COMMIT"
+          git worktree add --detach "$FROZEN_WORKTREE" "$RECEIPT_IMPLEMENTATION_COMMIT"
           # Preserve receipt-pinned runner/verifiers. Overlay only retained
           # input/output bytes and the newer unpinned exploratory modules.
           for path in \
@@ -93,7 +97,7 @@ jobs:
             mkdir -p "$FROZEN_WORKTREE/$(dirname "$path")"
             cp -- "$path" "$FROZEN_WORKTREE/$path"
           done
-          echo "Canonical receipt will be checked using frozen code $FROZEN_SOURCE_COMMIT"
+          echo "Canonical receipt will be checked with receipt-era code $RECEIPT_IMPLEMENTATION_COMMIT; original source selection $FROZEN_SOURCE_COMMIT"
 
       - name: Independently verify canonical inputs and enumerate every omission
         env:
@@ -132,7 +136,8 @@ jobs:
               "schema_version": 1,
               "status": "verified_exploratory_pareto_audit_only",
               "checkout_sha": os.environ["GITHUB_SHA"],
-              "frozen_analysis_implementation_commit": os.environ["FROZEN_SOURCE_COMMIT"],
+              "frozen_analysis_implementation_commit": os.environ["RECEIPT_IMPLEMENTATION_COMMIT"],
+              "original_source_selection_commit": os.environ["FROZEN_SOURCE_COMMIT"],
               "workflow_run_id": os.environ["GITHUB_RUN_ID"],
               "pareto_diagnostic_sha256": hashlib.sha256(raw).hexdigest(),
               "verified_canonical_inference_sha256":
