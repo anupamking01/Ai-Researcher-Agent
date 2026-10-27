@@ -13,12 +13,13 @@ import re
 import stat
 from pathlib import Path
 
+from scripts import build_human_eval_packet as packet_builder
 from scripts import export_human_eval_annotator_bundle as exporter
 from scripts import verify_published_main_study_inputs as published
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_TRACES = 40
-VARIANTS = exporter.EXPECTED_VARIANTS
+VARIANTS = packet_builder.EXPECTED_VARIANTS
 EXPECTED_PER_VARIANT = EXPECTED_TRACES // len(VARIANTS)
 
 
