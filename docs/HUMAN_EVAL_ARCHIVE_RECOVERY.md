@@ -21,6 +21,32 @@ run 34783525480. The canonical-analysis run 36070798723 still exposed its
 not proof that the original reports are destroyed: local, restricted, offline
 or institutional backups may exist.
 
+## Original treatment-run task-list anchor
+
+The two frozen automated CSVs are SHA-256-anchored, but that published
+aggregate does **not** include `experiments/main_budget_tasks.json`.
+Checking a recovered trace's question against a *locally edited* copy of that
+JSON could therefore create a self-consistent but false task-alignment claim.
+
+`scripts/verify_frozen_main_study_tasks.py` now checks the exact task
+manifest bytes against the **original treatment workflow source**, GitHub
+Actions run 34620917346, head commit
+`c3c15e46a8eec3a8bbc24c968eedc0548172a897`. At that revision the task
+manifest is Git blob `68316fdb00631856006119370f9f549b23d1bee3`,
+whose file-byte SHA-256 is
+`5701df80036edb354f4f7d1efc409ea8f554a215f8c37da9d1a0b8ed01fdfd5f`. Run it offline with
+`python -m scripts.verify_frozen_main_study_tasks`.
+
+The recovery inventory exposes `frozen_task_manifest_anchor`, blocks on a
+mismatch, and **skips** its 40-trace question-content concordance claim
+unless this original-run source anchor verifies. This prevents changing both
+a local task list and recovered trace questions while retaining the already
+published evaluator CSVs. The anchor is grounded in the repository revision
+recorded by the historical workflow, **not** an independent signed archive;
+it cannot authenticate missing report bytes or prove historical custody.
+Tests using synthetic task lists mock this source-only check explicitly.
+Neither treatments nor the evaluator are rerun.
+
 ## Read-only inventory
 
 Run this diagnostic in the checkout, optionally passing external archive

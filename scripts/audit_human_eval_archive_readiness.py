@@ -19,6 +19,7 @@ from scripts import export_human_eval_annotator_bundle as exporter
 from scripts import verify_published_main_study_inputs as published
 from scripts import verify_human_eval_automated_run_lineage as lineage
 from scripts import validate_main_study_inputs as main_input_contract
+from scripts import verify_frozen_main_study_tasks as frozen_tasks
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_TRACES = 40
@@ -252,6 +253,7 @@ def _trace_report_content_status(
     report_root: Path,
     located_ids: tuple[tuple[str, str], ...],
     run_alignment_status: str,
+    task_anchor_status: str,
 ) -> dict:
     """Diagnose archived trace/report *content* against frozen run/task cells.
 
@@ -262,6 +264,8 @@ def _trace_report_content_status(
               "checked": 0, "expected": EXPECTED_TRACES}
     if run_alignment_status != "40_run_ids_match_published_evaluator_not_authenticated":
         return result
+    if task_anchor_status != "original_treatment_run_task_manifest_matches":
+        return {**result, "status": "not_checked_without_original_run_task_manifest"}
 
     task_file = repo_root / "experiments/main_budget_tasks.json"
     if _file_status(task_file) != "present_unverified":
@@ -535,6 +539,16 @@ def audit_archive_readiness(
     else:
         input_anchor = "cannot_verify_missing_or_unsafe_input"
 
+    # The treatment/evaluator CSV fingerprint does not cover the task list.
+    # Anchor those question bytes separately to the original treatment-run
+    # source revision before declaring recovered trace/question concordance.
+    try:
+        frozen_tasks.verify_frozen_task_manifest(repo_root=root)
+    except (OSError, ValueError, UnicodeDecodeError):
+        task_anchor = "verification_failed_or_missing"
+    else:
+        task_anchor = "original_treatment_run_task_manifest_matches"
+
     run_alignment = _trace_run_alignment(
         repo_root=root, trace_status=trace_candidates["status"],
         located_ids=located_ids, published_input_anchor=input_anchor,
@@ -542,6 +556,7 @@ def audit_archive_readiness(
     content_status = _trace_report_content_status(
         repo_root=root, trace_root=traces, report_root=reports,
         located_ids=located_ids, run_alignment_status=run_alignment["status"],
+        task_anchor_status=task_anchor,
     )
     recovery_targets = _expected_recovery_paths(
         repo_root=root, trace_root=traces, report_root=reports,
@@ -556,6 +571,8 @@ def audit_archive_readiness(
                 if status != "pin_matches_file_not_authenticated")
     if input_anchor != "published_aggregate_matches":
         gaps.append("published_automated_input_anchor")
+    if task_anchor != "original_treatment_run_task_manifest_matches":
+        gaps.append("original_experiment_task_manifest_anchor")
     if run_alignment["status"] in (
         "candidate_run_identity_mismatch", "invalid_published_evaluator_run_ids"
     ):
@@ -585,6 +602,7 @@ def audit_archive_readiness(
         "expected_recovery_paths": recovery_targets,
         "independent_pins": pins,
         "published_automated_input_anchor": input_anchor,
+        "frozen_task_manifest_anchor": task_anchor,
         "blockers": sorted(gaps),
         "handoff_verified": False,
         "human_ratings_used": False,

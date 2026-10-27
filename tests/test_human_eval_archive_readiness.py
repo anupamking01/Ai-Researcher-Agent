@@ -421,6 +421,11 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
     outputs = archive if archive is not None else root / "outputs"
     _write_candidate_matrix(outputs, dict.fromkeys(audit.VARIANTS, 10))
     _simulate_published_identity_inputs(root, monkeypatch)
+    # This fixture intentionally substitutes synthetic questions: bypass only
+    # the immutable ORIGINAL task-byte pin, not trace/content checks.
+    monkeypatch.setattr(
+        audit.frozen_tasks, "verify_frozen_task_manifest", lambda **_kwargs: {}
+    )
     main_source = root / audit.lineage.MAIN_REL
     with main_source.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=(
