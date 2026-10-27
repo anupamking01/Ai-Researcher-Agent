@@ -75,10 +75,13 @@ call counts, token usage and recorded report-word count with the **published
 frozen treatment CSV for the same treatment/task cell**. The trace experiment
 configuration must have the original arm's direct/planner and verification
 settings. Missing, noninteger or mismatched counters fail the diagnostic even
-when the 40 filenames and embedded run IDs appear valid. It also reads each
-corresponding Markdown report and rejects empty or non-UTF-8 content. This prevents a
-matching *filename* from masking a different embedded task, swapped trace,
-report-path substitution, truncated JSON, or empty report. Separately
+when the 40 filenames and embedded run IDs appear valid. It also reads each corresponding Markdown report, rejects empty or non-UTF-8
+content, and checks the whitespace-split word count against the frozen trace
+and treatment CSV. The original runner recorded `len(report.split())` before
+writing that unchanged text to Markdown; the new comparison catches nonempty
+replacement/truncated reports whose counts differ. This prevents a matching
+*filename* from masking a different embedded task, swapped trace,
+report-path substitution, truncated JSON, empty report, or changed report length. Separately
 recovered trace/report directories are supported without copying them into
 the repository. Unreadable, unstable, oversized, or internally contradictory
 sources add `original_trace_report_content_alignment` as a blocker. The
@@ -87,7 +90,10 @@ output deliberately contains no report text or new research scores.
 **still diagnostic only**: even valid internal metadata cannot authenticate
 historical bytes, confirm report custody, prove exact text correspondence to
 the automated evaluator, or substitute for the independently pinned integrated
-handoff. Mutable directories are not an atomic snapshot.
+handoff. A substituted report with the same word count can still pass this diagnostic:
+word-count concordance is **not** a report-content hash, exact text match to
+the original evaluator, or independently authenticated custody. Mutable
+directories are not an atomic snapshot.
 
 When a historical manifest-file SHA-256 is supplied, the inventory now compares
 it against the bounded, descriptor-captured bytes of the corresponding research

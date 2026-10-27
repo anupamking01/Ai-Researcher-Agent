@@ -477,7 +477,7 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
             path = outputs / "experiment_traces" / variant / f"{run_id}.json"
             path.write_text(json.dumps(payload), encoding="utf-8")
             (outputs / run_id / "research_report.md").write_text(
-                f"Synthetic non-evaluation report for {run_id}.", encoding="utf-8"
+                "synthetic " * 49 + run_id, encoding="utf-8"
             )
     return outputs
 
@@ -665,3 +665,37 @@ def test_missing_or_boolean_trace_counter_is_not_canonical_measurement(
         "invalid_or_mismatched_trace_report_content"
     )
     assert "original_trace_report_content_alignment" in result["blockers"]
+
+
+@pytest.mark.parametrize("replacement", [
+    "a shorter replacement report",
+    "an unrelated but substantially longer recovered report " * 20,
+])
+def test_recovered_report_word_count_must_match_frozen_trace(
+    tmp_path, monkeypatch, replacement
+):
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    report = outputs / "d3-run-00/research_report.md"
+    report.write_text(replacement, encoding="utf-8")
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_to_published_evaluator"]["matched"] == 40
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "report word count" in result["trace_report_content"]["first_failure"]
+    assert "original_trace_report_content_alignment" in result["blockers"]
+    assert result["handoff_verified"] is False
+
+
+def test_matching_report_word_count_is_not_report_authentication(
+    tmp_path, monkeypatch
+):
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    report = outputs / "d3-run-00/research_report.md"
+    report.write_text("different " * 49 + "same-count", encoding="utf-8")
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_report_content"]["status"] == (
+        "40_trace_report_contents_align_to_frozen_cells_not_authenticated"
+    )
+    assert result["handoff_verified"] is False
+    assert result["status"] == "blocked"

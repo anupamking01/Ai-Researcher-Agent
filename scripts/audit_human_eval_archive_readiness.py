@@ -371,8 +371,18 @@ def _trace_report_content_status(
                 recorded_path = recorded_path.with_suffix(".md")
             if recorded_path != Path("outputs") / run_id / "research_report.md":
                 raise ValueError("recorded report path does not bind the trace run")
-            if not report_bytes.decode("utf-8").strip():
+            report_text = report_bytes.decode("utf-8")
+            if not report_text.strip():
                 raise ValueError("recovered Markdown report is empty or not UTF-8")
+            # logic.run records len(report.split()) before persisting the
+            # unchanged Markdown via write_md_to_pdf/write_to_file. A different
+            # (even nonempty) report with a different length is not that run's
+            # original report. This is a consistency check, NOT a content hash.
+            if len(report_text.split()) != trace["report_words"]:
+                raise ValueError(
+                    "recovered report word count differs from the frozen "
+                    "treatment trace and CSV"
+                )
         except (OSError, ValueError, UnicodeDecodeError, KeyError) as exc:
             return {"status": "invalid_or_mismatched_trace_report_content",
                     "checked": checked, "expected": EXPECTED_TRACES,
