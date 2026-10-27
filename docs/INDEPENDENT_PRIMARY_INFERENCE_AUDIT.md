@@ -30,8 +30,16 @@ It checks: frozen task order and configuration, report-level strict-support
 fractions, four variant mean strict-support rates, the three preregistered
 left/right paired means and mean/median contrasts, all ten task differences per
 contrast, sign counts, paired standardized effects, exact two-sided sign-flip
-p-values across 2^10 assignments, and the three-test Holm family. A mismatch
-fails closed. No model/provider access, experimental execution, evaluator
+p-values across 2^10 assignments, the three-test Holm family, **and the three
+predeclared 95% paired-bootstrap percentile intervals**. The interval check
+recreates the frozen 20,000 within-task-pair resamples for each contrast with
+the prespecified seeds 20260914, 20260915, and 20260916. It computes the
+resample means and linearly interpolated 2.5%/97.5% quantiles using exact
+rational arithmetic rather than the historical analyzer's floating-point
+mean and percentile helpers; comparison allows only a 1e-12 absolute
+rounding difference. The seeded Python `random.Random.randrange` index
+stream is intentionally shared to match the frozen resampling procedure.
+A mismatch fails closed. No model/provider access, experimental execution, evaluator
 recovery, or human-rating input is involved.
 
 The implementation intentionally does **not** import the historical analyzer's
@@ -39,9 +47,11 @@ math helpers. Arithmetic consistency is independent of the frozen inference
 implementation, but the auditor shares the existing scientific input preflight;
 it is not an independently developed validation of that entire input schema.
 
-**Scope limitations:** Bootstrap confidence interval draws, secondary paired
-descriptives, cost-quality Pareto summaries, and report rendering are *not*
-independently recomputed here. They remain covered by the existing frozen
+**Scope limitations:** Secondary paired descriptives, cost-quality Pareto
+summaries, and report rendering are *not* independently recomputed here.
+The bootstrap audit verifies the frozen deterministic sample procedure, **not**
+the frequentist coverage of its confidence intervals, the representativeness
+of the task set, or a separately generated random number stream. They remain covered by the existing frozen
 analysis/provenance/output checks, which are not substitutes for an independently
 implemented estimator. This is a numerical consistency audit, **not** an
 external signature, proof of authentic raw evidence, additional experiment,

@@ -10,7 +10,7 @@ import pytest
 
 from scripts.audit_primary_inference_independently import (
     ROOT, audit_files, audit_primary,
-    _exact_signflip,
+    _exact_signflip, _bootstrap_percentile_interval,
 )
 from fractions import Fraction
 from scripts.validate_main_study_inputs import read_csv_rows
@@ -29,7 +29,55 @@ def test_independent_math_matches_retained_frozen_primary_inference(evidence):
     audited = audit_primary(main, evaluator, results)
     assert audited["paired_tasks"] == 10
     assert audited["primary_contrasts_checked"] == 3
-    assert audited["bootstrap_intervals_checked"] is False
+    assert audited["bootstrap_intervals_checked"] is True
+
+
+
+@pytest.mark.parametrize("contrast", [
+    "D6_minus_D3_retrieval_depth",
+    "P6_minus_D6_planning",
+    "P6V_minus_P6_verification",
+])
+@pytest.mark.parametrize("endpoint", [0, 1])
+def test_rejects_manipulated_primary_bootstrap_endpoint(
+    evidence, contrast, endpoint,
+):
+    main, evaluator, payload = evidence
+    modified = copy.deepcopy(payload)
+    modified["primary_contrasts"][contrast][
+        "bootstrap_95pct_ci_mean_difference"
+    ][endpoint] += 0.05
+    with pytest.raises(ValueError, match="bootstrap_95pct_ci_mean_difference"):
+        audit_primary(main, evaluator, modified)
+
+
+@pytest.mark.parametrize("invalid", [
+    [],
+    [0.1],
+    [0.1, 0.2, 0.3],
+    [True, 0.2],
+    ["0.1", 0.2],
+    [float("nan"), 0.2],
+    [0.1, float("inf")],
+])
+def test_rejects_malformed_primary_bootstrap_interval(evidence, invalid):
+    main, evaluator, payload = evidence
+    payload["primary_contrasts"]["D6_minus_D3_retrieval_depth"][
+        "bootstrap_95pct_ci_mean_difference"
+    ] = invalid
+    with pytest.raises(ValueError, match="bootstrap_95pct_ci_mean_difference"):
+        audit_primary(main, evaluator, payload)
+
+
+def test_independent_bootstrap_preserves_constant_fraction_and_seed():
+    constant = [Fraction(1, 3)] * 10
+    assert _bootstrap_percentile_interval(
+        constant, seed=20260914, draws=41,
+    ) == (Fraction(1, 3), Fraction(1, 3))
+    mixed = [Fraction(-1, 4), Fraction(1, 2)] * 5
+    assert _bootstrap_percentile_interval(
+        mixed, seed=20260914, draws=101,
+    ) == _bootstrap_percentile_interval(mixed, seed=20260914, draws=101)
 
 
 def test_read_only_cli_inputs_match_frozen_primary_inference():

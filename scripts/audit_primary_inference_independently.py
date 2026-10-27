@@ -10,6 +10,7 @@ import argparse
 from fractions import Fraction
 import json
 import math
+import random
 import statistics
 from pathlib import Path
 
@@ -71,6 +72,32 @@ def _exact_signflip(differences):
         if abs(permuted) >= target:
             extreme += 1
     return Fraction(extreme, 1 << len(differences))
+
+
+def _bootstrap_percentile_interval(differences, *, seed, draws):
+    """Independently audit the frozen task-paired percentile bootstrap.
+
+    Reconstruct the seeded WITH-replacement task indices; use exact rational
+    counts for draw means and percentile interpolation. Only the Python
+    stdlib MT19937/randrange stream is shared with the frozen implementation.
+    """
+    if not differences or draws < 2:
+        raise ValueError("bootstrap audit needs paired data and at least two draws")
+    rng = random.Random(seed)
+    size = len(differences)
+    averages = sorted(
+        sum((differences[rng.randrange(size)] for _ in range(size)), Fraction(0)) / size
+        for _ in range(draws)
+    )
+
+    def percentile(numerator):
+        # 1/40 and 39/40 are the prespecified 2.5% and 97.5% quantiles.
+        position = Fraction((draws - 1) * numerator, 40)
+        lower = position.numerator // position.denominator
+        upper = min(lower + 1, draws - 1)
+        return averages[lower] + (averages[upper] - averages[lower]) * (position - lower)
+
+    return (percentile(1), percentile(39))
 
 
 def _median(values):
@@ -144,7 +171,7 @@ def audit_primary(treatment_rows, evaluator_rows, inference):
                      f"{variant}.mean_strict_support_rate")
 
     exact_pvalues = {}
-    for left, right, name in CONTRASTS:
+    for contrast_index, (left, right, name) in enumerate(CONTRASTS):
         recorded = results[name]
         if not isinstance(recorded, dict):
             raise ValueError(f"primary contrast must be an object: {name}")
@@ -188,6 +215,22 @@ def audit_primary(treatment_rows, evaluator_rows, inference):
                      f"{name}.exact_two_sided_signflip_p")
         exact_pvalues[name] = pvalue
 
+        recorded_interval = recorded.get("bootstrap_95pct_ci_mean_difference")
+        if not isinstance(recorded_interval, list) or len(recorded_interval) != 2:
+            raise ValueError(
+                f"independent primary inference mismatch: {name}.bootstrap_95pct_ci_mean_difference"
+            )
+        expected_interval = _bootstrap_percentile_interval(
+            differences, seed=20260914 + contrast_index, draws=20_000
+        )
+        for endpoint, (observed, expected) in enumerate(
+            zip(recorded_interval, expected_interval)
+        ):
+            _same_number(
+                observed, expected,
+                f"{name}.bootstrap_95pct_ci_mean_difference[{endpoint}]"
+            )
+
     # Independently check the predeclared three-test Holm family, including
     # monotonicity, without examining secondary or exploratory hypotheses.
     running = Fraction(0)
@@ -201,7 +244,7 @@ def audit_primary(treatment_rows, evaluator_rows, inference):
         "status": "independent_primary_arithmetic_consistent_not_provenance",
         "paired_tasks": 10,
         "primary_contrasts_checked": 3,
-        "bootstrap_intervals_checked": False,
+        "bootstrap_intervals_checked": True,
     }
 
 
