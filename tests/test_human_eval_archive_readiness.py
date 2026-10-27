@@ -94,7 +94,7 @@ def test_trace_symlink_directory_rejected(tmp_path):
     target.mkdir()
     (root / "D3").symlink_to(target, target_is_directory=True)
     result = audit.audit_archive_readiness(repo_root=tmp_path)
-    assert result["trace_candidates"]["status"] == "unsafe_directory_type"
+    assert result["trace_candidates"]["status"] == "unsafe_variant_directory"
     assert result["status"] == "blocked"
 
 
