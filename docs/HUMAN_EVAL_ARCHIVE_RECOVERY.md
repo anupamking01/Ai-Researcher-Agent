@@ -30,6 +30,8 @@ SHA-256 values:
 ```bash
 python -m scripts.audit_human_eval_archive_readiness \
   --repo-root . \
+  --trace-root <original-experiment-traces-directory> \
+  --report-root <original-outputs-directory-containing-run-id-folders> \
   --packet-root <original-coordinator-packet-directory> \
   --canonical-root <original-canonical-distribution-directory> \
   --reverse-root <original-reverse-distribution-directory> \
@@ -39,13 +41,25 @@ python -m scripts.audit_human_eval_archive_readiness \
 ```
 
 The JSON enumerates missing or unsafe file paths, the original-trace candidate
-count and the canonical published automated-input fingerprint check.
-A `40_candidates_unverified` trace status means exactly 40 matching candidate
-filenames were seen; it does **not** authenticate any report, validate task or
-run identity, or imply a passed integrated handoff. Even the zero-blocker
+counts **by frozen treatment** and the Markdown report candidate count, plus
+the canonical published automated-input fingerprint check. By default,
+traces are sought under `outputs/experiment_traces/<variant>/<run-id>.json`
+and reports under `outputs/<run-id>/research_report.md`; the two new root
+arguments allow a read-only inventory of separately recovered evidence without
+copying or rewriting it. A `40_matrix_candidates_unverified` status means
+exactly 10 regular trace candidates exist under each of D3, D6, P6 and P6V,
+with no duplicated run-id filenames or unexpected root entries. A
+`40_report_candidates_unverified` status means that the corresponding 40
+regular Markdown filenames were present. Neither status validates JSON,
+run/task identities, report content, report-to-trace linkage, or historical
+custody. Symlinks and missing/unsafe report candidates block readiness; a
+balanced but incoherent archive can still pass this **structural inventory**.
+Even the zero-blocker
 `candidate_inputs_present_not_verified` status is **not** an acceptance receipt.
-The command never reads rating submissions, opens a blinding key, writes files,
-or calls live APIs. `--require-candidates` exits nonzero for missing inputs.
+The command never reads report or trace contents, rating submissions, or a
+blinding key; it never writes files or calls live APIs. Even with external
+archive roots, the full handoff verifier requires approved original evidence
+staged in its documented source layout, with independent archival pins. `--require-candidates` exits nonzero for missing inputs.
 
 ## Accept only independently retained evidence
 

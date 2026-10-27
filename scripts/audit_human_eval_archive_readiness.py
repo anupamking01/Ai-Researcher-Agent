@@ -18,6 +18,8 @@ from scripts import verify_published_main_study_inputs as published
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_TRACES = 40
+VARIANTS = exporter.EXPECTED_VARIANTS
+EXPECTED_PER_VARIANT = EXPECTED_TRACES // len(VARIANTS)
 
 
 def _file_status(path: Path) -> str:
@@ -38,27 +40,99 @@ def _file_status(path: Path) -> str:
     return "present_unverified"
 
 
-def _trace_status(root: Path) -> tuple[str, int]:
-    """Count only direct <variant>/<run>.json regular candidates, not content."""
-    if not root.exists() and not root.is_symlink():
-        return "missing", 0
+def _directory_status(path: Path) -> str:
+    """Reject redirected and non-directory archive roots before enumeration."""
     try:
-        if not stat.S_ISDIR(root.lstat().st_mode):
-            return "unsafe_directory_type", 0
-        count = 0
-        for variant in root.iterdir():
-            if not stat.S_ISDIR(variant.lstat().st_mode):
-                return "unsafe_directory_type", count
-            for candidate in variant.iterdir():
-                if not stat.S_ISREG(candidate.lstat().st_mode):
-                    return "unsafe_file_type", count
-                if candidate.suffix == ".json":
-                    count += 1
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return "missing"
     except OSError:
-        return "inaccessible", 0
-    if count != EXPECTED_TRACES:
-        return "candidate_count_mismatch", count
-    return "40_candidates_unverified", count
+        return "inaccessible"
+    if not stat.S_ISDIR(mode):
+        return "unsafe_directory_type"
+    try:
+        if any(parent.is_symlink() for parent in path.parents):
+            return "unsafe_parent_symlink"
+    except OSError:
+        return "inaccessible"
+    return "present_unverified"
+
+
+def _trace_status(root: Path) -> tuple[dict, tuple[str, ...]]:
+    """Inventory 4 x 10 candidate filenames without parsing or endorsing traces.
+
+    An unbalanced 40-file directory cannot possibly represent the frozen
+    4 x 10 design. Avoid following links, accepting unfamiliar variants, or
+    conflating the existence of JSON filenames with run/task provenance.
+    """
+    by_variant = {variant: 0 for variant in VARIANTS}
+    run_ids: set[str] = set()
+
+    def result(status: str) -> dict:
+        return {
+            "status": status,
+            "count": sum(by_variant.values()),
+            "expected": EXPECTED_TRACES,
+            "by_variant": dict(by_variant),
+            "expected_per_variant": EXPECTED_PER_VARIANT,
+        }
+
+    status = _directory_status(root)
+    if status != "present_unverified":
+        return result(status), ()
+    try:
+        for variant_dir in sorted(root.iterdir()):
+            if variant_dir.name not in by_variant:
+                return result("unexpected_trace_root_entry"), ()
+            if _directory_status(variant_dir) != "present_unverified":
+                return result("unsafe_variant_directory"), ()
+            for candidate in sorted(variant_dir.iterdir()):
+                if candidate.suffix != ".json" or candidate.stem in ("", ".", ".."):
+                    return result("unexpected_trace_entry"), ()
+                if _file_status(candidate) != "present_unverified":
+                    return result("unsafe_trace_file_type"), ()
+                if candidate.stem in run_ids:
+                    return result("duplicate_trace_run_id"), ()
+                run_ids.add(candidate.stem)
+                by_variant[variant_dir.name] += 1
+                if sum(by_variant.values()) > EXPECTED_TRACES:
+                    return result("candidate_count_mismatch"), ()
+    except OSError:
+        return result("inaccessible"), ()
+
+    if len(run_ids) != EXPECTED_TRACES:
+        return result("candidate_count_mismatch"), tuple(sorted(run_ids))
+    if any(count != EXPECTED_PER_VARIANT for count in by_variant.values()):
+        return result("candidate_matrix_mismatch"), tuple(sorted(run_ids))
+    return result("40_matrix_candidates_unverified"), tuple(sorted(run_ids))
+
+
+def _report_status(root: Path, run_ids: tuple[str, ...]) -> dict:
+    """Check one expected Markdown filename per run, without opening reports."""
+    result = {"status": "not_checked_without_trace_candidates", "count": 0,
+              "expected": EXPECTED_TRACES, "missing_or_unsafe": {}}
+    if not run_ids:
+        return result
+    status = _directory_status(root)
+    if status != "present_unverified":
+        result["status"] = status
+        return result
+
+    failed: dict[str, int] = {}
+    for run_id in run_ids:
+        status = _file_status(root / run_id / "research_report.md")
+        if status == "present_unverified":
+            result["count"] += 1
+        else:
+            failed[status] = failed.get(status, 0) + 1
+    result["missing_or_unsafe"] = dict(sorted(failed.items()))
+    if failed:
+        result["status"] = "missing_or_unsafe_report_candidates"
+    elif result["count"] != EXPECTED_TRACES:
+        result["status"] = "candidate_count_mismatch"
+    else:
+        result["status"] = "40_report_candidates_unverified"
+    return result
 
 
 def _pin_status(value: str | None) -> str:
@@ -72,6 +146,8 @@ def _pin_status(value: str | None) -> str:
 def audit_archive_readiness(
     *,
     repo_root: Path = ROOT,
+    trace_root: Path | None = None,
+    report_root: Path | None = None,
     packet_root: Path | None = None,
     canonical_root: Path | None = None,
     reverse_root: Path | None = None,
@@ -103,7 +179,10 @@ def audit_archive_readiness(
             sources[f"{order}/{artifact}"] = bundle / artifact
 
     resources = {label: _file_status(path) for label, path in sources.items()}
-    trace_status, trace_count = _trace_status(root / "outputs/experiment_traces")
+    traces = Path(trace_root) if trace_root is not None else root / "outputs/experiment_traces"
+    reports = Path(report_root) if report_root is not None else root / "outputs"
+    trace_candidates, run_ids = _trace_status(traces)
+    report_candidates = _report_status(reports, run_ids)
     pins = {
         "research_manifest_file": _pin_status(research_manifest_sha256),
         "coordinator_manifest_file": _pin_status(coordinator_manifest_sha256),
@@ -125,8 +204,10 @@ def audit_archive_readiness(
         input_anchor = "cannot_verify_missing_or_unsafe_input"
 
     gaps = [label for label, status in resources.items() if status != "present_unverified"]
-    if trace_status != "40_candidates_unverified":
+    if trace_candidates["status"] != "40_matrix_candidates_unverified":
         gaps.append("original_experiment_trace_candidates")
+    if report_candidates["status"] != "40_report_candidates_unverified":
+        gaps.append("original_markdown_report_candidates")
     gaps.extend(label for label, status in pins.items()
                 if status != "pin_supplied_not_authenticated")
     if input_anchor != "published_aggregate_matches":
@@ -137,8 +218,8 @@ def audit_archive_readiness(
         "study_id": "budget-main-v1",
         "status": "blocked" if gaps else "candidate_inputs_present_not_verified",
         "resources": resources,
-        "trace_candidates": {"status": trace_status, "count": trace_count,
-                             "expected": EXPECTED_TRACES},
+        "trace_candidates": trace_candidates,
+        "report_candidates": report_candidates,
         "independent_pins": pins,
         "published_automated_input_anchor": input_anchor,
         "blockers": sorted(gaps),
@@ -156,6 +237,8 @@ def audit_archive_readiness(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=ROOT)
+    parser.add_argument("--trace-root", type=Path)
+    parser.add_argument("--report-root", type=Path)
     parser.add_argument("--packet-root", type=Path)
     parser.add_argument("--canonical-root", type=Path)
     parser.add_argument("--reverse-root", type=Path)
@@ -166,7 +249,8 @@ def main() -> int:
                         help="Exit nonzero unless all evidence candidates and pins are supplied")
     args = parser.parse_args()
     result = audit_archive_readiness(
-        repo_root=args.repo_root, packet_root=args.packet_root,
+        repo_root=args.repo_root, trace_root=args.trace_root,
+        report_root=args.report_root, packet_root=args.packet_root,
         canonical_root=args.canonical_root, reverse_root=args.reverse_root,
         research_manifest_path=args.research_manifest,
         research_manifest_sha256=args.research_manifest_sha256,
