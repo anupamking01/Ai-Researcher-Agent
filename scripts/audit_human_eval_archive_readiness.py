@@ -8,6 +8,7 @@ with independently retained pins for the actual acceptance decision.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import stat
@@ -136,12 +137,30 @@ def _report_status(root: Path, run_ids: tuple[str, ...]) -> dict:
     return result
 
 
-def _pin_status(value: str | None) -> str:
+def _pin_status(value: str | None, path: Path) -> str:
+    """Compare a supplied pin to bounded, captured manifest bytes.
+
+    Matching proves only local file/pin consistency. The coordinator must
+    independently establish when and where the expected digest was retained.
+    """
     if value is None:
         return "independent_pin_not_supplied"
     if type(value) is not str or re.fullmatch(r"[0-9a-f]{64}", value) is None:
         return "invalid_pin_format"
-    return "pin_supplied_not_authenticated"
+    if _file_status(path) != "present_unverified":
+        return "pinned_file_missing_or_unsafe"
+    try:
+        actual = hashlib.sha256(
+            packet_builder._read_regular_file_captured(
+                path, label="archival manifest for pin comparison"
+            )
+        ).hexdigest()
+    except (OSError, ValueError):
+        return "pinned_file_unreadable_or_unstable"
+    return (
+        "pin_matches_file_not_authenticated"
+        if actual == value else "pin_mismatch"
+    )
 
 
 def audit_archive_readiness(
@@ -185,8 +204,12 @@ def audit_archive_readiness(
     trace_candidates, run_ids = _trace_status(traces)
     report_candidates = _report_status(reports, run_ids)
     pins = {
-        "research_manifest_file": _pin_status(research_manifest_sha256),
-        "coordinator_manifest_file": _pin_status(coordinator_manifest_sha256),
+        "research_manifest_file": _pin_status(
+            research_manifest_sha256, manifest
+        ),
+        "coordinator_manifest_file": _pin_status(
+            coordinator_manifest_sha256, packet / "manifest.json"
+        ),
     }
     # The repository's canonical CSVs and manifest can be verified even when
     # the original report archive is unavailable; never infer report validity.
@@ -210,7 +233,7 @@ def audit_archive_readiness(
     if report_candidates["status"] != "40_report_candidates_unverified":
         gaps.append("original_markdown_report_candidates")
     gaps.extend(label for label, status in pins.items()
-                if status != "pin_supplied_not_authenticated")
+                if status != "pin_matches_file_not_authenticated")
     if input_anchor != "published_aggregate_matches":
         gaps.append("published_automated_input_anchor")
 

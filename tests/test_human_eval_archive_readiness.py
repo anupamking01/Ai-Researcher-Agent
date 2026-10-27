@@ -1,4 +1,5 @@
 """Synthetic, offline checks for the archive recovery inventory contract."""
+import hashlib
 from pathlib import Path
 
 from scripts import audit_human_eval_archive_readiness as audit
@@ -57,6 +58,10 @@ def test_full_candidate_inventory_is_never_mislabeled_as_verified(tmp_path):
     assert result["trace_candidates"]["status"] == "candidate_matrix_mismatch"
     assert result["trace_candidates"]["by_variant"]["D3"] == 40
     assert result["published_automated_input_anchor"] == "verification_failed"
+    assert result["independent_pins"] == {
+        "research_manifest_file": "pin_mismatch",
+        "coordinator_manifest_file": "pin_mismatch",
+    }
     assert result["status"] == "blocked"
     assert result["handoff_verified"] is False
     assert sorted(str(p.relative_to(root)) for p in root.rglob("*")) == before
@@ -106,7 +111,7 @@ def test_pin_values_are_not_treated_as_authenticated_evidence(tmp_path):
     )
     assert result["independent_pins"]["research_manifest_file"] == "invalid_pin_format"
     assert result["independent_pins"]["coordinator_manifest_file"] == (
-        "pin_supplied_not_authenticated"
+        "pinned_file_missing_or_unsafe"
     )
     assert "research_manifest_file" in result["blockers"]
 
@@ -225,3 +230,63 @@ def test_unknown_trace_variant_is_blocked_even_with_40_valid_candidates(tmp_path
     result = audit.audit_archive_readiness(repo_root=tmp_path)
     assert result["trace_candidates"]["status"] == "unexpected_trace_root_entry"
     assert "original_experiment_trace_candidates" in result["blockers"]
+
+
+def test_matching_manifest_bytes_do_not_authenticate_pin_custody(tmp_path):
+    research = tmp_path / "outputs/main_study_analysis_inputs_manifest.json"
+    coordinator = tmp_path / "outputs/human_eval/manifest.json"
+    for path, content in ((research, b"retained-research-manifest"),
+                          (coordinator, b"retained-coordinator-manifest")):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    result = audit.audit_archive_readiness(
+        repo_root=tmp_path,
+        research_manifest_sha256=hashlib.sha256(research.read_bytes()).hexdigest(),
+        coordinator_manifest_sha256=hashlib.sha256(coordinator.read_bytes()).hexdigest(),
+    )
+    assert result["independent_pins"] == {
+        "research_manifest_file": "pin_matches_file_not_authenticated",
+        "coordinator_manifest_file": "pin_matches_file_not_authenticated",
+    }
+    assert result["status"] == "blocked"
+    assert result["handoff_verified"] is False
+
+
+def test_coherently_supplied_but_wrong_manifest_pin_blocks_readiness(tmp_path):
+    manifest = tmp_path / "outputs/human_eval/manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_bytes(b"candidate-manifest")
+    result = audit.audit_archive_readiness(
+        repo_root=tmp_path,
+        coordinator_manifest_sha256=hashlib.sha256(b"original-manifest").hexdigest(),
+    )
+    assert result["independent_pins"]["coordinator_manifest_file"] == "pin_mismatch"
+    assert "coordinator_manifest_file" in result["blockers"]
+
+
+def test_symlinked_manifest_cannot_satisfy_even_a_matching_pin(tmp_path):
+    target = tmp_path / "manifest-source"
+    target.write_bytes(b"local-data")
+    manifest = tmp_path / "outputs/human_eval/manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.symlink_to(target)
+    result = audit.audit_archive_readiness(
+        repo_root=tmp_path,
+        coordinator_manifest_sha256=hashlib.sha256(target.read_bytes()).hexdigest(),
+    )
+    assert result["independent_pins"]["coordinator_manifest_file"] == (
+        "pinned_file_missing_or_unsafe"
+    )
+    assert result["handoff_verified"] is False
+
+
+def test_unstable_or_oversized_manifest_capture_blocks_pin(tmp_path, monkeypatch):
+    manifest = tmp_path / "outputs/human_eval/manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_bytes(b"manifest")
+    def fail_capture(*args, **kwargs):
+        raise ValueError("manifest changed or exceeds the read bound")
+    monkeypatch.setattr(audit.packet_builder, "_read_regular_file_captured", fail_capture)
+    assert audit._pin_status(
+        hashlib.sha256(b"manifest").hexdigest(), manifest
+    ) == "pinned_file_unreadable_or_unstable"

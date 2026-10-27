@@ -54,6 +54,14 @@ regular Markdown filenames were present. Neither status validates JSON,
 run/task identities, report content, report-to-trace linkage, or historical
 custody. Symlinks and missing/unsafe report candidates block readiness; a
 balanced but incoherent archive can still pass this **structural inventory**.
+When a historical manifest-file SHA-256 is supplied, the inventory now compares
+it against the bounded, descriptor-captured bytes of the corresponding research
+or coordinator manifest. A mismatch, missing/unsafe manifest, or unstable/oversized
+capture is an explicit blocker; syntax-valid pins alone no longer satisfy the
+readiness preflight. `pin_matches_file_not_authenticated` means only that the
+local bytes match the supplied value, **not** that the pin has trustworthy
+independent historical custody. Never compute a new pin from a suspect archive
+and present it as an earlier retained fingerprint.
 Even the zero-blocker
 `candidate_inputs_present_not_verified` status is **not** an acceptance receipt.
 The command never reads report or trace contents, rating submissions, or a
