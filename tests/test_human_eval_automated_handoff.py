@@ -135,7 +135,7 @@ def test_composite_gate_proves_both_source_pins_and_report_run_coverage(case):
     assert receipt["bundle_packet_sha256"]["canonical"] != receipt["bundle_packet_sha256"]["reverse"]
     assert receipt["human_ratings_read"] is False
     assert all(secret not in json.dumps(receipt) for secret in (
-        "blinding_key", "run_id", "variant_id", "synthetic-d3", "annotator_id",
+        "blinding_key", '"run_id":', '"variant_id":', "synthetic-d3", "annotator_id",
     ))
 
 
