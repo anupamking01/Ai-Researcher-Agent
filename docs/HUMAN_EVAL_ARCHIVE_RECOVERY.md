@@ -1,0 +1,78 @@
+# Recover the original automated-to-human VERA evidence (no outcome reruns)
+
+**Status (2026-10-27): blocked on original report and handoff custody.**
+This is an operational inventory and recovery plan, not an experiment or human-evaluation result.
+
+## Why this is a research gate
+
+VERA's versioned checkout contains the frozen automated-treatment/evaluator
+CSVs and published input-manifest aggregate, but not the original 40 treatment
+traces, Markdown report sources, coordinator blinded packet, or two distributable
+annotator bundles. The combined automated-to-human handoff verifier is designed
+to run against **original** sources with **independently retained** archival
+manifest-file SHA-256 pins. Synthetic tests and a locally regenerated packet
+cannot meet that original-evidence claim.
+
+On 2026-10-27 the GitHub Actions artifacts endpoint returned **no artifacts**
+for the original treatment workflow run 34620917346 and evaluator-recovery
+run 34783525480. The canonical-analysis run 36070798723 still exposed its
+10,270-byte analysis artifact (artifact ID 10837878458, expiry listed as
+2026-12-23). This is an observation about artifact availability at that time,
+not proof that the original reports are destroyed: local, restricted, offline
+or institutional backups may exist.
+
+## Read-only inventory
+
+Run this diagnostic in the checkout, optionally passing external archive
+locations and two *previously retained*, independently sourced file-byte
+SHA-256 values:
+
+```bash
+python -m scripts.audit_human_eval_archive_readiness \
+  --repo-root . \
+  --packet-root <original-coordinator-packet-directory> \
+  --canonical-root <original-canonical-distribution-directory> \
+  --reverse-root <original-reverse-distribution-directory> \
+  --research-manifest <original-archived-research-manifest.json> \
+  --research-manifest-sha256 <independent-file-byte-sha256> \
+  --coordinator-manifest-sha256 <independent-file-byte-sha256>
+```
+
+The JSON enumerates missing or unsafe file paths, the original-trace candidate
+count and the canonical published automated-input fingerprint check.
+A `40_candidates_unverified` trace status means exactly 40 matching candidate
+filenames were seen; it does **not** authenticate any report, validate task or
+run identity, or imply a passed integrated handoff. Even the zero-blocker
+`candidate_inputs_present_not_verified` status is **not** an acceptance receipt.
+The command never reads rating submissions, opens a blinding key, writes files,
+or calls live APIs. `--require-candidates` exits nonzero for missing inputs.
+
+## Accept only independently retained evidence
+
+1. Search authorized offline storage or archival exports for the **unchanged**
+   completed 40 experimental traces and each trace's associated Markdown report,
+   preserving original paths and original bytes. Do not regenerate treatments
+   or choose newer/better reports to fill missing cells.
+2. Recover the original coordinator packet and both treatment-blind
+   counterbalanced distribution bundles, if already created. If they were
+   never generated, distinguish first-time prospective packet preparation from
+   recovery of historical source reports; do not describe new packets as
+   historical originals.
+3. Recover the original research-input manifest JSON and the coordinator
+   manifest. Their file-byte SHA-256 hashes must be obtained from independently
+   retained trustworthy records, not recomputed from possibly altered copies.
+   The published aggregate `4e94308472e87cc14b85e5911c40b5f72c63225862a347e624fc0725afd632aa`
+   is **not** either manifest-file hash.
+4. Only once genuine sources and independent pins are available, run
+   `python -m scripts.verify_human_eval_automated_handoff` as documented in
+   `docs/HUMAN_EVAL_AUTOMATED_HANDOFF_GATE.md`. Investigate mismatches; never
+   rewrite the inputs, re-pin inconsistent archives or rerun treatments to
+   obtain a passing result.
+5. Retain the approved coordinator receipt separately and verify actual
+   delivery copies against its individual bundle-manifest hashes before
+   independent blinded scoring by two eligible annotators.
+
+The pilot remains diagnostic, automated confirmatory findings remain frozen,
+secondary/Pareto observations remain exploratory, and **human validation
+remains pending**. Neither the inventory nor a passing archival handoff
+constitutes an independent human judgment.
