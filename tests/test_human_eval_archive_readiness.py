@@ -482,7 +482,7 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
             path = outputs / "experiment_traces" / variant / f"{run_id}.json"
             path.write_text(json.dumps(payload), encoding="utf-8")
             (outputs / run_id / "research_report.md").write_text(
-                "synthetic " * 49 + run_id, encoding="utf-8"
+                "synthetic " * 49 + "archive-ending", encoding="utf-8"
             )
     return outputs
 
@@ -704,3 +704,46 @@ def test_matching_report_word_count_is_not_report_authentication(
     )
     assert result["handoff_verified"] is False
     assert result["status"] == "blocked"
+
+
+@pytest.mark.parametrize("unsafe_report", [
+    "D3",
+    "run_id",
+    "![figure](https://example.org/figure.png)",
+    '<img src="https://example.org/figure.png">',
+])
+def test_recovered_report_must_be_safe_for_blinded_packet_even_if_counts_match(
+    tmp_path, monkeypatch, unsafe_report
+):
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    report = outputs / "d3-run-00/research_report.md"
+    tokens = unsafe_report.split()
+    assert len(tokens) < 50
+    report.write_text(
+        "neutral " * (50 - len(tokens)) + unsafe_report, encoding="utf-8"
+    )
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_to_published_evaluator"]["matched"] == 40
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "annotator-facing" in result["trace_report_content"]["first_failure"]
+    assert "original_trace_report_content_alignment" in result["blockers"]
+    assert result["handoff_verified"] is False
+
+
+def test_archival_content_preflight_fails_closed_if_validator_contract_drifts(
+    tmp_path, monkeypatch
+):
+    _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        audit.packet_builder,
+        "_content_validator_runtime_contract_now",
+        lambda: {"schema_version": -1},
+    )
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_report_content"]["status"] == (
+        "invalid_content_validator_contract"
+    )
+    assert "original_trace_report_content_alignment" in result["blockers"]
+    assert result["handoff_verified"] is False

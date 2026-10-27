@@ -118,8 +118,17 @@ historical bytes, confirm report custody, prove exact text correspondence to
 the automated evaluator, or substitute for the independently pinned integrated
 handoff. A substituted report with the same word count can still pass this diagnostic:
 word-count concordance is **not** a report-content hash, exact text match to
-the original evaluator, or independently authenticated custody. Mutable
-directories are not an atomic snapshot.
+the original evaluator, or independently authenticated custody. The read-only
+preflight additionally runs the **same source/runtime-pinned annotator-facing
+content validator used by the actual packet builder** on every frozen research
+question and recovered Markdown report. It blocks candidate readiness if
+rendered text, Markdown links/attributes, images, or raw HTML could reveal
+treatment/coordinator markers or hide treatment identity; a changed content
+validator contract also fails closed. This is an early blinding and distribution
+safety diagnostic, **not** independent authentication, approval to distribute,
+or evidence that any annotator has rated a report. A different, non-leaking
+report of the same length can still pass. Mutable directories are not an atomic
+snapshot.
 
 ### Exact run-by-run recovery targets for partial backups
 

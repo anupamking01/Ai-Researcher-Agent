@@ -305,6 +305,17 @@ def _trace_report_content_status(
         return {**result, "status": "invalid_frozen_task_or_evaluator",
                 "reason": str(exc)}
 
+    # Diagnose distribution safety with the same versioned validator used by
+    # the actual blinded packet builder. A source/runtime drift must not make
+    # this recovery receipt claim that report text is ready for annotators.
+    try:
+        packet_builder.require_loaded_content_validator_unchanged(
+            operation="archival blinding-readiness preflight"
+        )
+    except (OSError, ValueError) as exc:
+        return {**result, "status": "invalid_content_validator_contract",
+                "reason": str(exc)}
+
     # Bound aggregate capture to the same maximum as the human-packet builder.
     # The output deliberately contains no report text or treatment results.
     total_bytes = 0
@@ -387,6 +398,15 @@ def _trace_report_content_status(
                     "recovered report word count differs from the frozen "
                     "treatment trace and CSV"
                 )
+            # Structural/measurement agreement does not establish that the
+            # original question and Markdown are safe to show blinded raters.
+            # Reuse the packet builder's treatment/coordinator-leakage audit,
+            # including rendered Markdown, attributes, HTML and image checks.
+            packet_builder.validate_annotator_facing_content(
+                [{"question": trace["question"],
+                  "report_markdown": report_text.strip()}],
+                label="recovered research report",
+            )
         except (OSError, ValueError, UnicodeDecodeError, KeyError) as exc:
             return {"status": "invalid_or_mismatched_trace_report_content",
                     "checked": checked, "expected": EXPECTED_TRACES,
@@ -581,6 +601,7 @@ def audit_archive_readiness(
     if content_status["status"] in (
         "invalid_frozen_task_or_evaluator",
         "invalid_or_mismatched_trace_report_content",
+        "invalid_content_validator_contract",
     ):
         gaps.append("original_trace_report_content_alignment")
 
