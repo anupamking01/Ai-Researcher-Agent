@@ -60,6 +60,33 @@ bytes over the combined check. The receipt excludes human scores, rater
 identities, coordinator key contents, and treatment-level effects. Store it
 in coordinator-only records, never in annotator-facing bundles.
 
+### Verify the actual delivery copy against the approved handoff
+
+The combined receipt now records `bundle_manifest_sha256` separately for
+`canonical` and `reverse`. Preserve this receipt independently, with the
+original source pins, **before** transferring a bundle. For each actual delivered
+or staged-to-send copy, use only its assigned manifest digest from that
+approved receipt, not a digest recomputed from the delivery copy:
+
+```bash
+python -m scripts.export_human_eval_annotator_bundle \
+  --verify-only \
+  --output-root <actual-delivered-bundle-directory> \
+  --expected-manifest-sha256 <trusted-digest-for-that-bundle>
+```
+
+This runs the existing source-free, treatment-blind packet and guide checks
+but additionally rejects a coherent replacement of report bytes **and** local
+manifest fingerprints after the coordinator's approved handoff. The unpinned
+`--verify-only` command still provides useful local diagnostics, but cannot
+authenticate a delivered copy. A PASS certifies exact agreement with the
+previously approved bundle manifest, under the verifier's capture-window
+limitations; it is not proof that the intended human received, read, or
+independently rated those files. Do not give annotators the combined
+coordinator receipt, research manifest, treatment/run mapping, or the second
+annotator's bundle. If digest-sharing is needed, share only the one assigned
+SHA-256 value through a separately trusted channel.
+
 ## Failure and scientific boundaries
 
 Missing independently archived hashes are a **blocker to this stronger

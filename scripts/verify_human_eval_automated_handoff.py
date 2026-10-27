@@ -136,6 +136,10 @@ def verify_automated_handoff(
             order: distributed["bundles"][order]["packet_sha256"]
             for order in ("canonical", "reverse")
         },
+        "bundle_manifest_sha256": {
+            order: initial[f"{order} annotator_manifest.json"]
+            for order in ("canonical", "reverse")
+        },
         "human_ratings_read": False,
         "treatment_outputs_rerun": False,
         "evaluator_outputs_rerun": False,

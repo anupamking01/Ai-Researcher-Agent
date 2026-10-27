@@ -5,6 +5,7 @@ All files are synthetic; no treatment traces or real ratings are used.
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -315,3 +316,87 @@ def test_window_custody_rejects_late_template_mutation(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="ratings_template.csv changed during verification window"):
         exporter.verify_annotator_bundle(root)
     assert modified == [True]
+
+
+
+def test_independently_pinned_delivery_accepts_original_synthetic_bundle(tmp_path):
+    root = _write_bundle(tmp_path / "bundle", _rows())
+    pin = hashlib.sha256((root / "annotator_manifest.json").read_bytes()).hexdigest()
+    receipt = exporter.verify_annotator_bundle(root, expected_manifest_sha256=pin)
+    assert receipt["annotator_manifest_sha256"] == pin
+    assert receipt["coordinator_artifacts_included"] is False
+
+
+def test_independently_pinned_delivery_rejects_coherently_rehashed_report(tmp_path):
+    root = _write_bundle(tmp_path / "bundle", _rows())
+    original_pin = hashlib.sha256(
+        (root / "annotator_manifest.json").read_bytes()
+    ).hexdigest()
+    modified = _rows()
+    modified[0]["report_markdown"] += " Synthetic report substitution."
+    packet = (chr(10).join(json.dumps(row, sort_keys=True) for row in modified) + chr(10)).encode()
+    _rehash_packet(root, packet)
+    # This local-only check cannot authenticate the original distribution.
+    assert exporter.verify_annotator_bundle(root)["n_reports"] == 2
+    with pytest.raises(ValueError, match="independently pinned"):
+        exporter.verify_annotator_bundle(
+            root, expected_manifest_sha256=original_pin
+        )
+
+
+def test_independently_pinned_delivery_rejects_wrong_valid_digest(tmp_path):
+    root = _write_bundle(tmp_path / "bundle", _rows())
+    with pytest.raises(ValueError, match="independently pinned"):
+        exporter.verify_annotator_bundle(
+            root, expected_manifest_sha256="0" * 64
+        )
+
+
+@pytest.mark.parametrize("invalid_pin", [
+    "", "a" * 63, "A" * 64, "g" * 64, 123, b"a" * 64, True,
+])
+def test_independently_pinned_delivery_rejects_invalid_pins(tmp_path, invalid_pin):
+    root = _write_bundle(tmp_path / "bundle", _rows())
+    with pytest.raises(ValueError, match="64 lowercase hex digits"):
+        exporter.verify_annotator_bundle(
+            root, expected_manifest_sha256=invalid_pin
+        )
+
+
+def test_delivery_pin_cli_verify_only_passes(tmp_path, monkeypatch, capsys):
+    import sys
+
+    root = _write_bundle(tmp_path / "bundle", _rows())
+    pin = hashlib.sha256((root / "annotator_manifest.json").read_bytes()).hexdigest()
+    monkeypatch.setattr(sys, "argv", [
+        "export_human_eval_annotator_bundle.py",
+        "--output-root", str(root),
+        "--verify-only", "--expected-manifest-sha256", pin,
+    ])
+    assert exporter.main() == 0
+    assert "HUMAN EVAL ANNOTATOR EXPORT: PASS" in capsys.readouterr().out
+
+
+def test_delivery_pin_cli_rejects_wrong_pin(tmp_path, monkeypatch):
+    import sys
+
+    root = _write_bundle(tmp_path / "bundle", _rows())
+    monkeypatch.setattr(sys, "argv", [
+        "export_human_eval_annotator_bundle.py",
+        "--output-root", str(root),
+        "--verify-only", "--expected-manifest-sha256", "0" * 64,
+    ])
+    with pytest.raises(SystemExit, match="independently pinned"):
+        exporter.main()
+
+
+def test_delivery_pin_cli_disallows_pin_during_unpinned_export(tmp_path, monkeypatch):
+    import sys
+
+    monkeypatch.setattr(sys, "argv", [
+        "export_human_eval_annotator_bundle.py",
+        "--output-root", str(tmp_path / "does-not-exist"),
+        "--expected-manifest-sha256", "0" * 64,
+    ])
+    with pytest.raises(SystemExit, match="requires --verify-only"):
+        exporter.main()

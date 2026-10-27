@@ -133,6 +133,10 @@ def test_composite_gate_proves_both_source_pins_and_report_run_coverage(case):
     assert receipt["coordinator_manifest_externally_pinned"] is True
     assert receipt["presentation_orders"] == ["canonical", "reverse"]
     assert receipt["bundle_packet_sha256"]["canonical"] != receipt["bundle_packet_sha256"]["reverse"]
+    for order, root_key in (("canonical", "canonical_root"), ("reverse", "reverse_root")):
+        assert receipt["bundle_manifest_sha256"][order] == hashlib.sha256(
+            (case[root_key] / "annotator_manifest.json").read_bytes()
+        ).hexdigest()
     assert receipt["human_ratings_read"] is False
     assert all(secret not in json.dumps(receipt) for secret in (
         "blinding_key", '"run_id":', '"variant_id":', "synthetic-d3", "annotator_id",

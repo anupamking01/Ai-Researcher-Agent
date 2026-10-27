@@ -19,6 +19,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import stat
 import tempfile
 from pathlib import Path
@@ -419,8 +420,22 @@ def _require_annotator_verification_window_unchanged(
         ) from exc
 
 
-def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
-    """Verify that a published bundle contains only annotator-safe artifacts."""
+def verify_annotator_bundle(
+    output_root: Path = DEFAULT_OUTPUT_ROOT,
+    *,
+    expected_manifest_sha256: str | None = None,
+) -> dict:
+    """Verify a blinded distribution bundle, optionally against an external pin.
+
+    A manifest rehashed alongside altered local files can satisfy the unpinned
+    self-consistency checks. The pin must come from a previously retained,
+    source-bound handoff receipt, not from the bundle under examination.
+    """
+    if expected_manifest_sha256 is not None and (
+        type(expected_manifest_sha256) is not str
+        or re.fullmatch(r"[0-9a-f]{64}", expected_manifest_sha256) is None
+    ):
+        raise ValueError("expected annotator manifest SHA-256 must be 64 lowercase hex digits")
     output_root = Path(output_root)
     if output_root.is_symlink() or not output_root.is_dir():
         raise ValueError(f"annotator bundle root must be a regular directory: {output_root}")
@@ -445,6 +460,12 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
     manifest_bytes = _regular_bytes(
         output_root / "annotator_manifest.json", label="annotator manifest"
     )
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    if (
+        expected_manifest_sha256 is not None
+        and manifest_sha256 != expected_manifest_sha256
+    ):
+        raise ValueError("annotator manifest does not match independently pinned SHA-256")
     packet_rows = _read_jsonl_packet(packet_bytes)
     template_rows = _read_ratings_template(template_bytes)
 
@@ -576,6 +597,7 @@ def verify_annotator_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
         "n_reports": len(packet_rows),
         "coordinator_artifacts_included": False,
         "packet_sha256": _fingerprint(packet_bytes)["sha256"],
+        "annotator_manifest_sha256": manifest_sha256,
         "ratings_template_sha256": _fingerprint(template_bytes)["sha256"],
         "annotator_guide_sha256": _fingerprint(guide_bytes)["sha256"],
         "presentation_order": presentation_order,
@@ -881,8 +903,14 @@ def main() -> int:
     verification = parser.add_mutually_exclusive_group()
     verification.add_argument("--verify-only", action="store_true")
     verification.add_argument("--verify-against-source", action="store_true")
+    parser.add_argument(
+        "--expected-manifest-sha256",
+        help="Independent SHA-256 pin for the distribution manifest; requires --verify-only",
+    )
     args = parser.parse_args()
     try:
+        if args.expected_manifest_sha256 is not None and not args.verify_only:
+            raise ValueError("--expected-manifest-sha256 requires --verify-only")
         if args.verify_against_source:
             if args.presentation_order is None:
                 raise ValueError(
@@ -897,7 +925,10 @@ def main() -> int:
                 annotator_guide_path=args.annotator_guide,
             )
         elif args.verify_only:
-            receipt = verify_annotator_bundle(args.output_root)
+            receipt = verify_annotator_bundle(
+                args.output_root,
+                expected_manifest_sha256=args.expected_manifest_sha256,
+            )
             if (
                 args.presentation_order is not None
                 and receipt["presentation_order"] != args.presentation_order
