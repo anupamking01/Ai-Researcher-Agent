@@ -7,6 +7,7 @@ import copy
 from functools import lru_cache
 from fractions import Fraction
 import json
+import math
 import random
 
 import pytest
@@ -95,6 +96,21 @@ def test_rejects_missing_malformed_nonfinite_secondary_interval(
     ]["model_calls"]["bootstrap_95pct_ci_mean_difference"] = invalid
     with pytest.raises(ValueError, match="bootstrap"):
         auditor.audit_primary(treatment, evaluator, modified)
+
+
+def test_secondary_interval_comparison_bounds_legacy_float_rounding():
+    # Only a small binary64 rounding envelope is permitted, even for
+    # large-magnitude exploratory measurements such as total tokens.
+    for sign in (-1, 1):
+        exact = Fraction(sign * 10000)
+        ulp = math.ulp(float(exact))
+        auditor._same_secondary_ci_endpoint(
+            float(exact) + 4 * ulp, exact, "synthetic bootstrap"
+        )
+        with pytest.raises(ValueError, match="synthetic bootstrap"):
+            auditor._same_secondary_ci_endpoint(
+                float(exact) + 64 * ulp, exact, "synthetic bootstrap"
+            )
 
 
 def test_integer_scaled_bootstrap_matches_direct_fraction_oracle():

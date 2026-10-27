@@ -80,7 +80,11 @@ It uses the existing 20,000 with-replacement, task-paired resamples and the
 historical seed mapping (20260914 + 100 + 10 × contrast index + metric index).
 Inputs are exact fractions derived from the archived CSV rows; bootstrap
 resample sums and percentile interpolation use integer-scaled rational
-arithmetic, not the historical float summary implementation. The seed's
+arithmetic, not the historical float summary implementation. Legacy float
+percentile rendering is compared within the larger of an absolute 1e-12
+tolerance or 16 binary64 units in the last place (ULPs) at the endpoint's
+magnitude; this narrow numerical allowance is necessary for token-count
+intervals without relaxing report-level support comparisons. The seed's
 Python random.Random.randrange index stream is shared by design.
 Missing, malformed, non-finite, or altered interval endpoints fail closed.
 The verifier does **not** calculate secondary p-values or change the

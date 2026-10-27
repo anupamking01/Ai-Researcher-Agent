@@ -149,6 +149,7 @@ def _secondary_bootstrap_ci(differences, *, seed, draws):
 
     return (percentile(1), percentile(39))
 
+
 def _median(values):
     ordered = sorted(values)
     midpoint = len(ordered) // 2
@@ -221,10 +222,26 @@ def _audit_secondary_pair(recorded, left_values, right_values, label, *, seed, d
         tuple(differences), seed=seed, draws=draws
     )
     for endpoint, (observed, expected) in enumerate(zip(interval, expected_interval)):
-        _same_number(
+        _same_secondary_ci_endpoint(
             observed, expected,
             f"{label}.bootstrap_95pct_ci_mean_difference[{endpoint}]",
         )
+
+
+def _same_secondary_ci_endpoint(observed, expected, label):
+    """Allow only bounded binary64 rounding relative to exact bootstrap sums.
+
+    Historical secondary percentiles were interpolated with float operands.
+    For large-valued outcomes (e.g., token counts), a few units in the last
+    place can exceed the primary rate check's fixed 1e-12 tolerance.
+    """
+    expected_float = float(expected)
+    tolerance = max(ABS_TOL, 16 * math.ulp(expected_float))
+    if not math.isclose(
+        _finite(observed, label), expected_float,
+        rel_tol=0.0, abs_tol=tolerance,
+    ):
+        raise ValueError(f"independent primary inference mismatch: {label}")
 
 
 PARETO_NOTE = (
