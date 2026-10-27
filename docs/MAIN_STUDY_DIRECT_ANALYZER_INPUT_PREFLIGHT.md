@@ -171,8 +171,7 @@ inference actually follows from its retained CSV inputs. Both a result and its
 self-reported SHA-256 can be rewritten together. The read-only verifier therefore
 offers an **opt-in** same-code consistency check:
 
-    python -m scripts.verify_main_study_diagnostic \\
-      outputs/diagnostics/local-check-001 --recompute
+    python -m scripts.verify_main_study_diagnostic outputs/diagnostics/local-check-001 --recompute
 
 The command first performs the original strict five-file receipt, current-code
 fingerprint, and 40-cell input validation. It then feeds only those already

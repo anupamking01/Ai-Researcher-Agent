@@ -217,7 +217,7 @@ def test_recomputation_detects_forged_markdown_with_repaired_receipt(inputs):
     destination, _ = _build(inputs)
     name = diagnostic.DIAGNOSTIC_MD
     with (destination / name).open("a", encoding="utf-8") as handle:
-        handle.write("\\nSynthetic changed interpretation.\\n")
+        handle.write("\nSynthetic changed interpretation.\n")
     _rehash_claimed_artifact(destination, name)
     assert verifier.verify_diagnostic_bundle(destination)["files_verified"] == 4
     with pytest.raises(ValueError, match="recomputed inference byte mismatch"):
