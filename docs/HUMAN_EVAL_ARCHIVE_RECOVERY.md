@@ -69,8 +69,14 @@ fingerprint-verified evaluator's 40 frozen run IDs agree with the candidate
 filenames. It uses bounded, descriptor-based reads and duplicate-key-rejecting
 JSON parsing to check the actual 40 trace bodies: schema version, treatment,
 task, run ID, task-set identity, exact frozen research question, completion
-status, and the trace's recorded report path. It also reads each corresponding
-Markdown report and rejects empty or non-UTF-8 content. This prevents a
+status, and the trace's recorded report path. It additionally compares the
+recovered trace's source budget, successful/failed source counts, search/model
+call counts, token usage and recorded report-word count with the **published
+frozen treatment CSV for the same treatment/task cell**. The trace experiment
+configuration must have the original arm's direct/planner and verification
+settings. Missing, noninteger or mismatched counters fail the diagnostic even
+when the 40 filenames and embedded run IDs appear valid. It also reads each
+corresponding Markdown report and rejects empty or non-UTF-8 content. This prevents a
 matching *filename* from masking a different embedded task, swapped trace,
 report-path substitution, truncated JSON, or empty report. Separately
 recovered trace/report directories are supported without copying them into
@@ -93,8 +99,11 @@ independent historical custody. Never compute a new pin from a suspect archive
 and present it as an earlier retained fingerprint.
 Even the zero-blocker
 `candidate_inputs_present_not_verified` status is **not** an acceptance receipt.
-The command never reads report or trace contents, rating submissions, or a
-blinding key; it never writes files or calls live APIs. Even with external
+The command performs bounded, read-only inspection of recovered report and
+trace contents, but never reads rating submissions or a blinding key, writes
+files, or calls live APIs. Matching trace counters are corroboration, not a
+cryptographic match to the original report bytes or independent authentication
+of archival custody. Even with external
 archive roots, the full handoff verifier requires approved original evidence
 staged in its documented source layout, with independent archival pins. `--require-candidates` exits nonzero for missing inputs.
 

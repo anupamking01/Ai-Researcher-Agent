@@ -421,6 +421,24 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
     outputs = archive if archive is not None else root / "outputs"
     _write_candidate_matrix(outputs, dict.fromkeys(audit.VARIANTS, 10))
     _simulate_published_identity_inputs(root, monkeypatch)
+    main_source = root / audit.lineage.MAIN_REL
+    with main_source.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=(
+            "variant_id", "task_id", "completed", "source_budget",
+            "successful_sources", "failed_sources", "search_calls",
+            "model_calls", "total_tokens", "report_words",
+        ))
+        writer.writeheader()
+        for variant in audit.VARIANTS:
+            for task_id in audit.lineage.TASKS:
+                writer.writerow({
+                    "variant_id": variant, "task_id": task_id,
+                    "completed": "True",
+                    "source_budget": audit.main_input_contract.FROZEN_SOURCE_BUDGETS[variant],
+                    "successful_sources": 2, "failed_sources": 1,
+                    "search_calls": 1, "model_calls": 4,
+                    "total_tokens": 250, "report_words": 50,
+                })
     tasks = {
         "task_set_id": "synthetic-frozen-task-set",
         "frozen_before_execution": True,
@@ -437,13 +455,24 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
             run_id = f"{variant.lower()}-run-{n:02d}"
             payload = {
                 "schema_version": 2,
-                "experiment": {"variant_id": variant, "task_id": task_id,
-                               "task_set_id": tasks["task_set_id"]},
-                "trace": {"variant_id": variant, "task_id": task_id,
-                          "task_set_id": tasks["task_set_id"],
-                          "run_id": run_id, "completed": True,
-                          "question": tasks["tasks"][n]["question"],
-                          "report_path": f"./outputs/{run_id}/research_report.pdf"},
+                "experiment": {
+                    "variant_id": variant, "task_id": task_id,
+                    "task_set_id": tasks["task_set_id"],
+                    "source_budget": audit.main_input_contract.FROZEN_SOURCE_BUDGETS[variant],
+                    "planning_mode": audit.FROZEN_EXECUTION_MODES[variant][0],
+                    "verification_mode": audit.FROZEN_EXECUTION_MODES[variant][1],
+                },
+                "trace": {
+                    "variant_id": variant, "task_id": task_id,
+                    "task_set_id": tasks["task_set_id"],
+                    "run_id": run_id, "completed": True,
+                    "question": tasks["tasks"][n]["question"],
+                    "report_path": f"./outputs/{run_id}/research_report.pdf",
+                    "source_budget": audit.main_input_contract.FROZEN_SOURCE_BUDGETS[variant],
+                    "successful_source_count": 2, "failed_source_count": 1,
+                    "search_call_count": 1, "model_call_count": 4,
+                    "total_tokens": 250, "report_words": 50,
+                },
             }
             path = outputs / "experiment_traces" / variant / f"{run_id}.json"
             path.write_text(json.dumps(payload), encoding="utf-8")
@@ -575,6 +604,62 @@ def test_content_preflight_rejects_unstable_or_oversized_trace_capture(
     monkeypatch.setattr(
         audit.packet_builder, "_read_regular_file_captured", fail_trace_capture
     )
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "original_trace_report_content_alignment" in result["blockers"]
+
+
+@pytest.mark.parametrize("trace_field", [
+    "source_budget", "successful_source_count", "failed_source_count",
+    "search_call_count", "model_call_count", "total_tokens", "report_words",
+])
+def test_recovered_telemetry_must_match_frozen_treatment_measurements(
+    tmp_path, monkeypatch, trace_field
+):
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces/D3/d3-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["trace"][trace_field] += 1
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_to_published_evaluator"]["matched"] == 40
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert trace_field in result["trace_report_content"]["first_failure"]
+    assert "original_trace_report_content_alignment" in result["blockers"]
+
+
+@pytest.mark.parametrize("field,wrong_value", [
+    ("planning_mode", "planner"),
+    ("verification_mode", "verify"),
+    ("source_budget", 6),
+])
+def test_recovered_experiment_config_must_match_frozen_treatment_arm(
+    tmp_path, monkeypatch, field, wrong_value
+):
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces/D3/d3-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["experiment"][field] = wrong_value
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "original_trace_report_content_alignment" in result["blockers"]
+
+
+def test_missing_or_boolean_trace_counter_is_not_canonical_measurement(
+    tmp_path, monkeypatch
+):
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces/D3/d3-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["trace"]["total_tokens"] = True
+    path.write_text(json.dumps(payload), encoding="utf-8")
     result = audit.audit_archive_readiness(repo_root=tmp_path)
     assert result["trace_report_content"]["status"] == (
         "invalid_or_mismatched_trace_report_content"

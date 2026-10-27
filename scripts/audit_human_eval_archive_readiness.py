@@ -18,11 +18,31 @@ from scripts import build_human_eval_packet as packet_builder
 from scripts import export_human_eval_annotator_bundle as exporter
 from scripts import verify_published_main_study_inputs as published
 from scripts import verify_human_eval_automated_run_lineage as lineage
+from scripts import validate_main_study_inputs as main_input_contract
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_TRACES = 40
 VARIANTS = packet_builder.EXPECTED_VARIANTS
 EXPECTED_PER_VARIANT = EXPECTED_TRACES // len(VARIANTS)
+
+# Historical main-study CSV measurements were computed from these exact trace
+# counters. A recovered trace that agrees on identity but not measurement is
+# not the evidence used for the frozen automated analysis.
+TRACE_TO_MAIN_MEASUREMENTS = (
+    ("source_budget", "source_budget"),
+    ("successful_source_count", "successful_sources"),
+    ("failed_source_count", "failed_sources"),
+    ("search_call_count", "search_calls"),
+    ("model_call_count", "model_calls"),
+    ("total_tokens", "total_tokens"),
+    ("report_words", "report_words"),
+)
+FROZEN_EXECUTION_MODES = {
+    "D3": ("direct", "none"),
+    "D6": ("direct", "none"),
+    "P6": ("planner", "none"),
+    "P6V": ("planner", "verify"),
+}
 
 
 def _file_status(path: Path) -> str:
@@ -247,8 +267,13 @@ def _trace_report_content_status(
     if _file_status(task_file) != "present_unverified":
         return {**result, "status": "not_checked_without_frozen_task_manifest"}
     source = repo_root / lineage.SUPPORT_REL
+    main_source = repo_root / lineage.MAIN_REL
     try:
         task_manifest = packet_builder._load_task_manifest(task_file)
+        main_bytes = packet_builder._read_regular_file_captured(
+            main_source, label="frozen treatment CSV for recovered trace telemetry"
+        )
+        main_rows = lineage._read_study_csv(main_bytes, path=main_source)
         evaluator_bytes = packet_builder._read_regular_file_captured(
             source, label="frozen evaluator for recovered trace content"
         )
@@ -259,6 +284,10 @@ def _trace_report_content_status(
         matrix = lineage._matrix(
             rows, label="frozen evaluator trace-content mapping",
             expected_cells=expected_cells, run_identity=True,
+        )
+        main_matrix = lineage._matrix(
+            main_rows, label="frozen treatment trace-content mapping",
+            expected_cells=expected_cells, run_identity=False,
         )
         expected_tasks = {
             (variant, row["run_id"]): task
@@ -314,6 +343,26 @@ def _trace_report_content_status(
                 raise ValueError("trace task-set identity or frozen question mismatch")
             if trace.get("completed") is not True:
                 raise ValueError("incomplete treatment cannot enter the human packet")
+            frozen_row = main_matrix[(variant, task_id)]
+            if frozen_row.get("completed") != "True":
+                raise ValueError("frozen treatment CSV does not record a completed run")
+            expected_planning, expected_verification = FROZEN_EXECUTION_MODES[variant]
+            if (experiment.get("planning_mode") != expected_planning
+                    or experiment.get("verification_mode") != expected_verification):
+                raise ValueError("recovered treatment execution mode differs from frozen arm")
+            frozen_budget = main_input_contract.FROZEN_SOURCE_BUDGETS[variant]
+            if (type(experiment.get("source_budget")) is not int
+                    or experiment["source_budget"] != frozen_budget):
+                raise ValueError("recovered experiment budget differs from frozen arm")
+            for trace_field, csv_field in TRACE_TO_MAIN_MEASUREMENTS:
+                observed = trace.get(trace_field)
+                expected = frozen_row.get(csv_field)
+                if (type(observed) is not int or observed < 0
+                        or str(observed) != expected):
+                    raise ValueError(
+                        f"recovered trace {trace_field} differs from frozen "
+                        f"treatment CSV {csv_field}"
+                    )
             declared_report = trace.get("report_path")
             if not isinstance(declared_report, str):
                 raise ValueError("trace has no valid original report path")
