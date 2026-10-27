@@ -224,6 +224,116 @@ def _trace_run_alignment(
     }
 
 
+
+def _trace_report_content_status(
+    *,
+    repo_root: Path,
+    trace_root: Path,
+    report_root: Path,
+    located_ids: tuple[tuple[str, str], ...],
+    run_alignment_status: str,
+) -> dict:
+    """Diagnose archived trace/report *content* against frozen run/task cells.
+
+    This is a read-only recovery preflight, not a source-authenticity or
+    historical-custody proof. The integrated handoff remains authoritative.
+    """
+    result = {"status": "not_checked_without_published_run_identity",
+              "checked": 0, "expected": EXPECTED_TRACES}
+    if run_alignment_status != "40_run_ids_match_published_evaluator_not_authenticated":
+        return result
+
+    task_file = repo_root / "experiments/main_budget_tasks.json"
+    if _file_status(task_file) != "present_unverified":
+        return {**result, "status": "not_checked_without_frozen_task_manifest"}
+    source = repo_root / lineage.SUPPORT_REL
+    try:
+        task_manifest = packet_builder._load_task_manifest(task_file)
+        evaluator_bytes = packet_builder._read_regular_file_captured(
+            source, label="frozen evaluator for recovered trace content"
+        )
+        rows = lineage._read_study_csv(evaluator_bytes, path=source)
+        expected_cells = {
+            (variant, task) for variant in VARIANTS for task in lineage.TASKS
+        }
+        matrix = lineage._matrix(
+            rows, label="frozen evaluator trace-content mapping",
+            expected_cells=expected_cells, run_identity=True,
+        )
+        expected_tasks = {
+            (variant, row["run_id"]): task
+            for (variant, task), row in matrix.items()
+        }
+        if set(expected_tasks) != set(located_ids):
+            raise ValueError("archived run filenames differ from frozen evaluator")
+        if set(task_manifest["tasks"]) != set(lineage.TASKS):
+            raise ValueError("frozen task manifest has an unexpected task matrix")
+    except (OSError, ValueError) as exc:
+        return {**result, "status": "invalid_frozen_task_or_evaluator",
+                "reason": str(exc)}
+
+    # Bound aggregate capture to the same maximum as the human-packet builder.
+    # The output deliberately contains no report text or treatment results.
+    total_bytes = 0
+    checked = 0
+    from urllib.parse import unquote
+    for variant, run_id in located_ids:
+        trace_file = trace_root / variant / f"{run_id}.json"
+        report_file = report_root / run_id / "research_report.md"
+        try:
+            if (_file_status(trace_file) != "present_unverified"
+                    or _file_status(report_file) != "present_unverified"):
+                raise ValueError("trace or report is missing, redirected, or unsafe")
+            trace_bytes = packet_builder._read_regular_file_captured(
+                trace_file, label="recovered experimental trace"
+            )
+            report_bytes = packet_builder._read_regular_file_captured(
+                report_file, label="recovered Markdown report"
+            )
+            total_bytes += len(trace_bytes) + len(report_bytes)
+            packet_builder._require_packet_byte_limit(
+                total_bytes, label="aggregate recovered trace/report bytes"
+            )
+            payload = packet_builder._load_json_object(
+                trace_bytes, label="recovered experimental trace"
+            )
+            experiment, trace = packet_builder._validated_trace_sections(
+                payload, trace_path=trace_file
+            )
+            task_id = expected_tasks[(variant, run_id)]
+            task_set_id = task_manifest["task_set_id"]
+            if (experiment.get("variant_id") != variant
+                    or trace.get("variant_id") != variant
+                    or experiment.get("task_id") != task_id
+                    or trace.get("task_id") != task_id
+                    or trace.get("run_id") != run_id):
+                raise ValueError("embedded treatment, task, or run identity mismatch")
+            if (experiment.get("task_set_id") != task_set_id
+                    or trace.get("task_set_id") != task_set_id
+                    or trace.get("question") != task_manifest["tasks"][task_id]):
+                raise ValueError("trace task-set identity or frozen question mismatch")
+            if trace.get("completed") is not True:
+                raise ValueError("incomplete treatment cannot enter the human packet")
+            declared_report = trace.get("report_path")
+            if not isinstance(declared_report, str):
+                raise ValueError("trace has no valid original report path")
+            recorded_path = Path(unquote(declared_report))
+            if recorded_path.suffix.lower() == ".pdf":
+                recorded_path = recorded_path.with_suffix(".md")
+            if recorded_path != Path("outputs") / run_id / "research_report.md":
+                raise ValueError("recorded report path does not bind the trace run")
+            if not report_bytes.decode("utf-8").strip():
+                raise ValueError("recovered Markdown report is empty or not UTF-8")
+        except (OSError, ValueError, UnicodeDecodeError, KeyError) as exc:
+            return {"status": "invalid_or_mismatched_trace_report_content",
+                    "checked": checked, "expected": EXPECTED_TRACES,
+                    "first_failure": f"{variant}/{run_id}: {exc}"}
+        checked += 1
+
+    return {"status": "40_trace_report_contents_align_to_frozen_cells_not_authenticated",
+            "checked": checked, "expected": EXPECTED_TRACES}
+
+
 def audit_archive_readiness(
     *,
     repo_root: Path = ROOT,
@@ -294,6 +404,10 @@ def audit_archive_readiness(
         repo_root=root, trace_status=trace_candidates["status"],
         located_ids=located_ids, published_input_anchor=input_anchor,
     )
+    content_status = _trace_report_content_status(
+        repo_root=root, trace_root=traces, report_root=reports,
+        located_ids=located_ids, run_alignment_status=run_alignment["status"],
+    )
     gaps = [label for label, status in resources.items() if status != "present_unverified"]
     if trace_candidates["status"] != "40_matrix_candidates_unverified":
         gaps.append("original_experiment_trace_candidates")
@@ -308,6 +422,12 @@ def audit_archive_readiness(
     ):
         gaps.append("original_trace_to_evaluator_run_identity")
 
+    if content_status["status"] in (
+        "invalid_frozen_task_or_evaluator",
+        "invalid_or_mismatched_trace_report_content",
+    ):
+        gaps.append("original_trace_report_content_alignment")
+
     return {
         "schema_version": 1,
         "study_id": "budget-main-v1",
@@ -316,6 +436,7 @@ def audit_archive_readiness(
         "trace_candidates": trace_candidates,
         "report_candidates": report_candidates,
         "trace_to_published_evaluator": run_alignment,
+        "trace_report_content": content_status,
         "independent_pins": pins,
         "published_automated_input_anchor": input_anchor,
         "blockers": sorted(gaps),

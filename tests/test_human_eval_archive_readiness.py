@@ -1,6 +1,9 @@
 """Synthetic, offline checks for the archive recovery inventory contract."""
 import csv
 import hashlib
+import json
+
+import pytest
 from pathlib import Path
 
 from scripts import audit_human_eval_archive_readiness as audit
@@ -412,3 +415,168 @@ def test_malformed_evaluator_run_id_matrix_cannot_be_used_as_an_identity_gate(
     )
     assert "original_trace_to_evaluator_run_identity" in result["blockers"]
 
+
+def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None):
+    """Synthetic run/task/report corpus; publication pin is stubbed in tests."""
+    outputs = archive if archive is not None else root / "outputs"
+    _write_candidate_matrix(outputs, dict.fromkeys(audit.VARIANTS, 10))
+    _simulate_published_identity_inputs(root, monkeypatch)
+    tasks = {
+        "task_set_id": "synthetic-frozen-task-set",
+        "frozen_before_execution": True,
+        "tasks": [
+            {"id": task_id, "question": f"Synthetic question for {task_id}"}
+            for task_id in audit.lineage.TASKS
+        ],
+    }
+    task_file = root / "experiments/main_budget_tasks.json"
+    task_file.parent.mkdir(parents=True, exist_ok=True)
+    task_file.write_text(json.dumps(tasks), encoding="utf-8")
+    for variant in audit.VARIANTS:
+        for n, task_id in enumerate(audit.lineage.TASKS):
+            run_id = f"{variant.lower()}-run-{n:02d}"
+            payload = {
+                "schema_version": 2,
+                "experiment": {"variant_id": variant, "task_id": task_id,
+                               "task_set_id": tasks["task_set_id"]},
+                "trace": {"variant_id": variant, "task_id": task_id,
+                          "task_set_id": tasks["task_set_id"],
+                          "run_id": run_id, "completed": True,
+                          "question": tasks["tasks"][n]["question"],
+                          "report_path": f"./outputs/{run_id}/research_report.pdf"},
+            }
+            path = outputs / "experiment_traces" / variant / f"{run_id}.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            (outputs / run_id / "research_report.md").write_text(
+                f"Synthetic non-evaluation report for {run_id}.", encoding="utf-8"
+            )
+    return outputs
+
+
+def test_recovered_trace_and_report_contents_align_only_diagnostically(
+    tmp_path, monkeypatch
+):
+    _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_report_content"] == {
+        "status": "40_trace_report_contents_align_to_frozen_cells_not_authenticated",
+        "checked": 40, "expected": 40,
+    }
+    assert result["handoff_verified"] is False
+    assert result["status"] == "blocked"  # original external pins/packets absent
+
+
+@pytest.mark.parametrize("field,bad_value", [
+    ("experiment_variant", "D6"),
+    ("trace_variant", "P6"),
+    ("experiment_task", "main-02"),
+    ("trace_task", "main-02"),
+    ("trace_run", "not-the-frozen-run"),
+    ("task_set_id", "other-task-set"),
+    ("question", "Different question"),
+    ("completed", False),
+    ("report_path", "./outputs/d6-run-00/research_report.pdf"),
+])
+def test_mismatched_embedded_trace_metadata_blocks_archive_readiness(
+    tmp_path, monkeypatch, field, bad_value
+):
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    trace_file = outputs / "experiment_traces/D3/d3-run-00.json"
+    payload = json.loads(trace_file.read_text(encoding="utf-8"))
+    if field == "experiment_variant":
+        payload["experiment"]["variant_id"] = bad_value
+    elif field == "trace_variant":
+        payload["trace"]["variant_id"] = bad_value
+    elif field == "experiment_task":
+        payload["experiment"]["task_id"] = bad_value
+    elif field == "trace_task":
+        payload["trace"]["task_id"] = bad_value
+    elif field == "trace_run":
+        payload["trace"]["run_id"] = bad_value
+    elif field == "task_set_id":
+        payload["trace"]["task_set_id"] = bad_value
+    else:
+        payload["trace"][field] = bad_value
+    trace_file.write_text(json.dumps(payload), encoding="utf-8")
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_to_published_evaluator"]["matched"] == 40
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "original_trace_report_content_alignment" in result["blockers"]
+    assert result["handoff_verified"] is False
+
+
+def test_duplicate_trace_json_member_cannot_hide_altered_run_identity(
+    tmp_path, monkeypatch
+):
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces/D3/d3-run-00.json"
+    text = path.read_text(encoding="utf-8")
+    text = text.replace('"run_id": "d3-run-00"',
+                        '"run_id": "some-other-run", "run_id": "d3-run-00"', 1)
+    path.write_text(text, encoding="utf-8")
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "duplicate JSON key" in result["trace_report_content"]["first_failure"]
+
+
+@pytest.mark.parametrize("bad_report", ["", "   \n"])
+def test_empty_report_cannot_pass_content_readiness(tmp_path, monkeypatch, bad_report):
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    (outputs / "d3-run-00/research_report.md").write_text(
+        bad_report, encoding="utf-8"
+    )
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["report_candidates"]["count"] == 40
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "original_trace_report_content_alignment" in result["blockers"]
+
+
+def test_external_recovered_archives_can_be_checked_without_copying(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "checkout"
+    archive = tmp_path / "recovered"
+    _write_semantically_aligned_fixture(repo, monkeypatch, archive=archive)
+    result = audit.audit_archive_readiness(
+        repo_root=repo, trace_root=archive / "experiment_traces",
+        report_root=archive,
+    )
+    assert result["trace_report_content"]["checked"] == 40
+    assert result["trace_report_content"]["status"].endswith(
+        "_not_authenticated"
+    )
+    assert result["handoff_verified"] is False
+
+
+def test_content_preflight_skips_without_anchored_run_ids(tmp_path):
+    _write_candidate_matrix(tmp_path / "outputs", dict.fromkeys(audit.VARIANTS, 10))
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_report_content"]["status"] == (
+        "not_checked_without_published_run_identity"
+    )
+    assert result["handoff_verified"] is False
+
+
+def test_content_preflight_rejects_unstable_or_oversized_trace_capture(
+    tmp_path, monkeypatch
+):
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    original = audit.packet_builder._read_regular_file_captured
+    def fail_trace_capture(path, *, label):
+        if Path(path).name == "d3-run-00.json":
+            raise ValueError("trace source changed during capture")
+        return original(path, label=label)
+    monkeypatch.setattr(
+        audit.packet_builder, "_read_regular_file_captured", fail_trace_capture
+    )
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "original_trace_report_content_alignment" in result["blockers"]

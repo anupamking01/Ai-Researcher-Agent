@@ -64,6 +64,25 @@ evaluator matrix cannot produce an identity match. Only mismatch/invalid-matrix
 results add an extra blocker; skipped comparisons remain blocked by their
 underlying missing-trace or missing-anchor requirements. Symlinks and missing/unsafe report candidates block readiness; a
 balanced but incoherent archive can still pass this **structural inventory**.
+The additional `trace_report_content` preflight runs only after the
+fingerprint-verified evaluator's 40 frozen run IDs agree with the candidate
+filenames. It uses bounded, descriptor-based reads and duplicate-key-rejecting
+JSON parsing to check the actual 40 trace bodies: schema version, treatment,
+task, run ID, task-set identity, exact frozen research question, completion
+status, and the trace's recorded report path. It also reads each corresponding
+Markdown report and rejects empty or non-UTF-8 content. This prevents a
+matching *filename* from masking a different embedded task, swapped trace,
+report-path substitution, truncated JSON, or empty report. Separately
+recovered trace/report directories are supported without copying them into
+the repository. Unreadable, unstable, oversized, or internally contradictory
+sources add `original_trace_report_content_alignment` as a blocker. The
+output deliberately contains no report text or new research scores.
+`40_trace_report_contents_align_to_frozen_cells_not_authenticated` is
+**still diagnostic only**: even valid internal metadata cannot authenticate
+historical bytes, confirm report custody, prove exact text correspondence to
+the automated evaluator, or substitute for the independently pinned integrated
+handoff. Mutable directories are not an atomic snapshot.
+
 When a historical manifest-file SHA-256 is supplied, the inventory now compares
 it against the bounded, descriptor-captured bytes of the corresponding research
 or coordinator manifest. A mismatch, missing/unsafe manifest, or unstable/oversized
