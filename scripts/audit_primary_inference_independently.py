@@ -178,6 +178,58 @@ def _audit_secondary_pair(recorded, left_values, right_values, label):
         )
 
 
+PARETO_NOTE = (
+    "Maximize mean strict support while minimizing mean treatment cost; "
+    "evaluator cost excluded."
+)
+
+
+def _audit_cost_quality_pareto(recorded, strict_means, treatment_cost_means):
+    """Independently derive the archived descriptive two-objective frontier.
+
+    Exact rational comparisons avoid rounded table means introducing or
+    erasing a dominance relation. This is descriptive, not a new hypothesis
+    test or a recommendation to select treatments post hoc.
+    """
+    if not isinstance(recorded, dict) or set(recorded) != {
+        "frontier", "dominated_by", "note",
+    }:
+        raise ValueError("independent cost-quality Pareto mismatch: schema")
+    if set(strict_means) != set(VARIANTS) or set(treatment_cost_means) != set(VARIANTS):
+        raise ValueError("independent cost-quality Pareto mismatch: variant means")
+
+    expected_dominated = {}
+    for candidate in VARIANTS:
+        expected_dominated[candidate] = [
+            other for other in VARIANTS
+            if other != candidate
+            and strict_means[other] >= strict_means[candidate]
+            and treatment_cost_means[other] <= treatment_cost_means[candidate]
+            and (
+                strict_means[other] > strict_means[candidate]
+                or treatment_cost_means[other] < treatment_cost_means[candidate]
+            )
+        ]
+    expected_frontier = [
+        candidate for candidate in VARIANTS
+        if not expected_dominated[candidate]
+    ]
+
+    dominated_by = recorded["dominated_by"]
+    if not isinstance(dominated_by, dict) or set(dominated_by) != set(VARIANTS):
+        raise ValueError("independent cost-quality Pareto mismatch: dominated_by schema")
+    for candidate in VARIANTS:
+        actual = dominated_by[candidate]
+        if type(actual) is not list or actual != expected_dominated[candidate]:
+            raise ValueError(
+                f"independent cost-quality Pareto mismatch: dominated_by[{candidate}]"
+            )
+    if type(recorded["frontier"]) is not list or recorded["frontier"] != expected_frontier:
+        raise ValueError("independent cost-quality Pareto mismatch: frontier")
+    if recorded["note"] != PARETO_NOTE:
+        raise ValueError("independent cost-quality Pareto mismatch: cost scope note")
+
+
 def audit_primary(treatment_rows, evaluator_rows, inference):
     """Cross-check primary estimates using raw counts, not analyzer functions."""
     # The historical, SHA-pinned CSV export precedes the newer mandatory
@@ -355,6 +407,28 @@ def audit_primary(treatment_rows, evaluator_rows, inference):
                 [secondary_cells[(right, task)][metric] for task in EXPECTED_TASKS],
                 f"{name}.{metric}",
             )
+
+    # Check the originally reported descriptive cost-quality frontier against
+    # exact means from the retained report-level records, not from the
+    # inference JSON being audited. This does not add confirmatory tests.
+    pareto_support_means = {
+        variant: sum(
+            (cell[(variant, task)] for task in EXPECTED_TASKS), Fraction(0)
+        ) / len(EXPECTED_TASKS)
+        for variant in VARIANTS
+    }
+    pareto_cost_means = {
+        variant: sum(
+            (secondary_cells[(variant, task)]["treatment_cost_usd"]
+             for task in EXPECTED_TASKS), Fraction(0)
+        ) / len(EXPECTED_TASKS)
+        for variant in VARIANTS
+    }
+    _audit_cost_quality_pareto(
+        inference.get("cost_quality_pareto"),
+        pareto_support_means,
+        pareto_cost_means,
+    )
     return {
         "status": "independent_primary_arithmetic_consistent_not_provenance",
         "paired_tasks": 10,
@@ -362,6 +436,7 @@ def audit_primary(treatment_rows, evaluator_rows, inference):
         "bootstrap_intervals_checked": True,
         "secondary_variant_means_checked": len(VARIANTS) * len(SECONDARY_METRICS),
         "secondary_paired_descriptives_checked": len(CONTRASTS) * len(SECONDARY_METRICS),
+        "cost_quality_pareto_checked": True,
     }
 
 

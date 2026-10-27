@@ -62,8 +62,19 @@ missing, or inconsistent metrics fail closed. This is **not** a new secondary
 hypothesis test, primary outcome, or preregistered confirmation. No p-values
 are added and no analyses are selected based on favorable effects.
 
-**Scope limitations:** Secondary **bootstrap intervals**, cost-quality Pareto
-summaries, and report rendering are *not* independently recomputed here.
+**Independent descriptive Pareto check (27 October 2026):** The same
+read-only audit now reconstructs the frozen cost-quality frontier directly
+from report-level strict-support counts and treatment-only cost records. It
+uses exact fractions for both ten-task means and verifies the complete
+ordered dominated-by relation, non-dominated frontier, fixed variant set,
+and the historical scope note excluding evaluator measurement overhead.
+The strict criterion is no worse on both axes with a strict improvement
+on at least one; equal quality *and* equal cost does not imply dominance.
+This verifies a descriptive summary only; it does not select a treatment,
+alter hypotheses, add a significance test, or establish human quality.
+
+**Scope limitations:** Secondary **bootstrap intervals** and report
+rendering are *not* independently recomputed here.
 The bootstrap audit verifies the frozen deterministic sample procedure, **not**
 the frequentist coverage of its confidence intervals, the representativeness
 of the task set, or a separately generated random number stream. They remain covered by the existing frozen
