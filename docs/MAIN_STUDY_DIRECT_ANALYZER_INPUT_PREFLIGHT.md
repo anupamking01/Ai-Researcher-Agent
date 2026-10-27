@@ -43,8 +43,10 @@ fail-closed behavior before result files appear.
 The wrapper requires an explicit `--output-dir` whose parent already exists and
 whose final directory **does not exist**. It is an error to reuse a destination.
 The unchanged analyzer runs with its result paths temporarily redirected to a
-private sibling scratch directory. Only after validation and successful JSON
-and Markdown rendering are the two files published under the new destination:
+private sibling scratch directory. Only after validation and successful JSON and Markdown rendering are five
+files published under the new destination: the two inference outputs, exact
+retained treatment/evaluator input CSVs, and a deterministic byte receipt
+(described below). The inference files remain:
 
 - `main_study_diagnostic_inference.json`
 - `main_study_diagnostic_inference.md`
@@ -54,7 +56,7 @@ The canonical analyzer defaults (`outputs/main_study_inference.json` and
 they already contain preserved results. Failed validation or rendering does not
 publish a diagnostic directory. Same-filesystem create-only linking prevents
 overwriting a previously published file in the new directory; publication of
-the **pair** is not an atomic transaction under abrupt process termination,
+the **five-file bundle** is not an atomic transaction under abrupt process termination,
 so an incomplete directory must not be treated as a valid receipt. The
 temporary analyzer globals are restored after both success and failure; do
 not run this global-patching helper concurrently in a shared process.
