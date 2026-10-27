@@ -1,4 +1,5 @@
 """Synthetic, offline checks for the archive recovery inventory contract."""
+import csv
 import hashlib
 from pathlib import Path
 
@@ -290,3 +291,124 @@ def test_unstable_or_oversized_manifest_capture_blocks_pin(tmp_path, monkeypatch
     assert audit._pin_status(
         hashlib.sha256(b"manifest").hexdigest(), manifest
     ) == "pinned_file_unreadable_or_unstable"
+
+
+def _simulate_published_identity_inputs(root: Path, monkeypatch) -> None:
+    """Test fixture: a stubbed published anchor is NOT a real provenance check."""
+    for rel in ("outputs/main_study_analysis_inputs_manifest.json",
+                "outputs/main_study_runs.csv"):
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("synthetic-only", encoding="utf-8")
+    support = root / audit.lineage.SUPPORT_REL
+    support.parent.mkdir(parents=True, exist_ok=True)
+    with support.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(
+            stream, fieldnames=("variant_id", "task_id", "run_id")
+        )
+        writer.writeheader()
+        for variant in audit.VARIANTS:
+            for n, task_id in enumerate(audit.lineage.TASKS):
+                writer.writerow({
+                    "variant_id": variant, "task_id": task_id,
+                    "run_id": f"{variant.lower()}-run-{n:02d}",
+                })
+    monkeypatch.setattr(
+        audit.published, "verify_published_frozen_inputs", lambda **_kwargs: {}
+    )
+
+
+def test_recovered_filename_identity_matches_frozen_evaluator_only_diagnostically(
+    tmp_path, monkeypatch
+):
+    _write_candidate_matrix(
+        tmp_path / "outputs", dict.fromkeys(audit.VARIANTS, 10)
+    )
+    _simulate_published_identity_inputs(tmp_path, monkeypatch)
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_to_published_evaluator"] == {
+        "status": "40_run_ids_match_published_evaluator_not_authenticated",
+        "matched": 40, "missing": 0, "unexpected": 0, "expected": 40,
+    }
+    assert result["handoff_verified"] is False
+    assert result["status"] == "blocked"  # no independent pins or packet
+
+
+def test_balanced_wrong_run_ids_fail_canonical_identity_preflight(
+    tmp_path, monkeypatch
+):
+    _write_candidate_matrix(
+        tmp_path / "outputs", dict.fromkeys(audit.VARIANTS, 10)
+    )
+    _simulate_published_identity_inputs(tmp_path, monkeypatch)
+    root = tmp_path / "outputs"
+    (root / "experiment_traces/D3/d3-run-00.json").rename(
+        root / "experiment_traces/D3/not-from-frozen-evaluator.json"
+    )
+    first = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert first["trace_candidates"]["status"] == "40_matrix_candidates_unverified"
+    assert first["trace_to_published_evaluator"] == {
+        "status": "candidate_run_identity_mismatch",
+        "matched": 39, "missing": 1, "unexpected": 1, "expected": 40,
+    }
+    assert "original_trace_to_evaluator_run_identity" in first["blockers"]
+
+
+def test_treatment_swapped_trace_filenames_fail_even_with_40_unique_runs(
+    tmp_path, monkeypatch
+):
+    _write_candidate_matrix(
+        tmp_path / "outputs", dict.fromkeys(audit.VARIANTS, 10)
+    )
+    _simulate_published_identity_inputs(tmp_path, monkeypatch)
+    root = tmp_path / "outputs/experiment_traces"
+    one = root / "D3/d3-run-00.json"
+    other = root / "D6/d6-run-00.json"
+    transit = root / "D3/intermediate.tmp"
+    one.rename(transit)
+    other.rename(root / "D3/d6-run-00.json")
+    transit.rename(root / "D6/d3-run-00.json")
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_candidates"]["status"] == "40_matrix_candidates_unverified"
+    assert result["trace_to_published_evaluator"]["status"] == (
+        "candidate_run_identity_mismatch"
+    )
+    assert result["trace_to_published_evaluator"]["matched"] == 38
+    assert result["trace_to_published_evaluator"]["missing"] == 2
+    assert result["trace_to_published_evaluator"]["unexpected"] == 2
+
+
+def test_unanchored_or_missing_trace_archive_never_claims_run_identity_match(
+    tmp_path
+):
+    _write_candidate_matrix(
+        tmp_path / "outputs", dict.fromkeys(audit.VARIANTS, 10)
+    )
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_to_published_evaluator"]["status"] == (
+        "not_checked_without_published_input_anchor"
+    )
+    empty = audit.audit_archive_readiness(repo_root=tmp_path / "absent")
+    assert empty["trace_to_published_evaluator"]["status"] == (
+        "not_checked_without_40_trace_candidates"
+    )
+
+
+def test_malformed_evaluator_run_id_matrix_cannot_be_used_as_an_identity_gate(
+    tmp_path, monkeypatch
+):
+    _write_candidate_matrix(
+        tmp_path / "outputs", dict.fromkeys(audit.VARIANTS, 10)
+    )
+    _simulate_published_identity_inputs(tmp_path, monkeypatch)
+    support = tmp_path / audit.lineage.SUPPORT_REL
+    support.write_text(
+        "variant_id,task_id,run_id\\nD3,main-01,duplicate-run\\n",
+        encoding="utf-8",
+    )
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_to_published_evaluator"]["status"] == (
+        "invalid_published_evaluator_run_ids"
+    )
+    assert "original_trace_to_evaluator_run_identity" in result["blockers"]
+

@@ -52,7 +52,17 @@ with no duplicated run-id filenames or unexpected root entries. A
 `40_report_candidates_unverified` status means that the corresponding 40
 regular Markdown filenames were present. Neither status validates JSON,
 run/task identities, report content, report-to-trace linkage, or historical
-custody. Symlinks and missing/unsafe report candidates block readiness; a
+custody. The additional `trace_to_published_evaluator` check compares the
+40 candidate **(treatment, run-id filename)** pairs with the frozen canonical
+evaluator CSV only after the published automated-input aggregate has verified.
+It detects wrong run IDs and treatment-swapped trace filenames even when all
+40 expected filenames, counts and report paths exist. A match means only
+`40_run_ids_match_published_evaluator_not_authenticated`: trace JSON and report
+contents, report-to-run linkage, independent custody and historical authenticity
+are **still unverified**. A missing archive, absent published anchor or invalid
+evaluator matrix cannot produce an identity match. Only mismatch/invalid-matrix
+results add an extra blocker; skipped comparisons remain blocked by their
+underlying missing-trace or missing-anchor requirements. Symlinks and missing/unsafe report candidates block readiness; a
 balanced but incoherent archive can still pass this **structural inventory**.
 When a historical manifest-file SHA-256 is supplied, the inventory now compares
 it against the bounded, descriptor-captured bytes of the corresponding research

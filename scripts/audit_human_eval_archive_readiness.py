@@ -17,6 +17,7 @@ from pathlib import Path
 from scripts import build_human_eval_packet as packet_builder
 from scripts import export_human_eval_annotator_bundle as exporter
 from scripts import verify_published_main_study_inputs as published
+from scripts import verify_human_eval_automated_run_lineage as lineage
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_TRACES = 40
@@ -69,6 +70,7 @@ def _trace_status(root: Path) -> tuple[dict, tuple[str, ...]]:
     """
     by_variant = {variant: 0 for variant in VARIANTS}
     run_ids: set[str] = set()
+    located_ids: set[tuple[str, str]] = set()
 
     def result(status: str) -> dict:
         return {
@@ -96,6 +98,7 @@ def _trace_status(root: Path) -> tuple[dict, tuple[str, ...]]:
                 if candidate.stem in run_ids:
                     return result("duplicate_trace_run_id"), ()
                 run_ids.add(candidate.stem)
+                located_ids.add((variant_dir.name, candidate.stem))
                 by_variant[variant_dir.name] += 1
                 if sum(by_variant.values()) > EXPECTED_TRACES:
                     return result("candidate_count_mismatch"), ()
@@ -103,10 +106,10 @@ def _trace_status(root: Path) -> tuple[dict, tuple[str, ...]]:
         return result("inaccessible"), ()
 
     if len(run_ids) != EXPECTED_TRACES:
-        return result("candidate_count_mismatch"), tuple(sorted(run_ids))
+        return result("candidate_count_mismatch"), tuple(sorted(located_ids))
     if any(count != EXPECTED_PER_VARIANT for count in by_variant.values()):
-        return result("candidate_matrix_mismatch"), tuple(sorted(run_ids))
-    return result("40_matrix_candidates_unverified"), tuple(sorted(run_ids))
+        return result("candidate_matrix_mismatch"), tuple(sorted(located_ids))
+    return result("40_matrix_candidates_unverified"), tuple(sorted(located_ids))
 
 
 def _report_status(root: Path, run_ids: tuple[str, ...]) -> dict:
@@ -163,6 +166,64 @@ def _pin_status(value: str | None, path: Path) -> str:
     )
 
 
+
+def _trace_run_alignment(
+    *,
+    repo_root: Path,
+    trace_status: str,
+    located_ids: tuple[tuple[str, str], ...],
+    published_input_anchor: str,
+) -> dict:
+    """Check recovered trace *filenames* against published evaluator run IDs.
+
+    A balanced D3/D6/P6/P6V directory can contain 40 unrelated runs or
+    treatment-swapped run filenames. The published, manifest-anchored evaluator
+    CSV supplies a fixed expected (treatment, run_id) set. This diagnostic
+    reads neither trace content nor report text and does NOT authenticate an
+    archive or establish report-to-trace provenance.
+    """
+    result = {"status": "not_checked_without_40_trace_candidates",
+              "matched": 0, "missing": 0, "unexpected": 0,
+              "expected": EXPECTED_TRACES}
+    if trace_status != "40_matrix_candidates_unverified":
+        return result
+    if published_input_anchor != "published_aggregate_matches":
+        return {**result, "status": "not_checked_without_published_input_anchor"}
+    source = repo_root / lineage.SUPPORT_REL
+    try:
+        raw = packet_builder._read_regular_file_captured(
+            source, label="published evaluator run-identity CSV"
+        )
+        rows = lineage._read_study_csv(raw, path=source)
+        expected_cells = {
+            (variant, task) for variant in VARIANTS for task in lineage.TASKS
+        }
+        matrix = lineage._matrix(
+            rows, label="published evaluator run identities",
+            expected_cells=expected_cells, run_identity=True,
+        )
+    except (OSError, ValueError):
+        return {**result, "status": "invalid_published_evaluator_run_ids"}
+
+    expected = {
+        (variant, row["run_id"])
+        for (variant, _task), row in matrix.items()
+    }
+    found = set(located_ids)
+    missing = expected - found
+    unexpected = found - expected
+    return {
+        "status": (
+            "40_run_ids_match_published_evaluator_not_authenticated"
+            if not missing and not unexpected else "candidate_run_identity_mismatch"
+        ),
+        "matched": len(found & expected),
+        "missing": len(missing),
+        "unexpected": len(unexpected),
+        "expected": EXPECTED_TRACES,
+    }
+
+
 def audit_archive_readiness(
     *,
     repo_root: Path = ROOT,
@@ -201,8 +262,10 @@ def audit_archive_readiness(
     resources = {label: _file_status(path) for label, path in sources.items()}
     traces = Path(trace_root) if trace_root is not None else root / "outputs/experiment_traces"
     reports = Path(report_root) if report_root is not None else root / "outputs"
-    trace_candidates, run_ids = _trace_status(traces)
-    report_candidates = _report_status(reports, run_ids)
+    trace_candidates, located_ids = _trace_status(traces)
+    report_candidates = _report_status(
+        reports, tuple(run_id for _variant, run_id in located_ids)
+    )
     pins = {
         "research_manifest_file": _pin_status(
             research_manifest_sha256, manifest
@@ -227,6 +290,10 @@ def audit_archive_readiness(
     else:
         input_anchor = "cannot_verify_missing_or_unsafe_input"
 
+    run_alignment = _trace_run_alignment(
+        repo_root=root, trace_status=trace_candidates["status"],
+        located_ids=located_ids, published_input_anchor=input_anchor,
+    )
     gaps = [label for label, status in resources.items() if status != "present_unverified"]
     if trace_candidates["status"] != "40_matrix_candidates_unverified":
         gaps.append("original_experiment_trace_candidates")
@@ -236,6 +303,10 @@ def audit_archive_readiness(
                 if status != "pin_matches_file_not_authenticated")
     if input_anchor != "published_aggregate_matches":
         gaps.append("published_automated_input_anchor")
+    if run_alignment["status"] in (
+        "candidate_run_identity_mismatch", "invalid_published_evaluator_run_ids"
+    ):
+        gaps.append("original_trace_to_evaluator_run_identity")
 
     return {
         "schema_version": 1,
@@ -244,6 +315,7 @@ def audit_archive_readiness(
         "resources": resources,
         "trace_candidates": trace_candidates,
         "report_candidates": report_candidates,
+        "trace_to_published_evaluator": run_alignment,
         "independent_pins": pins,
         "published_automated_input_anchor": input_anchor,
         "blockers": sorted(gaps),
