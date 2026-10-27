@@ -162,3 +162,35 @@ This optional local diagnostic remains distinct from the existing
 manifest-pinned canonical main-study analysis, exploratory work, pilot
 observations and pending blinded human validation. A separate trusted archive
 digest is required for independent chain-of-custody attestation.
+
+
+## Optional offline recomputation of archived local diagnostic inference
+
+A self-consistent local hash receipt does **not** establish that the archived
+inference actually follows from its retained CSV inputs. Both a result and its
+self-reported SHA-256 can be rewritten together. The read-only verifier therefore
+offers an **opt-in** same-code consistency check:
+
+    python -m scripts.verify_main_study_diagnostic \\
+      outputs/diagnostics/local-check-001 --recompute
+
+The command first performs the original strict five-file receipt, current-code
+fingerprint, and 40-cell input validation. It then feeds only those already
+captured/validated rows to the **unchanged historical analyzer** with its
+input reader and output paths temporarily redirected. JSON and Markdown are
+rendered in a private temporary directory and compared **byte-for-byte** to
+both archived inference outputs. Mismatches fail closed even when the local
+manifest has been edited to match altered output bytes. The verifier restores
+the historical analyzer's temporary bindings on success and failure and
+does not touch the canonical output files. No treatment generation, model
+calls, common-evaluator runs, or human annotations are performed.
+
+This invokes **the same original statistical implementation**, not an
+independent estimator, so shared code defects may be reproduced. The mode is
+synchronous and temporarily patches module-level globals: do not run it
+concurrently with other uses of the analyzer in one Python process. It does
+not establish trusted origin, immutable storage, protection against all
+concurrent mutations, or any canonical manuscript-facing verification.
+Omitting `--recompute` retains the existing inexpensive byte-only verifier
+behavior. Frozen confirmatory results, exploratory diagnostics, pilot
+observations and pending blinded human validation remain distinct.

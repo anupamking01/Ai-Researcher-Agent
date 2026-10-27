@@ -2,16 +2,18 @@
 
 This checks retained CSV scientific validity, declared byte fingerprints, and
 local code/config versions. It does NOT establish external artifact provenance,
-recompute inference, authenticate source files, or validate human ratings.
+recompute inference by default, authenticate source files, or validate human ratings.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import stat
 import tempfile
+from contextlib import redirect_stdout
 from pathlib import Path
 
 from scripts import analyze_main_study as frozen
@@ -89,7 +91,66 @@ def _fingerprint(raw: bytes) -> dict:
     return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
 
 
-def verify_diagnostic_bundle(directory: Path) -> dict:
+
+def _verify_recomputed_inference(
+    treatment_rows: list[dict[str, str]],
+    evaluator_rows: list[dict[str, str]],
+    retained: dict[str, bytes],
+) -> None:
+    """Compare both archived outputs to offline inference from retained rows.
+
+    This is an opt-in local consistency check, not a second independent
+    statistical implementation or authentication of original input sources.
+    The historical analyzer is executed without editing its pinned source,
+    with output paths confined to a private temporary directory. Its global
+    reader/output bindings are restored even when recomputation fails.
+    Do not invoke concurrently in a shared Python process.
+    """
+    main_reference = Path(frozen.MAIN_CSV)
+    support_reference = Path(frozen.SUPPORT_CSV)
+    if main_reference == support_reference:
+        raise ValueError("diagnostic recomputation input references must be distinct")
+
+    original_reader = frozen._read_csv
+    original_json, original_md = frozen.OUT_JSON, frozen.OUT_MD
+
+    def retained_reader(path: Path) -> list[dict[str, str]]:
+        reference = Path(path)
+        if reference == main_reference:
+            return [dict(row) for row in treatment_rows]
+        if reference == support_reference:
+            return [dict(row) for row in evaluator_rows]
+        raise ValueError(f"unexpected diagnostic recomputation input: {reference}")
+
+    with tempfile.TemporaryDirectory(prefix=".vera-diagnostic-recompute-") as scratch:
+        root = Path(scratch)
+        recomputed_paths = {
+            diagnostic.DIAGNOSTIC_JSON: root / diagnostic.DIAGNOSTIC_JSON,
+            diagnostic.DIAGNOSTIC_MD: root / diagnostic.DIAGNOSTIC_MD,
+        }
+        try:
+            frozen._read_csv = retained_reader
+            frozen.OUT_JSON = recomputed_paths[diagnostic.DIAGNOSTIC_JSON]
+            frozen.OUT_MD = recomputed_paths[diagnostic.DIAGNOSTIC_MD]
+            # The original analyzer prints a complete result payload; do not
+            # echo it during a byte-consistency verification command.
+            with redirect_stdout(io.StringIO()):
+                status = frozen.main()
+        finally:
+            frozen._read_csv = original_reader
+            frozen.OUT_JSON, frozen.OUT_MD = original_json, original_md
+
+        if status != 0:
+            raise ValueError("diagnostic offline inference recomputation failed")
+        for name, path in recomputed_paths.items():
+            regenerated = _read_regular(
+                path, limit=diagnostic.DIAGNOSTIC_MAX_FILE_BYTES
+            )
+            if regenerated != retained[name]:
+                raise ValueError(f"diagnostic recomputed inference byte mismatch: {name}")
+
+
+def verify_diagnostic_bundle(directory: Path, *, recompute: bool = False) -> dict:
     directory = Path(directory)
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError("diagnostic directory must exist and not be a symlink")
@@ -160,12 +221,17 @@ def verify_diagnostic_bundle(directory: Path) -> dict:
         treatment = preflight.read_csv_rows(main)
         evaluator = preflight.read_csv_rows(support)
         preflight.validate_rows(treatment, evaluator, require_canonical_matrix=True)
-    return {
+    if recompute:
+        _verify_recomputed_inference(treatment, evaluator, contents)
+    result = {
         "status": "verified_local_diagnostic_bytes_not_canonical_provenance",
         "study_id": "budget-main-v1",
         "retained_input_cells": len(treatment),
         "files_verified": len(ARTIFACTS),
     }
+    if recompute:
+        result["offline_inference_recomputed"] = True
+    return result
 
 
 def _cli() -> int:
@@ -173,8 +239,12 @@ def _cli() -> int:
         description="Verify locally retained VERA diagnostic inputs and output bytes"
     )
     parser.add_argument("directory", type=Path)
+    parser.add_argument(
+        "--recompute", action="store_true",
+        help="also regenerate local inference offline from retained CSV rows and compare exact output bytes",
+    )
     args = parser.parse_args()
-    print(json.dumps(verify_diagnostic_bundle(args.directory), sort_keys=True))
+    print(json.dumps(verify_diagnostic_bundle(args.directory, recompute=args.recompute), sort_keys=True))
     return 0
 
 

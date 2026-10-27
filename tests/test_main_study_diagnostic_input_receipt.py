@@ -179,3 +179,62 @@ def test_duplicate_manifest_key_fails_closed(inputs):
     path.write_text(raw.replace('"schema_version": 1', '"schema_version": 1, "schema_version": 1'))
     with pytest.raises(ValueError, match="duplicate diagnostic manifest key"):
         verifier.verify_diagnostic_bundle(destination)
+
+
+def _rehash_claimed_artifact(destination, name):
+    """Simulate a locally rewritten result accompanied by its forged receipt."""
+    content = (destination / name).read_bytes()
+    path = destination / diagnostic.DIAGNOSTIC_MANIFEST
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["artifacts"][name] = {
+        "bytes": len(content), "sha256": hashlib.sha256(content).hexdigest()
+    }
+    path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+
+
+def test_opt_in_recomputation_matches_both_synthetic_outputs(inputs):
+    destination, _ = _build(inputs)
+    verified = verifier.verify_diagnostic_bundle(destination, recompute=True)
+    assert verified["offline_inference_recomputed"] is True
+    assert verified["files_verified"] == 4
+
+
+def test_recomputation_detects_forged_json_with_repaired_local_receipt(inputs):
+    destination, _ = _build(inputs)
+    path = destination / diagnostic.DIAGNOSTIC_JSON
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["variant_summary"]["D3"]["means"]["strict_support_rate"] = 0.99
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    _rehash_claimed_artifact(destination, diagnostic.DIAGNOSTIC_JSON)
+    # Self-consistent byte hashes alone do not show the numbers were computed
+    # from the retained rows; recomputation must reject this altered result.
+    assert verifier.verify_diagnostic_bundle(destination)["files_verified"] == 4
+    with pytest.raises(ValueError, match="recomputed inference byte mismatch"):
+        verifier.verify_diagnostic_bundle(destination, recompute=True)
+
+
+def test_recomputation_detects_forged_markdown_with_repaired_receipt(inputs):
+    destination, _ = _build(inputs)
+    name = diagnostic.DIAGNOSTIC_MD
+    with (destination / name).open("a", encoding="utf-8") as handle:
+        handle.write("\\nSynthetic changed interpretation.\\n")
+    _rehash_claimed_artifact(destination, name)
+    assert verifier.verify_diagnostic_bundle(destination)["files_verified"] == 4
+    with pytest.raises(ValueError, match="recomputed inference byte mismatch"):
+        verifier.verify_diagnostic_bundle(destination, recompute=True)
+
+
+def test_recomputation_restores_historical_analyzer_globals_on_failure(inputs, monkeypatch):
+    destination, _ = _build(inputs)
+    original_reader = frozen._read_csv
+    original_json, original_md = frozen.OUT_JSON, frozen.OUT_MD
+
+    def failed_render(_payload):
+        raise RuntimeError("synthetic recomputation renderer failure")
+
+    monkeypatch.setattr(frozen, "_markdown", failed_render)
+    with pytest.raises(RuntimeError, match="synthetic recomputation"):
+        verifier.verify_diagnostic_bundle(destination, recompute=True)
+    assert frozen._read_csv is original_reader
+    assert frozen.OUT_JSON == original_json
+    assert frozen.OUT_MD == original_md
