@@ -112,3 +112,26 @@ def test_rejects_ambiguous_or_nonstandard_json_before_statistical_audit(
             ROOT / "outputs/posthoc_support_runs.csv",
             path,
         )
+
+
+def test_rejects_coherently_dropped_cell_even_when_both_csvs_match(evidence):
+    main, evaluator, payload = evidence
+    main.pop()
+    evaluator[:] = [
+        row for row in evaluator
+        if (row["variant_id"], row["task_id"]) in
+        {(item["variant_id"], item["task_id"]) for item in main}
+    ]
+    with pytest.raises(ValueError, match="frozen matrix mismatch"):
+        audit_primary(main, evaluator, payload)
+
+
+@pytest.mark.parametrize("field,replacement", [
+    ("posthoc_claims_checked", "1"),
+    ("posthoc_strict_support_rate", "0.123456"),
+])
+def test_rejects_broken_treatment_evaluator_mirror(evidence, field, replacement):
+    main, evaluator, payload = evidence
+    main[0][field] = replacement
+    with pytest.raises(ValueError, match="evaluator mirror mismatch"):
+        audit_primary(main, evaluator, payload)

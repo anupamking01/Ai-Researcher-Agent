@@ -17,8 +17,14 @@ python -m scripts.audit_primary_inference_independently
 ```
 
 Optional `--main`, `--evaluator`, and `--inference` paths support reviewing
-local copies without writing output. The auditor runs strict canonical 40-cell
-CSV preflight and rejects duplicate or non-finite result JSON fields.
+local copies without writing output. The historical SHA-pinned CSV export lacks pricing-metadata fields required by
+the newer prospective strict canonical preflight. The auditor therefore runs
+the shared row-level scientific input validator and **separately** requires
+the exact 40 frozen treatment/task cells, unique identities, matching
+treatment/evaluator rows, evaluator count conservation, and published
+treatment/evaluator support-count and strict-rate mirrors. This is not a claim
+that legacy CSVs satisfy the newer prospective metadata contract. It rejects
+duplicate or non-finite inference JSON members.
 
 It checks: frozen task order and configuration, report-level strict-support
 fractions, four variant mean strict-support rates, the three preregistered

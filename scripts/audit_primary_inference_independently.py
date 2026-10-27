@@ -81,7 +81,29 @@ def _median(values):
 
 def audit_primary(treatment_rows, evaluator_rows, inference):
     """Cross-check primary estimates using raw counts, not analyzer functions."""
-    validate_rows(treatment_rows, evaluator_rows, require_canonical_matrix=True)
+    # The historical, SHA-pinned CSV export precedes the newer mandatory
+    # pricing-file metadata required by the strict prospective export contract.
+    # Apply row-level validity and separately require the exact frozen matrix
+    # and cross-file support mirrors; do not pretend this legacy export meets
+    # the prospective provenance schema.
+    validate_rows(treatment_rows, evaluator_rows, require_canonical_matrix=False)
+    expected_cells = {(variant, task) for variant in VARIANTS for task in EXPECTED_TASKS}
+    main_cells = {(row["variant_id"], row["task_id"]) for row in treatment_rows}
+    support_cells = {(row["variant_id"], row["task_id"]) for row in evaluator_rows}
+    if main_cells != expected_cells or support_cells != expected_cells:
+        raise ValueError("frozen matrix mismatch in primary inference inputs")
+    main_by_cell = {(row["variant_id"], row["task_id"]): row for row in treatment_rows}
+    for row in evaluator_rows:
+        key = (row["variant_id"], row["task_id"])
+        mirror = main_by_cell[key]
+        if int(mirror["posthoc_claims_checked"]) != int(row["claims_checked"]):
+            raise ValueError(f"evaluator mirror mismatch: {key}/claims_checked")
+        checked_rate = Fraction(int(row["supported"]), int(row["claims_checked"]))
+        if not math.isclose(
+            _finite(float(mirror["posthoc_strict_support_rate"]), "posthoc_strict_support_rate"),
+            float(checked_rate), rel_tol=0.0, abs_tol=ABS_TOL
+        ):
+            raise ValueError(f"evaluator mirror mismatch: {key}/strict_support_rate")
     if not isinstance(inference, dict):
         raise ValueError("inference must be a JSON object")
     if (
