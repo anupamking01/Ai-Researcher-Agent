@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import stat
 import sys
@@ -21,6 +22,61 @@ if __package__ in (None, ""):
 
 from scripts import analyze_main_study as frozen
 from scripts.validate_main_study_inputs import read_csv_rows, validate_rows
+
+
+MAX_DIAGNOSTIC_INPUT_BYTES = 8 * 1024 * 1024
+DIAGNOSTIC_MAIN_INPUT = "main_study_diagnostic_treatment_input.csv"
+DIAGNOSTIC_SUPPORT_INPUT = "main_study_diagnostic_evaluator_input.csv"
+DIAGNOSTIC_MANIFEST = "main_study_diagnostic_provenance.json"
+
+
+def _capture_csv_input(path: Path) -> bytes:
+    """Capture one bounded regular-file generation before scientific validation."""
+    path = Path(path)
+    try:
+        original = os.stat(path, follow_symlinks=False)
+        if not stat.S_ISREG(original.st_mode):
+            raise ValueError(f"diagnostic input must be a regular file: {path}")
+        if not 0 < original.st_size <= MAX_DIAGNOSTIC_INPUT_BYTES:
+            raise ValueError(f"diagnostic input exceeds size limit or is empty: {path}")
+        fd = os.open(
+            path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+    except OSError as exc:
+        raise ValueError(f"diagnostic input cannot be opened safely: {path}") from exc
+
+    def identity(entry):
+        return (
+            entry.st_dev, entry.st_ino, entry.st_mode, entry.st_size,
+            entry.st_mtime_ns, entry.st_ctime_ns,
+        )
+
+    try:
+        before = os.fstat(fd)
+        if identity(original) != identity(before):
+            raise ValueError(f"diagnostic input changed before capture: {path}")
+        parts = []
+        total = 0
+        while True:
+            block = os.read(fd, min(1024 * 1024, MAX_DIAGNOSTIC_INPUT_BYTES + 1 - total))
+            if not block:
+                break
+            total += len(block)
+            if total > MAX_DIAGNOSTIC_INPUT_BYTES:
+                raise ValueError(f"diagnostic input exceeds size limit: {path}")
+            parts.append(block)
+        after = os.fstat(fd)
+        named = os.stat(path, follow_symlinks=False)
+        if (
+            total != before.st_size
+            or identity(original) != identity(after)
+            or identity(after) != identity(named)
+        ):
+            raise ValueError(f"diagnostic input changed during capture: {path}")
+        return b"".join(parts)
+    finally:
+        os.close(fd)
 
 
 @contextmanager
@@ -37,9 +93,20 @@ def _bound_validated_inputs():
     if main_path == support_path:
         raise ValueError("treatment and evaluator inputs must be separate CSV paths")
 
-    treatment_rows = read_csv_rows(main_path)
-    evaluator_rows = read_csv_rows(support_path)
-    validate_rows(treatment_rows, evaluator_rows, require_canonical_matrix=True)
+    # Parse copies of the precise bytes consumed by inference. The original
+    # source paths are never reread by the byte-pinned historical analyzer.
+    retained = {
+        DIAGNOSTIC_MAIN_INPUT: _capture_csv_input(main_path),
+        DIAGNOSTIC_SUPPORT_INPUT: _capture_csv_input(support_path),
+    }
+    with tempfile.TemporaryDirectory(prefix=".vera-diagnostic-input-snapshot-") as root:
+        treatment_copy = Path(root) / DIAGNOSTIC_MAIN_INPUT
+        evaluator_copy = Path(root) / DIAGNOSTIC_SUPPORT_INPUT
+        treatment_copy.write_bytes(retained[DIAGNOSTIC_MAIN_INPUT])
+        evaluator_copy.write_bytes(retained[DIAGNOSTIC_SUPPORT_INPUT])
+        treatment_rows = read_csv_rows(treatment_copy)
+        evaluator_rows = read_csv_rows(evaluator_copy)
+        validate_rows(treatment_rows, evaluator_rows, require_canonical_matrix=True)
 
     original_reader = frozen._read_csv
 
@@ -53,7 +120,7 @@ def _bound_validated_inputs():
 
     frozen._read_csv = validated_reader
     try:
-        yield
+        yield retained
     finally:
         frozen._read_csv = original_reader
 
@@ -126,11 +193,60 @@ def _diagnostic_file_fingerprint(directory_fd: int, name: str) -> tuple[int, int
         os.close(file_fd)
 
 
-def _publish_diagnostic_pair(staging: Path, destination: Path) -> None:
+def _byte_fingerprint(raw: bytes) -> dict:
+    return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+
+def _stage_diagnostic_evidence(staging: Path, retained: dict[str, bytes]) -> None:
+    """Retain exact input bytes and output/source hashes for local diagnostics."""
+    required = {DIAGNOSTIC_MAIN_INPUT, DIAGNOSTIC_SUPPORT_INPUT}
+    if set(retained) != required:
+        raise ValueError("diagnostic captured input set mismatch")
+    artifacts = {}
+    for name in (DIAGNOSTIC_MAIN_INPUT, DIAGNOSTIC_SUPPORT_INPUT):
+        raw = retained[name]
+        if not 0 < len(raw) <= MAX_DIAGNOSTIC_INPUT_BYTES:
+            raise ValueError("diagnostic input snapshot exceeds size limit")
+        (staging / name).write_bytes(raw)
+        artifacts[name] = _byte_fingerprint(raw)
+    for name in (DIAGNOSTIC_JSON, DIAGNOSTIC_MD):
+        artifacts[name] = _byte_fingerprint((staging / name).read_bytes())
+
+    from scripts import validate_main_study_inputs as preflight
+
+    receipt = {
+        "schema_version": 1,
+        "study_id": "budget-main-v1",
+        "scope": "local_diagnostic_not_canonical",
+        "sources": {
+            "scripts/analyze_main_study.py":
+                _byte_fingerprint(Path(frozen.__file__).read_bytes()),
+            "scripts/validate_main_study_inputs.py":
+                _byte_fingerprint(Path(preflight.__file__).read_bytes()),
+        },
+        "analysis_config": {
+            "bootstrap_draws": frozen.BOOTSTRAP_DRAWS,
+            "bootstrap_seed": frozen.BOOTSTRAP_SEED,
+            "expected_tasks": frozen.EXPECTED_TASKS,
+        },
+        "artifacts": artifacts,
+    }
+    (staging / DIAGNOSTIC_MANIFEST).write_text(
+        json.dumps(receipt, sort_keys=True, indent=2, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _publish_diagnostic_pair(
+    staging: Path, destination: Path, *, extra_files: tuple[str, ...] = ()
+) -> None:
     """Bind both diagnostic links to opened directories; fail on namespace drift.
 
     POSIX-only, not an atomic two-file transaction or immutable snapshot.
     """
+    names = (DIAGNOSTIC_JSON, DIAGNOSTIC_MD, *extra_files)
+    if len(set(names)) != len(names):
+        raise ValueError("duplicate diagnostic publication filename")
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     try:
         parent_fd = os.open(destination.parent, flags)
@@ -144,7 +260,7 @@ def _publish_diagnostic_pair(staging: Path, destination: Path) -> None:
             # Pin exact stage-file content and inode before creating any destination.
             fingerprints = {
                 name: _diagnostic_file_fingerprint(source_fd, name)
-                for name in (DIAGNOSTIC_JSON, DIAGNOSTIC_MD)
+                for name in names
             }
             os.mkdir(destination.name, mode=0o700, dir_fd=parent_fd)
             output_fd = os.open(destination.name, flags, dir_fd=parent_fd)
@@ -152,7 +268,7 @@ def _publish_diagnostic_pair(staging: Path, destination: Path) -> None:
                 output_identity = os.fstat(output_fd)
                 linked = []
                 try:
-                    for name in (DIAGNOSTIC_JSON, DIAGNOSTIC_MD):
+                    for name in names:
                         source = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
                         if not stat.S_ISREG(source.st_mode):
                             raise ValueError("diagnostic staged output must be a regular file")
@@ -245,7 +361,7 @@ def main(*, output_dir: Path) -> int:
     if not destination.parent.is_dir():
         raise ValueError(f"create the diagnostic parent directory first: {destination.parent}")
 
-    with _bound_validated_inputs():
+    with _bound_validated_inputs() as retained_inputs:
         with tempfile.TemporaryDirectory(
             prefix=".vera-main-diagnostic-stage-", dir=destination.parent
         ) as scratch:
@@ -260,7 +376,14 @@ def main(*, output_dir: Path) -> int:
             if status != 0:
                 return status
 
-            _publish_diagnostic_pair(staging, destination)
+            _stage_diagnostic_evidence(staging, retained_inputs)
+            _publish_diagnostic_pair(
+                staging, destination,
+                extra_files=(
+                    DIAGNOSTIC_MAIN_INPUT, DIAGNOSTIC_SUPPORT_INPUT,
+                    DIAGNOSTIC_MANIFEST,
+                ),
+            )
             return status
 
 

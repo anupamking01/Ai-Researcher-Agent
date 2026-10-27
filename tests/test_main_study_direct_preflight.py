@@ -224,9 +224,11 @@ def test_diagnostic_publication_uses_directory_descriptors(direct_inputs, monkey
     monkeypatch.setattr(validated.os, "link", capture)
     destination = analyze_main_study.OUT_JSON.parent / "fd-bound"
     assert validated.main(output_dir=destination) == 0
-    assert len(observed) == 2
+    assert len(observed) == 5
     assert [record[0] for record in observed] == [
-        validated.DIAGNOSTIC_JSON, validated.DIAGNOSTIC_MD
+        validated.DIAGNOSTIC_JSON, validated.DIAGNOSTIC_MD,
+        validated.DIAGNOSTIC_MAIN_INPUT, validated.DIAGNOSTIC_SUPPORT_INPUT,
+        validated.DIAGNOSTIC_MANIFEST,
     ]
     assert all(
         record[0] == record[1]

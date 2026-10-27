@@ -120,3 +120,42 @@ immutable escrow, externally pinned artifact, prevention of post-return edits, o
 historical proof of the canonical results. SHA-256 establishes only byte identity.
 For manuscript-facing inference use the existing verified canonical runner;
 the original frozen analyzer and all confirmatory artifacts remain unchanged.
+
+
+## Retained exact-byte diagnostic inputs and independent byte verification
+
+The optional local diagnostic command now captures a bounded exact-byte
+snapshot of each CSV *before validation*. It validates private copies of
+precisely those bytes and supplies the same validated rows to the unchanged
+historical analyzer. Five files are published under the new, create-only
+diagnostic directory: two inference results, two retained input CSVs, and a
+deterministic local provenance JSON receipt.
+
+Retained input files are named main_study_diagnostic_treatment_input.csv and
+main_study_diagnostic_evaluator_input.csv. The receipt is named
+main_study_diagnostic_provenance.json. It records exact byte counts and SHA-256
+for both inputs and results, the current analyzer and preflight source files,
+and the bootstrap configuration. Each source CSV is limited to 8 MiB and must
+be a stable regular file, not a leaf symlink. Observable mutation/replacement
+during capture fails closed; later changes to the original CSV path cannot
+silently affect inference computed from the preserved snapshot.
+
+The existing descriptor-bound publication mechanism now includes all five
+files. The original byte-pinned analyzer and canonical results remain
+unchanged. For independent *local* byte-consistency checking, execute:
+
+    python -m scripts.verify_main_study_diagnostic outputs/diagnostics/local-check-001
+
+This read-only verifier checks the exact file set, fingerprints, current script
+fingerprints, analysis configuration and full frozen 40-cell scientific input
+preflight against its copied, retained bytes. It does not rerun treatments or
+the statistics, and requires no provider API credits.
+
+**Important boundary:** a self-contained receipt is not an externally pinned
+provenance proof. A party able to edit both the local archive and its receipt
+can forge internal consistency. SHA-256 proves observed byte identity only, and
+a different analyzer version/configuration requires explicit verification.
+This optional local diagnostic remains distinct from the existing
+manifest-pinned canonical main-study analysis, exploratory work, pilot
+observations and pending blinded human validation. A separate trusted archive
+digest is required for independent chain-of-custody attestation.
