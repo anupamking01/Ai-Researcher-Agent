@@ -17,6 +17,7 @@ from scripts import export_human_eval_annotator_bundle as exporter
 from scripts import verify_human_eval_automated_run_lineage as lineage
 from scripts import verify_human_eval_counterbalanced_handoff as handoff
 from scripts import verify_published_main_study_inputs as published
+from scripts import verify_frozen_main_study_tasks as frozen_tasks
 
 
 def _require_pin(value: str, *, label: str) -> None:
@@ -101,12 +102,20 @@ def verify_automated_handoff(
     # Noncanonical task tuples are supported only for synthetic diagnostics;
     # their receipt explicitly records that historical anchoring did not run.
     published_anchor_verified = expected_tasks == lineage.TASKS
+    original_task_source_verified = False
     if published_anchor_verified:
         published.verify_published_frozen_inputs(
             repo_root=repo_root,
             manifest_path=research_manifest_path,
             expected_manifest_sha256=expected_research_manifest_sha256,
         )
+        # Published CSVs do not anchor the original research questions.
+        # The coordinator pin alone could be renewed after a task/packet
+        # rewrite, so bind the canonical handoff to original treatment source.
+        frozen_tasks.verify_frozen_task_manifest(
+            repo_root=repo_root, task_manifest_path=task_manifest_path,
+        )
+        original_task_source_verified = True
 
     aligned = lineage.audit_files(
         repo_root=repo_root,
@@ -146,6 +155,7 @@ def verify_automated_handoff(
         "coordinator_manifest_externally_pinned": True,
         "coordinator_manifest_sha256": expected_coordinator_manifest_sha256,
         "published_frozen_input_anchor_verified": published_anchor_verified,
+        "original_treatment_run_task_manifest_verified": original_task_source_verified,
         "published_frozen_input_aggregate_sha256": (
             published.FROZEN_INPUT_AGGREGATE_SHA256
             if published_anchor_verified else None
@@ -166,7 +176,8 @@ def verify_automated_handoff(
             "Coordinator-only pre-distribution source/run alignment, not "
             "an atomic archive snapshot, proof of independent human rating, "
             "or evidence of human-validation outcomes; noncanonical task "
-            "diagnostics do not verify the historical published-input anchor"
+            "diagnostics verify neither the historical published-input "
+            "nor original treatment-run task source anchors"
         ),
     }
 

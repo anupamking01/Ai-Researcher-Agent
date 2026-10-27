@@ -21,6 +21,14 @@ packet manifest **file**. For the default frozen 4×10 task matrix it also
 checks the canonical CSVs against the independently published
 input-manifest **aggregate** digest before any lineage or distribution PASS;
 a newly created file-byte pin cannot substitute for the historical digest.
+For the genuine 40-cell study it also verifies the **exact original treatment
+task-list bytes** via `scripts.verify_frozen_main_study_tasks` (treatment
+workflow run `34620917346`, source revision
+`c3c15e46a8eec3a8bbc24c968eedc0548172a897`, manifest-byte SHA-256
+`5701df80036edb354f4f7d1efc409ea8f554a215f8c37da9d1a0b8ed01fdfd5f`).
+The published CSV aggregate does not cover research question text; merely
+re-pinning a coordinator packet cannot compensate for changed task questions.
+This source-revision anchor is not independent signed archival custody.
 It then runs both existing verifiers, checks the expected 40
 cells, and re-fingerprints the shared handoff-file inputs across the
 sequential verification window: both pinned manifests, the frozen task
@@ -62,12 +70,14 @@ entries). It accepts an archived manifest at a different path without
 mistaking its file hash for its aggregate fingerprint. A coherent replacement
 of both CSVs and a newly pinned manifest will fail this historical check.
 Custom-task test fixtures explicitly report
-`published_frozen_input_anchor_verified: false`; that diagnostic cannot
-establish continuity with the published main study.
+`published_frozen_input_anchor_verified: false` and
+`original_treatment_run_task_manifest_verified: false`. Such diagnostics
+cannot establish continuity with the historical study's CSVs **or questions**.
 
 A PASS for the default genuine 40-cell study requires original retained inputs,
-a match to the published aggregate, exact coordinator/evaluator run-ID
-alignment for every treatment/task cell, both independent file-byte anchors,
+a match to the published aggregate **and original task-manifest bytes**,
+exact coordinator/evaluator run-ID alignment for every treatment/task cell,
+both independent file-byte anchors,
 valid counterbalanced source-bound bundles, and unchanged observed source
 bytes over the combined check. The receipt excludes human scores, rater
 identities, coordinator key contents, and treatment-level effects. Store it
@@ -102,9 +112,9 @@ SHA-256 value through a separately trusted channel.
 
 ## Failure and scientific boundaries
 
-Missing independently archived hashes are a **blocker to this stronger
-pre-distribution claim**; rerunning an analysis or hashing freshly changed
-files cannot supply historical anchoring. A mismatch requires investigation
+Missing independently archived hashes or a changed original task manifest
+are **blockers to this stronger pre-distribution claim**; rerunning an analysis
+or hashing freshly changed files cannot supply historical anchoring. A mismatch requires investigation
 against the original retained evidence, not substitution or treatment reruns.
 The gate cannot prove the authenticity of the upstream archive, an atomic
 snapshot spanning mutable filesystems, annotator independence, actual

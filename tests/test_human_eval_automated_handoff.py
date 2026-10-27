@@ -132,6 +132,7 @@ def test_composite_gate_proves_both_source_pins_and_report_run_coverage(case):
     assert receipt["research_manifest_externally_pinned"] is True
     # This fixture has two synthetic tasks, not the published 40-cell archive.
     assert receipt["published_frozen_input_anchor_verified"] is False
+    assert receipt["original_treatment_run_task_manifest_verified"] is False
     assert receipt["published_frozen_input_aggregate_sha256"] is None
     assert receipt["coordinator_manifest_externally_pinned"] is True
     assert receipt["presentation_orders"] == ["canonical", "reverse"]
@@ -284,3 +285,90 @@ def test_default_frozen_task_gate_rejects_newly_pinned_nonpublished_input_matrix
     case["expected_tasks"] = lineage.TASKS
     with pytest.raises(ValueError, match="published frozen input aggregate SHA-256 mismatch"):
         combined.verify_automated_handoff(**case)
+
+
+def test_canonical_handoff_rejects_task_manifest_not_used_by_original_run(
+    case, monkeypatch,
+):
+    """Synthetic fixture: isolate task source pin; no archival PASS is claimed."""
+    monkeypatch.setattr(
+        combined.published, "verify_published_frozen_inputs", lambda **_kwargs: {}
+    )
+    case["expected_tasks"] = lineage.TASKS
+    with pytest.raises(
+        ValueError, match="task manifest differs from the original treatment-run source"
+    ):
+        combined.verify_automated_handoff(**case)
+
+
+def test_canonical_handoff_checks_original_task_source_before_packet(
+    case, monkeypatch,
+):
+    """Fail closed before either packet check if task attestation fails."""
+    seen = []
+    monkeypatch.setattr(
+        combined.published, "verify_published_frozen_inputs",
+        lambda **_kwargs: seen.append("published"),
+    )
+
+    def reject_tasks(**_kwargs):
+        seen.append("original_tasks")
+        raise ValueError("synthetic original-task-source sentinel")
+
+    monkeypatch.setattr(
+        combined.frozen_tasks, "verify_frozen_task_manifest", reject_tasks
+    )
+    monkeypatch.setattr(
+        combined.lineage, "audit_files",
+        lambda **_kwargs: pytest.fail("lineage checked before source attestation"),
+    )
+    monkeypatch.setattr(
+        combined.handoff, "verify_counterbalanced_handoff",
+        lambda **_kwargs: pytest.fail("distribution checked before source attestation"),
+    )
+    case["expected_tasks"] = lineage.TASKS
+    with pytest.raises(ValueError, match="synthetic original-task-source sentinel"):
+        combined.verify_automated_handoff(**case)
+    assert seen == ["published", "original_tasks"]
+
+
+def test_canonical_receipt_records_both_independent_source_checks(
+    case, monkeypatch,
+):
+    """Stubbed components exercise control flow; evidence is wholly synthetic."""
+    checked = []
+    monkeypatch.setattr(
+        combined.published, "verify_published_frozen_inputs",
+        lambda **_kwargs: checked.append("published"),
+    )
+
+    def attest_source(**kwargs):
+        assert kwargs["task_manifest_path"] == case["task_manifest_path"]
+        checked.append("original_tasks")
+
+    monkeypatch.setattr(
+        combined.frozen_tasks, "verify_frozen_task_manifest", attest_source
+    )
+    monkeypatch.setattr(
+        combined.lineage, "audit_files",
+        lambda **_kwargs: {
+            "n_reports": 40, "run_ids_matched": 40,
+            "archival_manifest_externally_pinned": True,
+        },
+    )
+    monkeypatch.setattr(
+        combined.handoff, "verify_counterbalanced_handoff",
+        lambda **_kwargs: {
+            "n_reports": 40,
+            "bundles": {
+                "canonical": {"packet_sha256": "synthetic-canonical"},
+                "reverse": {"packet_sha256": "synthetic-reverse"},
+            },
+        },
+    )
+    case["expected_tasks"] = lineage.TASKS
+    result = combined.verify_automated_handoff(**case)
+    assert checked == ["published", "original_tasks"]
+    assert result["published_frozen_input_anchor_verified"] is True
+    assert result["original_treatment_run_task_manifest_verified"] is True
+    assert result["n_reports"] == result["run_ids_matched"] == 40
