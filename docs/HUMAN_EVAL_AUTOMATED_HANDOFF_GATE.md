@@ -18,8 +18,12 @@ and that the two distribution orders share the correct frozen source.
 as one coordinator-only, fail-closed operational check. It validates externally
 retained pins for the historical input manifest **file** and the coordinator
 packet manifest **file**, runs both existing verifiers, checks the expected 40
-cells, and rereads the critical manifest/CSV/blinding-key bytes to detect
-observable changes across the sequential verification window.
+cells, and re-fingerprints the shared handoff-file inputs across the
+sequential verification window: both pinned manifests, the frozen task
+manifest and guide, both automated CSVs, all four coordinator packet files,
+and every file in each counterbalanced annotator-distribution bundle.
+This additionally detects persistent changes to the first bundle while the
+second is being checked.
 
 ## Procedure
 
@@ -65,8 +69,12 @@ against the original retained evidence, not substitution or treatment reruns.
 The gate cannot prove the authenticity of the upstream archive, an atomic
 snapshot spanning mutable filesystems, annotator independence, actual
 blinding, informed consent, human score collection, or human-validation
-conclusions. It detects observable byte changes between its checks but not
-an ABA mutation that reverts to the original bytes.
+conclusions. Each listed handoff file is captured under the existing bounded
+regular-file reader and compared by SHA-256 before and after the two checks,
+without keeping two copies of the report contents. This detects persistent
+content changes but not an ABA mutation that reverts to the original bytes,
+unobserved modifications to individual source traces/reports between the two
+component verifiers, or later changes after the verification receipt.
 
 This is not a human-evaluation result. The diagnostic pilot, frozen automated
 confirmatory inference, exploratory analyses, and any future independently

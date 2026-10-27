@@ -214,3 +214,57 @@ def test_does_not_write_to_any_frozen_or_distribution_inputs(case):
     before = {path: path.read_bytes() for path in files}
     combined.verify_automated_handoff(**case)
     assert before == {path: path.read_bytes() for path in files}
+
+@pytest.mark.parametrize(("label", "root_key", "filename"), [
+    ("coordinator packet.jsonl", "packet_root", "packet.jsonl"),
+    ("coordinator ratings_template.csv", "packet_root", "ratings_template.csv"),
+    ("canonical packet.jsonl", "canonical_root", "packet.jsonl"),
+    ("reverse ratings_template.csv", "reverse_root", "ratings_template.csv"),
+    ("frozen task manifest", "task_manifest_path", None),
+    ("frozen annotator guide", "annotator_guide_path", None),
+])
+def test_rejects_shared_source_or_distribution_drift_after_verifiers(
+    case, monkeypatch, label, root_key, filename,
+):
+    """Both component verifiers can pass before a distributed input changes."""
+    if root_key == "annotator_guide_path":
+        guide = case["repo_root"] / "synthetic-frozen-guide.md"
+        guide.write_bytes(exporter.DEFAULT_ANNOTATOR_GUIDE.read_bytes())
+        case["annotator_guide_path"] = guide
+
+    target = case[root_key]
+    if filename is not None:
+        target = target / filename
+    actual_handoff = handoff.verify_counterbalanced_handoff
+
+    def changed_after_both_checks(**kwargs):
+        receipt = actual_handoff(**kwargs)
+        with target.open("ab") as stream:
+            stream.write(b"\n")
+        return receipt
+
+    monkeypatch.setattr(
+        handoff, "verify_counterbalanced_handoff", changed_after_both_checks
+    )
+    with pytest.raises(ValueError, match=label + " changed during combined"):
+        combined.verify_automated_handoff(**case)
+
+
+def test_detects_first_bundle_mutation_between_counterbalanced_checks(
+    case, monkeypatch,
+):
+    """A validated canonical bundle must remain stable during reverse audit."""
+    actual = exporter.verify_annotator_bundle_against_source
+
+    def changed_after_canonical(**kwargs):
+        receipt = actual(**kwargs)
+        if kwargs["expected_presentation_order"] == "canonical":
+            with (case["canonical_root"] / "packet.jsonl").open("ab") as stream:
+                stream.write(b"\n")
+        return receipt
+
+    monkeypatch.setattr(
+        exporter, "verify_annotator_bundle_against_source", changed_after_canonical
+    )
+    with pytest.raises(ValueError, match="canonical packet.jsonl changed during combined"):
+        combined.verify_automated_handoff(**case)

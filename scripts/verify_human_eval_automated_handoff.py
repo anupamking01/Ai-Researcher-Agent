@@ -23,10 +23,17 @@ def _require_pin(value: str, *, label: str) -> None:
         raise ValueError(f"{label} must be 64 lowercase hexadecimal SHA-256 digits")
 
 
-def _capture_sources(paths: dict[str, Path]) -> dict[str, bytes]:
-    """Bound each critical source to its captured regular-file bytes."""
+def _capture_sources(paths: dict[str, Path]) -> dict[str, str]:
+    """Fingerprint bounded, descriptor-captured evidence without retaining reports.
+
+    A digest is computed from each exact regular-file capture, not an
+    independently reread pathname. Only a single source's bytes are held at
+    a time, even when both 40-report annotator packets are included.
+    """
     return {
-        label: packet_builder._read_regular_file_captured(path, label=label)
+        label: hashlib.sha256(
+            packet_builder._read_regular_file_captured(path, label=label)
+        ).hexdigest()
         for label, path in paths.items()
     }
 
@@ -67,15 +74,24 @@ def verify_automated_handoff(
     )
     critical_paths = {
         "research manifest": research_manifest_path,
-        "coordinator manifest": packet_root / "manifest.json",
-        "coordinator blinding key": packet_root / "blinding_key.csv",
+        "frozen task manifest": task_manifest_path,
+        "frozen annotator guide": Path(annotator_guide_path),
         "treatment CSV": repo_root / lineage.MAIN_REL,
         "common-evaluator CSV": repo_root / lineage.SUPPORT_REL,
     }
+    # Preserve every coordinator and distribution file across both verifier
+    # windows, not just the anchored manifests and automated CSVs. Otherwise
+    # the first verified bundle could change while the second is checked.
+    for name in exporter.COORDINATOR_ARTIFACTS:
+        critical_paths[f"coordinator {name}"] = packet_root / name
+    for order, root in (("canonical", canonical_root), ("reverse", reverse_root)):
+        for name in exporter.ANNOTATOR_ARTIFACTS:
+            critical_paths[f"{order} {name}"] = Path(root) / name
+
     initial = _capture_sources(critical_paths)
-    if hashlib.sha256(initial["research manifest"]).hexdigest() != expected_research_manifest_sha256:
+    if initial["research manifest"] != expected_research_manifest_sha256:
         raise ValueError("research manifest does not match independently retained pin")
-    if hashlib.sha256(initial["coordinator manifest"]).hexdigest() != expected_coordinator_manifest_sha256:
+    if initial["coordinator manifest.json"] != expected_coordinator_manifest_sha256:
         raise ValueError("coordinator manifest does not match independently retained pin")
 
     aligned = lineage.audit_files(
