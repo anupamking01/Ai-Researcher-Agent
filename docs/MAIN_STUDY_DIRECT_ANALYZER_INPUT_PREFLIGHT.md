@@ -95,3 +95,28 @@ post-return filesystem mutation, or make a two-file publication atomic during
 abrupt termination. The frozen historical analyzer and its analysis receipts
 remain unchanged. POSIX `dir_fd`, `O_DIRECTORY`, and `O_NOFOLLOW` support
 is required.
+
+## Staged-output byte continuity during diagnostic publication
+
+A destination hard link shares a mutable inode with its stage file. Therefore
+directory and inode identity alone do **not** establish that the two published
+inference files still contain the numbers rendered by the analyzer. The optional
+diagnostic publisher now captures bounded SHA-256 fingerprints of both generated
+stage files before it creates a destination. It refuses symbolic links,
+non-regular files and files larger than 16 MiB. Its descriptor-relative reads
+check for observable modification or replacement while hashing; publication
+rechecks both stage and published names against the initial inode, size,
+modification time and byte digests before reporting success.
+
+Synthetic adversarial regressions change a staged JSON result after the first
+link, replace an unlinked Markdown result with byte-identical new inode content,
+and change a published result after linking. Each must fail closed and remove
+the original newly created output directory without touching unrelated paths.
+Positive control demonstrates exact-byte publication. Oversized and symlinked
+stage-file controls fail before any output directory is created.
+
+These are **observational checks over one publication window**, not a transaction,
+immutable escrow, externally pinned artifact, prevention of post-return edits, or
+historical proof of the canonical results. SHA-256 establishes only byte identity.
+For manuscript-facing inference use the existing verified canonical runner;
+the original frozen analyzer and all confirmatory artifacts remain unchanged.

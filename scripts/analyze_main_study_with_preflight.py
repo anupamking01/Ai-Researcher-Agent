@@ -7,6 +7,7 @@ replacement for the externally pinned, manifest-verified analysis runner.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import stat
 import sys
@@ -75,6 +76,56 @@ def _same_directory(first: os.stat_result, second: os.stat_result) -> bool:
     )
 
 
+
+DIAGNOSTIC_MAX_FILE_BYTES = 16 * 1024 * 1024
+
+
+def _diagnostic_file_fingerprint(directory_fd: int, name: str) -> tuple[int, int, int, int, str]:
+    """Read a bounded regular file relative to its retained directory descriptor.
+
+    The within-read stat comparison detects observable concurrent modification
+    and replacement. The returned digest deliberately excludes ctime and link
+    count: publishing an additional hard link legitimately changes both.
+    """
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    try:
+        file_fd = os.open(name, flags, dir_fd=directory_fd)
+    except OSError as exc:
+        raise ValueError(f"diagnostic output cannot be opened safely: {name}") from exc
+    try:
+        before = os.fstat(file_fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"diagnostic output is not a regular file: {name}")
+        if before.st_size > DIAGNOSTIC_MAX_FILE_BYTES:
+            raise ValueError(f"diagnostic output exceeds size limit: {name}")
+
+        digest = hashlib.sha256()
+        size = 0
+        while True:
+            block = os.read(file_fd, 1024 * 1024)
+            if not block:
+                break
+            size += len(block)
+            if size > DIAGNOSTIC_MAX_FILE_BYTES:
+                raise ValueError(f"diagnostic output exceeds size limit: {name}")
+            digest.update(block)
+
+        after = os.fstat(file_fd)
+        named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+
+        def observed(st: os.stat_result) -> tuple[int, int, int, int, int, int]:
+            return (
+                st.st_dev, st.st_ino, st.st_mode, st.st_size,
+                st.st_mtime_ns, st.st_ctime_ns,
+            )
+
+        if size != after.st_size or observed(before) != observed(after) or observed(after) != observed(named):
+            raise ValueError(f"diagnostic output changed while fingerprinting: {name}")
+        return (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, digest.hexdigest())
+    finally:
+        os.close(file_fd)
+
+
 def _publish_diagnostic_pair(staging: Path, destination: Path) -> None:
     """Bind both diagnostic links to opened directories; fail on namespace drift.
 
@@ -90,6 +141,11 @@ def _publish_diagnostic_pair(staging: Path, destination: Path) -> None:
         source_fd = os.open(staging, flags)
         try:
             source_identity = os.fstat(source_fd)
+            # Pin exact stage-file content and inode before creating any destination.
+            fingerprints = {
+                name: _diagnostic_file_fingerprint(source_fd, name)
+                for name in (DIAGNOSTIC_JSON, DIAGNOSTIC_MD)
+            }
             os.mkdir(destination.name, mode=0o700, dir_fd=parent_fd)
             output_fd = os.open(destination.name, flags, dir_fd=parent_fd)
             try:
@@ -100,6 +156,8 @@ def _publish_diagnostic_pair(staging: Path, destination: Path) -> None:
                         source = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
                         if not stat.S_ISREG(source.st_mode):
                             raise ValueError("diagnostic staged output must be a regular file")
+                        if (source.st_dev, source.st_ino) != fingerprints[name][:2]:
+                            raise ValueError("diagnostic staged-file identity changed during publication")
                         os.link(
                             name, name, src_dir_fd=source_fd,
                             dst_dir_fd=output_fd, follow_symlinks=False,
@@ -114,6 +172,16 @@ def _publish_diagnostic_pair(staging: Path, destination: Path) -> None:
                             raise ValueError("diagnostic staged-file identity changed")
                     os.fsync(output_fd)
                     os.fsync(parent_fd)
+                    # A hard-link points to the same mutable inode: descriptor
+                    # identity alone cannot detect altered diagnostic numbers.
+                    for name, expected in fingerprints.items():
+                        if (
+                            _diagnostic_file_fingerprint(source_fd, name) != expected
+                            or _diagnostic_file_fingerprint(output_fd, name) != expected
+                        ):
+                            raise ValueError(
+                                "diagnostic output content or identity changed during publication"
+                            )
                     try:
                         parent_now = os.stat(destination.parent, follow_symlinks=False)
                         source_now = os.stat(staging, follow_symlinks=False)
