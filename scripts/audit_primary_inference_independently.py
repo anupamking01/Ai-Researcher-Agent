@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from decimal import Decimal
+from functools import lru_cache
 from fractions import Fraction
 import json
 import math
@@ -111,6 +112,43 @@ def _bootstrap_percentile_interval(differences, *, seed, draws):
     return (percentile(1), percentile(39))
 
 
+
+@lru_cache(maxsize=64)
+def _secondary_bootstrap_ci(differences, *, seed, draws):
+    """Reconstruct a frozen secondary paired-bootstrap interval with integers.
+
+    The differences argument is a tuple of exact rational task-paired effects.
+    Scaling by their least common denominator makes every with-replacement
+    bootstrap mean and linearly interpolated percentile exact, independently
+    of the historical analyzer's float/statistics helpers. Cached fixed inputs
+    avoid regenerating resamples in repeated adversarial validation tests.
+    """
+    if not differences or draws < 2:
+        raise ValueError("secondary bootstrap requires paired data and two draws")
+    size = len(differences)
+    denominator = math.lcm(*(value.denominator for value in differences))
+    scaled = tuple(
+        value.numerator * (denominator // value.denominator)
+        for value in differences
+    )
+    rng = random.Random(seed)
+    sampled_sums = sorted(
+        sum(scaled[rng.randrange(size)] for _ in range(size))
+        for _ in range(draws)
+    )
+
+    def percentile(numerator):
+        position = Fraction((draws - 1) * numerator, 40)
+        lower = position.numerator // position.denominator
+        upper = min(lower + 1, draws - 1)
+        interpolated_sum = (
+            Fraction(sampled_sums[lower])
+            + (sampled_sums[upper] - sampled_sums[lower]) * (position - lower)
+        )
+        return interpolated_sum / (size * denominator)
+
+    return (percentile(1), percentile(39))
+
 def _median(values):
     ordered = sorted(values)
     midpoint = len(ordered) // 2
@@ -138,8 +176,8 @@ def _secondary_values(treatment, evaluator):
     return measures
 
 
-def _audit_secondary_pair(recorded, left_values, right_values, label):
-    """Check every secondary *point descriptive*, not its bootstrap interval."""
+def _audit_secondary_pair(recorded, left_values, right_values, label, *, seed, draws):
+    """Check exploratory paired descriptors, including frozen bootstrap intervals."""
     if not isinstance(recorded, dict):
         raise ValueError(f"secondary paired descriptive must be an object: {label}")
     differences = [right - left for left, right in zip(left_values, right_values)]
@@ -175,6 +213,17 @@ def _audit_secondary_pair(recorded, left_values, right_values, label):
         _same_number(
             recorded.get("paired_dz"), float(mean) / math.sqrt(float(variance)),
             f"{label}.paired_dz",
+        )
+    interval = recorded.get("bootstrap_95pct_ci_mean_difference")
+    if not isinstance(interval, list) or len(interval) != 2:
+        raise ValueError(f"secondary bootstrap interval schema mismatch: {label}")
+    expected_interval = _secondary_bootstrap_ci(
+        tuple(differences), seed=seed, draws=draws
+    )
+    for endpoint, (observed, expected) in enumerate(zip(interval, expected_interval)):
+        _same_number(
+            observed, expected,
+            f"{label}.bootstrap_95pct_ci_mean_difference[{endpoint}]",
         )
 
 
@@ -396,16 +445,18 @@ def audit_primary(treatment_rows, evaluator_rows, inference):
     secondary = inference.get("secondary_paired_descriptives")
     if not isinstance(secondary, dict) or set(secondary) != {c[2] for c in CONTRASTS}:
         raise ValueError("secondary paired contrast schema mismatch")
-    for left, right, name in CONTRASTS:
+    for contrast_index, (left, right, name) in enumerate(CONTRASTS):
         metrics = secondary[name]
         if not isinstance(metrics, dict) or set(metrics) != set(SECONDARY_METRICS):
             raise ValueError(f"secondary paired metric schema mismatch: {name}")
-        for metric in SECONDARY_METRICS:
+        for metric_index, metric in enumerate(SECONDARY_METRICS):
             _audit_secondary_pair(
                 metrics[metric],
                 [secondary_cells[(left, task)][metric] for task in EXPECTED_TASKS],
                 [secondary_cells[(right, task)][metric] for task in EXPECTED_TASKS],
                 f"{name}.{metric}",
+                seed=20260914 + 100 + 10 * contrast_index + metric_index,
+                draws=20_000,
             )
 
     # Check the originally reported descriptive cost-quality frontier against
@@ -436,6 +487,7 @@ def audit_primary(treatment_rows, evaluator_rows, inference):
         "bootstrap_intervals_checked": True,
         "secondary_variant_means_checked": len(VARIANTS) * len(SECONDARY_METRICS),
         "secondary_paired_descriptives_checked": len(CONTRASTS) * len(SECONDARY_METRICS),
+        "secondary_bootstrap_intervals_checked": len(CONTRASTS) * len(SECONDARY_METRICS),
         "cost_quality_pareto_checked": True,
     }
 

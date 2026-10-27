@@ -73,8 +73,21 @@ on at least one; equal quality *and* equal cost does not imply dominance.
 This verifies a descriptive summary only; it does not select a treatment,
 alter hypotheses, add a significance test, or establish human quality.
 
-**Scope limitations:** Secondary **bootstrap intervals** and report
-rendering are *not* independently recomputed here.
+**Independent secondary bootstrap check (27 October 2026):** The offline
+auditor now also reconstructs all **24** preserved exploratory paired-bootstrap
+95% percentile intervals (three frozen comparisons × eight secondary metrics).
+It uses the existing 20,000 with-replacement, task-paired resamples and the
+historical seed mapping (20260914 + 100 + 10 × contrast index + metric index).
+Inputs are exact fractions derived from the archived CSV rows; bootstrap
+resample sums and percentile interpolation use integer-scaled rational
+arithmetic, not the historical float summary implementation. The seed's
+Python random.Random.randrange index stream is shared by design.
+Missing, malformed, non-finite, or altered interval endpoints fail closed.
+The verifier does **not** calculate secondary p-values or change the
+predeclared three-test Holm family: all secondary outcomes and intervals
+remain **exploratory/descriptive**, not confirmatory.
+
+**Scope limitations:** Report rendering is *not* independently recomputed here.
 The bootstrap audit verifies the frozen deterministic sample procedure, **not**
 the frequentist coverage of its confidence intervals, the representativeness
 of the task set, or a separately generated random number stream. They remain covered by the existing frozen
