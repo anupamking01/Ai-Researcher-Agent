@@ -47,7 +47,22 @@ math helpers. Arithmetic consistency is independent of the frozen inference
 implementation, but the auditor shares the existing scientific input preflight;
 it is not an independently developed validation of that entire input schema.
 
-**Scope limitations:** Secondary paired descriptives, cost-quality Pareto
+**Additional independent exploratory-descriptive check (27 October 2026):**
+The same read-only command now independently reconstructs all eight frozen
+secondary outcome types (broad support, unsupported/contradicted fraction,
+successful sources, tokens, treatment cost, latency, model calls, and report
+words) from the preserved treatment/evaluator CSV records. Count ratios use
+exact rational arithmetic; treatment measurements are parsed through
+`Decimal` to rational values rather than the historical float aggregation.
+For each variant it checks all eight means and the zero-evidence report count;
+for each of the three frozen contrasts it checks eight task-paired point
+descriptives: means, mean/median differences, all task differences, paired
+standardized differences, and positive/negative/tie counts. Malformed,
+missing, or inconsistent metrics fail closed. This is **not** a new secondary
+hypothesis test, primary outcome, or preregistered confirmation. No p-values
+are added and no analyses are selected based on favorable effects.
+
+**Scope limitations:** Secondary **bootstrap intervals**, cost-quality Pareto
 summaries, and report rendering are *not* independently recomputed here.
 The bootstrap audit verifies the frozen deterministic sample procedure, **not**
 the frequentist coverage of its confidence intervals, the representativeness

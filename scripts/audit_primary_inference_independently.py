@@ -7,6 +7,7 @@ It deliberately does not import scripts.analyze_main_study.
 from __future__ import annotations
 
 import argparse
+from decimal import Decimal
 from fractions import Fraction
 import json
 import math
@@ -24,6 +25,16 @@ CONTRASTS = (
     ("P6", "P6V", "P6V_minus_P6_verification"),
 )
 EXPECTED_TASKS = tuple(f"main-{number:02d}" for number in range(1, 11))
+# These remain descriptive/exploratory, never part of the Holm primary family.
+SECONDARY_METRICS = (
+    "broad_support_rate", "unsupported_or_contradicted_rate",
+    "successful_sources", "total_tokens", "treatment_cost_usd",
+    "latency_seconds", "model_calls", "report_words",
+)
+TREATMENT_SECONDARY_FIELDS = (
+    "successful_sources", "total_tokens", "treatment_cost_usd",
+    "latency_seconds", "model_calls", "report_words",
+)
 ABS_TOL = 1e-12
 
 
@@ -106,6 +117,67 @@ def _median(values):
     return (ordered[midpoint - 1] + ordered[midpoint]) / 2
 
 
+def _secondary_values(treatment, evaluator):
+    """Derive secondary outcomes independently from captured CSV text.
+
+    Decimal-to-Fraction conversion avoids using the historical analyzer's
+    float parser or paired-summary helpers. The existing scientific preflight
+    has already validated these columns and their numeric domains.
+    """
+    checked = int(evaluator["claims_checked"])
+    measures = {
+        "broad_support_rate": Fraction(
+            int(evaluator["supported"]) + int(evaluator["partially_supported"]), checked
+        ),
+        "unsupported_or_contradicted_rate": Fraction(
+            int(evaluator["unsupported"]) + int(evaluator["contradicted"]), checked
+        ),
+    }
+    for field in TREATMENT_SECONDARY_FIELDS:
+        measures[field] = Fraction(Decimal(treatment[field]))
+    return measures
+
+
+def _audit_secondary_pair(recorded, left_values, right_values, label):
+    """Check every secondary *point descriptive*, not its bootstrap interval."""
+    if not isinstance(recorded, dict):
+        raise ValueError(f"secondary paired descriptive must be an object: {label}")
+    differences = [right - left for left, right in zip(left_values, right_values)]
+    if len(differences) != len(EXPECTED_TASKS):
+        raise ValueError(f"secondary paired matrix mismatch: {label}")
+    mean = sum(differences, Fraction(0)) / len(differences)
+    _same_integer(recorded.get("n_pairs"), len(differences), f"{label}.n_pairs")
+    for field, expected in (
+        ("left_mean", sum(left_values, Fraction(0)) / len(left_values)),
+        ("right_mean", sum(right_values, Fraction(0)) / len(right_values)),
+        ("mean_difference", mean),
+        ("median_difference", _median(differences)),
+    ):
+        _same_number(recorded.get(field), expected, f"{label}.{field}")
+    shown = recorded.get("task_differences")
+    if not isinstance(shown, list) or len(shown) != len(EXPECTED_TASKS):
+        raise ValueError(f"secondary paired task_differences mismatch: {label}")
+    for task, observed, expected in zip(EXPECTED_TASKS, shown, differences):
+        _same_number(observed, expected, f"{label}.task_differences[{task}]")
+    for field, expected in (
+        ("positive_tasks", sum(d > 0 for d in differences)),
+        ("negative_tasks", sum(d < 0 for d in differences)),
+        ("tied_tasks", sum(d == 0 for d in differences)),
+    ):
+        _same_integer(recorded.get(field), expected, f"{label}.{field}")
+    variance = sum((difference - mean) ** 2 for difference in differences) / (
+        len(differences) - 1
+    )
+    if variance == 0:
+        if recorded.get("paired_dz") is not None:
+            raise ValueError(f"secondary paired_dz mismatch: {label}")
+    else:
+        _same_number(
+            recorded.get("paired_dz"), float(mean) / math.sqrt(float(variance)),
+            f"{label}.paired_dz",
+        )
+
+
 def audit_primary(treatment_rows, evaluator_rows, inference):
     """Cross-check primary estimates using raw counts, not analyzer functions."""
     # The historical, SHA-pinned CSV export precedes the newer mandatory
@@ -161,6 +233,12 @@ def audit_primary(treatment_rows, evaluator_rows, inference):
         identity = (row["variant_id"], row["task_id"])
         cell[identity] = Fraction(int(row["supported"]), int(row["claims_checked"]))
 
+    secondary_cells = {
+        key: _secondary_values(main_by_cell[key], row)
+        for row in evaluator_rows
+        for key in [(row["variant_id"], row["task_id"])]
+    }
+
     for variant in VARIANTS:
         record = summary[variant]
         if not isinstance(record, dict) or not isinstance(record.get("means"), dict):
@@ -169,6 +247,26 @@ def audit_primary(treatment_rows, evaluator_rows, inference):
         average = sum(cell[(variant, task)] for task in EXPECTED_TASKS) / 10
         _same_number(record["means"].get("strict_support_rate"), average,
                      f"{variant}.mean_strict_support_rate")
+        _same_integer(
+            record.get("zero_evidence_runs"),
+            sum(
+                row["variant_id"] == variant
+                and row["evidence_status"] == "zero_successful_sources"
+                for row in evaluator_rows
+            ),
+            f"{variant}.zero_evidence_runs",
+        )
+        if set(record["means"]) != {"strict_support_rate", *SECONDARY_METRICS}:
+            raise ValueError(f"secondary mean metric schema mismatch: {variant}")
+        for metric in SECONDARY_METRICS:
+            expected_mean = sum(
+                (secondary_cells[(variant, task)][metric] for task in EXPECTED_TASKS),
+                Fraction(0),
+            ) / len(EXPECTED_TASKS)
+            _same_number(
+                record["means"].get(metric), expected_mean,
+                f"{variant}.mean_{metric}",
+            )
 
     exact_pvalues = {}
     for contrast_index, (left, right, name) in enumerate(CONTRASTS):
@@ -240,11 +338,30 @@ def audit_primary(treatment_rows, evaluator_rows, inference):
         running = max(running, min(Fraction(1), (3 - rank) * pvalue))
         _same_number(results[name].get("holm_adjusted_p"), running,
                      f"{name}.holm_adjusted_p")
+
+    # These are *exploratory descriptors*. Deliberately do not add their
+    # statistics to the frozen confirmatory family or inspect/rerun treatments.
+    secondary = inference.get("secondary_paired_descriptives")
+    if not isinstance(secondary, dict) or set(secondary) != {c[2] for c in CONTRASTS}:
+        raise ValueError("secondary paired contrast schema mismatch")
+    for left, right, name in CONTRASTS:
+        metrics = secondary[name]
+        if not isinstance(metrics, dict) or set(metrics) != set(SECONDARY_METRICS):
+            raise ValueError(f"secondary paired metric schema mismatch: {name}")
+        for metric in SECONDARY_METRICS:
+            _audit_secondary_pair(
+                metrics[metric],
+                [secondary_cells[(left, task)][metric] for task in EXPECTED_TASKS],
+                [secondary_cells[(right, task)][metric] for task in EXPECTED_TASKS],
+                f"{name}.{metric}",
+            )
     return {
         "status": "independent_primary_arithmetic_consistent_not_provenance",
         "paired_tasks": 10,
         "primary_contrasts_checked": 3,
         "bootstrap_intervals_checked": True,
+        "secondary_variant_means_checked": len(VARIANTS) * len(SECONDARY_METRICS),
+        "secondary_paired_descriptives_checked": len(CONTRASTS) * len(SECONDARY_METRICS),
     }
 
 
