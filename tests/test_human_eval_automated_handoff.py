@@ -130,6 +130,9 @@ def test_composite_gate_proves_both_source_pins_and_report_run_coverage(case):
     assert receipt["status"] == "automated_run_and_counterbalanced_handoff_verified"
     assert receipt["n_reports"] == receipt["run_ids_matched"] == 8
     assert receipt["research_manifest_externally_pinned"] is True
+    # This fixture has two synthetic tasks, not the published 40-cell archive.
+    assert receipt["published_frozen_input_anchor_verified"] is False
+    assert receipt["published_frozen_input_aggregate_sha256"] is None
     assert receipt["coordinator_manifest_externally_pinned"] is True
     assert receipt["presentation_orders"] == ["canonical", "reverse"]
     assert receipt["bundle_packet_sha256"]["canonical"] != receipt["bundle_packet_sha256"]["reverse"]
@@ -271,4 +274,13 @@ def test_detects_first_bundle_mutation_between_counterbalanced_checks(
         exporter, "verify_annotator_bundle_against_source", changed_after_canonical
     )
     with pytest.raises(ValueError, match="canonical packet.jsonl changed during combined"):
+        combined.verify_automated_handoff(**case)
+
+
+
+def test_default_frozen_task_gate_rejects_newly_pinned_nonpublished_input_matrix(case):
+    # A locally rehashed, pinned synthetic input manifest is not sufficient
+    # to assert continuity with the historical published 40-cell experiment.
+    case["expected_tasks"] = lineage.TASKS
+    with pytest.raises(ValueError, match="published frozen input aggregate SHA-256 mismatch"):
         combined.verify_automated_handoff(**case)

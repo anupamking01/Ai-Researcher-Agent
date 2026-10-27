@@ -5,6 +5,7 @@ statistical analysis, evaluator outputs, and human evaluations are untouched.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -81,3 +82,43 @@ def test_unmodified_archived_copy_passes_without_writing_or_recomputing(tmp_path
     assert before == {
         name: (root / name).read_bytes() for name in (*FROZEN_INPUTS, MANIFEST)
     }
+
+
+
+def test_relocated_independently_pinned_manifest_preserves_published_anchor(tmp_path):
+    root = _copied_archive(tmp_path)
+    archive = root / "retained" / "input-manifest.json"
+    archive.parent.mkdir()
+    archive.write_bytes((root / MANIFEST).read_bytes())
+    (root / MANIFEST).unlink()
+    original_pin = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    result = verify_published_frozen_inputs(
+        repo_root=root, manifest_path=archive,
+        expected_manifest_sha256=original_pin,
+    )
+    assert result["published_aggregate_sha256"] == FROZEN_INPUT_AGGREGATE_SHA256
+    with pytest.raises(ValueError, match="SHA-256"):
+        verify_published_frozen_inputs(
+            repo_root=root, manifest_path=archive,
+            expected_manifest_sha256="0" * 64,
+        )
+
+
+def test_relocated_newly_pinned_modified_archive_cannot_impersonate_published_inputs(tmp_path):
+    root = _copied_archive(tmp_path)
+    source = root / "outputs/posthoc_support_runs.csv"
+    original = source.read_bytes()
+    needle = b",0.8333333333333334,6181,"
+    assert needle in original
+    source.write_bytes(original.replace(needle, b",0.8333333333333334,6182,", 1))
+    _rehash_local_manifest(root, FROZEN_INPUTS)
+
+    archive = root / "retained-manifest.json"
+    archive.write_bytes((root / MANIFEST).read_bytes())
+    current_pin = hashlib.sha256(archive.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match="published frozen input aggregate SHA-256 mismatch"):
+        verify_published_frozen_inputs(
+            repo_root=root, manifest_path=archive,
+            expected_manifest_sha256=current_pin,
+        )

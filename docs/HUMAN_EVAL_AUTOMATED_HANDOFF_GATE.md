@@ -17,7 +17,11 @@ and that the two distribution orders share the correct frozen source.
 `scripts/verify_human_eval_automated_handoff.py` enforces the conjunction
 as one coordinator-only, fail-closed operational check. It validates externally
 retained pins for the historical input manifest **file** and the coordinator
-packet manifest **file**, runs both existing verifiers, checks the expected 40
+packet manifest **file**. For the default frozen 4×10 task matrix it also
+checks the canonical CSVs against the independently published
+input-manifest **aggregate** digest before any lineage or distribution PASS;
+a newly created file-byte pin cannot substitute for the historical digest.
+It then runs both existing verifiers, checks the expected 40
 cells, and re-fingerprints the shared handoff-file inputs across the
 sequential verification window: both pinned manifests, the frozen task
 manifest and guide, both automated CSVs, all four coordinator packet files,
@@ -51,9 +55,18 @@ python -m scripts.verify_human_eval_automated_handoff \
 The published `4e94308472e87cc14b85e5911c40b5f72c63225862a347e624fc0725afd632aa`
 main-study input-manifest **aggregate** digest is not the same as the SHA-256
 of the JSON manifest *file*, and must not be substituted for the
-`--research-manifest-sha256` argument.
+`--research-manifest-sha256` argument. For the actual 40-cell study, the
+gate now checks **both** values: the independently archived manifest-file
+pin and the fixed published aggregate (over the same two canonical CSV
+entries). It accepts an archived manifest at a different path without
+mistaking its file hash for its aggregate fingerprint. A coherent replacement
+of both CSVs and a newly pinned manifest will fail this historical check.
+Custom-task test fixtures explicitly report
+`published_frozen_input_anchor_verified: false`; that diagnostic cannot
+establish continuity with the published main study.
 
-A PASS requires genuine retained inputs, exact coordinator/evaluator run-ID
+A PASS for the default genuine 40-cell study requires original retained inputs,
+a match to the published aggregate, exact coordinator/evaluator run-ID
 alignment for every treatment/task cell, both independent file-byte anchors,
 valid counterbalanced source-bound bundles, and unchanged observed source
 bytes over the combined check. The receipt excludes human scores, rater

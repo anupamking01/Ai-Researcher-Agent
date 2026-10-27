@@ -16,6 +16,7 @@ from scripts import build_human_eval_packet as packet_builder
 from scripts import export_human_eval_annotator_bundle as exporter
 from scripts import verify_human_eval_automated_run_lineage as lineage
 from scripts import verify_human_eval_counterbalanced_handoff as handoff
+from scripts import verify_published_main_study_inputs as published
 
 
 def _require_pin(value: str, *, label: str) -> None:
@@ -94,6 +95,19 @@ def verify_automated_handoff(
     if initial["coordinator manifest.json"] != expected_coordinator_manifest_sha256:
         raise ValueError("coordinator manifest does not match independently retained pin")
 
+    # A newly pinned, internally consistent archive is not necessarily the
+    # *published* 40-cell dataset. For the real frozen task matrix require
+    # both external file-byte anchoring and the historical aggregate digest.
+    # Noncanonical task tuples are supported only for synthetic diagnostics;
+    # their receipt explicitly records that historical anchoring did not run.
+    published_anchor_verified = expected_tasks == lineage.TASKS
+    if published_anchor_verified:
+        published.verify_published_frozen_inputs(
+            repo_root=repo_root,
+            manifest_path=research_manifest_path,
+            expected_manifest_sha256=expected_research_manifest_sha256,
+        )
+
     aligned = lineage.audit_files(
         repo_root=repo_root,
         packet_root=packet_root,
@@ -131,6 +145,11 @@ def verify_automated_handoff(
         "research_manifest_externally_pinned": True,
         "coordinator_manifest_externally_pinned": True,
         "coordinator_manifest_sha256": expected_coordinator_manifest_sha256,
+        "published_frozen_input_anchor_verified": published_anchor_verified,
+        "published_frozen_input_aggregate_sha256": (
+            published.FROZEN_INPUT_AGGREGATE_SHA256
+            if published_anchor_verified else None
+        ),
         "presentation_orders": ["canonical", "reverse"],
         "bundle_packet_sha256": {
             order: distributed["bundles"][order]["packet_sha256"]
@@ -146,7 +165,8 @@ def verify_automated_handoff(
         "interpretation": (
             "Coordinator-only pre-distribution source/run alignment, not "
             "an atomic archive snapshot, proof of independent human rating, "
-            "or evidence of human-validation outcomes"
+            "or evidence of human-validation outcomes; noncanonical task "
+            "diagnostics do not verify the historical published-input anchor"
         ),
     }
 

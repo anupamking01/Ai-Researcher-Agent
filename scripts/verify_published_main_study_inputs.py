@@ -25,7 +25,12 @@ FROZEN_INPUTS = (
 )
 
 
-def verify_published_frozen_inputs(*, repo_root: Path = ROOT) -> dict:
+def verify_published_frozen_inputs(
+    *,
+    repo_root: Path = ROOT,
+    manifest_path: Path | None = None,
+    expected_manifest_sha256: str | None = None,
+) -> dict:
     """Verify the saved manifest AND its independently published aggregate.
 
     The existing manifest verifier checks exact contents, pathname safety,
@@ -34,7 +39,11 @@ def verify_published_frozen_inputs(*, repo_root: Path = ROOT) -> dict:
     and their local manifest from silently redefining the frozen analysis.
     """
     root = Path(repo_root)
-    entries = verify_manifest_file(root / MANIFEST, root=root)
+    entries = verify_manifest_file(
+        Path(manifest_path) if manifest_path is not None else root / MANIFEST,
+        root=root,
+        expected_manifest_sha256=expected_manifest_sha256,
+    )
     if {entry["path"] for entry in entries} != set(FROZEN_INPUTS):
         raise ValueError("published frozen inputs must contain exactly the two canonical CSVs")
     serialized = json.dumps(
@@ -67,9 +76,15 @@ def verify_published_frozen_inputs(*, repo_root: Path = ROOT) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=ROOT)
+    parser.add_argument("--manifest-path", type=Path)
+    parser.add_argument("--expected-manifest-sha256")
     args = parser.parse_args()
     try:
-        result = verify_published_frozen_inputs(repo_root=args.repo_root)
+        result = verify_published_frozen_inputs(
+            repo_root=args.repo_root,
+            manifest_path=args.manifest_path,
+            expected_manifest_sha256=args.expected_manifest_sha256,
+        )
     except (OSError, ValueError) as exc:
         parser.exit(1, f"PUBLISHED FROZEN MAIN-STUDY INPUTS: FAIL: {exc}\n")
     print(json.dumps(result, sort_keys=True, indent=2))
