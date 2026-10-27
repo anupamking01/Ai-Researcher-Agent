@@ -136,7 +136,8 @@ deterministic local provenance JSON receipt.
 Retained input files are named main_study_diagnostic_treatment_input.csv and
 main_study_diagnostic_evaluator_input.csv. The receipt is named
 main_study_diagnostic_provenance.json. It records exact byte counts and SHA-256
-for both inputs and results, the current analyzer and preflight source files,
+for both inputs and results, the analyzer, diagnostic wrapper, preflight validator
+and numeric-validator source files,
 and the bootstrap configuration. Each source CSV is limited to 8 MiB and must
 be a stable regular file, not a leaf symlink. Observable mutation/replacement
 during capture fails closed; later changes to the original CSV path cannot

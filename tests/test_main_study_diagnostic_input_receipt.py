@@ -65,6 +65,12 @@ def test_diagnostic_retains_precise_analyzed_csv_and_fingerprints(inputs):
     manifest = json.loads((destination / diagnostic.DIAGNOSTIC_MANIFEST).read_text())
     assert manifest["scope"] == "local_diagnostic_not_canonical"
     assert manifest["analysis_config"]["bootstrap_draws"] == 8
+    assert set(manifest["sources"]) == {
+        "scripts/analyze_main_study.py",
+        "scripts/analyze_main_study_with_preflight.py",
+        "scripts/validate_main_study_inputs.py",
+        "scripts/validate_numeric_inputs.py",
+    }
     for name, fingerprint in manifest["artifacts"].items():
         data = (destination / name).read_bytes()
         assert fingerprint == {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}

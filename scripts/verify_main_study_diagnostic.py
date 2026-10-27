@@ -26,9 +26,14 @@ ARTIFACTS = (
     diagnostic.DIAGNOSTIC_JSON,
     diagnostic.DIAGNOSTIC_MD,
 )
+from scripts import validate_numeric_inputs as numeric
+
+
 SOURCES = {
     "scripts/analyze_main_study.py": Path(frozen.__file__),
+    "scripts/analyze_main_study_with_preflight.py": Path(diagnostic.__file__),
     "scripts/validate_main_study_inputs.py": Path(preflight.__file__),
+    "scripts/validate_numeric_inputs.py": Path(numeric.__file__),
 }
 
 
