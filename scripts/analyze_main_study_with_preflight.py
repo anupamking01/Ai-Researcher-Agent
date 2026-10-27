@@ -21,6 +21,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts import analyze_main_study as frozen
+from scripts import validate_numeric_inputs as numeric
 from scripts.validate_main_study_inputs import read_csv_rows, validate_rows
 
 
@@ -226,7 +227,7 @@ def _stage_diagnostic_evidence(staging: Path, retained: dict[str, bytes]) -> Non
             "scripts/validate_main_study_inputs.py":
                 _byte_fingerprint(Path(preflight.__file__).read_bytes()),
             "scripts/validate_numeric_inputs.py":
-                _byte_fingerprint(Path(preflight.require_nonnegative.__code__.co_filename).read_bytes()),
+                _byte_fingerprint(Path(numeric.__file__).read_bytes()),
         },
         "analysis_config": {
             "bootstrap_draws": frozen.BOOTSTRAP_DRAWS,
