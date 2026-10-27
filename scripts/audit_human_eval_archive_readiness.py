@@ -393,6 +393,82 @@ def _trace_report_content_status(
             "checked": checked, "expected": EXPECTED_TRACES}
 
 
+def _expected_recovery_paths(
+    *,
+    repo_root: Path,
+    trace_root: Path,
+    report_root: Path,
+    published_input_anchor: str,
+) -> dict:
+    """Identify exact missing original files even when fewer than 40 survive.
+
+    The published, fingerprint-verified common-evaluator CSV supplies the
+    historical (treatment, task, run_id) mapping. A partial or empty archive
+    must not hide which files need retrieval from authorized backups.
+    This inventory is coordinator-only and never authenticates candidate
+    contents, report text, or archival custody.
+    """
+    result = {
+        "status": "not_checked_without_published_input_anchor",
+        "expected": EXPECTED_TRACES,
+        "traces_present": 0,
+        "reports_present": 0,
+        "missing_traces": [],
+        "missing_reports": [],
+        "unsafe_traces": [],
+        "unsafe_reports": [],
+    }
+    if published_input_anchor != "published_aggregate_matches":
+        return result
+
+    source = repo_root / lineage.SUPPORT_REL
+    try:
+        raw = packet_builder._read_regular_file_captured(
+            source, label="published evaluator recovery target CSV"
+        )
+        rows = lineage._read_study_csv(raw, path=source)
+        expected_cells = {
+            (variant, task) for variant in VARIANTS for task in lineage.TASKS
+        }
+        matrix = lineage._matrix(
+            rows, label="published recovery target run identities",
+            expected_cells=expected_cells, run_identity=True,
+        )
+    except (OSError, ValueError):
+        return {**result, "status": "invalid_published_evaluator_run_ids"}
+
+    for (variant, task_id), row in sorted(matrix.items()):
+        run_id = row["run_id"]
+        for label, relative, root in (
+            ("traces", Path(variant) / f"{run_id}.json", trace_root),
+            ("reports", Path(run_id) / "research_report.md", report_root),
+        ):
+            status = _file_status(root / relative)
+            if status == "present_unverified":
+                result[f"{label}_present"] += 1
+                continue
+            target = {
+                "variant_id": variant,
+                "task_id": task_id,
+                "run_id": run_id,
+                "relative_path": relative.as_posix(),
+                "reason": status,
+            }
+            destination = "missing" if status == "missing" else "unsafe"
+            result[f"{destination}_{label}"].append(target)
+
+    incomplete = any(
+        result[key] for key in (
+            "missing_traces", "missing_reports", "unsafe_traces", "unsafe_reports"
+        )
+    )
+    result["status"] = (
+        "expected_paths_missing_or_unsafe" if incomplete
+        else "expected_paths_present_not_authenticated"
+    )
+    return result
+
+
 def audit_archive_readiness(
     *,
     repo_root: Path = ROOT,
@@ -467,6 +543,10 @@ def audit_archive_readiness(
         repo_root=root, trace_root=traces, report_root=reports,
         located_ids=located_ids, run_alignment_status=run_alignment["status"],
     )
+    recovery_targets = _expected_recovery_paths(
+        repo_root=root, trace_root=traces, report_root=reports,
+        published_input_anchor=input_anchor,
+    )
     gaps = [label for label, status in resources.items() if status != "present_unverified"]
     if trace_candidates["status"] != "40_matrix_candidates_unverified":
         gaps.append("original_experiment_trace_candidates")
@@ -487,6 +567,12 @@ def audit_archive_readiness(
     ):
         gaps.append("original_trace_report_content_alignment")
 
+    if recovery_targets["status"] in (
+        "invalid_published_evaluator_run_ids",
+        "expected_paths_missing_or_unsafe",
+    ):
+        gaps.append("original_expected_run_archive_paths")
+
     return {
         "schema_version": 1,
         "study_id": "budget-main-v1",
@@ -496,6 +582,7 @@ def audit_archive_readiness(
         "report_candidates": report_candidates,
         "trace_to_published_evaluator": run_alignment,
         "trace_report_content": content_status,
+        "expected_recovery_paths": recovery_targets,
         "independent_pins": pins,
         "published_automated_input_anchor": input_anchor,
         "blockers": sorted(gaps),

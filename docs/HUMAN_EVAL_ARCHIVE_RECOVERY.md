@@ -95,6 +95,28 @@ word-count concordance is **not** a report-content hash, exact text match to
 the original evaluator, or independently authenticated custody. Mutable
 directories are not an atomic snapshot.
 
+### Exact run-by-run recovery targets for partial backups
+
+The coordinator-only JSON field `expected_recovery_paths` lists the **exact**
+missing or unsafe archived files for each frozen treatment/task/run ID, even
+when zero or fewer than 40 traces have been recovered. It derives the expected
+file names from the already published, fingerprint-verified evaluator CSV,
+**not** from filenames found in a partial archive. Entries contain the
+treatment, task ID, historical run ID, path relative to `--trace-root` or
+`--report-root`, and the reason (`missing`, `unsafe_file_type`, etc.).
+The separate `traces_present` and `reports_present` counts tally only
+ordinary file candidates; neither count proves their contents. The list can
+guide targeted searches in authorized local/offline backups, without
+regenerating or cherry-picking experimental outputs.
+
+If the published automated-input anchor cannot be verified, status is
+`not_checked_without_published_input_anchor` and **no run identities are
+asserted**. If its evaluator run-ID matrix is invalid, the result is blocked
+rather than presenting misleading missing-file targets. Even
+`expected_paths_present_not_authenticated` verifies only expected paths,
+not historical custody or report integrity. Keep the receipt coordinator-only
+and never distribute run/treatment mappings to blinded annotators.
+
 When a historical manifest-file SHA-256 is supplied, the inventory now compares
 it against the bounded, descriptor-captured bytes of the corresponding research
 or coordinator manifest. A mismatch, missing/unsafe manifest, or unstable/oversized
