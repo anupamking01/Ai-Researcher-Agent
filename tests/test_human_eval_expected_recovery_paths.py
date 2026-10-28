@@ -1,5 +1,6 @@
 """Read-only frozen-run recovery targets, including incomplete backup sets."""
 import csv
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,12 @@ def _frozen_stub(tmp_path: Path, monkeypatch):
         audit.published, "verify_published_frozen_inputs",
         lambda **kwargs: None,
     )
+    # Use the synthetic evaluator digest only in this mocked-anchor fixture.
+    monkeypatch.setattr(audit, "PUBLISHED_CSV_FILE_SHA256", {
+        audit.lineage.SUPPORT_REL: hashlib.sha256(
+            (root / audit.lineage.SUPPORT_REL).read_bytes()
+        ).hexdigest()
+    })
     return root
 
 

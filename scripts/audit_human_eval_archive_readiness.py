@@ -45,6 +45,27 @@ FROZEN_EXECUTION_MODES = {
     "P6V": ("planner", "verify"),
 }
 
+# Individual SHA-256s from the published, aggregate-anchored frozen-input
+# manifest. Recheck exact captured bytes at each later CSV read; the earlier
+# aggregate verification alone cannot protect mutable paths across calls.
+PUBLISHED_CSV_FILE_SHA256 = {
+    lineage.MAIN_REL: "966ea80519af5ea7b832c86d7868525a4ef75874f396f242291e3be949382a0e",
+    lineage.SUPPORT_REL: "5acd80d6115f269c7fab40180dec0d778a45eaafd7d5c23cb79c43fd7837773c",
+}
+
+
+def _capture_published_csv(repo_root: Path, relative: str, *, label: str) -> bytes:
+    """Bind every downstream read to the original published CSV bytes."""
+    expected_sha = PUBLISHED_CSV_FILE_SHA256.get(relative)
+    if expected_sha is None:
+        raise ValueError("unexpected frozen CSV requested")
+    raw = packet_builder._read_regular_file_captured(
+        repo_root / relative, label=label
+    )
+    if hashlib.sha256(raw).hexdigest() != expected_sha:
+        raise ValueError(f"{label} changed after published input verification")
+    return raw
+
 
 def _file_status(path: Path) -> str:
     """Do not silently classify symlinks or nonregular evidence as available."""
@@ -242,8 +263,9 @@ def _trace_run_alignment(
         return {**result, "status": "not_checked_without_published_input_anchor"}
     source = repo_root / lineage.SUPPORT_REL
     try:
-        raw = packet_builder._read_regular_file_captured(
-            source, label="published evaluator run-identity CSV"
+        raw = _capture_published_csv(
+            repo_root, lineage.SUPPORT_REL,
+            label="published evaluator run-identity CSV"
         )
         rows = lineage._read_study_csv(raw, path=source)
         expected_cells = {
@@ -304,12 +326,16 @@ def _trace_report_content_status(
     main_source = repo_root / lineage.MAIN_REL
     try:
         task_manifest = packet_builder._load_task_manifest(task_file)
-        main_bytes = packet_builder._read_regular_file_captured(
-            main_source, label="frozen treatment CSV for recovered trace telemetry"
+        if task_manifest["sha256"] != frozen_tasks.ORIGINAL_TASK_MANIFEST_SHA256:
+            raise ValueError("frozen task manifest changed after source verification")
+        main_bytes = _capture_published_csv(
+            repo_root, lineage.MAIN_REL,
+            label="frozen treatment CSV for recovered trace telemetry"
         )
         main_rows = lineage._read_study_csv(main_bytes, path=main_source)
-        evaluator_bytes = packet_builder._read_regular_file_captured(
-            source, label="frozen evaluator for recovered trace content"
+        evaluator_bytes = _capture_published_csv(
+            repo_root, lineage.SUPPORT_REL,
+            label="frozen evaluator for recovered trace content"
         )
         rows = lineage._read_study_csv(evaluator_bytes, path=source)
         expected_cells = {
@@ -477,8 +503,9 @@ def _expected_recovery_paths(
 
     source = repo_root / lineage.SUPPORT_REL
     try:
-        raw = packet_builder._read_regular_file_captured(
-            source, label="published evaluator recovery target CSV"
+        raw = _capture_published_csv(
+            repo_root, lineage.SUPPORT_REL,
+            label="published evaluator recovery target CSV"
         )
         rows = lineage._read_study_csv(raw, path=source)
         expected_cells = {

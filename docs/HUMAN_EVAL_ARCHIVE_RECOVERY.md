@@ -103,6 +103,16 @@ evaluator matrix cannot produce an identity match. Only mismatch/invalid-matrix
 results add an extra blocker; skipped comparisons remain blocked by their
 underlying missing-trace or missing-anchor requirements. Symlinks and missing/unsafe report candidates block readiness; a
 balanced but incoherent archive can still pass this **structural inventory**.
+Each independent downstream capture of the frozen treatment or evaluator
+CSV is rechecked against that file's SHA-256 recorded in the published,
+aggregate-anchored input manifest. The original task manifest is also
+rechecked against its original-run source SHA-256 **after** its own later
+content load. A source replaced between the initial published/task-source
+verification and a subsequent run-identity, recovery-target, or trace-content
+read fails closed, even if the replacement is a well-formed table or task
+manifest. These per-capture checks do not make mutable directories an atomic
+snapshot and do not authenticate missing historical reports.
+
 The additional `trace_report_content` preflight runs only after the
 fingerprint-verified evaluator's 40 frozen run IDs agree with the candidate
 filenames. It uses bounded, descriptor-based reads and duplicate-key-rejecting

@@ -319,6 +319,12 @@ def _simulate_published_identity_inputs(root: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         audit.published, "verify_published_frozen_inputs", lambda **_kwargs: {}
     )
+    # Only this synthetic fixture substitutes known test CSV bytes for the
+    # canonical published file digests.
+    monkeypatch.setattr(audit, "PUBLISHED_CSV_FILE_SHA256", {
+        relative: hashlib.sha256((root / relative).read_bytes()).hexdigest()
+        for relative in (audit.lineage.MAIN_REL, audit.lineage.SUPPORT_REL)
+    })
 
 
 def test_recovered_filename_identity_matches_frozen_evaluator_only_diagnostically(
@@ -455,6 +461,15 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
     task_file = root / "experiments/main_budget_tasks.json"
     task_file.parent.mkdir(parents=True, exist_ok=True)
     task_file.write_text(json.dumps(tasks), encoding="utf-8")
+    monkeypatch.setattr(
+        audit.frozen_tasks, "ORIGINAL_TASK_MANIFEST_SHA256",
+        hashlib.sha256(task_file.read_bytes()).hexdigest(),
+    )
+    # Treatment CSV was rewritten after the identity-only synthetic fixture.
+    monkeypatch.setattr(audit, "PUBLISHED_CSV_FILE_SHA256", {
+        relative: hashlib.sha256((root / relative).read_bytes()).hexdigest()
+        for relative in (audit.lineage.MAIN_REL, audit.lineage.SUPPORT_REL)
+    })
     for variant in audit.VARIANTS:
         for n, task_id in enumerate(audit.lineage.TASKS):
             run_id = f"{variant.lower()}-run-{n:02d}"
@@ -820,3 +835,101 @@ def test_41_trace_entries_retains_count_mismatch_status(tmp_path):
     result = audit.audit_archive_readiness(repo_root=tmp_path)
     assert result["trace_candidates"]["status"] == "candidate_count_mismatch"
     assert result["status"] == "blocked"
+
+
+
+@pytest.mark.parametrize("relative", [audit.lineage.MAIN_REL, audit.lineage.SUPPORT_REL])
+def test_published_csv_capture_rejects_later_replacement(tmp_path, monkeypatch, relative):
+    """A previous canonical check cannot approve a subsequently changed file."""
+    source = tmp_path / relative
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"pinned synthetic bytes")
+    monkeypatch.setattr(audit, "PUBLISHED_CSV_FILE_SHA256", {
+        relative: hashlib.sha256(source.read_bytes()).hexdigest()
+    })
+    assert audit._capture_published_csv(
+        tmp_path, relative, label="synthetic frozen CSV"
+    ) == b"pinned synthetic bytes"
+    source.write_bytes(b"changed synthetic bytes")
+    with pytest.raises(ValueError, match="changed after published input verification"):
+        audit._capture_published_csv(
+            tmp_path, relative, label="synthetic frozen CSV"
+        )
+
+
+def test_late_evaluator_replacement_blocks_recovered_run_identity(tmp_path, monkeypatch):
+    _write_candidate_matrix(tmp_path / "outputs", dict.fromkeys(audit.VARIANTS, 10))
+    _simulate_published_identity_inputs(tmp_path, monkeypatch)
+    support = tmp_path / audit.lineage.SUPPORT_REL
+
+    def change_after_stated_verification(**_kwargs):
+        support.write_bytes(support.read_bytes().replace(b"d3-run-00", b"new-run-00"))
+        return {}
+
+    monkeypatch.setattr(
+        audit.published, "verify_published_frozen_inputs",
+        change_after_stated_verification,
+    )
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    # The mocked earlier publication receipt is not sufficient for a later read.
+    assert receipt["published_automated_input_anchor"] == "published_aggregate_matches"
+    assert receipt["trace_to_published_evaluator"]["status"] == (
+        "invalid_published_evaluator_run_ids"
+    )
+    assert receipt["expected_recovery_paths"]["status"] == (
+        "invalid_published_evaluator_run_ids"
+    )
+    assert "original_trace_to_evaluator_run_identity" in receipt["blockers"]
+    assert receipt["handoff_verified"] is False
+
+
+def test_late_treatment_replacement_blocks_telemetry_concordance(tmp_path, monkeypatch):
+    _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    main = tmp_path / audit.lineage.MAIN_REL
+
+    def change_after_stated_verification(**_kwargs):
+        content = main.read_bytes()
+        assert b",250,50" in content
+        main.write_bytes(content.replace(b",250,50", b",251,50", 1))
+        return {}
+
+    monkeypatch.setattr(
+        audit.published, "verify_published_frozen_inputs",
+        change_after_stated_verification,
+    )
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["trace_to_published_evaluator"]["matched"] == 40
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_frozen_task_or_evaluator"
+    )
+    assert "changed after published input verification" in (
+        receipt["trace_report_content"]["reason"]
+    )
+    assert "original_trace_report_content_alignment" in receipt["blockers"]
+
+
+def test_late_task_manifest_replacement_blocks_question_alignment(tmp_path, monkeypatch):
+    _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    task_file = tmp_path / "experiments/main_budget_tasks.json"
+
+    def change_after_stated_verification(**_kwargs):
+        payload = json.loads(task_file.read_text(encoding="utf-8"))
+        payload["tasks"][0]["question"] = "Changed after the source check"
+        task_file.write_text(json.dumps(payload), encoding="utf-8")
+        return {}
+
+    monkeypatch.setattr(
+        audit.frozen_tasks, "verify_frozen_task_manifest",
+        change_after_stated_verification,
+    )
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["frozen_task_manifest_anchor"] == (
+        "original_treatment_run_task_manifest_matches"
+    )
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_frozen_task_or_evaluator"
+    )
+    assert "changed after source verification" in (
+        receipt["trace_report_content"]["reason"]
+    )
+    assert "original_trace_report_content_alignment" in receipt["blockers"]
