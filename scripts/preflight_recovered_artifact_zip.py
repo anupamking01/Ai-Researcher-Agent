@@ -146,7 +146,7 @@ def _preflight_central_directory(handle, archive_bytes: int) -> None:
         search_end = index
     if record is None:
         raise RecoveredArchiveError(
-            "ZIP has no unambiguous terminal end-of-central-directory record"
+            "cannot safely inspect ZIP: no unambiguous terminal end-of-central-directory record"
         )
     _, disk, cd_disk, on_disk, count, size_cd, cd_offset, _ = record
     if disk or cd_disk or on_disk != count:
