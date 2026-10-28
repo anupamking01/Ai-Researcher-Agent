@@ -82,6 +82,22 @@ def _directory_status(path: Path) -> str:
     return "present_unverified"
 
 
+def _bounded_sorted_trace_entries(directory: Path, *, maximum: int) -> list[Path]:
+    """Sort a bounded directory snapshot without materializing an unbounded scan.
+
+    Recovery archives may be externally supplied and accidentally contain huge
+    trees. A valid 40-cell study never needs more than four variant directories
+    or 40 trace files in total. Inspect one overflow entry to fail closed;
+    never use sorted(directory.iterdir()) on unbounded input.
+    """
+    entries: list[Path] = []
+    for entry in directory.iterdir():
+        if len(entries) >= maximum:
+            raise ValueError("trace archive directory exceeds entry limit")
+        entries.append(entry)
+    return sorted(entries)
+
+
 def _trace_status(root: Path) -> tuple[dict, tuple[str, ...]]:
     """Inventory 4 x 10 candidate filenames without parsing or endorsing traces.
 
@@ -106,12 +122,26 @@ def _trace_status(root: Path) -> tuple[dict, tuple[str, ...]]:
     if status != "present_unverified":
         return result(status), ()
     try:
-        for variant_dir in sorted(root.iterdir()):
+        try:
+            # One extra entry preserves the existing unexpected-root diagnosis.
+            variant_dirs = _bounded_sorted_trace_entries(
+                root, maximum=len(VARIANTS) + 1
+            )
+        except ValueError:
+            return result("trace_root_entry_limit_exceeded"), ()
+        for variant_dir in variant_dirs:
             if variant_dir.name not in by_variant:
                 return result("unexpected_trace_root_entry"), ()
             if _directory_status(variant_dir) != "present_unverified":
                 return result("unsafe_variant_directory"), ()
-            for candidate in sorted(variant_dir.iterdir()):
+            try:
+                # One overflow trace keeps the 41-file count error distinct.
+                candidates = _bounded_sorted_trace_entries(
+                    variant_dir, maximum=EXPECTED_TRACES + 1
+                )
+            except ValueError:
+                return result("trace_variant_entry_limit_exceeded"), ()
+            for candidate in candidates:
                 if candidate.suffix != ".json" or candidate.stem in ("", ".", ".."):
                     return result("unexpected_trace_entry"), ()
                 if _file_status(candidate) != "present_unverified":

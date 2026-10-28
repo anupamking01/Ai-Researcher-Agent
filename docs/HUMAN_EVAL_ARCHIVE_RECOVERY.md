@@ -66,6 +66,19 @@ python -m scripts.audit_human_eval_archive_readiness \
   --coordinator-manifest-sha256 <independent-file-byte-sha256>
 ```
 
+Trace-tree enumeration is bounded before sorting: at most five root entries
+(four frozen treatment directories plus one unexpected entry) and 41 entries
+per treatment directory (40 total runs plus one overflow) are ever captured
+for inventory. Larger directories fail closed as
+`trace_root_entry_limit_exceeded` or
+`trace_variant_entry_limit_exceeded`, rather than materializing and sorting
+arbitrarily many untrusted paths. These statuses are archive-structure
+blockers, not evidence that historical runs failed. The scan remains read-only
+and preserves the existing diagnosis for a single unexpected root entry and
+41 trace files. Move unrelated files out of a **working copy** of the recovery
+location only if their independent archival provenance is preserved; never
+delete or rewrite original evidence to force a passing inventory.
+
 The JSON enumerates missing or unsafe file paths, the original-trace candidate
 counts **by frozen treatment** and the Markdown report candidate count, plus
 the canonical published automated-input fingerprint check. By default,

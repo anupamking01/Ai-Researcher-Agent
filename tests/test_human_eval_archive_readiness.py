@@ -747,3 +747,76 @@ def test_archival_content_preflight_fails_closed_if_validator_contract_drifts(
     )
     assert "original_trace_report_content_alignment" in result["blockers"]
     assert result["handoff_verified"] is False
+
+
+def test_trace_directory_enumeration_stops_after_bounded_overflow(
+    tmp_path, monkeypatch
+):
+    """A hostile archive iterator cannot force an unbounded eager sort."""
+    trace_root = tmp_path / "outputs/experiment_traces"
+    trace_root.mkdir(parents=True)
+    original = Path.iterdir
+    consumed = []
+
+    def oversized_root(self):
+        if self == trace_root:
+            for n in range(1_000_000):
+                consumed.append(n)
+                yield trace_root / f"unexpected-{n}"
+        else:
+            yield from original(self)
+
+    monkeypatch.setattr(Path, "iterdir", oversized_root)
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["status"] == "blocked"
+    assert result["trace_candidates"]["status"] == (
+        "trace_root_entry_limit_exceeded"
+    )
+    assert len(consumed) == len(audit.VARIANTS) + 2
+    assert "original_experiment_trace_candidates" in result["blockers"]
+
+
+def test_oversized_variant_directory_is_rejected_without_full_scan(
+    tmp_path, monkeypatch
+):
+    trace_root = tmp_path / "outputs/experiment_traces"
+    variant_root = trace_root / "D3"
+    variant_root.mkdir(parents=True)
+    original = Path.iterdir
+    consumed = []
+
+    def oversized_variant(self):
+        if self == variant_root:
+            for n in range(1_000_000):
+                consumed.append(n)
+                yield variant_root / f"synthetic-{n}.json"
+        else:
+            yield from original(self)
+
+    monkeypatch.setattr(Path, "iterdir", oversized_variant)
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["status"] == "blocked"
+    assert result["trace_candidates"]["status"] == (
+        "trace_variant_entry_limit_exceeded"
+    )
+    assert len(consumed) == audit.EXPECTED_TRACES + 2
+    assert "original_experiment_trace_candidates" in result["blockers"]
+
+
+def test_single_unexpected_trace_root_entry_retains_specific_diagnosis(tmp_path):
+    trace_root = tmp_path / "outputs/experiment_traces"
+    for name in (*audit.VARIANTS, "unexpected"):
+        (trace_root / name).mkdir(parents=True)
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_candidates"]["status"] == "unexpected_trace_root_entry"
+    assert result["status"] == "blocked"
+
+
+def test_41_trace_entries_retains_count_mismatch_status(tmp_path):
+    variant_root = tmp_path / "outputs/experiment_traces/D3"
+    variant_root.mkdir(parents=True)
+    for n in range(audit.EXPECTED_TRACES + 1):
+        (variant_root / f"synthetic-{n:02d}.json").write_text("{}")
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_candidates"]["status"] == "candidate_count_mismatch"
+    assert result["status"] == "blocked"
