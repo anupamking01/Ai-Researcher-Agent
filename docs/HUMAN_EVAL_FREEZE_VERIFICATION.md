@@ -146,3 +146,22 @@ identities should remain unopened until real annotations have been collected,
 the blinded freeze has been verified, and any required multi-rater analysis
 choice has been documented. Pilot, automated confirmatory, exploratory, and
 human-validation claims remain separate.
+
+
+## Bounded verification of retained preflight receipts
+
+Before a blinded annotator submission enters the final rating freeze, its
+retained preflight receipt is independently checked against the same ratings
+CSV and annotator distribution. The receipt directory must contain **only**
+`preflight_receipt.json`. Both the initial check and the check after
+recomputation now inspect at most **two** directory entries through the
+already-open directory descriptor. A second entry fails immediately, avoiding
+an unbounded `os.listdir` allocation on a supplied receipt directory.
+The verifier continues to reject changed paths and nonregular receipts.
+
+Synthetic tests cover early overflow with a simulated million-entry directory,
+a late sidecar inserted during recomputation, and the existing successful
+single-receipt flow. These are denial-of-service and custody safeguards, not
+human ratings, proof of annotator independence, or historical archive
+authentication. The frozen protocol, automated confirmatory measurements,
+pilot, and exploratory findings are unchanged.

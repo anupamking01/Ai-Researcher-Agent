@@ -810,6 +810,50 @@ def test_receipt_verifier_rejects_undeclared_directory_entry(tmp_path):
         )
 
 
+def test_receipt_verifier_bounds_untrusted_directory_enumeration(monkeypatch):
+    """Reject after two entries even if an external directory is enormous."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    enumerated = []
+
+    @contextmanager
+    def many_entries(_root_fd):
+        def entries():
+            for index in range(1_000_000):
+                enumerated.append(index)
+                yield SimpleNamespace(name=f"unexpected-{index}")
+
+        yield entries()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(verify.os, "scandir", many_entries)
+        with pytest.raises(ValueError, match="artifact set mismatch"):
+            verify._bounded_receipt_entries(1234)
+
+    assert enumerated == [0, 1]
+
+
+def test_receipt_verifier_rejects_extra_entry_added_during_recomputation(
+    tmp_path, monkeypatch
+):
+    receipt_root, submission, bundle = _published_receipt(tmp_path)
+    original_preflight = freeze.preflight_annotator_submission
+
+    def add_late_artifact(*args, **kwargs):
+        receipt = original_preflight(*args, **kwargs)
+        (receipt_root / "late-sidecar.txt").write_text("late", encoding="utf-8")
+        return receipt
+
+    monkeypatch.setattr(freeze, "preflight_annotator_submission", add_late_artifact)
+    with pytest.raises(ValueError, match="artifact set mismatch"):
+        verify.verify_preflight_receipt(
+            receipt_root=receipt_root,
+            rating_path=submission,
+            annotator_bundle_root=bundle,
+        )
+
+
 def test_receipt_verifier_rejects_symlinked_receipt_root(tmp_path):
     receipt_root, submission, bundle = _published_receipt(tmp_path)
     linked_root = tmp_path / "linked-receipt"

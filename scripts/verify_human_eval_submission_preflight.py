@@ -75,6 +75,25 @@ def _read_descriptor_bytes(file_descriptor: int) -> bytes:
         remaining -= len(chunk)
 
 
+def _bounded_receipt_entries(root_fd: int) -> set[str]:
+    """Inspect at most two names from the already-open receipt directory.
+
+    The receipt contract permits exactly one file. Read one overflow entry
+    to reject oversized or unexpected inventories without materializing an
+    unbounded external directory using os.listdir().
+    """
+    names: list[str] = []
+    with os.scandir(root_fd) as entries:
+        for entry in entries:
+            if names:
+                raise ValueError(
+                    "human-evaluation preflight receipt artifact set mismatch: "
+                    "more than one directory entry"
+                )
+            names.append(entry.name)
+    return set(names)
+
+
 def _require_same_object(current: os.stat_result, opened: os.stat_result) -> None:
     if (
         (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
@@ -107,7 +126,7 @@ def _retained_receipt_window(receipt_root: Path):
                 "human-evaluation preflight receipt root must be a regular "
                 f"directory: {receipt_root}"
             )
-        entries = set(os.listdir(root_fd))
+        entries = _bounded_receipt_entries(root_fd)
         if entries != {RECEIPT_NAME}:
             raise ValueError(
                 "human-evaluation preflight receipt artifact set mismatch: "
@@ -183,7 +202,7 @@ def _retained_receipt_window(receipt_root: Path):
                     "human-evaluation preflight receipt changed during verification"
                 )
             _require_same_object(os.fstat(receipt_fd), opened)
-            if set(os.listdir(root_fd)) != {RECEIPT_NAME}:
+            if _bounded_receipt_entries(root_fd) != {RECEIPT_NAME}:
                 raise ValueError(
                     "human-evaluation preflight receipt artifact set changed during "
                     "verification"
