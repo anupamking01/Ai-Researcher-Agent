@@ -1373,6 +1373,7 @@ def test_query_allocation_rejects_skipping_earlier_eligible_candidate():
     """Original get_new_urls cannot silently omit an unseen candidate."""
     trace = {
         "source_budget": 3,
+        "question": "original question",
         "search_queries": ["original question"],
         "search_records": [{
             "query": "original question",
