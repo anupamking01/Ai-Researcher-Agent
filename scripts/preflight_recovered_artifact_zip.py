@@ -231,7 +231,7 @@ def _verify_local_header_metadata(handle, info: zipfile.ZipInfo, *, cd_offset: i
             crc, compressed, uncompressed
         ) == (info.CRC, info.compress_size, info.file_size)
     if not sizes_agree:
-        raise RecoveredArchiveError("local ZIP header CRC/size metadata disagrees with central directory")
+        raise RecoveredArchiveError("cannot safely inspect ZIP: local ZIP header CRC/size metadata disagrees with central directory")
     if start + LOCAL_HEADER.size + name_length + extra_length + info.compress_size > cd_offset:
         raise RecoveredArchiveError("local ZIP header/data extends into central directory")
 
