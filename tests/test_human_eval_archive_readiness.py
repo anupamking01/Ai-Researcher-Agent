@@ -448,7 +448,8 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
                     "completed": "True",
                     "source_budget": audit.main_input_contract.FROZEN_SOURCE_BUDGETS[variant],
                     "successful_sources": 2, "failed_sources": 1,
-                    "search_calls": 1, "model_calls": 4,
+                    "search_calls": (1 if variant in ("D3", "D6") else 4),
+                    "model_calls": 4,
                     "total_tokens": 250, "report_words": 50,
                     "treatment_cost_usd": 0.0002,
                     "cost_status": "estimated_from_frozen_uncached_rates",
@@ -489,6 +490,23 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
     for variant in audit.VARIANTS:
         for n, task_id in enumerate(audit.lineage.TASKS):
             run_id = f"{variant.lower()}-run-{n:02d}"
+            question = tasks["tasks"][n]["question"]
+            plan = ([question] if variant in ("D3", "D6") else [
+                f"Synthetic planned query {i} for {task_id}" for i in range(4)
+            ])
+            urls = [
+                "https://example.test/a", "https://example.test/b",
+                "https://example.test/c",
+            ]
+            # Direct searches may schedule all three; the 6-source planner
+            # allocates [2, 2, 1, 1] across four planned searches.
+            schedules = ([urls] if len(plan) == 1
+                         else [urls[:2], urls[2:], [], []])
+            records = [
+                {"query": query, "candidate_urls": list(scheduled),
+                 "scheduled_urls": list(scheduled)}
+                for query, scheduled in zip(plan, schedules)
+            ]
             payload = {
                 "schema_version": 2,
                 "experiment": {
@@ -506,22 +524,12 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
                     "report_path": f"./outputs/{run_id}/research_report.pdf",
                     "source_budget": audit.main_input_contract.FROZEN_SOURCE_BUDGETS[variant],
                     "successful_source_count": 2, "failed_source_count": 1,
-                    "search_call_count": 1, "model_call_count": 4,
+                    "search_call_count": len(records), "model_call_count": 4,
                     "total_tokens": 250, "report_words": 50,
                     "latency_seconds": 1.25,
-                    "source_count": 3, "query_count": 1,
-                    "search_queries": [tasks["tasks"][n]["question"]],
-                    "search_records": [{
-                        "query": tasks["tasks"][n]["question"],
-                        "candidate_urls": [
-                            "https://example.test/a", "https://example.test/b",
-                            "https://example.test/c",
-                        ],
-                        "scheduled_urls": [
-                            "https://example.test/a", "https://example.test/b",
-                            "https://example.test/c",
-                        ],
-                    }],
+                    "source_count": 3, "query_count": len(plan),
+                    "search_queries": plan,
+                    "search_records": records,
                     "usage_accounting_status": "provider_usage_complete",
                     "prompt_tokens": 100, "completion_tokens": 150,
                     "unavailable_usage_call_count": 0,
@@ -1261,3 +1269,97 @@ def test_search_provenance_rejects_out_of_order_executed_queries():
     }
     with pytest.raises(ValueError, match="query order"):
         audit._validate_recovered_search_provenance(trace)
+
+
+@pytest.mark.parametrize("variant", ["D3", "D6"])
+def test_original_direct_query_must_be_exact_frozen_question(
+    tmp_path, monkeypatch, variant
+):
+    """Self-consistent renamed search records cannot change direct treatment."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    trace_file = outputs / "experiment_traces" / variant / f"{variant.lower()}-run-00.json"
+    payload = json.loads(trace_file.read_text(encoding="utf-8"))
+    trace = payload["trace"]
+    trace["search_queries"] = ["Different research question"]
+    trace["search_records"][0]["query"] = "Different research question"
+    trace_file.write_text(json.dumps(payload), encoding="utf-8")
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "direct search query differs" in (
+        receipt["trace_report_content"]["first_failure"]
+    )
+    assert "original_trace_report_content_alignment" in receipt["blockers"]
+
+
+@pytest.mark.parametrize("variant", ["P6", "P6V"])
+def test_planner_per_query_budget_cannot_be_reallocated_in_recovered_trace(
+    tmp_path, monkeypatch, variant
+):
+    """Frozen global source totals cannot conceal violating the planned split."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    trace_file = outputs / "experiment_traces" / variant / f"{variant.lower()}-run-00.json"
+    payload = json.loads(trace_file.read_text(encoding="utf-8"))
+    trace = payload["trace"]
+    # Original planner distribution is [2, 2, 1, 1]. Move the third
+    # scheduled URL into query one while leaving every global counter,
+    # order, URL partition, and frozen CSV measurement unchanged.
+    trace["search_records"][0]["candidate_urls"].append("https://example.test/c")
+    trace["search_records"][0]["scheduled_urls"].append("https://example.test/c")
+    trace["search_records"][1]["scheduled_urls"] = []
+    trace_file.write_text(json.dumps(payload), encoding="utf-8")
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "per-query browse budget" in (
+        receipt["trace_report_content"]["first_failure"]
+    )
+    assert "original_trace_report_content_alignment" in receipt["blockers"]
+
+
+@pytest.mark.parametrize("variant", ["P6", "P6V"])
+def test_recovered_planner_requires_four_planned_queries(
+    tmp_path, monkeypatch, variant
+):
+    """A valid source ledger must also obey the frozen planner contract."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    trace_file = outputs / "experiment_traces" / variant / f"{variant.lower()}-run-00.json"
+    payload = json.loads(trace_file.read_text(encoding="utf-8"))
+    trace = payload["trace"]
+    trace["search_queries"].append("fifth planned query")
+    trace["query_count"] += 1
+    trace_file.write_text(json.dumps(payload), encoding="utf-8")
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "original four-query plan" in receipt["trace_report_content"]["first_failure"]
+
+
+def test_query_allocation_accepts_skipped_and_duplicate_planner_queries():
+    """Distinct planned slots remain enforceable even when text repeats."""
+    trace = {
+        "source_budget": 6,
+        "search_queries": ["same", "same", "other", "last"],
+        "search_records": [
+            {"query": "same", "scheduled_urls": ["a", "b"]},
+            {"query": "same", "scheduled_urls": ["c", "d"]},
+            {"query": "other", "scheduled_urls": ["e"]},
+            {"query": "last", "scheduled_urls": ["f"]},
+        ],
+    }
+    audit._validate_recovered_query_budget_allocation(trace, variant="P6V")
+
+
+def test_query_allocation_rejects_search_without_allocated_budget():
+    trace = {
+        "source_budget": 1,
+        "search_queries": ["first", "second", "third", "fourth"],
+        "search_records": [
+            {"query": "second", "scheduled_urls": []},
+        ],
+    }
+    with pytest.raises(ValueError, match="without a query browse budget"):
+        audit._validate_recovered_query_budget_allocation(trace, variant="P6")

@@ -137,6 +137,17 @@ query/search-call counters and globally scheduled URLs: recorded queries must
 follow the planned order (allowing budget-skipped queries), search-result
 candidate URLs must contain newly scheduled URLs in their original order,
 and transient failed-search records cannot claim successful scheduling.
+The recovery preflight also enforces the original **query-plan execution
+contract**: direct arms must search the exact frozen task question; planner
+arms must record four planned queries; and individual search records must
+respect the source budgets deterministically allocated by the original
+runner (6 sources across four planner queries yields [2, 2, 1, 1]).
+It allows unused per-query budget, genuine search errors, and duplicate
+planned query text without reallocating budget to other queries. An altered
+search strategy can otherwise leave frozen total source/search counts intact
+while invalidating the direct/planning comparison. These checks only establish
+internal consistency with version-controlled runner behavior, **not** that
+searches occurred or retrieved source documents are authentic.
 This catches tampered nested retrieval records even if the frozen aggregate
 counters and URL partitions agree. It does not demonstrate that a search
 engine returned those candidates, or that URLs were genuinely visited.

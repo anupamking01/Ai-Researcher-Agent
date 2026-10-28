@@ -421,6 +421,63 @@ def _validate_recovered_search_provenance(trace: dict) -> None:
         raise ValueError("recovered search_records scheduled URLs differ from trace ledger")
 
 
+
+def _validate_recovered_query_budget_allocation(trace: dict, *, variant: str) -> None:
+    """Check the original runner's planned-query and per-query browse budgets.
+
+    The treatment's total source count can agree with the frozen CSV even
+    when a recovered trace spends that budget in a different query. Original
+    ResearchAgent.create_search_queries returns the exact question for direct
+    arms, or four planned queries for planner arms. conduct_research allocates
+    its fixed browse budget by divmod, giving earlier queries the remainder;
+    async_search never schedules more than its individual allocation or the
+    remaining global budget. These are execution-contract checks, not evidence
+    that reported search results were actually retrieved.
+    """
+    queries = trace["search_queries"]
+    if variant in ("D3", "D6"):
+        if queries != [trace["question"]]:
+            raise ValueError(
+                "recovered direct search query differs from frozen research question"
+            )
+    elif variant in ("P6", "P6V"):
+        if len(queries) != 4:
+            raise ValueError(
+                "recovered planner query count differs from original four-query plan"
+            )
+    else:
+        raise ValueError("unexpected recovered treatment variant")
+
+    total_budget = trace["source_budget"]
+    base, remainder = divmod(total_budget, len(queries))
+    allocations = [
+        base + (1 if index < remainder else 0)
+        for index in range(len(queries))
+    ]
+    next_query = 0
+    remaining = total_budget
+    for index, record in enumerate(trace["search_records"]):
+        query = record["query"]
+        # Match the same earliest remaining planned-query occurrence as the
+        # preceding search-provenance check; duplicate query text is allowed.
+        while next_query < len(queries) and queries[next_query] != query:
+            next_query += 1
+        if next_query == len(queries):
+            raise ValueError("recovered search record has no matching planned query")
+        allowed = min(allocations[next_query], remaining)
+        if allowed <= 0:
+            raise ValueError(
+                f"recovered search_records[{index}] ran without a query browse budget"
+            )
+        scheduled = len(record["scheduled_urls"])
+        if scheduled > allowed:
+            raise ValueError(
+                f"recovered search_records[{index}] exceeds its per-query browse budget"
+            )
+        remaining -= scheduled
+        next_query += 1
+
+
 def _validate_recovered_provider_usage(trace: dict) -> None:
     """Validate the frozen run's per-model usage and aggregate cost basis.
 
@@ -681,6 +738,7 @@ def _trace_report_content_status(
                     )
             _validate_recovered_source_ledgers(trace, variant=variant)
             _validate_recovered_search_provenance(trace)
+            _validate_recovered_query_budget_allocation(trace, variant=variant)
             _validate_recovered_provider_usage(trace)
             _validate_recovered_efficiency_measurements(
                 trace, frozen_row, pricing_models=pricing_models
