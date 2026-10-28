@@ -245,3 +245,87 @@ def test_directory_local_name_disagreement_is_rejected(tmp_path):
     path.write_bytes(raw)
     with pytest.raises(audit.RecoveredArchiveError, match="cannot safely inspect ZIP"):
         audit.audit_recovered_zip(path)
+
+
+def test_central_directory_member_limit_checked_before_zipfile_open(tmp_path, monkeypatch):
+    """Reject many tiny headers without allocating thousands of ZipInfo objects."""
+    path = tmp_path / "too-many-headers.zip"
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as out:
+        for index in range(audit.MAX_MEMBERS + 1):
+            out.writestr(f"synthetic/{index}.txt", b"x")
+
+    def must_not_open(*args, **kwargs):
+        raise AssertionError("ZipFile must not parse an overlarge directory")
+
+    monkeypatch.setattr(audit.zipfile, "ZipFile", must_not_open)
+    with pytest.raises(audit.RecoveredArchiveError, match="central-directory member count"):
+        audit.audit_recovered_zip(path)
+
+
+def test_false_small_eocd_count_cannot_bypass_preparse_bound(tmp_path, monkeypatch):
+    """Do not trust just the EOCD entry count: walk its actual records."""
+    path = _zip(tmp_path / "lied-about-count.zip", {"one.txt": b"1", "two.txt": b"2"})
+    raw = bytearray(path.read_bytes())
+    offset = len(raw) - 22
+    assert raw[offset:offset + 4] == b"PK\x05\x06"
+    raw[offset + 8:offset + 12] = b"\x01\x00\x01\x00"
+    path.write_bytes(raw)
+
+    def must_not_open(*args, **kwargs):
+        raise AssertionError("ZipFile must not parse inconsistent directory headers")
+
+    monkeypatch.setattr(audit.zipfile, "ZipFile", must_not_open)
+    with pytest.raises(audit.RecoveredArchiveError, match="member count does not match"):
+        audit.audit_recovered_zip(path)
+
+
+def test_oversized_claimed_central_directory_rejected_before_open(tmp_path, monkeypatch):
+    path = _zip(tmp_path / "huge-directory.zip", {"good.txt": b"synthetic"})
+    raw = bytearray(path.read_bytes())
+    offset = len(raw) - 22
+    assert raw[offset:offset + 4] == b"PK\x05\x06"
+    raw[offset + 12:offset + 16] = (
+        audit.MAX_CENTRAL_DIRECTORY_BYTES + 1
+    ).to_bytes(4, "little")
+    path.write_bytes(raw)
+
+    def must_not_open(*args, **kwargs):
+        raise AssertionError("ZipFile must not read an oversized directory")
+
+    monkeypatch.setattr(audit.zipfile, "ZipFile", must_not_open)
+    with pytest.raises(audit.RecoveredArchiveError, match="central directory exceeds"):
+        audit.audit_recovered_zip(path)
+
+
+def test_central_directory_overrun_rejected_before_open(tmp_path, monkeypatch):
+    path = _zip(tmp_path / "overrun.zip", {"good.txt": b"synthetic"})
+    raw = bytearray(path.read_bytes())
+    central = raw.index(b"PK\x01\x02")
+    # Extra-field length in the fixed central-directory header.
+    raw[central + 30:central + 32] = (65535).to_bytes(2, "little")
+    path.write_bytes(raw)
+
+    def must_not_open(*args, **kwargs):
+        raise AssertionError("ZipFile must not parse an overrun")
+
+    monkeypatch.setattr(audit.zipfile, "ZipFile", must_not_open)
+    with pytest.raises(audit.RecoveredArchiveError, match="entry exceeds"):
+        audit.audit_recovered_zip(path)
+
+
+def test_unaccounted_trailing_bytes_rejected(tmp_path):
+    """An ambiguous trailer is not part of a canonical GitHub artifact ZIP."""
+    path = _zip(tmp_path / "extra-trailer.zip", {"good.txt": b"synthetic"})
+    path.write_bytes(path.read_bytes() + b"out-of-band-trailer")
+    with pytest.raises(audit.RecoveredArchiveError, match="terminal end-of-central-directory"):
+        audit.audit_recovered_zip(path)
+
+
+def test_ordinary_zip_comment_remains_supported(tmp_path):
+    path = tmp_path / "commented.zip"
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as out:
+        out.writestr("reports/test.md", b"# Synthetic")
+        out.comment = b"ordinary ZIP comment"
+    receipt = audit.audit_recovered_zip(path)
+    assert receipt["file_count"] == 1
+    assert receipt["files"][0]["path"] == "reports/test.md"

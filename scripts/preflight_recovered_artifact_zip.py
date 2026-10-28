@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import struct
 import unicodedata
 import zipfile
 import zlib
@@ -22,6 +23,11 @@ MAX_MEMBERS = 2000
 MAX_MEMBER_BYTES = 64 * 1024 * 1024
 MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 1000
+# zipfile eagerly materializes *all* central-directory entries at construction.
+# Restrict their raw table size and actual record count before opening ZipFile.
+MAX_CENTRAL_DIRECTORY_BYTES = 8 * 1024 * 1024
+EOCD_HEADER = struct.Struct("<4s4H2IH")
+CENTRAL_HEADER = struct.Struct("<4s6H3I5H2I")
 CHUNK_BYTES = 1024 * 1024
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -115,6 +121,74 @@ def _inspect_member(info: zipfile.ZipInfo) -> tuple[str, bool]:
     return key, is_directory
 
 
+def _preflight_central_directory(handle, archive_bytes: int) -> None:
+    """Bound the central directory before zipfile eagerly creates ZipInfo objects.
+
+    Deliberately accept the ordinary single-disk, non-ZIP64 GitHub artifact
+    layout. A ZIP with extensions, an embedded executable prefix, or ambiguous
+    trailer is not an acceptable unauthenticated recovery candidate.
+    """
+    tail_bytes = min(archive_bytes, EOCD_HEADER.size + 65535)
+    handle.seek(archive_bytes - tail_bytes)
+    tail = handle.read(tail_bytes)
+    search_end = len(tail)
+    record = None
+    while True:
+        index = tail.rfind(b"PK\x05\x06", 0, search_end)
+        if index < 0:
+            break
+        if index + EOCD_HEADER.size <= len(tail):
+            candidate = EOCD_HEADER.unpack_from(tail, index)
+            if index + EOCD_HEADER.size + candidate[-1] == len(tail):
+                record = candidate
+                eocd_offset = archive_bytes - tail_bytes + index
+                break
+        search_end = index
+    if record is None:
+        raise RecoveredArchiveError(
+            "ZIP has no unambiguous terminal end-of-central-directory record"
+        )
+    _, disk, cd_disk, on_disk, count, size_cd, cd_offset, _ = record
+    if disk or cd_disk or on_disk != count:
+        raise RecoveredArchiveError(
+            "ZIP requires one consistent central directory on one disk"
+        )
+    if not 0 < count <= MAX_MEMBERS:
+        raise RecoveredArchiveError(
+            "ZIP central-directory member count outside permitted bounds"
+        )
+    if not 0 < size_cd <= MAX_CENTRAL_DIRECTORY_BYTES:
+        raise RecoveredArchiveError("ZIP central directory exceeds bounded size range")
+    if cd_offset + size_cd != eocd_offset:
+        raise RecoveredArchiveError(
+            "ZIP central-directory offsets are inconsistent or noncanonical"
+        )
+    offset = cd_offset
+    for _ in range(count):
+        if offset + CENTRAL_HEADER.size > eocd_offset:
+            raise RecoveredArchiveError("ZIP central-directory entries exceed declared size")
+        handle.seek(offset)
+        header = handle.read(CENTRAL_HEADER.size)
+        if len(header) != CENTRAL_HEADER.size:
+            raise RecoveredArchiveError("truncated ZIP central-directory entry")
+        fields = CENTRAL_HEADER.unpack(header)
+        # Name length, disk start, ZIP64 size/offset sentinels are fixed fields.
+        if fields[0] != b"PK\x01\x02" or fields[10] == 0 or fields[13] != 0:
+            raise RecoveredArchiveError("invalid ZIP central-directory entry")
+        if (
+            fields[8] == 0xFFFFFFFF
+            or fields[9] == 0xFFFFFFFF
+            or fields[16] == 0xFFFFFFFF
+        ):
+            raise RecoveredArchiveError("ZIP64 central-directory entry is unsupported")
+        offset += CENTRAL_HEADER.size + fields[10] + fields[11] + fields[12]
+        if offset > eocd_offset:
+            raise RecoveredArchiveError("ZIP central-directory entry exceeds declared size")
+    if offset != eocd_offset:
+        raise RecoveredArchiveError(
+            "ZIP central-directory member count does not match its records"
+        )
+
 def _unchanged(original: os.stat_result, current: os.stat_result) -> bool:
     return (
         original.st_dev, original.st_ino, original.st_mode,
@@ -148,6 +222,9 @@ def audit_recovered_zip(path: Path, *, expected_archive_sha256: str | None = Non
             if expected_archive_sha256 and archive_sha256 != expected_archive_sha256:
                 raise RecoveredArchiveError("archive SHA-256 differs from supplied independent pin")
 
+            # The ZipFile constructor otherwise parses every advertised record
+            # before our MAX_MEMBERS check can run (a memory exhaustion risk).
+            _preflight_central_directory(handle, before.st_size)
             files = []
             total = 0
             seen: set[str] = set()

@@ -118,7 +118,18 @@ preserved in the current-observation receipt. Empty directory entries are also r
 ZIP decoder, so their local headers, compressed streams, and CRCs cannot evade
 verification just because directory names are omitted from the file inventory.
 The decoder validates the declared zero-length directory contents; this
-preflight is not a substitute for independent historical provenance checks. It bounds ZIP input size, entry count, and total
+preflight is not a substitute for independent historical provenance checks. To avoid an archive with thousands of tiny central-directory records
+exhausting memory before Python's eager `zipfile.ZipFile` parser returns,
+the verifier now scans the bounded central-directory headers **before**
+constructing `ZipFile`. It enforces the declared and actual record counts,
+an 8 MiB central-directory cap, consistent offsets, and a canonical single-disk,
+non-ZIP64 ZIP layout. Ordinary ZIP comments remain supported; ambiguous
+trailers, self-extracting prefixes, inconsistent member-count claims, and
+unsupported central-directory extensions fail closed. This is an intentional
+conservative restriction for candidate GitHub Actions artifact ZIPs, not a
+general-purpose ZIP compatibility promise.
+
+It bounds ZIP input size, entry count, and total
 uncompressed bytes; reads members in chunks; checks for changes during its
 inspection; and never extracts or rewrites candidate evidence. It produces
 an observed-current ZIP SHA-256 and per-file SHA-256 inventory on stdout.
