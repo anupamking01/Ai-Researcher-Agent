@@ -71,6 +71,45 @@ def test_harmless_compatible_unicode_filename_still_valid(tmp_path):
     assert receipt["files"][0]["path"] == "reports/\uFF26ullwidth.txt"
 
 
+@pytest.mark.parametrize("name", [
+    "results/report.md:ads",            # NTFS alternate data stream
+    "results/report?.md",              # Windows wildcard
+    "results/report*2026.md",
+    "results/report<old>.md",
+    "results/a|b.txt",
+    "results/a\"b.txt",
+    "results/report.",                 # Win32 trims trailing periods
+    "results/report ",                # Win32 trims trailing spaces
+    "results/trace. /child.json",     # dangerous intermediate component
+    "results/NUL.txt",
+    "results/CON",                    # device name without extension
+    "results/aux/report.json",        # reserved directory component
+    "results/PRN.md",
+    "results/COM1.log",
+    "results/LPT9.log",
+    "results/CONIN$.txt",
+    "results/CONOUT$.txt",
+    "results/COM\u00B9.md",          # superscript digit becomes 1 under NFKC
+    "results/\uFF23\uFF2F\uFF2E.txt", # fullwidth CON becomes device name
+    "results/nul .txt",               # Win32 strips spaces before extension
+])
+def test_nonportable_windows_aliases_devices_and_ads_rejected(tmp_path, name):
+    """Reject paths that cannot be carried safely across common filesystems."""
+    path = _zip(tmp_path / "windows-unsafe.zip", {name: b"synthetic"})
+    with pytest.raises(audit.RecoveredArchiveError, match="unsafe normalized ZIP member"):
+        audit.audit_recovered_zip(path)
+
+
+@pytest.mark.parametrize("name", [
+    "results/console.md", "results/com10.txt", "results/trace..md",
+    "results/nulled/report.md",
+])
+def test_similar_but_portable_names_still_allowed(tmp_path, name):
+    path = _zip(tmp_path / "windows-ok.zip", {name: b"synthetic"})
+    receipt = audit.audit_recovered_zip(path)
+    assert [f["path"] for f in receipt["files"]] == [name]
+
+
 def test_casefold_path_collisions_are_rejected(tmp_path):
     path = _zip(tmp_path / "bad.zip", {"A.txt": b"one", "a.txt": b"two"})
     with pytest.raises(audit.RecoveredArchiveError, match="duplicate or nonportable"):

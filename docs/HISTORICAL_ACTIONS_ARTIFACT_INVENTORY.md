@@ -107,7 +107,13 @@ unsupported compression methods, oversized members, excessive expansion, and
 invalid ZIP/CRC content. Name safety is checked both before and after Unicode
 NFKC/casefold normalization: compatibility characters must not introduce dot
 traversal segments, new path separators, backslashes, or drive-like prefixes.
-Harmless Unicode filenames remain supported, and original member spellings are
+It also rejects Windows/NTFS-unsafe component names (reserved device names,
+trailing periods/spaces, alternate-data-stream colons, and forbidden filesystem
+characters) after normalization. These otherwise create aliases, inaccessible
+paths, or streams on a different platform despite appearing valid in a ZIP.
+Names merely resembling device names remain valid. These checks reduce
+cross-platform recovery hazards, but do not authorize extraction or establish
+evidence authenticity. Harmless Unicode filenames remain supported, and original member spellings are
 preserved in the current-observation receipt. Empty directory entries are also read through the
 ZIP decoder, so their local headers, compressed streams, and CRCs cannot evade
 verification just because directory names are omitted from the file inventory.

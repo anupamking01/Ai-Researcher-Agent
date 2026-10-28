@@ -25,6 +25,13 @@ MAX_COMPRESSION_RATIO = 1000
 CHUNK_BYTES = 1024 * 1024
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
+WINDOWS_FORBIDDEN_CHARS = frozenset('<>:"|?*')
+WINDOWS_DEVICE_NAMES = frozenset(
+    {"con", "prn", "aux", "nul", "conin$", "conout$"}
+    | {f"com{number}" for number in range(1, 10)}
+    | {f"lpt{number}" for number in range(1, 10)}
+)
+
 
 class RecoveredArchiveError(ValueError):
     """An archive cannot be trusted even for safe offline inspection."""
@@ -71,6 +78,14 @@ def _path_key(name: str) -> str:
         or "\\" in normalized
         or ":" in normalized_parts[0]
         or any(unicodedata.category(c) in ("Cc", "Cf", "Cs") for c in normalized)
+        or any(
+            # Windows aliases, devices, and NTFS alternate data streams must
+            # not turn a structurally safe member into an unsafe extraction.
+            part.endswith((" ", "."))
+            or any(char in WINDOWS_FORBIDDEN_CHARS for char in part)
+            or part.split(".", 1)[0].rstrip(" ") in WINDOWS_DEVICE_NAMES
+            for part in normalized_parts
+        )
     ):
         raise RecoveredArchiveError(f"unsafe normalized ZIP member name: {name!r}")
     return normalized
