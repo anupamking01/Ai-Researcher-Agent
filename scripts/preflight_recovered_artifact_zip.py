@@ -74,7 +74,7 @@ def _inspect_member(info: zipfile.ZipInfo) -> tuple[str, bool]:
         raise RecoveredArchiveError(f"unsupported ZIP compression: {info.filename!r}")
     if info.file_size < 0 or info.compress_size < 0:
         raise RecoveredArchiveError("negative ZIP member size")
-    if is_directory and (info.file_size or info.compress_size > 0):
+    if is_directory and info.file_size:
         raise RecoveredArchiveError(f"nonempty directory entry: {info.filename!r}")
     if info.file_size > MAX_MEMBER_BYTES:
         raise RecoveredArchiveError(f"ZIP member exceeds size limit: {info.filename!r}")

@@ -125,3 +125,13 @@ def test_non_zip_fails_closed(tmp_path):
     path.write_bytes(b"not a ZIP")
     with pytest.raises(audit.RecoveredArchiveError, match="cannot safely inspect"):
         audit.audit_recovered_zip(path)
+
+
+def test_empty_deflated_directory_entry_is_allowed(tmp_path):
+    path = tmp_path / "directory.zip"
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as out:
+        out.writestr("folder/", b"")
+        out.writestr("folder/report.md", b"# Synthetic")
+    receipt = audit.audit_recovered_zip(path)
+    assert receipt["file_count"] == 1
+    assert receipt["files"][0]["path"] == "folder/report.md"
