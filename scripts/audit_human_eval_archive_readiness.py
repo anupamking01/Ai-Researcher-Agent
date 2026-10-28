@@ -345,6 +345,61 @@ def _validate_recovered_source_ledgers(trace: dict, *, variant: str) -> None:
         raise ValueError("recovered trace source URL ledger partition is inconsistent")
 
 
+
+def _validate_recovered_provider_usage(trace: dict) -> None:
+    """Validate the frozen run's per-model usage and aggregate cost basis.
+
+    The historical runner required complete provider-reported usage for every
+    model. Aggregate model-call and token counts can match the published CSV
+    while the underlying provider ledger is missing or internally impossible.
+    This is internal consistency only; historical prices and archive custody
+    are not independently authenticated here.
+    """
+    by_model = trace.get("provider_usage_by_model")
+    if type(by_model) is not dict or not by_model:
+        raise ValueError("recovered trace provider_usage_by_model must be nonempty")
+
+    totals = {
+        "model_calls": 0, "unavailable_calls": 0,
+        "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+    }
+    for model, usage in by_model.items():
+        if type(model) is not str or not model or model != model.strip():
+            raise ValueError("recovered trace provider model name is invalid")
+        if type(usage) is not dict:
+            raise ValueError(f"recovered trace {model} usage ledger must be an object")
+        for field in totals:
+            value = usage.get(field)
+            if type(value) is not int or value < 0:
+                raise ValueError(
+                    f"recovered trace {model} {field} must be a nonnegative integer"
+                )
+            totals[field] += value
+        if usage["model_calls"] <= 0:
+            raise ValueError(f"recovered trace {model} model_calls must be positive")
+        if usage["unavailable_calls"] != 0:
+            raise ValueError(
+                f"recovered trace {model} unavailable_calls contradict complete usage"
+            )
+        if usage["total_tokens"] != (
+            usage["prompt_tokens"] + usage["completion_tokens"]
+        ):
+            raise ValueError(f"recovered trace {model} total_tokens ledger mismatch")
+
+    expected = {
+        "model_call_count": totals["model_calls"],
+        "unavailable_usage_call_count": totals["unavailable_calls"],
+        "prompt_tokens": totals["prompt_tokens"],
+        "completion_tokens": totals["completion_tokens"],
+        "total_tokens": totals["total_tokens"],
+    }
+    for field, value in expected.items():
+        if type(trace.get(field)) is not int or trace[field] != value:
+            raise ValueError(f"recovered trace aggregate {field} ledger mismatch")
+    if totals["total_tokens"] <= 0:
+        raise ValueError("recovered trace provider usage must contain positive tokens")
+
+
 def _trace_report_content_status(
     *,
     repo_root: Path,
@@ -482,6 +537,7 @@ def _trace_report_content_status(
                         f"treatment CSV {csv_field}"
                     )
             _validate_recovered_source_ledgers(trace, variant=variant)
+            _validate_recovered_provider_usage(trace)
             declared_report = trace.get("report_path")
             if not isinstance(declared_report, str):
                 raise ValueError("trace has no valid original report path")

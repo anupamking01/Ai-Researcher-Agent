@@ -494,6 +494,15 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
                     "total_tokens": 250, "report_words": 50,
                     "source_count": 3, "query_count": 1,
                     "usage_accounting_status": "provider_usage_complete",
+                    "prompt_tokens": 100, "completion_tokens": 150,
+                    "unavailable_usage_call_count": 0,
+                    "provider_usage_by_model": {
+                        "synthetic-model": {
+                            "model_calls": 4, "unavailable_calls": 0,
+                            "prompt_tokens": 100, "completion_tokens": 150,
+                            "total_tokens": 250,
+                        },
+                    },
                     "scheduled_urls": [
                         "https://example.test/a", "https://example.test/b",
                         "https://example.test/c",
@@ -737,6 +746,85 @@ def test_recovered_source_provenance_requires_consistent_original_ledgers(
     assert error_fragment in result["trace_report_content"]["first_failure"]
     assert "original_trace_report_content_alignment" in result["blockers"]
     assert result["handoff_verified"] is False
+
+
+
+@pytest.mark.parametrize("field,bad_value,error_fragment", [
+    ("provider_usage_by_model", None, "provider_usage_by_model"),
+    ("provider_usage_by_model", {}, "provider_usage_by_model"),
+    ("prompt_tokens", True, "aggregate prompt_tokens"),
+    ("prompt_tokens", 101, "aggregate prompt_tokens"),
+    ("completion_tokens", 149, "aggregate completion_tokens"),
+    ("unavailable_usage_call_count", 1, "aggregate unavailable_usage_call_count"),
+])
+def test_recovered_provider_usage_requires_complete_aggregate_concordance(
+    tmp_path, monkeypatch, field, bad_value, error_fragment
+):
+    """Frozen total counts alone must not certify a corrupted model ledger."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces/D3/d3-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["trace"][field] = bad_value
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert error_fragment in receipt["trace_report_content"]["first_failure"]
+    assert "original_trace_report_content_alignment" in receipt["blockers"]
+    assert receipt["handoff_verified"] is False
+
+
+@pytest.mark.parametrize("field,bad_value,error_fragment", [
+    ("model_calls", True, "model_calls"),
+    ("model_calls", 0, "model_calls"),
+    ("unavailable_calls", 1, "unavailable_calls"),
+    ("prompt_tokens", -1, "prompt_tokens"),
+    ("completion_tokens", 151, "total_tokens"),
+    ("total_tokens", 249, "total_tokens"),
+])
+def test_recovered_provider_usage_rejects_inconsistent_per_model_counters(
+    tmp_path, monkeypatch, field, bad_value, error_fragment
+):
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces/D3/d3-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["trace"]["provider_usage_by_model"]["synthetic-model"][field] = bad_value
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert error_fragment in receipt["trace_report_content"]["first_failure"]
+    assert "original_trace_report_content_alignment" in receipt["blockers"]
+
+
+def test_recovered_provider_usage_accepts_consistent_multi_model_accounting(
+    tmp_path, monkeypatch
+):
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces/D3/d3-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["trace"]["provider_usage_by_model"] = {
+        "model-a": {
+            "model_calls": 2, "unavailable_calls": 0,
+            "prompt_tokens": 70, "completion_tokens": 80, "total_tokens": 150,
+        },
+        "model-b": {
+            "model_calls": 2, "unavailable_calls": 0,
+            "prompt_tokens": 30, "completion_tokens": 70, "total_tokens": 100,
+        },
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["trace_report_content"]["status"] == (
+        "40_trace_report_contents_align_to_frozen_cells_not_authenticated"
+    )
+    assert receipt["trace_report_content"]["checked"] == 40
+    assert receipt["handoff_verified"] is False
 
 
 @pytest.mark.parametrize("replacement", [

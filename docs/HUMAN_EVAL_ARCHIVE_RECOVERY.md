@@ -131,7 +131,16 @@ the frozen arm budget, completed source outcomes accounting for all scheduled
 URLs, unique/nonblank URLs in the scheduled/success/failed lists, disjoint
 success/failure partitions, search calls within the query count, and completed
 provider-usage accounting. Thus matching aggregate CSV counters cannot mask
-an internally contradictory URL/source ledger. This does **not** prove any
+an internally contradictory URL/source ledger. A separate provider-usage
+concordance check now requires each recovered model's nonnegative integer call
+and token counters, positive call count, zero unavailable-usage calls, and
+`total_tokens = prompt_tokens + completion_tokens`; their sums must exactly
+match the trace-level prompt/completion/total token counts and model-call
+totals. This mirrors the original treatment runner's complete-provider-usage
+contract, so unchanged frozen aggregate CSV counters cannot hide a corrupted
+per-model cost basis. It does not re-price requests, independently pin the
+historical pricing table, or establish the accuracy of provider-reported
+usage. This does **not** prove any
 URL was actually retrieved, link any individual source to a report claim, or
 authenticate historical archive bytes. It also reads each corresponding Markdown report, rejects empty or non-UTF-8
 content, and checks the whitespace-split word count against the frozen trace
