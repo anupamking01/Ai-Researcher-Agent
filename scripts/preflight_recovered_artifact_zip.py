@@ -15,6 +15,7 @@ import re
 import stat
 import unicodedata
 import zipfile
+import zlib
 
 MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
 MAX_MEMBERS = 2000
@@ -146,6 +147,16 @@ def audit_recovered_zip(path: Path, *, expected_archive_sha256: str | None = Non
                         raise RecoveredArchiveError("ZIP file conflicts with a nested member path")
                 for info in entries:
                     if info.is_dir():
+                        # ZIP directory members are real entries with local headers,
+                        # compressed streams, and CRCs. Skipping archive.open() would
+                        # accept corrupt directory metadata or unreadable DEFLATE data.
+                        # A one-byte read reaches EOF for a valid empty directory and
+                        # makes ZipExtFile validate its stream and CRC.
+                        with archive.open(info, mode="r") as directory:
+                            if directory.read(1):
+                                raise RecoveredArchiveError(
+                                    f"ZIP directory contains data: {info.filename!r}"
+                                )
                         continue
                     digest = hashlib.sha256()
                     size = 0
@@ -176,7 +187,7 @@ def audit_recovered_zip(path: Path, *, expected_archive_sha256: str | None = Non
             ):
                 raise RecoveredArchiveError("archive changed during inspection")
     except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile, EOFError, RuntimeError,
-            NotImplementedError) as exc:
+            NotImplementedError, zlib.error) as exc:
         raise RecoveredArchiveError(f"cannot safely inspect ZIP: {exc}") from exc
     return {
         "schema_version": 1,

@@ -104,7 +104,11 @@ with `--expected-archive-sha256 <lowercase-64-hex>`. Never derive this
 historical pin from the ZIP being evaluated. This offline, read-only verifier
 rejects path traversal, nonportable/colliding names, links, encrypted entries,
 unsupported compression methods, oversized members, excessive expansion, and
-invalid ZIP/CRC content. It bounds ZIP input size, entry count, and total
+invalid ZIP/CRC content. Empty directory entries are also read through the
+ZIP decoder, so their local headers, compressed streams, and CRCs cannot evade
+verification just because directory names are omitted from the file inventory.
+The decoder validates the declared zero-length directory contents; this
+preflight is not a substitute for independent historical provenance checks. It bounds ZIP input size, entry count, and total
 uncompressed bytes; reads members in chunks; checks for changes during its
 inspection; and never extracts or rewrites candidate evidence. It produces
 an observed-current ZIP SHA-256 and per-file SHA-256 inventory on stdout.

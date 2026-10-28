@@ -135,3 +135,51 @@ def test_empty_deflated_directory_entry_is_allowed(tmp_path):
     receipt = audit.audit_recovered_zip(path)
     assert receipt["file_count"] == 1
     assert receipt["files"][0]["path"] == "folder/report.md"
+
+
+def test_directory_crc_mismatch_is_rejected(tmp_path):
+    """The ZIP reader must inspect directory CRCs, not just regular files."""
+    path = _zip(tmp_path / "bad-directory-crc.zip", {
+        "folder/": b"",
+        "folder/report.md": b"# Synthetic",
+    })
+    raw = bytearray(path.read_bytes())
+    central_header = raw.index(b"PK\\x01\\x02")
+    # Central-directory CRC32 lives 16 bytes after its signature.
+    raw[central_header + 16:central_header + 20] = (1).to_bytes(4, "little")
+    path.write_bytes(raw)
+    with pytest.raises(audit.RecoveredArchiveError, match="cannot safely inspect ZIP"):
+        audit.audit_recovered_zip(path)
+
+
+def test_directory_corrupt_deflate_stream_is_rejected(tmp_path):
+    """An empty directory cannot conceal corrupt compressed data."""
+    path = _zip(tmp_path / "bad-directory-stream.zip", {
+        "folder/": b"",
+        "folder/report.md": b"# Synthetic",
+    })
+    with zipfile.ZipFile(path) as archive:
+        info = archive.getinfo("folder/")
+        assert info.compress_type == zipfile.ZIP_DEFLATED
+        assert info.compress_size == 2
+        offset = info.header_offset + 30 + len(info.filename.encode("utf-8")) + len(info.extra)
+    raw = bytearray(path.read_bytes())
+    raw[offset] = 0xFF  # Invalid DEFLATE block header; central metadata unchanged.
+    path.write_bytes(raw)
+    with pytest.raises(audit.RecoveredArchiveError, match="cannot safely inspect ZIP"):
+        audit.audit_recovered_zip(path)
+
+
+def test_directory_local_name_disagreement_is_rejected(tmp_path):
+    """Local and central ZIP headers must agree for directories too."""
+    path = _zip(tmp_path / "bad-directory-local-header.zip", {
+        "folder/": b"",
+        "folder/report.md": b"# Synthetic",
+    })
+    raw = bytearray(path.read_bytes())
+    assert raw.startswith(b"PK\\x03\\x04")
+    assert raw[30:37] == b"folder/"
+    raw[30:37] = b"foldEr/"  # Same byte count; central entry remains "folder/".
+    path.write_bytes(raw)
+    with pytest.raises(audit.RecoveredArchiveError, match="cannot safely inspect ZIP"):
+        audit.audit_recovered_zip(path)
