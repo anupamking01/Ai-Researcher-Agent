@@ -95,6 +95,62 @@ def test_standalone_bundle_accepts_valid_synthetic_packet(tmp_path):
     )
 
 
+@pytest.mark.parametrize(
+    "bad_id",
+    [
+        '=HYPERLINK("https://example.invalid","score")',
+        "H001-P6V",
+        "H０01",  # Visually confusable Unicode numeral, not an original ID.
+    ],
+)
+def test_standalone_bundle_rejects_coherently_rehashed_unsafe_blind_id(
+    tmp_path, bad_id
+):
+    rows = _rows()
+    rows[0]["blind_id"] = bad_id
+    root = _write_bundle(tmp_path / "bundle", rows)
+    with pytest.raises(ValueError, match="blind_id is not a generated opaque ID"):
+        exporter.verify_annotator_bundle(root)
+
+
+@pytest.mark.parametrize(
+    "bad_task_id",
+    ["P6V", "main-99", "main-01 variant_id", "<img src=x>"],
+)
+def test_standalone_bundle_rejects_coherently_rehashed_unsafe_task_id(
+    tmp_path, bad_task_id
+):
+    rows = _rows()
+    rows[0]["task_id"] = bad_task_id
+    root = _write_bundle(tmp_path / "bundle", rows)
+    with pytest.raises(ValueError, match="task_id is not in the frozen VERA task set"):
+        exporter.verify_annotator_bundle(root)
+
+
+def test_standalone_bundle_enforces_generated_blind_id_sequence(tmp_path):
+    rows = _rows()
+    rows[1]["blind_id"] = "H003"
+    root = _write_bundle(tmp_path / "bundle", rows)
+    with pytest.raises(ValueError, match="generated presentation order"):
+        exporter.verify_annotator_bundle(root)
+
+
+def test_standalone_bundle_requires_declared_reverse_order(tmp_path):
+    root = _write_bundle(tmp_path / "bundle", list(reversed(_rows())))
+    with pytest.raises(ValueError, match="generated presentation order"):
+        exporter.verify_annotator_bundle(root)
+
+    manifest_path = root / "annotator_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["presentation_order"] = "reverse"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    receipt = exporter.verify_annotator_bundle(root)
+    assert receipt["presentation_order"] == "reverse"
+    assert receipt["n_reports"] == 2
+
+
 def test_standalone_bundle_rejects_legacy_schema_without_order_contract(tmp_path):
     root = _write_bundle(tmp_path / "bundle", _rows())
     manifest_path = root / "annotator_manifest.json"

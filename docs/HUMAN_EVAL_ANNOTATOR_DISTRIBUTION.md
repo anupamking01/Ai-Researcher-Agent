@@ -80,6 +80,18 @@ and the verified coordinator-manifest SHA-256. The verifier rejects extra files,
 including a coordinator blinding key copied into the distribution directory
 after export.
 
+Standalone verification also enforces the original packet builder's public
+identifier contract: opaque blind IDs use the literal `H###` format and
+the declared canonical (`H001` through `HNNN`) or complete reverse order;
+task IDs belong to the frozen `main-01` through `main-10` set. These two
+fields are annotator-visible, and blind IDs also appear in spreadsheet-facing
+rating templates. A coherently rehashed bundle cannot use them to insert
+treatment identifiers, markup, or spreadsheet-active formulas while still
+receiving a local verification receipt. This is *structural consistency*, not
+independent authentication: matching IDs do not establish report authenticity
+or full historical archival custody. Source-bound checks and independent
+retained fingerprints remain necessary.
+
 Publication is built in a descriptor-bound staging directory. The exporter
 creates all three files relative to the opened staging inode rather than
 repeatedly resolving its path, checks that path-to-inode binding around

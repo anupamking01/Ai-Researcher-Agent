@@ -50,6 +50,10 @@ DISTRIBUTION_NOTE = (
 )
 CONTENT_VALIDATOR_PATH = "scripts/build_human_eval_packet.py"
 PRESENTATION_ORDERS = ("canonical", "reverse")
+# These are generated identifiers in the original frozen 10-task VERA design.
+# Validate them separately from narrative content: both fields are visible to
+# annotators, and blind_id also appears in spreadsheet-facing ratings templates.
+FROZEN_TASK_IDS = frozenset(f"main-{index:02d}" for index in range(1, 11))
 
 
 def _regular_bytes(path: Path, *, label: str) -> bytes:
@@ -300,6 +304,14 @@ def _read_jsonl_packet(content: bytes) -> list[dict]:
                 raise ValueError(
                     f"annotator packet line {line_number} {field} must be non-empty text"
                 )
+        if re.fullmatch(r"H[0-9]{3}", row["blind_id"]) is None:
+            raise ValueError(
+                f"annotator packet line {line_number} blind_id is not a generated opaque ID"
+            )
+        if row["task_id"] not in FROZEN_TASK_IDS:
+            raise ValueError(
+                f"annotator packet line {line_number} task_id is not in the frozen VERA task set"
+            )
         rows.append(row)
     if not rows:
         raise ValueError("annotator packet contains no reports")
@@ -578,6 +590,14 @@ def verify_annotator_bundle(
         raise ValueError("annotator manifest artifact fingerprint mismatch")
 
     packet_ids = [row["blind_id"].strip() for row in packet_rows]
+    # The builder assigns H001..HNNN after shuffling. The only permitted
+    # alternative is the exporter's complete reverse order, not a substituted,
+    # missing, or out-of-order blind-ID sequence in a self-rehashed bundle.
+    expected_blind_ids = [f"H{index:03d}" for index in range(1, len(packet_rows) + 1)]
+    if presentation_order == "reverse":
+        expected_blind_ids.reverse()
+    if packet_ids != expected_blind_ids:
+        raise ValueError("annotator packet blind IDs deviate from generated presentation order")
     template_ids = [str(row["blind_id"]).strip() for row in template_rows]
     if not all(packet_ids) or len(set(packet_ids)) != len(packet_ids):
         raise ValueError("annotator packet blind IDs must be unique and non-empty")
