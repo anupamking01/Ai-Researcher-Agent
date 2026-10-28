@@ -5,6 +5,7 @@ No GitHub network requests, experiments, artifacts or human ratings are used.
 from __future__ import annotations
 
 import copy
+from datetime import datetime, timezone
 import pytest
 
 from scripts import audit_historical_workflow_artifacts as audit
@@ -30,7 +31,13 @@ def _responses(artifacts=None):
 def _artifact(run_id, name, *, expired=False, ident=1001):
     return {
         "id": ident, "name": name, "expired": expired,
-        "expires_at": "2026-12-23T23:03:46Z",
+        "expires_at": "2099-12-23T23:03:46Z",
+        "size_in_bytes": 10270,
+        "digest": "sha256:" + "a" * 64,
+        "archive_download_url": (
+            f"https://api.github.com/repos/{audit.REPOSITORY}"
+            f"/actions/artifacts/{ident}/zip"
+        ),
         "workflow_run": {"id": run_id},
     }
 
@@ -190,3 +197,102 @@ def test_source_unavailability_is_an_error_not_a_missing_archive_claim():
         raise audit.ArtifactInventoryError("GitHub returned rate-limit response")
     with pytest.raises(audit.ArtifactInventoryError, match="rate-limit"):
         audit.audit_historical_artifact_inventory(fetch_json=inaccessible)
+
+
+def test_listed_original_zip_metadata_is_explicitly_unverified():
+    matches = {
+        run_id: [_artifact(run_id, expected, ident=run_id)]
+        for _, run_id, _, _, _, expected in audit.HISTORICAL_RUNS
+    }
+    inventory = audit.audit_historical_artifact_inventory(
+        fetch_json=_client(_responses(matches)),
+        checked_at=datetime(2026, 10, 28, tzinfo=timezone.utc),
+    )
+    candidate = inventory["historical_runs"]["original_treatment"]["expected_artifact"]
+    assert candidate["zip_size_in_bytes"] == 10270
+    assert candidate["github_zip_digest"] == "sha256:" + "a" * 64
+    assert candidate["archive_download_url"].endswith(
+        f"/actions/artifacts/{audit.HISTORICAL_RUNS[0][1]}/zip"
+    )
+    assert candidate["expiry_elapsed_at_check"] is False
+    assert inventory["historical_evidence_authenticated"] is False
+    assert inventory["human_evaluation_ready"] is False
+
+
+def test_elapsed_expiry_flag_cannot_claim_downloadable_candidate():
+    role, run_id, _, _, _, expected = audit.HISTORICAL_RUNS[0]
+    candidate = _artifact(run_id, expected, ident=501)
+    candidate["expires_at"] = "2026-10-28T12:00:00Z"
+    inventory = audit.audit_historical_artifact_inventory(
+        fetch_json=_client(_responses({run_id: [candidate]})),
+        checked_at=datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc),
+    )
+    receipt = inventory["historical_runs"][role]
+    assert receipt["listing_status"] == "named_artifact_listed_elapsed_expiry"
+    assert receipt["expected_artifact"]["expiry_elapsed_at_check"] is True
+    assert inventory["status"] == "blocked_original_artifact_listings"
+
+
+@pytest.mark.parametrize("bad_size", [0, -1, True, 10.2, "10270"])
+def test_invalid_or_empty_zip_size_fails_closed(bad_size):
+    _, run_id, _, _, _, expected = audit.HISTORICAL_RUNS[0]
+    candidate = _artifact(run_id, expected)
+    candidate["size_in_bytes"] = bad_size
+    with pytest.raises(audit.ArtifactInventoryError, match="byte size"):
+        audit.audit_historical_artifact_inventory(
+            fetch_json=_client(_responses({run_id: [candidate]}))
+        )
+
+
+@pytest.mark.parametrize("bad_digest", ["sha256:xyz", "sha1:" + "a" * 40, 123])
+def test_bad_github_zip_digest_fails_closed(bad_digest):
+    _, run_id, _, _, _, expected = audit.HISTORICAL_RUNS[0]
+    candidate = _artifact(run_id, expected)
+    candidate["digest"] = bad_digest
+    with pytest.raises(audit.ArtifactInventoryError, match="ZIP digest"):
+        audit.audit_historical_artifact_inventory(
+            fetch_json=_client(_responses({run_id: [candidate]}))
+        )
+
+
+def test_missing_legacy_github_digest_is_not_a_historical_authentication_claim():
+    _, run_id, _, _, _, expected = audit.HISTORICAL_RUNS[0]
+    candidate = _artifact(run_id, expected)
+    candidate["digest"] = None
+    result = audit.audit_historical_artifact_inventory(
+        fetch_json=_client(_responses({run_id: [candidate]}))
+    )
+    assert result["historical_runs"]["original_treatment"]["expected_artifact"]["github_zip_digest"] is None
+    assert result["historical_evidence_authenticated"] is False
+
+
+@pytest.mark.parametrize("bad_expiry", [
+    "tomorrow", "2026-02-30T00:00:00Z", "2026-12-23T23:03:46",
+    "2026-12-23T23:03:46+01:00",
+])
+def test_malformed_or_ambiguous_artifact_expiry_fails_closed(bad_expiry):
+    _, run_id, _, _, _, expected = audit.HISTORICAL_RUNS[0]
+    candidate = _artifact(run_id, expected)
+    candidate["expires_at"] = bad_expiry
+    with pytest.raises(audit.ArtifactInventoryError, match="expir"):
+        audit.audit_historical_artifact_inventory(
+            fetch_json=_client(_responses({run_id: [candidate]}))
+        )
+
+
+def test_unscoped_download_endpoint_fails_closed():
+    _, run_id, _, _, _, expected = audit.HISTORICAL_RUNS[0]
+    candidate = _artifact(run_id, expected)
+    candidate["archive_download_url"] = "https://example.com/artifact.zip"
+    with pytest.raises(audit.ArtifactInventoryError, match="download URL"):
+        audit.audit_historical_artifact_inventory(
+            fetch_json=_client(_responses({run_id: [candidate]}))
+        )
+
+
+def test_naive_inventory_clock_fails_closed():
+    with pytest.raises(audit.ArtifactInventoryError, match="timezone-aware"):
+        audit.audit_historical_artifact_inventory(
+            fetch_json=_client(_responses()),
+            checked_at=datetime(2026, 10, 28),
+        )

@@ -29,3 +29,24 @@ The output distinguishes **named artifact absent**, **named artifact expired**, 
 As observed on **2026-10-28**, the two original/recovery runs returned no artifacts in their run-scoped listings. The canonical-analysis run still listed artifact **10837878458**, expiry **2026-12-23T23:03:46Z**. These are point-in-time API observations; the inventory command must be rerun for current status. Nothing here proves an original archive was destroyed or rules out authorized institutional/offline backups. Do **not** treat a newly generated pin for recovered material as an independently retained historical fingerprint.
 
 Even if both original artifacts become listed, the JSON still sets historical_evidence_authenticated and human_evaluation_ready to false. Recovery must satisfy the independent trace/report source-custody checks and the blinded packet/handoff gates in HUMAN_EVAL_ARCHIVE_RECOVERY.md. No pilot, confirmatory, exploratory, or pending human-validation conclusion is changed by this read-only availability audit.
+
+## ZIP metadata and expiry checks (availability, not custody)
+
+For each listed artifact, the inventory checks that the GitHub-provided ZIP
+size is a positive integer, that its archive download endpoint points to
+the expected artifact in this repository, and that its expiry is an unambiguous
+UTC timestamp. The output records zip_size_in_bytes, archive_download_url,
+and github_zip_digest (when GitHub supplies a well-formed sha256 value),
+so an operator can identify the specific ZIP advertised at inventory time.
+This SHA-256 is GitHub-generated ZIP metadata, NOT an independently retained
+file-byte fingerprint for the original 40 traces or Markdown reports.
+A missing GitHub digest is represented as null, not silently synthesized.
+
+All three run listings are evaluated against one checked_at_utc timestamp.
+An artifact with expired=false but expires_at at or before that instant is
+reported as named_artifact_listed_elapsed_expiry and cannot count as a
+nonexpired candidate; expired=true remains expired even with a future
+deadline. Ambiguous timestamps, zero-size ZIPs, malformed digest metadata,
+or an unrelated ZIP endpoint fail closed. No listed metadata proves download
+success, ZIP content validity, independent historical custody, or human
+evaluation readiness.

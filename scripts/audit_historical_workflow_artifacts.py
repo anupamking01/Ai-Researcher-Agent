@@ -106,6 +106,19 @@ def _require_object(value: object, *, label: str) -> dict:
     return value
 
 
+def _parse_expiry_utc(value: object) -> datetime:
+    """Require an unambiguous GitHub UTC expiry timestamp."""
+    if type(value) is not str or re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)",
+        value,
+    ) is None:
+        raise ArtifactInventoryError("artifact expiry is not an RFC3339 UTC timestamp")
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ArtifactInventoryError("artifact expiry timestamp is invalid") from exc
+
+
 def _listed_artifacts(
     run_id: int, *, fetch_json: Callable[[str], object]
 ) -> list[dict]:
@@ -136,12 +149,25 @@ def _listed_artifacts(
                 raise ArtifactInventoryError("artifact listing has invalid or repeated artifact ID")
             seen_ids.add(artifact_id)
             if (
-                not isinstance(artifact.get("name"), str)
+                type(artifact.get("name")) is not str
                 or not artifact["name"]
                 or type(artifact.get("expired")) is not bool
-                or not isinstance(artifact.get("expires_at"), str)
             ):
                 raise ArtifactInventoryError("artifact listing has invalid name/expiry metadata")
+            _parse_expiry_utc(artifact.get("expires_at"))
+            if type(artifact.get("size_in_bytes")) is not int or artifact["size_in_bytes"] <= 0:
+                raise ArtifactInventoryError("artifact ZIP has invalid or zero byte size")
+            expected_url = (
+                f"{API_BASE}/repos/{REPOSITORY}/actions/artifacts/{artifact_id}/zip"
+            )
+            if artifact.get("archive_download_url") != expected_url:
+                raise ArtifactInventoryError("artifact ZIP download URL is not run-repository scoped")
+            digest = artifact.get("digest")
+            if digest is not None and (
+                type(digest) is not str
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
+            ):
+                raise ArtifactInventoryError("artifact ZIP digest metadata is invalid")
             source = artifact.get("workflow_run")
             if source is not None:
                 if type(source) is not dict or source.get("id") != run_id:
@@ -155,9 +181,18 @@ def _listed_artifacts(
 
 
 def audit_historical_artifact_inventory(
-    *, fetch_json: Callable[[str], object] = _fetch_json
+    *,
+    fetch_json: Callable[[str], object] = _fetch_json,
+    checked_at: datetime | None = None,
 ) -> dict:
-    """Pin run identity before interpreting artifact listing metadata."""
+    """Pin run identity and single UTC inventory time before interpreting listings."""
+    if checked_at is None:
+        checked_at = datetime.now(timezone.utc)
+    if not isinstance(checked_at, datetime) or checked_at.tzinfo is None or (
+        checked_at.utcoffset() is None
+    ):
+        raise ArtifactInventoryError("inventory checked_at must be timezone-aware")
+    checked_at = checked_at.astimezone(timezone.utc)
     receipts = {}
     for role, run_id, workflow_name, commit, conclusion, expected_name in HISTORICAL_RUNS:
         path = f"/repos/{REPOSITORY}/actions/runs/{run_id}"
@@ -177,7 +212,16 @@ def audit_historical_artifact_inventory(
         matching = [item for item in artifacts if item["name"] == expected_name]
         if len(matching) > 1:
             raise ArtifactInventoryError(f"{role} has duplicate expected artifact names")
-        eligible = [item for item in matching if item["expired"] is False]
+        eligible = [
+            item for item in matching
+            if item["expired"] is False
+            and _parse_expiry_utc(item["expires_at"]) > checked_at
+        ]
+        elapsed_expiry = bool(
+            matching
+            and matching[0]["expired"] is False
+            and _parse_expiry_utc(matching[0]["expires_at"]) <= checked_at
+        )
         receipts[role] = {
             "run_id": run_id,
             "workflow_name": workflow_name,
@@ -191,12 +235,17 @@ def audit_historical_artifact_inventory(
                     "name": matching[0]["name"],
                     "expired": matching[0]["expired"],
                     "expires_at": matching[0]["expires_at"],
+                    "expiry_elapsed_at_check": elapsed_expiry,
+                    "zip_size_in_bytes": matching[0]["size_in_bytes"],
+                    "github_zip_digest": matching[0].get("digest"),
+                    "archive_download_url": matching[0]["archive_download_url"],
                 }
                 if matching else None
             ),
             "listing_status": (
                 "named_nonexpired_artifact_listed_not_download_verified"
                 if eligible else
+                "named_artifact_listed_elapsed_expiry" if elapsed_expiry else
                 "named_artifact_listed_expired" if matching else
                 "named_artifact_not_listed"
             ),
@@ -209,7 +258,7 @@ def audit_historical_artifact_inventory(
     return {
         "schema_version": 1,
         "study_id": "budget-main-v1",
-        "checked_at_utc": datetime.now(timezone.utc).isoformat(),
+        "checked_at_utc": checked_at.isoformat(),
         "repository": REPOSITORY,
         "status": (
             "original_artifact_candidates_listed_not_authenticated"
@@ -225,8 +274,10 @@ def audit_historical_artifact_inventory(
         "interpretation": (
             "Run-scoped GitHub Actions metadata only. An absent/expired listing "
             "does not prove evidence was destroyed or that offline backups do not exist. "
-            "A listed nonexpired artifact is neither a successful ZIP download nor "
-            "independent historical custody authentication. The separate original "
+            "A listed nonexpired artifact requires a positive ZIP size and an expiry "
+            "deadline later than checked_at_utc; its GitHub-supplied digest (when "
+            "present) is metadata, not an independent archive pin. No listing "
+            "proves a successful ZIP download or historical custody. The original "
             "trace/report and blinded human-evaluation gates remain mandatory."
         ),
     }
