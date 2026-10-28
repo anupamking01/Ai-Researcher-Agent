@@ -144,7 +144,7 @@ def test_directory_crc_mismatch_is_rejected(tmp_path):
         "folder/report.md": b"# Synthetic",
     })
     raw = bytearray(path.read_bytes())
-    central_header = raw.index(b"PK\\x01\\x02")
+    central_header = raw.index(b"PK\x01\x02")
     # Central-directory CRC32 lives 16 bytes after its signature.
     raw[central_header + 16:central_header + 20] = (1).to_bytes(4, "little")
     path.write_bytes(raw)
@@ -177,7 +177,7 @@ def test_directory_local_name_disagreement_is_rejected(tmp_path):
         "folder/report.md": b"# Synthetic",
     })
     raw = bytearray(path.read_bytes())
-    assert raw.startswith(b"PK\\x03\\x04")
+    assert raw.startswith(b"PK\x03\x04")
     assert raw[30:37] == b"folder/"
     raw[30:37] = b"foldEr/"  # Same byte count; central entry remains "folder/".
     path.write_bytes(raw)
