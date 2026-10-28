@@ -192,7 +192,7 @@ def _preflight_central_directory(handle, archive_bytes: int) -> int:
     return cd_offset
 
 
-def _verify_local_header_metadata(handle, info: zipfile.ZipInfo, *, cd_offset: int) -> None:
+def _verify_local_header_metadata(handle, info: zipfile.ZipInfo, *, cd_offset: int) -> tuple[int, int]:
     """Require the local and central ZIP records to describe the same member.
 
     Python's zipfile verifies the local filename and decodes using the central
@@ -232,8 +232,27 @@ def _verify_local_header_metadata(handle, info: zipfile.ZipInfo, *, cd_offset: i
         ) == (info.CRC, info.compress_size, info.file_size)
     if not sizes_agree:
         raise RecoveredArchiveError("cannot safely inspect ZIP: local ZIP header CRC/size metadata disagrees with central directory")
-    if start + LOCAL_HEADER.size + name_length + extra_length + info.compress_size > cd_offset:
+    payload_end = start + LOCAL_HEADER.size + name_length + extra_length + info.compress_size
+    if payload_end > cd_offset:
         raise RecoveredArchiveError("local ZIP header/data extends into central directory")
+    if flags & 0x08:
+        # The ZIP reader trusts central metadata and does not verify the
+        # following streaming data descriptor. Require the actual on-disk
+        # CRC/sizes, with or without the optional descriptor signature.
+        unsigned = struct.pack("<III", info.CRC, info.compress_size, info.file_size)
+        handle.seek(payload_end)
+        descriptor = handle.read(min(16, cd_offset - payload_end))
+        if descriptor.startswith(b"PK\x07\x08" + unsigned):
+            member_end = payload_end + 16
+        elif descriptor.startswith(unsigned):
+            member_end = payload_end + 12
+        else:
+            raise RecoveredArchiveError(
+                "streaming ZIP data descriptor disagrees with central directory"
+            )
+    else:
+        member_end = payload_end
+    return start, member_end
 
 def _unchanged(original: os.stat_result, current: os.stat_result) -> bool:
     return (
@@ -279,9 +298,12 @@ def audit_recovered_zip(path: Path, *, expected_archive_sha256: str | None = Non
                 entries = archive.infolist()
                 if not entries or len(entries) > MAX_MEMBERS:
                     raise RecoveredArchiveError("ZIP member count outside permitted bounds")
-                # Validate all central-directory entries BEFORE decompressing any bytes.
+                # Validate all local/central metadata BEFORE decompressing bytes.
+                local_ranges = []
                 for info in entries:
-                    _verify_local_header_metadata(handle, info, cd_offset=cd_offset)
+                    local_ranges.append(
+                        _verify_local_header_metadata(handle, info, cd_offset=cd_offset)
+                    )
                     key, is_directory = _inspect_member(info)
                     if key in seen:
                         raise RecoveredArchiveError(f"duplicate or nonportable ZIP path: {info.filename!r}")
@@ -291,6 +313,16 @@ def audit_recovered_zip(path: Path, *, expected_archive_sha256: str | None = Non
                         total += info.file_size
                         if total > MAX_UNCOMPRESSED_BYTES:
                             raise RecoveredArchiveError("ZIP total uncompressed size exceeds limit")
+                # A member's compressed payload or streaming descriptor must
+                # not overlap any other member's local header or payload.
+                by_offset = sorted(local_ranges)
+                if any(
+                    next_start < previous_end
+                    for (_, previous_end), (next_start, _) in zip(
+                        by_offset, by_offset[1:]
+                    )
+                ):
+                    raise RecoveredArchiveError("overlapping ZIP local member regions")
                 if not file_keys:
                     raise RecoveredArchiveError("ZIP contains no regular files")
                 for key in seen:

@@ -360,8 +360,8 @@ def test_local_zip_header_must_agree_with_central_metadata(
         audit.audit_recovered_zip(path)
 
 
-def test_streaming_zip_data_descriptor_remains_supported(tmp_path):
-    """Bit-3 local placeholders are valid when the central record is authoritative."""
+def _streaming_zip_bytes() -> bytes:
+    """Build a genuine streaming ZIP with a signed data descriptor."""
     class NonSeekingStream(io.BytesIO):
         def seek(self, *args, **kwargs):
             raise OSError("not seekable")
@@ -371,8 +371,79 @@ def test_streaming_zip_data_descriptor_remains_supported(tmp_path):
         archive.writestr("reports/streaming.md", b"# Synthetic streamed report")
     raw = sink.getvalue()
     assert int.from_bytes(raw[6:8], "little") & 0x08
+    assert b"PK\x07\x08" in raw
+    return raw
+
+
+def test_streaming_zip_data_descriptor_remains_supported(tmp_path):
+    """Bit-3 placeholders and a matching signed descriptor are valid."""
     path = tmp_path / "streaming.zip"
-    path.write_bytes(raw)
+    path.write_bytes(_streaming_zip_bytes())
     receipt = audit.audit_recovered_zip(path)
     assert receipt["file_count"] == 1
     assert receipt["files"][0]["path"] == "reports/streaming.md"
+
+
+@pytest.mark.parametrize("descriptor_field_offset", [4, 8, 12])
+def test_streaming_descriptor_crc_and_sizes_must_match(tmp_path, descriptor_field_offset):
+    """zipfile ignores contradictory descriptor fields after successful decoding."""
+    raw = bytearray(_streaming_zip_bytes())
+    descriptor = raw.index(b"PK\x07\x08")
+    raw[descriptor + descriptor_field_offset] ^= 1
+    path = tmp_path / "tampered-descriptor.zip"
+    path.write_bytes(raw)
+    with zipfile.ZipFile(path) as archive:
+        assert archive.read("reports/streaming.md") == b"# Synthetic streamed report"
+    with pytest.raises(audit.RecoveredArchiveError, match="streaming ZIP data descriptor"):
+        audit.audit_recovered_zip(path)
+
+
+def test_missing_streaming_descriptor_is_rejected(tmp_path):
+    """The bit-3 flag must not permit an absent/garbled descriptor."""
+    raw = bytearray(_streaming_zip_bytes())
+    descriptor = raw.index(b"PK\x07\x08")
+    raw[descriptor:descriptor + 4] = b"JUNK"
+    path = tmp_path / "missing-descriptor.zip"
+    path.write_bytes(raw)
+    with zipfile.ZipFile(path) as archive:
+        assert archive.read("reports/streaming.md") == b"# Synthetic streamed report"
+    with pytest.raises(audit.RecoveredArchiveError, match="streaming ZIP data descriptor"):
+        audit.audit_recovered_zip(path)
+
+
+def test_unsigned_streaming_data_descriptor_is_supported(tmp_path):
+    """The descriptor signature is optional in ordinary non-ZIP64 ZIPs."""
+    raw = bytearray(_streaming_zip_bytes())
+    descriptor = raw.index(b"PK\x07\x08")
+    del raw[descriptor:descriptor + 4]
+    eocd = raw.index(b"PK\x05\x06")
+    central_directory_offset = int.from_bytes(raw[eocd + 16:eocd + 20], "little")
+    raw[eocd + 16:eocd + 20] = (central_directory_offset - 4).to_bytes(4, "little")
+    path = tmp_path / "unsigned-descriptor.zip"
+    path.write_bytes(raw)
+    with zipfile.ZipFile(path) as archive:
+        assert archive.read("reports/streaming.md") == b"# Synthetic streamed report"
+    receipt = audit.audit_recovered_zip(path)
+    assert receipt["file_count"] == 1
+    assert receipt["historical_evidence_authenticated"] is False
+
+
+def test_overlapping_local_member_ranges_rejected_before_decode(tmp_path):
+    """Two valid-looking local headers cannot claim overlapping byte ranges."""
+    path = _zip(tmp_path / "overlap.zip", {"a.txt": b"A" * 32, "b.txt": b"B" * 32})
+    raw = bytearray(path.read_bytes())
+    with zipfile.ZipFile(path) as archive:
+        first, second = archive.infolist()
+        data_start = first.header_offset + 30 + len(first.filename.encode("utf-8")) + len(first.extra)
+        overlap_compressed_size = second.header_offset - data_start + 1
+        assert overlap_compressed_size > first.compress_size
+    # Make the local and central compressed-size fields agree with each other
+    # while pointing one payload one byte into the next member's local header.
+    raw[first.header_offset + 18:first.header_offset + 22] = (
+        overlap_compressed_size.to_bytes(4, "little")
+    )
+    central = raw.index(b"PK\x01\x02")
+    raw[central + 20:central + 24] = overlap_compressed_size.to_bytes(4, "little")
+    path.write_bytes(raw)
+    with pytest.raises(audit.RecoveredArchiveError, match="overlapping ZIP local member"):
+        audit.audit_recovered_zip(path)
