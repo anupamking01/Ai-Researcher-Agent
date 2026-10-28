@@ -10,7 +10,7 @@ import pytest
 from scripts import verify_canonical_archive_checkout as audit
 
 
-def _fixture(tmp_path, monkeypatch, *, missing=(), extra=(), altered=()):
+def _fixture(tmp_path, monkeypatch, *, missing=(), extra=(), altered=(), archive_overrides=None):
     root = tmp_path / "checkout"
     sources = {}
     for relative in audit.CANONICAL_MEMBERS:
@@ -25,7 +25,8 @@ def _fixture(tmp_path, monkeypatch, *, missing=(), extra=(), altered=()):
             if relative not in missing:
                 out.writestr(
                     relative,
-                    b"changed synthetic evidence" if relative in altered else content,
+                    b"changed synthetic evidence" if relative in altered
+                    else (archive_overrides or {}).get(relative, content),
                 )
         for relative in extra:
             out.writestr(relative, b"unexpected synthetic bytes")
@@ -137,3 +138,85 @@ def test_symlinked_checkout_member_is_not_accepted(tmp_path, monkeypatch):
     target.symlink_to(other)
     with pytest.raises(ValueError, match="regular file"):
         audit.verify_archive_against_checkout(archive, root=root)
+
+
+def test_github_observed_v1_provenance_is_not_mistaken_for_v2_checkout(
+    tmp_path, monkeypatch
+):
+    archived_v1 = b"synthetic legacy provenance receipt v1"
+    monkeypatch.setattr(
+        audit, "PUBLISHED_ARCHIVED_PROVENANCE_SHA256",
+        hashlib.sha256(archived_v1).hexdigest(),
+    )
+    root, archive, sources = _fixture(
+        tmp_path, monkeypatch,
+        archive_overrides={audit.PROVENANCE_RECEIPT: archived_v1},
+    )
+    receipt = audit.verify_archive_against_checkout(archive, root=root)
+    assert receipt["historical_workflow_receipt_exception_used"] is True
+    assert receipt["status"] == (
+        "canonical_archive_matches_checkout_and_pinned_historical_receipt_not_original_evidence"
+    )
+    assert receipt["archived_provenance_receipt_sha256"] == hashlib.sha256(
+        archived_v1
+    ).hexdigest()
+    assert receipt["verified_checkout_provenance_receipt_sha256"] == hashlib.sha256(
+        sources[audit.PROVENANCE_RECEIPT]
+    ).hexdigest()
+    matched = {member["path"]: member for member in receipt["matched_files"]}
+    assert len(matched) == 7
+    assert matched[audit.PROVENANCE_RECEIPT]["sha256"] != (
+        receipt["verified_checkout_provenance_receipt_sha256"]
+    )
+    assert matched[audit.PROVENANCE_RECEIPT]["match_basis"] == (
+        "pinned_github_workflow_v1_receipt"
+    )
+    assert all(
+        member["match_basis"] == "verified_checkout"
+        for path, member in matched.items() if path != audit.PROVENANCE_RECEIPT
+    )
+    assert receipt["historical_evidence_authenticated"] is False
+    assert receipt["human_evaluation_ready"] is False
+
+
+def test_unpinned_v1_lookalike_fails_closed(tmp_path, monkeypatch):
+    root, archive, _ = _fixture(
+        tmp_path, monkeypatch,
+        archive_overrides={
+            audit.PROVENANCE_RECEIPT: b"arbitrary unpinned synthetic receipt"
+        },
+    )
+    with pytest.raises(ValueError, match="pinned published provenance receipt"):
+        audit.verify_archive_against_checkout(archive, root=root)
+
+
+def test_pinned_v1_receipt_cannot_mask_changed_analysis_bytes(
+    tmp_path, monkeypatch
+):
+    archived_v1 = b"synthetic legacy provenance receipt v1"
+    monkeypatch.setattr(
+        audit, "PUBLISHED_ARCHIVED_PROVENANCE_SHA256",
+        hashlib.sha256(archived_v1).hexdigest(),
+    )
+    root, archive, _ = _fixture(
+        tmp_path, monkeypatch,
+        archive_overrides={audit.PROVENANCE_RECEIPT: archived_v1},
+        altered=("outputs/main_study_inference.json",),
+    )
+    with pytest.raises(ValueError, match="main_study_inference.json"):
+        audit.verify_archive_against_checkout(archive, root=root)
+
+
+def test_identical_v2_receipt_does_not_claim_historical_exception(
+    tmp_path, monkeypatch
+):
+    root, archive, sources = _fixture(tmp_path, monkeypatch)
+    receipt = audit.verify_archive_against_checkout(archive, root=root)
+    assert receipt["historical_workflow_receipt_exception_used"] is False
+    assert receipt["historical_workflow_receipt_pin_source"] is None
+    assert receipt["archived_provenance_receipt_sha256"] == hashlib.sha256(
+        sources[audit.PROVENANCE_RECEIPT]
+    ).hexdigest()
+    assert {entry["match_basis"] for entry in receipt["matched_files"]} == {
+        "verified_checkout"
+    }
