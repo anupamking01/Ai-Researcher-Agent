@@ -131,7 +131,16 @@ the frozen arm budget, completed source outcomes accounting for all scheduled
 URLs, unique/nonblank URLs in the scheduled/success/failed lists, disjoint
 success/failure partitions, search calls within the query count, and completed
 provider-usage accounting. Thus matching aggregate CSV counters cannot mask
-an internally contradictory URL/source ledger. A separate provider-usage
+an internally contradictory URL/source ledger. The diagnostic additionally
+reconciles each trace's actual `search_queries` and `search_records` with its
+query/search-call counters and globally scheduled URLs: recorded queries must
+follow the planned order (allowing budget-skipped queries), search-result
+candidate URLs must contain newly scheduled URLs in their original order,
+and transient failed-search records cannot claim successful scheduling.
+This catches tampered nested retrieval records even if the frozen aggregate
+counters and URL partitions agree. It does not demonstrate that a search
+engine returned those candidates, or that URLs were genuinely visited.
+A separate provider-usage
 concordance check now requires each recovered model's nonnegative integer call
 and token counters, positive call count, zero unavailable-usage calls, and
 `total_tokens = prompt_tokens + completion_tokens`; their sums must exactly

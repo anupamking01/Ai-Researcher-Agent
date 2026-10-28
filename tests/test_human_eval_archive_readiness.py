@@ -510,6 +510,18 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
                     "total_tokens": 250, "report_words": 50,
                     "latency_seconds": 1.25,
                     "source_count": 3, "query_count": 1,
+                    "search_queries": [tasks["tasks"][n]["question"]],
+                    "search_records": [{
+                        "query": tasks["tasks"][n]["question"],
+                        "candidate_urls": [
+                            "https://example.test/a", "https://example.test/b",
+                            "https://example.test/c",
+                        ],
+                        "scheduled_urls": [
+                            "https://example.test/a", "https://example.test/b",
+                            "https://example.test/c",
+                        ],
+                    }],
                     "usage_accounting_status": "provider_usage_complete",
                     "prompt_tokens": 100, "completion_tokens": 150,
                     "unavailable_usage_call_count": 0,
@@ -1158,3 +1170,94 @@ def test_missing_historical_pricing_bytes_block_cost_concordance(
     )
     assert "original_trace_report_content_alignment" in receipt["blockers"]
 
+
+@pytest.mark.parametrize("mutation,expected_fragment", [
+    ("missing_queries", "search_queries"),
+    ("empty_queries", "search_queries"),
+    ("nonstring_query", "search_queries"),
+    ("missing_records", "search_records"),
+    ("empty_records", "search_records"),
+    ("nonobject_record", "search_records[0]"),
+    ("record_unplanned_query", "query order differs"),
+    ("record_candidate_type", "candidate_urls"),
+    ("record_candidate_without_scheduled_url", "scheduled URL is missing"),
+    ("record_reordered_urls", "candidate-result order"),
+    ("record_incomplete_schedule", "scheduled URLs differ"),
+    ("record_error_with_schedule", "search_error record"),
+])
+def test_recovered_search_result_ledger_cannot_mask_frozen_source_counts(
+    tmp_path, monkeypatch, mutation, expected_fragment
+):
+    """All aggregate counters still agree; tampered nested retrieval must fail."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces/D3/d3-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    trace = payload["trace"]
+    record = trace["search_records"][0]
+    if mutation == "missing_queries":
+        del trace["search_queries"]
+    elif mutation == "empty_queries":
+        trace["search_queries"] = []
+    elif mutation == "nonstring_query":
+        trace["search_queries"] = [123]
+    elif mutation == "missing_records":
+        del trace["search_records"]
+    elif mutation == "empty_records":
+        trace["search_records"] = []
+    elif mutation == "nonobject_record":
+        trace["search_records"] = [False]
+    elif mutation == "record_unplanned_query":
+        record["query"] = "unplanned search"
+    elif mutation == "record_candidate_type":
+        record["candidate_urls"] = "https://example.test/a"
+    elif mutation == "record_candidate_without_scheduled_url":
+        record["candidate_urls"] = ["https://example.test/a"]
+    elif mutation == "record_reordered_urls":
+        record["scheduled_urls"] = list(reversed(record["scheduled_urls"]))
+    elif mutation == "record_incomplete_schedule":
+        record["scheduled_urls"] = record["scheduled_urls"][:-1]
+    elif mutation == "record_error_with_schedule":
+        record["search_error"] = "synthetic search outage"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert expected_fragment in receipt["trace_report_content"]["first_failure"]
+    assert "original_trace_report_content_alignment" in receipt["blockers"]
+    assert receipt["handoff_verified"] is False
+
+
+def test_search_provenance_accepts_skipped_planned_query_and_failed_search():
+    """The runner may skip a plan step and record a search outage with no URLs."""
+    trace = {
+        "query_count": 3,
+        "search_call_count": 2,
+        "search_queries": ["query one", "budget skipped", "query three"],
+        "search_records": [
+            {"query": "query one",
+             "candidate_urls": ["https://example.test/one"],
+             "scheduled_urls": ["https://example.test/one"]},
+            {"query": "query three", "candidate_urls": [], "scheduled_urls": [],
+             "search_error": "synthetic transient failure"},
+        ],
+        "scheduled_urls": ["https://example.test/one"],
+    }
+    audit._validate_recovered_search_provenance(trace)
+
+
+def test_search_provenance_rejects_out_of_order_executed_queries():
+    """Matching query counts do not permit reshuffling the retrieval plan."""
+    trace = {
+        "query_count": 2,
+        "search_call_count": 2,
+        "search_queries": ["first", "second"],
+        "search_records": [
+            {"query": "second", "candidate_urls": [], "scheduled_urls": []},
+            {"query": "first", "candidate_urls": [], "scheduled_urls": []},
+        ],
+        "scheduled_urls": [],
+    }
+    with pytest.raises(ValueError, match="query order"):
+        audit._validate_recovered_search_provenance(trace)

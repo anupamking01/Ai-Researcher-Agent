@@ -352,6 +352,75 @@ def _validate_recovered_source_ledgers(trace: dict, *, variant: str) -> None:
 
 
 
+
+def _validate_recovered_search_provenance(trace: dict) -> None:
+    """Reconcile the original runner's query/result ledger with scheduled URLs.
+
+    The experiment runner persists both planned queries and one result record
+    per actual search invocation. Aggregate search-call and source counters can
+    agree with frozen CSV measurements even if these nested records were
+    replaced. Skipped planned queries are legitimate when budget runs out.
+    This checks internal consistency, not real retrieval or archive custody.
+    """
+    queries = trace.get("search_queries")
+    if (type(queries) is not list
+            or len(queries) != trace["query_count"]
+            or any(type(query) is not str or not query.strip()
+                   for query in queries)):
+        raise ValueError("recovered trace search_queries/query_count ledger is invalid")
+
+    records = trace.get("search_records")
+    if type(records) is not list or len(records) != trace["search_call_count"]:
+        raise ValueError("recovered trace search_records/search_call_count ledger is invalid")
+
+    next_query = 0
+    scheduled_from_records: list[str] = []
+    for index, record in enumerate(records):
+        if type(record) is not dict:
+            raise ValueError(f"recovered search_records[{index}] is not an object")
+        query = record.get("query")
+        if type(query) is not str or not query.strip():
+            raise ValueError(f"recovered search_records[{index}] query is invalid")
+        # A query can be skipped if its allocated source budget was already
+        # exhausted. Executed queries must nevertheless preserve plan order,
+        # even when two planned queries have identical text.
+        while next_query < len(queries) and queries[next_query] != query:
+            next_query += 1
+        if next_query == len(queries):
+            raise ValueError("recovered search_records query order differs from plan")
+        next_query += 1
+
+        candidates = record.get("candidate_urls")
+        scheduled = record.get("scheduled_urls")
+        if (type(candidates) is not list
+                or any(type(url) is not str or not url for url in candidates)):
+            raise ValueError(f"recovered search_records[{index}] candidate_urls invalid")
+        if (type(scheduled) is not list
+                or any(type(url) is not str or not url for url in scheduled)):
+            raise ValueError(f"recovered search_records[{index}] scheduled_urls invalid")
+        if "search_error" in record and (
+            type(record["search_error"]) is not str or candidates or scheduled
+        ):
+            raise ValueError("recovered search_error record has candidate/scheduled URLs")
+
+        # The original get_new_urls retains candidate-result order while
+        # removing previously visited URLs; repetitions in search results are
+        # legitimate, but newly scheduled URLs cannot be invented/reordered.
+        candidate_index = 0
+        for url in scheduled:
+            while (candidate_index < len(candidates)
+                   and candidates[candidate_index] != url):
+                candidate_index += 1
+            if candidate_index == len(candidates):
+                raise ValueError("recovered search_records scheduled URL is missing "
+                                 "or out of candidate-result order")
+            candidate_index += 1
+        scheduled_from_records.extend(scheduled)
+
+    if scheduled_from_records != trace.get("scheduled_urls"):
+        raise ValueError("recovered search_records scheduled URLs differ from trace ledger")
+
+
 def _validate_recovered_provider_usage(trace: dict) -> None:
     """Validate the frozen run's per-model usage and aggregate cost basis.
 
@@ -611,6 +680,7 @@ def _trace_report_content_status(
                         f"treatment CSV {csv_field}"
                     )
             _validate_recovered_source_ledgers(trace, variant=variant)
+            _validate_recovered_search_provenance(trace)
             _validate_recovered_provider_usage(trace)
             _validate_recovered_efficiency_measurements(
                 trace, frozen_row, pricing_models=pricing_models
