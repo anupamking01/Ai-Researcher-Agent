@@ -90,3 +90,28 @@ The GitHub run API exposes last-update time, not a separately authenticated
 completion timestamp. An update after execution could broaden that interval;
 the audit cannot prove the precise moment a job finished or establish custody
 from these timestamps alone.
+
+
+## Offline preflight for a recovered candidate ZIP (not authentication)
+
+If a ZIP is later recovered from an authorized original or offline backup,
+inspect it **before any extraction**:
+
+    python -m scripts.preflight_recovered_artifact_zip <candidate.zip>
+
+An optional previously retained **independent ZIP-byte SHA-256** can be checked
+with `--expected-archive-sha256 <lowercase-64-hex>`. Never derive this
+historical pin from the ZIP being evaluated. This offline, read-only verifier
+rejects path traversal, nonportable/colliding names, links, encrypted entries,
+unsupported compression methods, oversized members, excessive expansion, and
+invalid ZIP/CRC content. It bounds ZIP input size, entry count, and total
+uncompressed bytes; reads members in chunks; checks for changes during its
+inspection; and never extracts or rewrites candidate evidence. It produces
+an observed-current ZIP SHA-256 and per-file SHA-256 inventory on stdout.
+
+A structurally valid ZIP is **not** evidence that its report contents came from
+the original experiments. A newly calculated hash is not an independently
+retained provenance anchor, and an independently retained ZIP hash is not
+a substitute for the original trace/report and integrated human-evaluation
+handoff checks documented in HUMAN_EVAL_ARCHIVE_RECOVERY.md.
+The command does not regenerate reports, evaluator results, or human ratings.
