@@ -138,9 +138,18 @@ and token counters, positive call count, zero unavailable-usage calls, and
 match the trace-level prompt/completion/total token counts and model-call
 totals. This mirrors the original treatment runner's complete-provider-usage
 contract, so unchanged frozen aggregate CSV counters cannot hide a corrupted
-per-model cost basis. It does not re-price requests, independently pin the
-historical pricing table, or establish the accuracy of provider-reported
-usage. This does **not** prove any
+per-model cost basis. The recovery diagnostic now also requires a finite,
+nonnegative original trace latency equal to the frozen treatment CSV latency,
+and independently recomputes each treatment's cost from the captured per-model
+token ledger using the dated *uncached* price table in the original treatment
+checkout. That table is SHA-256-bound to historical workflow run 34620917346
+(source commit `c3c15e46a8eec3a8bbc24c968eedc0548172a897`;
+file digest `35eb6aea8a4e494ea6b94a0905e893849958d37ac386915aac7958b00c4eeace`).
+An unknown priced model, mismatched cost or latency, or edited/missing pricing
+source blocks content readiness. Costs use the historical `math.fsum` method
+with a small floating-point tolerance; they are research estimates, **not**
+independently authenticated provider billing, real-world charged costs, or
+evidence about cached-token discounts. This does **not** prove any
 URL was actually retrieved, link any individual source to a report claim, or
 authenticate historical archive bytes. It also reads each corresponding Markdown report, rejects empty or non-UTF-8
 content, and checks the whitespace-split word count against the frozen trace

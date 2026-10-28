@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import stat
 from pathlib import Path
@@ -38,6 +39,11 @@ TRACE_TO_MAIN_MEASUREMENTS = (
     ("total_tokens", "total_tokens"),
     ("report_words", "report_words"),
 )
+# Pricing bytes from historical treatment workflow 34620917346 (source
+# commit c3c15e46...). Never use present-day prices for frozen outcomes.
+FROZEN_PRICING_REL = "experiments/openai_pricing_2026-09-08.json"
+ORIGINAL_PRICING_SHA256 = "35eb6aea8a4e494ea6b94a0905e893849958d37ac386915aac7958b00c4eeace"
+
 FROZEN_EXECUTION_MODES = {
     "D3": ("direct", "none"),
     "D6": ("direct", "none"),
@@ -400,6 +406,73 @@ def _validate_recovered_provider_usage(trace: dict) -> None:
         raise ValueError("recovered trace provider usage must contain positive tokens")
 
 
+
+def _load_original_run_pricing(repo_root: Path) -> dict:
+    """Capture exactly the historical treatment checkout's dated price table.
+
+    The source revision anchor constrains re-pricing but is not independent
+    evidence of provider billing or historical archive custody.
+    """
+    raw = packet_builder._read_regular_file_captured(
+        repo_root / FROZEN_PRICING_REL, label="original treatment-run pricing table"
+    )
+    if hashlib.sha256(raw).hexdigest() != ORIGINAL_PRICING_SHA256:
+        raise ValueError("original treatment-run pricing table source fingerprint mismatch")
+    payload = packet_builder._load_json_object(
+        raw, label="original treatment-run pricing table"
+    )
+    if (payload.get("unit") != "per_1m_text_tokens"
+            or payload.get("currency") != "USD"
+            or type(payload.get("models")) is not dict):
+        raise ValueError("original treatment-run pricing table has invalid units")
+    return payload["models"]
+
+
+def _validate_recovered_efficiency_measurements(
+    trace: dict, frozen_row: dict, *, pricing_models: dict
+) -> None:
+    """Check latency and reprice model usage against frozen treatment results.
+
+    Reproduce the historical run summarizer's uncached-token cost method;
+    trace.estimated_cost_usd is only an uncomputed placeholder.
+    """
+    latency = trace.get("latency_seconds")
+    if type(latency) not in (int, float) or not math.isfinite(latency) or latency < 0:
+        raise ValueError("recovered trace latency_seconds must be finite and nonnegative")
+    try:
+        frozen_latency = float(frozen_row["latency_seconds"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("frozen treatment latency_seconds is invalid") from exc
+    if not math.isfinite(frozen_latency) or latency != frozen_latency:
+        raise ValueError("recovered trace latency_seconds differs from frozen treatment CSV")
+
+    if frozen_row.get("cost_status") != "estimated_from_frozen_uncached_rates":
+        raise ValueError("frozen treatment cost_status differs from original cost method")
+    parts = []
+    for model, usage in trace["provider_usage_by_model"].items():
+        rates = pricing_models.get(model)
+        if type(rates) is not dict:
+            raise ValueError(f"recovered model {model!r} has no original frozen price")
+        for field in ("input", "output"):
+            rate = rates.get(field)
+            if type(rate) not in (int, float) or not math.isfinite(rate) or rate < 0:
+                raise ValueError(f"original frozen pricing {model!r} {field} is invalid")
+        parts.extend((
+            usage["prompt_tokens"] / 1_000_000 * rates["input"],
+            usage["completion_tokens"] / 1_000_000 * rates["output"],
+        ))
+    computed_cost = math.fsum(parts)
+    try:
+        frozen_cost = float(frozen_row["treatment_cost_usd"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("frozen treatment_cost_usd is invalid") from exc
+    if (not math.isfinite(frozen_cost) or frozen_cost < 0
+            or not math.isfinite(computed_cost)
+            or not math.isclose(computed_cost, frozen_cost,
+                                rel_tol=1e-12, abs_tol=1e-12)):
+        raise ValueError("recovered provider ledger cost differs from frozen treatment_cost_usd")
+
+
 def _trace_report_content_status(
     *,
     repo_root: Path,
@@ -451,6 +524,7 @@ def _trace_report_content_status(
             main_rows, label="frozen treatment trace-content mapping",
             expected_cells=expected_cells, run_identity=False,
         )
+        pricing_models = _load_original_run_pricing(repo_root)
         expected_tasks = {
             (variant, row["run_id"]): task
             for (variant, task), row in matrix.items()
@@ -538,6 +612,9 @@ def _trace_report_content_status(
                     )
             _validate_recovered_source_ledgers(trace, variant=variant)
             _validate_recovered_provider_usage(trace)
+            _validate_recovered_efficiency_measurements(
+                trace, frozen_row, pricing_models=pricing_models
+            )
             declared_report = trace.get("report_path")
             if not isinstance(declared_report, str):
                 raise ValueError("trace has no valid original report path")

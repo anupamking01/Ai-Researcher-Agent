@@ -438,6 +438,7 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
             "variant_id", "task_id", "completed", "source_budget",
             "successful_sources", "failed_sources", "search_calls",
             "model_calls", "total_tokens", "report_words",
+            "treatment_cost_usd", "cost_status", "latency_seconds",
         ))
         writer.writeheader()
         for variant in audit.VARIANTS:
@@ -449,6 +450,9 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
                     "successful_sources": 2, "failed_sources": 1,
                     "search_calls": 1, "model_calls": 4,
                     "total_tokens": 250, "report_words": 50,
+                    "treatment_cost_usd": 0.0002,
+                    "cost_status": "estimated_from_frozen_uncached_rates",
+                    "latency_seconds": 1.25,
                 })
     tasks = {
         "task_set_id": "synthetic-frozen-task-set",
@@ -470,6 +474,18 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
         relative: hashlib.sha256((root / relative).read_bytes()).hexdigest()
         for relative in (audit.lineage.MAIN_REL, audit.lineage.SUPPORT_REL)
     })
+    # Synthetic pricing replaces the historical pin only within test fixtures.
+    price_file = root / audit.FROZEN_PRICING_REL
+    rates = {"input": 0.2, "output": 1.2}
+    price_file.write_text(json.dumps({
+        "currency": "USD", "unit": "per_1m_text_tokens",
+        "models": {name: (dict(rates) if name != "expensive-model"
+                           else {"input": 2.0, "output": 12.0})
+                   for name in ("synthetic-model", "model-a", "model-b",
+                                "expensive-model")}
+    }), encoding="utf-8")
+    monkeypatch.setattr(audit, "ORIGINAL_PRICING_SHA256",
+                        hashlib.sha256(price_file.read_bytes()).hexdigest())
     for variant in audit.VARIANTS:
         for n, task_id in enumerate(audit.lineage.TASKS):
             run_id = f"{variant.lower()}-run-{n:02d}"
@@ -492,6 +508,7 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
                     "successful_source_count": 2, "failed_source_count": 1,
                     "search_call_count": 1, "model_call_count": 4,
                     "total_tokens": 250, "report_words": 50,
+                    "latency_seconds": 1.25,
                     "source_count": 3, "query_count": 1,
                     "usage_accounting_status": "provider_usage_complete",
                     "prompt_tokens": 100, "completion_tokens": 150,
@@ -1073,3 +1090,71 @@ def test_late_task_manifest_replacement_blocks_question_alignment(tmp_path, monk
         receipt["trace_report_content"]["reason"]
     )
     assert "original_trace_report_content_alignment" in receipt["blockers"]
+
+@pytest.mark.parametrize("latency", [-1.0, True, None, "1.25", 2.0])
+def test_archived_latency_must_match_frozen_efficiency_measurement(
+    tmp_path, monkeypatch, latency
+):
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces/D3/d3-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["trace"]["latency_seconds"] = latency
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "latency_seconds" in receipt["trace_report_content"]["first_failure"]
+    assert "original_trace_report_content_alignment" in receipt["blockers"]
+
+
+@pytest.mark.parametrize("replacement,diagnostic", [
+    ("expensive-model", "treatment_cost_usd"),
+    ("unknown-model", "no original frozen price"),
+])
+def test_archived_cost_rejects_model_substitution_with_same_token_totals(
+    tmp_path, monkeypatch, replacement, diagnostic
+):
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces/D3/d3-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    ledger = payload["trace"]["provider_usage_by_model"]
+    ledger[replacement] = ledger.pop("synthetic-model")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert diagnostic in receipt["trace_report_content"]["first_failure"]
+    assert "original_trace_report_content_alignment" in receipt["blockers"]
+
+
+def test_modified_historical_pricing_bytes_block_cost_concordance(
+    tmp_path, monkeypatch
+):
+    _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = tmp_path / audit.FROZEN_PRICING_REL
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["models"]["synthetic-model"]["output"] = 1.3
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_frozen_task_or_evaluator"
+    )
+    assert "pricing table source fingerprint mismatch" in (
+        receipt["trace_report_content"]["reason"]
+    )
+    assert "original_trace_report_content_alignment" in receipt["blockers"]
+
+
+def test_missing_historical_pricing_bytes_block_cost_concordance(
+    tmp_path, monkeypatch
+):
+    _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    (tmp_path / audit.FROZEN_PRICING_REL).unlink()
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_frozen_task_or_evaluator"
+    )
+    assert "original_trace_report_content_alignment" in receipt["blockers"]
+
