@@ -213,6 +213,24 @@ def _listed_artifacts(
     raise ArtifactInventoryError("artifact listing exceeds bounded pagination limit")
 
 
+
+def _listing_identity(artifacts: list[dict]) -> dict[int, tuple]:
+    """Compare custody-relevant metadata, not volatile download counters or API order."""
+    identity_fields = (
+        "name", "expired", "created_at", "updated_at", "expires_at",
+        "size_in_bytes", "digest", "archive_download_url",
+    )
+    source_fields = (
+        "id", "head_sha", "head_branch", "repository_id", "head_repository_id",
+    )
+    return {
+        artifact["id"]: (
+            *(artifact.get(field) for field in identity_fields),
+            *(artifact["workflow_run"].get(field) for field in source_fields),
+        )
+        for artifact in artifacts
+    }
+
 def audit_historical_artifact_inventory(
     *,
     fetch_json: Callable[[str], object] = _fetch_json,
@@ -258,6 +276,17 @@ def audit_historical_artifact_inventory(
             run_id, expected_head_sha=commit, started_at=started_at,
             last_updated_at=last_updated_at, fetch_json=fetch_json,
         )
+        # GitHub's page totals alone cannot detect an ID replacement or changed
+        # custody metadata between page reads. Reconcile a second complete scan
+        # before asserting that a historical artifact is absent or available.
+        second_scan = _listed_artifacts(
+            run_id, expected_head_sha=commit, started_at=started_at,
+            last_updated_at=last_updated_at, fetch_json=fetch_json,
+        )
+        if _listing_identity(artifacts) != _listing_identity(second_scan):
+            raise ArtifactInventoryError(
+                f"{role} artifact listing changed across two complete scans"
+            )
         matching = [item for item in artifacts if item["name"] == expected_name]
         if len(matching) > 1:
             raise ArtifactInventoryError(f"{role} has duplicate expected artifact names")
@@ -281,6 +310,7 @@ def audit_historical_artifact_inventory(
             "workflow_last_updated_at": last_updated_at.isoformat(),
             "expected_artifact_name": expected_name,
             "total_artifacts_listed": len(artifacts),
+            "listing_reconciliation": "two_matching_full_passes",
             "expected_artifact": (
                 {
                     "id": matching[0]["id"],

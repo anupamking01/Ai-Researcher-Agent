@@ -30,6 +30,18 @@ As observed on **2026-10-28**, the two original/recovery runs returned no artifa
 
 Even if both original artifacts become listed, the JSON still sets historical_evidence_authenticated and human_evaluation_ready to false. Recovery must satisfy the independent trace/report source-custody checks and the blinded packet/handoff gates in HUMAN_EVAL_ARCHIVE_RECOVERY.md. No pilot, confirmatory, exploratory, or pending human-validation conclusion is changed by this read-only availability audit.
 
+The tool performs **two complete run-scoped artifact-listing scans** before
+reporting any availability status, including an absent expected artifact. It
+reconciles artifact IDs and custody-relevant fields (name, expiry, timestamps,
+ZIP size/digest/download endpoint, and historical workflow source identity)
+across both scans. A same-count ID swap, newly listed artifact, or metadata
+change fails closed instead of becoming a false missing/present assertion.
+Pagination order and volatile download counts are intentionally ignored.
+Each successful run receipt identifies the two-pass reconciliation. This is
+only a consistency check between two API observations, **not** an atomic
+GitHub snapshot, proof of absence after the scan, ZIP verification, or an
+independent historical fingerprint.
+
 ## ZIP metadata and expiry checks (availability, not custody)
 
 For each listed artifact, the inventory checks that the GitHub-provided ZIP

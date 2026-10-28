@@ -421,3 +421,105 @@ def test_valid_artifact_receipt_preserves_temporal_and_source_custody_metadata()
     assert receipt["workflow_last_updated_at"] == "2026-09-24T23:05:00+00:00"
     assert receipt["expected_artifact"]["created_at"] == "2026-09-24T23:03:00Z"
     assert receipt["expected_artifact"]["updated_at"] == "2026-09-24T23:03:00Z"
+
+
+def _changing_listing(responses, run_id, first_entries, second_entries):
+    """Return different complete page-one snapshots without any real GitHub I/O."""
+    path = (
+        f"/repos/{audit.REPOSITORY}/actions/runs/{run_id}"
+        "/artifacts?per_page=100&page=1"
+    )
+    calls = []
+
+    def fetch(requested):
+        if requested == path:
+            calls.append(requested)
+            entries = first_entries if len(calls) == 1 else second_entries
+            return {"total_count": len(entries), "artifacts": copy.deepcopy(entries)}
+        return copy.deepcopy(responses[requested])
+
+    return fetch, calls
+
+
+def test_reconciliation_rejects_artifact_added_after_initial_empty_listing():
+    _, run_id, _, _, _, expected = audit.HISTORICAL_RUNS[0]
+    fetch, calls = _changing_listing(
+        _responses(), run_id, [], [_artifact(run_id, expected, ident=8121)]
+    )
+    with pytest.raises(audit.ArtifactInventoryError, match="two complete scans"):
+        audit.audit_historical_artifact_inventory(fetch_json=fetch)
+    assert len(calls) == 2
+
+
+def test_reconciliation_rejects_artifact_id_swap_at_unchanged_total_count():
+    _, run_id, _, _, _, expected = audit.HISTORICAL_RUNS[0]
+    first = _artifact(run_id, "unrelated-debug-log", ident=8122)
+    second = _artifact(run_id, expected, ident=8123)
+    fetch, _ = _changing_listing(_responses(), run_id, [first], [second])
+    with pytest.raises(audit.ArtifactInventoryError, match="two complete scans"):
+        audit.audit_historical_artifact_inventory(fetch_json=fetch)
+
+
+@pytest.mark.parametrize("field,new_value", [
+    ("name", "other-artifact"),
+    ("expired", True),
+    ("updated_at", "2026-09-24T23:04:00Z"),
+    ("size_in_bytes", 10271),
+    ("digest", "sha256:" + "b" * 64),
+    ("expires_at", "2099-12-24T23:03:46Z"),
+])
+def test_reconciliation_rejects_same_id_with_changed_source_metadata(field, new_value):
+    _, run_id, _, _, _, expected = audit.HISTORICAL_RUNS[0]
+    first = _artifact(run_id, expected, ident=8124)
+    second = copy.deepcopy(first)
+    second[field] = new_value
+    fetch, _ = _changing_listing(_responses(), run_id, [first], [second])
+    with pytest.raises(audit.ArtifactInventoryError, match="two complete scans"):
+        audit.audit_historical_artifact_inventory(fetch_json=fetch)
+
+
+def test_reconciliation_ignores_only_volatile_download_count_changes():
+    _, run_id, _, _, _, expected = audit.HISTORICAL_RUNS[2]
+    first = _artifact(run_id, expected, ident=8125)
+    first["download_count"] = 1
+    second = copy.deepcopy(first)
+    second["download_count"] = 99
+    fetch, calls = _changing_listing(_responses(), run_id, [first], [second])
+    result = audit.audit_historical_artifact_inventory(fetch_json=fetch)
+    receipt = result["historical_runs"]["canonical_analysis"]
+    assert receipt["listing_reconciliation"] == "two_matching_full_passes"
+    assert receipt["expected_artifact"]["id"] == 8125
+    assert len(calls) == 2
+
+
+def test_reconciliation_accepts_same_ids_reordered_across_pages():
+    _, run_id, _, _, _, expected = audit.HISTORICAL_RUNS[2]
+    first = [
+        _artifact(run_id, f"other-{i}", ident=9000 + i)
+        for i in range(100)
+    ]
+    tail = _artifact(run_id, expected, ident=9999)
+    page_prefix = (
+        f"/repos/{audit.REPOSITORY}/actions/runs/{run_id}"
+        "/artifacts?per_page=100&page="
+    )
+    page_calls = {1: 0, 2: 0}
+    responses = _responses()
+
+    def fetch(path):
+        if path.startswith(page_prefix):
+            page = int(path[len(page_prefix):])
+            page_calls[page] += 1
+            if page == 1:
+                entries = first if page_calls[page] == 1 else first[:-1] + [tail]
+            else:
+                entries = [tail] if page_calls[page] == 1 else [first[-1]]
+            return {"total_count": 101, "artifacts": copy.deepcopy(entries)}
+        return copy.deepcopy(responses[path])
+
+    receipt = audit.audit_historical_artifact_inventory(fetch_json=fetch)[
+        "historical_runs"
+    ]["canonical_analysis"]
+    assert receipt["expected_artifact"]["id"] == 9999
+    assert receipt["listing_reconciliation"] == "two_matching_full_passes"
+    assert page_calls == {1: 2, 2: 2}
