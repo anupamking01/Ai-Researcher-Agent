@@ -28,6 +28,7 @@ MAX_COMPRESSION_RATIO = 1000
 MAX_CENTRAL_DIRECTORY_BYTES = 8 * 1024 * 1024
 EOCD_HEADER = struct.Struct("<4s4H2IH")
 CENTRAL_HEADER = struct.Struct("<4s6H3I5H2I")
+LOCAL_HEADER = struct.Struct("<4s2B4HL2L2H")
 CHUNK_BYTES = 1024 * 1024
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -121,7 +122,7 @@ def _inspect_member(info: zipfile.ZipInfo) -> tuple[str, bool]:
     return key, is_directory
 
 
-def _preflight_central_directory(handle, archive_bytes: int) -> None:
+def _preflight_central_directory(handle, archive_bytes: int) -> int:
     """Bound the central directory before zipfile eagerly creates ZipInfo objects.
 
     Deliberately accept the ordinary single-disk, non-ZIP64 GitHub artifact
@@ -188,6 +189,51 @@ def _preflight_central_directory(handle, archive_bytes: int) -> None:
         raise RecoveredArchiveError(
             "ZIP central-directory member count does not match its records"
         )
+    return cd_offset
+
+
+def _verify_local_header_metadata(handle, info: zipfile.ZipInfo, *, cd_offset: int) -> None:
+    """Require the local and central ZIP records to describe the same member.
+
+    Python's zipfile verifies the local filename and decodes using the central
+    method/CRC, but does not require the local method, flags or CRC/size fields
+    to agree. These contradictions create ambiguous recovery evidence.
+    """
+    start = info.header_offset
+    if start < 0 or start + LOCAL_HEADER.size > cd_offset:
+        raise RecoveredArchiveError("local ZIP header is outside the member-data region")
+    handle.seek(start)
+    raw = handle.read(LOCAL_HEADER.size)
+    if len(raw) != LOCAL_HEADER.size:
+        raise RecoveredArchiveError("truncated local ZIP header")
+    (
+        signature, _version_lo, _version_hi, flags, method,
+        _modified_time, _modified_date, crc, compressed, uncompressed,
+        name_length, extra_length,
+    ) = LOCAL_HEADER.unpack(raw)
+    if signature != b"PK\\x03\\x04":
+        raise RecoveredArchiveError("invalid local ZIP header signature")
+    if flags != info.flag_bits or method != info.compress_type:
+        raise RecoveredArchiveError("local ZIP header flags/compression disagree with central directory")
+    if flags & 0x08:
+        # A streaming writer may put zero placeholders here and append a data
+        # descriptor. Nonzero fields must still agree with the central record.
+        sizes_agree = all(
+            local in (0, central)
+            for local, central in (
+                (crc, info.CRC),
+                (compressed, info.compress_size),
+                (uncompressed, info.file_size),
+            )
+        )
+    else:
+        sizes_agree = (
+            crc, compressed, uncompressed
+        ) == (info.CRC, info.compress_size, info.file_size)
+    if not sizes_agree:
+        raise RecoveredArchiveError("local ZIP header CRC/size metadata disagrees with central directory")
+    if start + LOCAL_HEADER.size + name_length + extra_length + info.compress_size > cd_offset:
+        raise RecoveredArchiveError("local ZIP header/data extends into central directory")
 
 def _unchanged(original: os.stat_result, current: os.stat_result) -> bool:
     return (
@@ -224,7 +270,7 @@ def audit_recovered_zip(path: Path, *, expected_archive_sha256: str | None = Non
 
             # The ZipFile constructor otherwise parses every advertised record
             # before our MAX_MEMBERS check can run (a memory exhaustion risk).
-            _preflight_central_directory(handle, before.st_size)
+            cd_offset = _preflight_central_directory(handle, before.st_size)
             files = []
             total = 0
             seen: set[str] = set()
@@ -235,6 +281,7 @@ def audit_recovered_zip(path: Path, *, expected_archive_sha256: str | None = Non
                     raise RecoveredArchiveError("ZIP member count outside permitted bounds")
                 # Validate all central-directory entries BEFORE decompressing any bytes.
                 for info in entries:
+                    _verify_local_header_metadata(handle, info, cd_offset=cd_offset)
                     key, is_directory = _inspect_member(info)
                     if key in seen:
                         raise RecoveredArchiveError(f"duplicate or nonportable ZIP path: {info.filename!r}")

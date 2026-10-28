@@ -129,7 +129,7 @@ unsupported central-directory extensions fail closed. This is an intentional
 conservative restriction for candidate GitHub Actions artifact ZIPs, not a
 general-purpose ZIP compatibility promise.
 
-It bounds ZIP input size, entry count, and total
+The preflight additionally cross-checks each member's local ZIP header against\nits central-directory record before decoding: compression method and flags\nmust match, and CRC/compressed/uncompressed sizes must match unless the ZIP\nstreaming data-descriptor flag permits zero local placeholders. Python's\nstandard ZIP reader uses central-directory values for decoding and can accept\ncontradictory local metadata even when its CRC check succeeds. Rejecting those\ncontradictions reduces ambiguity in recovered-evidence inspection without\nclaiming independent archive authenticity. Streaming data descriptors remain\nsupported.\n\nIt bounds ZIP input size, entry count, and total
 uncompressed bytes; reads members in chunks; checks for changes during its
 inspection; and never extracts or rewrites candidate evidence. It produces
 an observed-current ZIP SHA-256 and per-file SHA-256 inventory on stdout.

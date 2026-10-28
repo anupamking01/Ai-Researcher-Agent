@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 from pathlib import Path
 import stat
 import zipfile
@@ -329,3 +330,49 @@ def test_ordinary_zip_comment_remains_supported(tmp_path):
     receipt = audit.audit_recovered_zip(path)
     assert receipt["file_count"] == 1
     assert receipt["files"][0]["path"] == "reports/test.md"
+
+@pytest.mark.parametrize(("offset", "width", "replacement"), [
+    (8, 2, zipfile.ZIP_STORED),  # local method differs from DEFLATED central record
+    (6, 2, 0x0800),             # conflicting UTF-8 purpose flag on ASCII name
+    (14, 4, 0),                 # central CRC remains correct
+    (18, 4, 0),                 # local compressed-size mismatch
+    (22, 4, 0),                 # local uncompressed-size mismatch
+])
+def test_local_zip_header_must_agree_with_central_metadata(
+    tmp_path, offset, width, replacement
+):
+    """zipfile can read these ambiguously described members; preflight must reject."""
+    path = _zip(tmp_path / "ambiguous-local-metadata.zip", {
+        "reports/test.md": b"# Synthetic local/central metadata regression"
+    })
+    raw = bytearray(path.read_bytes())
+    assert raw.startswith(b"PK\\x03\\x04")
+    assert raw.index(b"PK\\x01\\x02") > 30
+    assert int.from_bytes(raw[offset:offset + width], "little") != replacement
+    raw[offset:offset + width] = replacement.to_bytes(width, "little")
+    path.write_bytes(raw)
+
+    # zipfile uses the central record for decoding, so the discrepancy is
+    # not caught by successfully reading the member and its central CRC.
+    with zipfile.ZipFile(path) as archive:
+        assert archive.read("reports/test.md").startswith(b"# Synthetic")
+    with pytest.raises(audit.RecoveredArchiveError, match="local ZIP header"):
+        audit.audit_recovered_zip(path)
+
+
+def test_streaming_zip_data_descriptor_remains_supported(tmp_path):
+    """Bit-3 local placeholders are valid when the central record is authoritative."""
+    class NonSeekingStream(io.BytesIO):
+        def seek(self, *args, **kwargs):
+            raise OSError("not seekable")
+
+    sink = NonSeekingStream()
+    with zipfile.ZipFile(sink, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("reports/streaming.md", b"# Synthetic streamed report")
+    raw = sink.getvalue()
+    assert int.from_bytes(raw[6:8], "little") & 0x08
+    path = tmp_path / "streaming.zip"
+    path.write_bytes(raw)
+    receipt = audit.audit_recovered_zip(path)
+    assert receipt["file_count"] == 1
+    assert receipt["files"][0]["path"] == "reports/streaming.md"
