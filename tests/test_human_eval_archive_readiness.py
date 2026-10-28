@@ -1344,10 +1344,14 @@ def test_query_allocation_accepts_skipped_and_duplicate_planner_queries():
         "source_budget": 6,
         "search_queries": ["same", "same", "other", "last"],
         "search_records": [
-            {"query": "same", "scheduled_urls": ["a", "b"]},
-            {"query": "same", "scheduled_urls": ["c", "d"]},
-            {"query": "other", "scheduled_urls": ["e"]},
-            {"query": "last", "scheduled_urls": ["f"]},
+            {"query": "same", "candidate_urls": ["a", "a", "b"],
+             "scheduled_urls": ["a", "b"]},
+            {"query": "same", "candidate_urls": ["a", "c", "d"],
+             "scheduled_urls": ["c", "d"]},
+            {"query": "other", "candidate_urls": ["b", "e"],
+             "scheduled_urls": ["e"]},
+            {"query": "last", "candidate_urls": ["e", "f"],
+             "scheduled_urls": ["f"]},
         ],
     }
     audit._validate_recovered_query_budget_allocation(trace, variant="P6V")
@@ -1363,3 +1367,64 @@ def test_query_allocation_rejects_search_without_allocated_budget():
     }
     with pytest.raises(ValueError, match="without a query browse budget"):
         audit._validate_recovered_query_budget_allocation(trace, variant="P6")
+
+
+def test_query_allocation_rejects_skipping_earlier_eligible_candidate():
+    """Original get_new_urls cannot silently omit an unseen candidate."""
+    trace = {
+        "source_budget": 3,
+        "search_queries": ["original question"],
+        "search_records": [{
+            "query": "original question",
+            "candidate_urls": ["a", "b", "c"],
+            "scheduled_urls": ["a", "c"],
+        }],
+    }
+    with pytest.raises(ValueError, match="greedy candidate URL scheduling"):
+        audit._validate_recovered_query_budget_allocation(trace, variant="D3")
+
+
+def test_query_allocation_accepts_greedy_deduplication_and_search_failure():
+    """Repeated and previously visited candidates are skipped by the runner."""
+    trace = {
+        "source_budget": 6,
+        "search_queries": ["first", "second", "third", "fourth"],
+        "search_records": [
+            {"query": "first", "candidate_urls": ["a", "a", "b", "c"],
+             "scheduled_urls": ["a", "b"]},
+            {"query": "second", "candidate_urls": ["b", "a", "c", "d"],
+             "scheduled_urls": ["c", "d"]},
+            {"query": "third", "candidate_urls": ["c", "e"],
+             "scheduled_urls": ["e"]},
+            {"query": "fourth", "candidate_urls": [], "scheduled_urls": [],
+             "search_error": "transient outage"},
+        ],
+    }
+    audit._validate_recovered_search_provenance({
+        **trace, "query_count": 4, "search_call_count": 4,
+        "scheduled_urls": ["a", "b", "c", "d", "e"],
+    })
+    audit._validate_recovered_query_budget_allocation(trace, variant="P6")
+
+
+def test_archive_recovery_rejects_omitted_greedy_result_with_frozen_counts(
+    tmp_path, monkeypatch
+):
+    """A tampered candidate order cannot hide behind matching frozen totals."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces/P6/p6-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    first = payload["trace"]["search_records"][0]
+    first["candidate_urls"].insert(0, "https://example.test/unseen")
+    # Leave scheduled URLs and every aggregate measurement unchanged. The old
+    # subsequence/plan-budget checks accepted this altered search record.
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "greedy candidate URL scheduling" in (
+        receipt["trace_report_content"]["first_failure"]
+    )
+    assert "original_trace_report_content_alignment" in receipt["blockers"]
+    assert receipt["handoff_verified"] is False

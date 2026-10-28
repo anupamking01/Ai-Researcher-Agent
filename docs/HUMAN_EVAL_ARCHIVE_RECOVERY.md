@@ -143,7 +143,17 @@ arms must record four planned queries; and individual search records must
 respect the source budgets deterministically allocated by the original
 runner (6 sources across four planner queries yields [2, 2, 1, 1]).
 It allows unused per-query budget, genuine search errors, and duplicate
-planned query text without reallocating budget to other queries. An altered
+planned query text without reallocating budget to other queries. It now also
+replays the original runner's **greedy candidate URL scheduling**: for each
+query it takes the first not-yet-visited candidate URLs up to the allocated
+budget and retains the visited set across queries, including failed browses.
+This prevents an altered result list from placing a previously unseen URL
+ahead of the recorded scheduled set while preserving every frozen source
+count, candidate-subsequence constraint, and per-query budget. Repeated
+candidate URLs and candidates visited in prior queries remain legitimate;
+a search-error record still schedules no URLs. This deterministic
+consistency rule is not independent evidence that any candidate was returned
+by a real search engine. An altered
 search strategy can otherwise leave frozen total source/search counts intact
 while invalidating the direct/planning comparison. These checks only establish
 internal consistency with version-controlled runner behavior, **not** that

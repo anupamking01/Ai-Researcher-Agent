@@ -431,8 +431,10 @@ def _validate_recovered_query_budget_allocation(trace: dict, *, variant: str) ->
     arms, or four planned queries for planner arms. conduct_research allocates
     its fixed browse budget by divmod, giving earlier queries the remainder;
     async_search never schedules more than its individual allocation or the
-    remaining global budget. These are execution-contract checks, not evidence
-    that reported search results were actually retrieved.
+    remaining global budget. The runner also greedily schedules the earliest
+    previously unseen candidate URLs, retaining visited URLs across queries;
+    merely selecting any candidate subsequence is insufficient. These are
+    execution-contract checks, not evidence of genuine retrieval.
     """
     queries = trace["search_queries"]
     if variant in ("D3", "D6"):
@@ -456,6 +458,7 @@ def _validate_recovered_query_budget_allocation(trace: dict, *, variant: str) ->
     ]
     next_query = 0
     remaining = total_budget
+    visited_urls: set[str] = set()
     for index, record in enumerate(trace["search_records"]):
         query = record["query"]
         # Match the same earliest remaining planned-query occurrence as the
@@ -473,6 +476,23 @@ def _validate_recovered_query_budget_allocation(trace: dict, *, variant: str) ->
         if scheduled > allowed:
             raise ValueError(
                 f"recovered search_records[{index}] exceeds its per-query browse budget"
+            )
+        # ResearchAgent.get_new_urls greedily takes the first previously unseen
+        # candidates up to this query's allocation. A subsequence check alone
+        # allows fabricated omission of earlier eligible results while all
+        # frozen source totals and aggregate search ledgers still match.
+        expected_scheduled: list[str] = []
+        for url in record["candidate_urls"]:
+            if len(expected_scheduled) >= allowed:
+                break
+            if url in visited_urls:
+                continue
+            visited_urls.add(url)
+            expected_scheduled.append(url)
+        if record["scheduled_urls"] != expected_scheduled:
+            raise ValueError(
+                f"recovered search_records[{index}] differs from original "
+                "greedy candidate URL scheduling"
             )
         remaining -= scheduled
         next_query += 1
