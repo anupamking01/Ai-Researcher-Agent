@@ -7,8 +7,15 @@ The original treatment run `34620917346` and evaluator-recovery run
 `34783525480` have no listed downloadable artifacts. Recheck the run-scoped
 API before relying on this dated observation.
 
-If an authorized copy of the canonical-analysis artifact is obtained, run
-this entirely offline, from the exact published research checkout:
+On **2026-10-29** the GitHub Actions API returned the actual retained ZIP
+for artifact **10837878458** (10,270 bytes). The downloaded ZIP SHA-256 is
+`226f009ba6b158b77fc98f4e56ec96e1943d1749bc818b0876e90f76077de4b5`,
+matching the digest reported by GitHub's artifact metadata. This is a
+**provider-observed** digest, not an independently retained historical
+fingerprint and not evidence of the missing original 40 treatment traces.
+The ZIP has exactly the seven named files below.
+
+Run the verifier entirely offline from a provenance-verified current checkout:
 
 ```bash
 python -m scripts.verify_canonical_archive_checkout \
@@ -21,11 +28,12 @@ is available, add `--expected-archive-sha256 <64-lowercase-hex>`. Do not
 compute a fresh digest from an untrusted ZIP and describe it as historical
 custody evidence.
 
-The verifier first runs the existing independent canonical provenance and
+The verifier first runs the existing canonical provenance and
 execution-recomputation gate on the checkout. It then invokes the extraction-free,
-bounded ZIP structural/CRC preflight, requires **exactly these seven** paths,
-and compares every uncompressed member's byte count and SHA-256 to the
-provenance-verified published checkout:
+bounded ZIP structural/CRC preflight and requires **exactly these seven** paths.
+Six files must match the verified current checkout byte-for-byte. The seventh,
+the provenance receipt, may either match the checkout exactly or match an
+**exactly pinned historical workflow v1 receipt** (details below):
 
 - `outputs/canonical_analysis_source.json`
 - `outputs/main_study_analysis_inputs_manifest.json`
@@ -35,23 +43,50 @@ provenance-verified published checkout:
 - `outputs/posthoc_support_runs.csv`
 - `paper/MAIN_STUDY_INFERENCE.md`
 
-The path set comes from the canonical-analysis workflow's upload step, **not**
-from filenames provided by an unauthenticated candidate archive. Missing,
-additional, renamed, or byte-changed files block concordance. Read-only
-pre/post checkout captures reject observable source changes during verification.
-The comparison does not rewrite the checkout or ZIP, extract files, rerun
-treatments or evaluators, or generate human annotations. Synthetic regression
-tests cover matching members, altered contents, replacement members, missing
-and additional paths, an incorrect independently supplied ZIP pin, provenance
-gate failure, symlinks, and source mutations during inspection.
+### Historical v1 versus checked-in v2 provenance receipt
 
-**Scientific interpretation:** PASS means a *presently inspected candidate
-canonical-analysis ZIP* is structurally safe and contains bytes matching the
-published provenance-verified analysis checkout. It does **not** prove the
-ZIP is the historical GitHub artifact, establish independent historical
-custody, authenticate original treatment traces/reports, or imply human
-validation. An ordinary checked-out tree may change between observations;
-the read-only comparisons are not an atomic filesystem snapshot.
+Actual inspection on 2026-10-29 showed a **real version difference**:
+the ZIP's `outputs/main_study_analysis_provenance.json` is schema **v1**,
+2,492 bytes, SHA-256
+`73f12a725f3cf4d27748a95e1f380ca5cfcac3b8fdd5adeda7abaa2f3f6e10e0`.
+The currently published checkout has a strengthened schema **v2** receipt,
+which adds later verification fields and changes implementation hashes.
+It is **not byte-identical** to the historical workflow output. The other
+six ZIP members are byte-identical to the current research checkout at
+`9d163f811444b5e01129d9433395e806b5b9255b`, as checked through their
+Git blob hashes and uncompressed bytes.
+
+The old verifier incorrectly required the v1 receipt to equal the later v2
+checkout receipt and therefore would reject the actual GitHub archive despite
+identical canonical inputs, inference, and manuscript output. The updated
+verifier accepts **only** the specific pinned v1 receipt SHA-256 above as an
+exception, while requiring a freshly verified current checkout and exact
+byte agreement for all six substantive files. Any other changed receipt
+still fails closed. The result distinguishes the archived receipt's actual
+digest from the current verified checkout receipt digest, and labels the
+exception explicitly. The pinned v1 digest comes from **this newly retrieved
+GitHub artifact**, not a pre-existing independent historical anchor.
+
+The expected seven-member path set comes from the canonical-analysis
+workflow's upload step, **not** from filenames supplied by the candidate ZIP.
+Missing, additional, renamed, or byte-changed substantive files block
+concordance. Read-only pre/post checkout captures reject observable changes
+during verification. The operation does not rewrite the checkout or ZIP,
+extract files, rerun treatments or evaluators, or generate human annotations.
+Synthetic tests cover identical-current bundles, the pinned historical v1
+receipt, unpinned receipt lookalikes, malicious substitutions even alongside
+the pinned receipt, wrong independent ZIP pins, provenance-gate failures,
+missing/additional paths, symlinks and observable file mutations.
+
+**Scientific interpretation:** PASS means the inspected ZIP passed structural
+triage, matched the six current provenance-verified canonical input/output
+files byte-for-byte, and had either an identical current provenance receipt or
+the exact provider-observed historical v1 receipt. It does **not** establish
+independent historical custody, authenticate original treatment reports/traces,
+or imply human validation. The ZIP observed in this recovery iteration matched
+GitHub's reported byte digest, but that provider metadata is not an
+independently retained archival fingerprint. Checkout observations are not an
+atomic filesystem snapshot.
 
 The original **40 experiment traces and matching Markdown reports** plus
 independently retained archival fingerprints remain the blocker for
