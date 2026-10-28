@@ -1,9 +1,10 @@
 """Offline, read-only concordance check for the retained canonical-analysis ZIP.
 
-A passing result shows that the structurally inspected archive contains exactly
-the seven published canonical-analysis snapshot files, with bytes identical to
-a provenance-verified checkout. It does NOT authenticate original treatments
-or establish historical custody, and it cannot replace missing original reports.
+A passing result shows that the archive contains the seven published analysis
+files. Six must byte-match the currently verified checkout; the provenance
+receipt may instead match the exact historical v1 member observed in GitHub's
+canonical artifact. This is a provider-observed pin, not independent custody
+or authentication of original treatment traces or reports.
 """
 from __future__ import annotations
 
@@ -25,6 +26,18 @@ CANONICAL_MEMBERS = (
     "outputs/main_study_runs.csv",
     "outputs/posthoc_support_runs.csv",
     "paper/MAIN_STUDY_INFERENCE.md",
+)
+
+PROVENANCE_RECEIPT = "outputs/main_study_analysis_provenance.json"
+# Observed in artifact 10837878458 of canonical workflow 36070798723
+# (downloaded on 2026-10-29, GitHub-reported ZIP sha256:
+# 226f009ba6b158b77fc98f4e56ec96e1943d1749bc818b0876e90f76077de4b5).
+# The uploaded receipt was schema v1. Later, the checked-in receipt became
+# schema v2 as provenance checks were strengthened; its bytes must not be
+# misrepresented as the exact historical ZIP member. This pin is derived from
+# GitHub's retained artifact, NOT an independent pre-existing historical hash.
+PUBLISHED_ARCHIVED_PROVENANCE_SHA256 = (
+    "73f12a725f3cf4d27748a95e1f380ca5cfcac3b8fdd5adeda7abaa2f3f6e10e0"
 )
 
 
@@ -72,22 +85,52 @@ def verify_archive_against_checkout(
         )
 
     mismatched = []
+    match_basis = {}
     for member in members:
-        source = before[member["path"]]
+        path = member["path"]
+        source = before[path]
         if (
-            member["uncompressed_bytes"] != len(source)
-            or member["sha256"] != hashlib.sha256(source).hexdigest()
+            member["uncompressed_bytes"] == len(source)
+            and member["sha256"] == hashlib.sha256(source).hexdigest()
         ):
-            mismatched.append(member["path"])
+            match_basis[path] = "verified_checkout"
+        elif (
+            path == PROVENANCE_RECEIPT
+            and member["sha256"] == PUBLISHED_ARCHIVED_PROVENANCE_SHA256
+        ):
+            # The retained workflow ZIP has a v1 provenance receipt, whereas
+            # today's verified checkout contains an expanded v2 receipt.
+            # Only the exact observed historical receipt bytes are exempted;
+            # all six substantive analysis inputs/outputs still must match.
+            match_basis[path] = "pinned_github_workflow_v1_receipt"
+        else:
+            mismatched.append(path)
     if mismatched:
         raise ValueError(
-            "canonical ZIP file bytes differ from the verified checkout: "
+            "canonical ZIP file bytes differ from the verified checkout or "
+            "pinned published provenance receipt: "
             + ", ".join(sorted(mismatched))
         )
 
+    used_historical_receipt = (
+        match_basis[PROVENANCE_RECEIPT] == "pinned_github_workflow_v1_receipt"
+    )
+    archive_by_path = {member["path"]: member for member in members}
     return {
-        "schema_version": 1,
-        "status": "canonical_archive_matches_verified_checkout_not_original_evidence",
+        "schema_version": 2,
+        "status": (
+            "canonical_archive_matches_checkout_and_pinned_historical_receipt_not_original_evidence"
+            if used_historical_receipt
+            else "canonical_archive_matches_verified_checkout_not_original_evidence"
+        ),
+        "historical_workflow_receipt_exception_used": used_historical_receipt,
+        "historical_workflow_receipt_pin_source": (
+            "github_retained_artifact_10837878458_observed_2026-10-29"
+            if used_historical_receipt else None
+        ),
+        "archived_provenance_receipt_sha256": archive_by_path[
+            PROVENANCE_RECEIPT
+        ]["sha256"],
         "archive_sha256_observed_now": inspected["archive_sha256_observed_now"],
         "independently_supplied_archive_pin_matched": inspected[
             "expected_archive_sha256_matched"
@@ -101,8 +144,9 @@ def verify_archive_against_checkout(
         "matched_files": [
             {
                 "path": relative,
-                "bytes": len(before[relative]),
-                "sha256": hashlib.sha256(before[relative]).hexdigest(),
+                "bytes": archive_by_path[relative]["uncompressed_bytes"],
+                "sha256": archive_by_path[relative]["sha256"],
+                "match_basis": match_basis[relative],
             }
             for relative in CANONICAL_MEMBERS
         ],
