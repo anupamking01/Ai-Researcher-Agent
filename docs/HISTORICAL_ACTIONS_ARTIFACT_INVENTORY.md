@@ -50,3 +50,26 @@ deadline. Ambiguous timestamps, zero-size ZIPs, malformed digest metadata,
 or an unrelated ZIP endpoint fail closed. No listed metadata proves download
 success, ZIP content validity, independent historical custody, or human
 evaluation readiness.
+
+
+## Historical workflow-source and creation-window concordance
+
+A listed ZIP also has to be attributed to **the original first attempt** of
+the pinned push workflow on branch research-paper-eval-2027, at the exact
+workflow source path. The audit checks the artifact's embedded workflow-run
+SHA, run ID, stable repository identity and head-repository identity against
+the run's pinned metadata. Missing source associations fail closed. It also
+checks that the artifact's GitHub-reported creation time falls between the
+workflow's recorded start and completion, that update time is not before
+creation, and that expiration follows creation. Malformed or ambiguous time
+metadata is rejected. The receipt exposes run start/completion and artifact
+creation/update times for reviewer inspection.
+
+This blocks a same-name artifact associated with a different branch, commit,
+repository, or later workflow attempt from masquerading as the historical
+candidate. These are **GitHub-reported metadata consistency checks only**:
+timestamps and association fields are not independent cryptographic
+attestations. They do not prove ZIP byte identity, that an archived report is
+genuine, or that the original source contents survive. The canonical-analysis
+ZIP remains a secondary analysis artifact, not a substitute for the missing
+treatment and evaluator-recovery archives.

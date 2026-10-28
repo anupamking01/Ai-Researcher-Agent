@@ -21,6 +21,9 @@ API_BASE = "https://api.github.com"
 PAGE_SIZE = 100
 MAX_PAGES = 20
 MAX_RESPONSE_BYTES = 512 * 1024
+# Immutable GitHub repository ID, captured from the original historical runs.
+HISTORICAL_REPOSITORY_ID = 812439224
+HISTORICAL_BRANCH = "research-paper-eval-2027"
 # Anchors are from historical workflow metadata and version-controlled source,
 # NOT newly generated fingerprints or independent archival attestations.
 HISTORICAL_RUNS = (
@@ -106,21 +109,26 @@ def _require_object(value: object, *, label: str) -> dict:
     return value
 
 
-def _parse_expiry_utc(value: object) -> datetime:
-    """Require an unambiguous GitHub UTC expiry timestamp."""
+def _parse_utc_timestamp(value: object, *, label: str) -> datetime:
+    """Reject missing, ambiguous, non-UTC, or invalid GitHub timestamps."""
     if type(value) is not str or re.fullmatch(
         r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)",
         value,
     ) is None:
-        raise ArtifactInventoryError("artifact expiry is not an RFC3339 UTC timestamp")
+        raise ArtifactInventoryError(f"{label} is not an RFC3339 UTC timestamp")
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise ArtifactInventoryError("artifact expiry timestamp is invalid") from exc
+        raise ArtifactInventoryError(f"{label} timestamp is invalid") from exc
+
+
+def _parse_expiry_utc(value: object) -> datetime:
+    return _parse_utc_timestamp(value, label="artifact expiry")
 
 
 def _listed_artifacts(
-    run_id: int, *, fetch_json: Callable[[str], object]
+    run_id: int, *, expected_head_sha: str, started_at: datetime,
+    completed_at: datetime, fetch_json: Callable[[str], object],
 ) -> list[dict]:
     """Read every page; never interpret a partial listing as a missing archive."""
     seen_ids = set()
@@ -154,7 +162,20 @@ def _listed_artifacts(
                 or type(artifact.get("expired")) is not bool
             ):
                 raise ArtifactInventoryError("artifact listing has invalid name/expiry metadata")
-            _parse_expiry_utc(artifact.get("expires_at"))
+            created_at = _parse_utc_timestamp(
+                artifact.get("created_at"), label="artifact creation"
+            )
+            updated_at = _parse_utc_timestamp(
+                artifact.get("updated_at"), label="artifact update"
+            )
+            if not started_at <= created_at <= completed_at:
+                raise ArtifactInventoryError(
+                    "artifact creation is outside its historical workflow execution window"
+                )
+            if updated_at < created_at:
+                raise ArtifactInventoryError("artifact update precedes creation")
+            if _parse_expiry_utc(artifact.get("expires_at")) <= created_at:
+                raise ArtifactInventoryError("artifact expiry must follow creation")
             if type(artifact.get("size_in_bytes")) is not int or artifact["size_in_bytes"] <= 0:
                 raise ArtifactInventoryError("artifact ZIP has invalid or zero byte size")
             expected_url = (
@@ -169,9 +190,21 @@ def _listed_artifacts(
             ):
                 raise ArtifactInventoryError("artifact ZIP digest metadata is invalid")
             source = artifact.get("workflow_run")
-            if source is not None:
-                if type(source) is not dict or source.get("id") != run_id:
-                    raise ArtifactInventoryError("artifact belongs to a different workflow run")
+            if type(source) is not dict or (
+                type(source.get("id")) is not int or source["id"] != run_id
+            ):
+                raise ArtifactInventoryError("artifact belongs to a different workflow run")
+            if (
+                source.get("head_sha") != expected_head_sha
+                or source.get("head_branch") != HISTORICAL_BRANCH
+                or type(source.get("repository_id")) is not int
+                or source["repository_id"] != HISTORICAL_REPOSITORY_ID
+                or type(source.get("head_repository_id")) is not int
+                or source["head_repository_id"] != HISTORICAL_REPOSITORY_ID
+            ):
+                raise ArtifactInventoryError(
+                    "artifact workflow source identity differs from historical run"
+                )
             found.append(artifact)
         if len(found) == total:
             return found
@@ -204,11 +237,27 @@ def audit_historical_artifact_inventory(
             or run.get("head_sha") != commit
             or run.get("status") != "completed"
             or run.get("conclusion") != conclusion
+            or type(run.get("run_attempt")) is not int
+            or run["run_attempt"] != 1
+            or run.get("head_branch") != HISTORICAL_BRANCH
+            or run.get("path") != f".github/workflows/{workflow_name}.yml"
+            or run.get("event") != "push"
         ):
             raise ArtifactInventoryError(
                 f"{role} workflow identity/status differs from frozen historical anchor"
             )
-        artifacts = _listed_artifacts(run_id, fetch_json=fetch_json)
+        started_at = _parse_utc_timestamp(
+            run.get("run_started_at"), label=f"{role} workflow start"
+        )
+        completed_at = _parse_utc_timestamp(
+            run.get("updated_at"), label=f"{role} workflow completion"
+        )
+        if completed_at < started_at:
+            raise ArtifactInventoryError(f"{role} workflow completion precedes start")
+        artifacts = _listed_artifacts(
+            run_id, expected_head_sha=commit, started_at=started_at,
+            completed_at=completed_at, fetch_json=fetch_json,
+        )
         matching = [item for item in artifacts if item["name"] == expected_name]
         if len(matching) > 1:
             raise ArtifactInventoryError(f"{role} has duplicate expected artifact names")
@@ -227,6 +276,9 @@ def audit_historical_artifact_inventory(
             "workflow_name": workflow_name,
             "head_sha": commit,
             "workflow_conclusion": conclusion,
+            "workflow_attempt": 1,
+            "workflow_started_at": started_at.isoformat(),
+            "workflow_completed_at": completed_at.isoformat(),
             "expected_artifact_name": expected_name,
             "total_artifacts_listed": len(artifacts),
             "expected_artifact": (
@@ -235,6 +287,8 @@ def audit_historical_artifact_inventory(
                     "name": matching[0]["name"],
                     "expired": matching[0]["expired"],
                     "expires_at": matching[0]["expires_at"],
+                    "created_at": matching[0]["created_at"],
+                    "updated_at": matching[0]["updated_at"],
                     "expiry_elapsed_at_check": elapsed_expiry,
                     "zip_size_in_bytes": matching[0]["size_in_bytes"],
                     "github_zip_digest": matching[0].get("digest"),
@@ -272,7 +326,8 @@ def audit_historical_artifact_inventory(
         "evaluator_rerun": False,
         "human_ratings_used": False,
         "interpretation": (
-            "Run-scoped GitHub Actions metadata only. An absent/expired listing "
+            "Run-scoped GitHub Actions metadata and creation-window/source-identity "
+            "consistency only. An absent/expired listing "
             "does not prove evidence was destroyed or that offline backups do not exist. "
             "A listed nonexpired artifact requires a positive ZIP size and an expiry "
             "deadline later than checked_at_utc; its GitHub-supplied digest (when "
