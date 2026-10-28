@@ -60,7 +60,20 @@ def _path_key(name: str) -> str:
         or any(unicodedata.category(c) in ("Cc", "Cf", "Cs") for c in name)
     ):
         raise RecoveredArchiveError(f"unsafe ZIP member name: {name!r}")
-    return unicodedata.normalize("NFKC", raw).casefold()
+    # Compatibility normalization must not *create* dangerous path syntax.
+    # Checking only the original ZIP name would allow e.g. FULLWIDTH FULL STOP
+    # segments to become "..", or FULLWIDTH SOLIDUS to become "/" downstream.
+    normalized = unicodedata.normalize("NFKC", raw).casefold()
+    normalized_parts = normalized.split("/")
+    if (
+        len(normalized_parts) != len(parts)
+        or any(part in ("", ".", "..") for part in normalized_parts)
+        or "\\" in normalized
+        or ":" in normalized_parts[0]
+        or any(unicodedata.category(c) in ("Cc", "Cf", "Cs") for c in normalized)
+    ):
+        raise RecoveredArchiveError(f"unsafe normalized ZIP member name: {name!r}")
+    return normalized
 
 
 def _inspect_member(info: zipfile.ZipInfo) -> tuple[str, bool]:

@@ -48,6 +48,29 @@ def test_unsafe_paths_rejected(tmp_path, name):
         audit.audit_recovered_zip(path)
 
 
+
+@pytest.mark.parametrize("name", [
+    "reports/\uFF0E\uFF0E/trace.json",  # FULLWIDTH FULL STOP => ".."
+    "reports/\uFF0E/trace.json",        # FULLWIDTH FULL STOP => "."
+    "reports\uFF0Ftrace.json",          # FULLWIDTH SOLIDUS => new separator
+    "reports/\uFF0F/trace.json",        # new separators/empty components
+    "C\uFF1A/trace.json",               # FULLWIDTH COLON => drive prefix
+    "reports\uFF3Ctrace.json",          # FULLWIDTH REVERSE SOLIDUS => backslash
+])
+def test_compatibility_normalization_cannot_create_unsafe_paths(tmp_path, name):
+    """Original ZIP spelling can hide traversal/separators after NFKC."""
+    path = _zip(tmp_path / "unicode-unsafe.zip", {name: b"synthetic"})
+    with pytest.raises(audit.RecoveredArchiveError, match="unsafe normalized ZIP member"):
+        audit.audit_recovered_zip(path)
+
+
+def test_harmless_compatible_unicode_filename_still_valid(tmp_path):
+    path = _zip(tmp_path / "unicode-ok.zip", {"reports/\uFF26ullwidth.txt": b"synthetic"})
+    receipt = audit.audit_recovered_zip(path)
+    assert receipt["file_count"] == 1
+    assert receipt["files"][0]["path"] == "reports/\uFF26ullwidth.txt"
+
+
 def test_casefold_path_collisions_are_rejected(tmp_path):
     path = _zip(tmp_path / "bad.zip", {"A.txt": b"one", "a.txt": b"two"})
     with pytest.raises(audit.RecoveredArchiveError, match="duplicate or nonportable"):

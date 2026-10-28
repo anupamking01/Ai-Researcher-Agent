@@ -104,7 +104,11 @@ with `--expected-archive-sha256 <lowercase-64-hex>`. Never derive this
 historical pin from the ZIP being evaluated. This offline, read-only verifier
 rejects path traversal, nonportable/colliding names, links, encrypted entries,
 unsupported compression methods, oversized members, excessive expansion, and
-invalid ZIP/CRC content. Empty directory entries are also read through the
+invalid ZIP/CRC content. Name safety is checked both before and after Unicode
+NFKC/casefold normalization: compatibility characters must not introduce dot
+traversal segments, new path separators, backslashes, or drive-like prefixes.
+Harmless Unicode filenames remain supported, and original member spellings are
+preserved in the current-observation receipt. Empty directory entries are also read through the
 ZIP decoder, so their local headers, compressed streams, and CRCs cannot evade
 verification just because directory names are omitted from the file inventory.
 The decoder validates the declared zero-length directory contents; this
