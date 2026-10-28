@@ -492,6 +492,16 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
                     "successful_source_count": 2, "failed_source_count": 1,
                     "search_call_count": 1, "model_call_count": 4,
                     "total_tokens": 250, "report_words": 50,
+                    "source_count": 3, "query_count": 1,
+                    "usage_accounting_status": "provider_usage_complete",
+                    "scheduled_urls": [
+                        "https://example.test/a", "https://example.test/b",
+                        "https://example.test/c",
+                    ],
+                    "successful_urls": [
+                        "https://example.test/a", "https://example.test/b",
+                    ],
+                    "failed_urls": ["https://example.test/c"],
                 },
             }
             path = outputs / "experiment_traces" / variant / f"{run_id}.json"
@@ -685,6 +695,48 @@ def test_missing_or_boolean_trace_counter_is_not_canonical_measurement(
         "invalid_or_mismatched_trace_report_content"
     )
     assert "original_trace_report_content_alignment" in result["blockers"]
+
+
+
+@pytest.mark.parametrize("field,bad_value,error_fragment", [
+    ("source_count", None, "source_count"),
+    ("source_count", True, "source_count"),
+    ("source_count", 4, "source_count"),
+    ("source_count", 2, "source_count"),
+    ("query_count", False, "query_count"),
+    ("query_count", 0, "query_count"),
+    ("usage_accounting_status", "estimated", "usage_accounting_status"),
+    ("scheduled_urls", ["https://example.test/a", "https://example.test/a",
+                        "https://example.test/c"], "scheduled_urls"),
+    ("scheduled_urls", ["https://example.test/a", "https://example.test/b"],
+     "scheduled_urls"),
+    ("scheduled_urls", ["https://example.test/a", "https://example.test/b", 5],
+     "scheduled_urls"),
+    ("successful_urls", ["https://example.test/a", "https://example.test/a"],
+     "successful_urls"),
+    ("successful_urls", ["https://example.test/a", "https://example.test/d"],
+     "source URL ledger partition"),
+    ("failed_urls", ["https://example.test/a"], "source URL ledger partition"),
+    ("failed_urls", [" https://example.test/c "], "failed_urls"),
+])
+def test_recovered_source_provenance_requires_consistent_original_ledgers(
+    tmp_path, monkeypatch, field, bad_value, error_fragment
+):
+    """Frozen CSV counters alone must not approve contradictory source evidence."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces/D3/d3-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["trace"][field] = bad_value
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_to_published_evaluator"]["matched"] == 40
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert error_fragment in result["trace_report_content"]["first_failure"]
+    assert "original_trace_report_content_alignment" in result["blockers"]
+    assert result["handoff_verified"] is False
 
 
 @pytest.mark.parametrize("replacement", [

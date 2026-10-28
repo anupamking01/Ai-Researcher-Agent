@@ -124,7 +124,16 @@ call counts, token usage and recorded report-word count with the **published
 frozen treatment CSV for the same treatment/task cell**. The trace experiment
 configuration must have the original arm's direct/planner and verification
 settings. Missing, noninteger or mismatched counters fail the diagnostic even
-when the 40 filenames and embedded run IDs appear valid. It also reads each corresponding Markdown report, rejects empty or non-UTF-8
+when the 40 filenames and embedded run IDs appear valid. It additionally
+checks the completed-run source-provenance ledgers using the original runner's
+invariants: nonnegative integer source/query counts, total source count within
+the frozen arm budget, completed source outcomes accounting for all scheduled
+URLs, unique/nonblank URLs in the scheduled/success/failed lists, disjoint
+success/failure partitions, search calls within the query count, and completed
+provider-usage accounting. Thus matching aggregate CSV counters cannot mask
+an internally contradictory URL/source ledger. This does **not** prove any
+URL was actually retrieved, link any individual source to a report claim, or
+authenticate historical archive bytes. It also reads each corresponding Markdown report, rejects empty or non-UTF-8
 content, and checks the whitespace-split word count against the frozen trace
 and treatment CSV. The original runner recorded `len(report.split())` before
 writing that unchanged text to Markdown; the new comparison catches nonempty

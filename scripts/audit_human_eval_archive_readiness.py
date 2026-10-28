@@ -298,6 +298,53 @@ def _trace_run_alignment(
 
 
 
+def _validate_recovered_source_ledgers(trace: dict, *, variant: str) -> None:
+    """Check completed-run source provenance, not merely frozen CSV counters.
+
+    Mirror the original treatment runner's source-URL ledger invariants.
+    Internal ledger consistency is useful recovery evidence, but cannot prove
+    that a URL was retrieved or authenticate the original archived bytes.
+    """
+    for name in ("source_count", "query_count"):
+        value = trace.get(name)
+        if type(value) is not int or value < 0:
+            raise ValueError(f"recovered trace {name} must be a nonnegative integer")
+    if trace["source_count"] > main_input_contract.FROZEN_SOURCE_BUDGETS[variant]:
+        raise ValueError("recovered trace source_count exceeds frozen source budget")
+    if trace["source_count"] != (
+        trace["successful_source_count"] + trace["failed_source_count"]
+    ):
+        raise ValueError("recovered trace source_count does not match source outcomes")
+    if trace["search_call_count"] > trace["query_count"]:
+        raise ValueError("recovered trace query_count is below search_call_count")
+    if trace.get("usage_accounting_status") != "provider_usage_complete":
+        raise ValueError("recovered trace usage_accounting_status is not complete")
+
+    ledgers = {}
+    for name, count_field in (
+        ("scheduled_urls", "source_count"),
+        ("successful_urls", "successful_source_count"),
+        ("failed_urls", "failed_source_count"),
+    ):
+        values = trace.get(name)
+        if (
+            type(values) is not list
+            or any(type(url) is not str or not url or url != url.strip()
+                   for url in values)
+            or len(values) != trace[count_field]
+            or len(set(values)) != len(values)
+        ):
+            raise ValueError(f"recovered trace {name} has invalid URL/count ledger")
+        ledgers[name] = set(values)
+    if (
+        ledgers["successful_urls"] & ledgers["failed_urls"]
+        or ledgers["scheduled_urls"] != (
+            ledgers["successful_urls"] | ledgers["failed_urls"]
+        )
+    ):
+        raise ValueError("recovered trace source URL ledger partition is inconsistent")
+
+
 def _trace_report_content_status(
     *,
     repo_root: Path,
@@ -434,6 +481,7 @@ def _trace_report_content_status(
                         f"recovered trace {trace_field} differs from frozen "
                         f"treatment CSV {csv_field}"
                     )
+            _validate_recovered_source_ledgers(trace, variant=variant)
             declared_report = trace.get("report_path")
             if not isinstance(declared_report, str):
                 raise ValueError("trace has no valid original report path")
