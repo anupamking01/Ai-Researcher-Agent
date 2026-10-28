@@ -401,13 +401,13 @@ def test_historical_run_malformed_clock_fails_closed(field, bad):
         audit.audit_historical_artifact_inventory(fetch_json=_client(responses))
 
 
-def test_workflow_completion_before_start_fails():
+def test_workflow_last_update_before_start_fails():
     _, run_id, _, _, _, _ = audit.HISTORICAL_RUNS[2]
     responses = _responses()
     responses[f"/repos/{audit.REPOSITORY}/actions/runs/{run_id}"][
         "updated_at"
     ] = "2026-09-24T22:59:59Z"
-    with pytest.raises(audit.ArtifactInventoryError, match="completion precedes"):
+    with pytest.raises(audit.ArtifactInventoryError, match="last update precedes"):
         audit.audit_historical_artifact_inventory(fetch_json=_client(responses))
 
 
@@ -418,6 +418,6 @@ def test_valid_artifact_receipt_preserves_temporal_and_source_custody_metadata()
     )["historical_runs"]["canonical_analysis"]
     assert receipt["workflow_attempt"] == 1
     assert receipt["workflow_started_at"] == "2026-09-24T23:00:00+00:00"
-    assert receipt["workflow_completed_at"] == "2026-09-24T23:05:00+00:00"
+    assert receipt["workflow_last_updated_at"] == "2026-09-24T23:05:00+00:00"
     assert receipt["expected_artifact"]["created_at"] == "2026-09-24T23:03:00Z"
     assert receipt["expected_artifact"]["updated_at"] == "2026-09-24T23:03:00Z"

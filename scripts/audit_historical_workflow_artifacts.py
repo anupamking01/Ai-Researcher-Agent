@@ -128,7 +128,7 @@ def _parse_expiry_utc(value: object) -> datetime:
 
 def _listed_artifacts(
     run_id: int, *, expected_head_sha: str, started_at: datetime,
-    completed_at: datetime, fetch_json: Callable[[str], object],
+    last_updated_at: datetime, fetch_json: Callable[[str], object],
 ) -> list[dict]:
     """Read every page; never interpret a partial listing as a missing archive."""
     seen_ids = set()
@@ -168,9 +168,9 @@ def _listed_artifacts(
             updated_at = _parse_utc_timestamp(
                 artifact.get("updated_at"), label="artifact update"
             )
-            if not started_at <= created_at <= completed_at:
+            if not started_at <= created_at <= last_updated_at:
                 raise ArtifactInventoryError(
-                    "artifact creation is outside its historical workflow execution window"
+                    "artifact creation is outside historical start-to-last-update window"
                 )
             if updated_at < created_at:
                 raise ArtifactInventoryError("artifact update precedes creation")
@@ -249,14 +249,14 @@ def audit_historical_artifact_inventory(
         started_at = _parse_utc_timestamp(
             run.get("run_started_at"), label=f"{role} workflow start"
         )
-        completed_at = _parse_utc_timestamp(
-            run.get("updated_at"), label=f"{role} workflow completion"
+        last_updated_at = _parse_utc_timestamp(
+            run.get("updated_at"), label=f"{role} workflow last update"
         )
-        if completed_at < started_at:
-            raise ArtifactInventoryError(f"{role} workflow completion precedes start")
+        if last_updated_at < started_at:
+            raise ArtifactInventoryError(f"{role} workflow last update precedes start")
         artifacts = _listed_artifacts(
             run_id, expected_head_sha=commit, started_at=started_at,
-            completed_at=completed_at, fetch_json=fetch_json,
+            last_updated_at=last_updated_at, fetch_json=fetch_json,
         )
         matching = [item for item in artifacts if item["name"] == expected_name]
         if len(matching) > 1:
@@ -278,7 +278,7 @@ def audit_historical_artifact_inventory(
             "workflow_conclusion": conclusion,
             "workflow_attempt": 1,
             "workflow_started_at": started_at.isoformat(),
-            "workflow_completed_at": completed_at.isoformat(),
+            "workflow_last_updated_at": last_updated_at.isoformat(),
             "expected_artifact_name": expected_name,
             "total_artifacts_listed": len(artifacts),
             "expected_artifact": (

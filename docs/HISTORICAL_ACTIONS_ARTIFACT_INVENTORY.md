@@ -60,9 +60,9 @@ workflow source path. The audit checks the artifact's embedded workflow-run
 SHA, run ID, stable repository identity and head-repository identity against
 the run's pinned metadata. Missing source associations fail closed. It also
 checks that the artifact's GitHub-reported creation time falls between the
-workflow's recorded start and completion, that update time is not before
+workflow's reported start and last-update timestamps, that update time is not before
 creation, and that expiration follows creation. Malformed or ambiguous time
-metadata is rejected. The receipt exposes run start/completion and artifact
+metadata is rejected. The receipt exposes run start/last-update and artifact
 creation/update times for reviewer inspection.
 
 This blocks a same-name artifact associated with a different branch, commit,
@@ -73,3 +73,8 @@ attestations. They do not prove ZIP byte identity, that an archived report is
 genuine, or that the original source contents survive. The canonical-analysis
 ZIP remains a secondary analysis artifact, not a substitute for the missing
 treatment and evaluator-recovery archives.
+
+The GitHub run API exposes last-update time, not a separately authenticated
+completion timestamp. An update after execution could broaden that interval;
+the audit cannot prove the precise moment a job finished or establish custody
+from these timestamps alone.
