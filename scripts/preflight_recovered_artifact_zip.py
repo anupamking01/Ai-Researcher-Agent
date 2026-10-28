@@ -211,7 +211,7 @@ def _verify_local_header_metadata(handle, info: zipfile.ZipInfo, *, cd_offset: i
         _modified_time, _modified_date, crc, compressed, uncompressed,
         name_length, extra_length,
     ) = LOCAL_HEADER.unpack(raw)
-    if signature != b"PK\\x03\\x04":
+    if signature != b"PK\x03\x04":
         raise RecoveredArchiveError("invalid local ZIP header signature")
     if flags != info.flag_bits or method != info.compress_type:
         raise RecoveredArchiveError("local ZIP header flags/compression disagree with central directory")

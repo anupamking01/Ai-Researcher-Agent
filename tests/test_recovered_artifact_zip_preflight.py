@@ -346,8 +346,8 @@ def test_local_zip_header_must_agree_with_central_metadata(
         "reports/test.md": b"# Synthetic local/central metadata regression"
     })
     raw = bytearray(path.read_bytes())
-    assert raw.startswith(b"PK\\x03\\x04")
-    assert raw.index(b"PK\\x01\\x02") > 30
+    assert raw.startswith(b"PK\x03\x04")
+    assert raw.index(b"PK\x01\x02") > 30
     assert int.from_bytes(raw[offset:offset + width], "little") != replacement
     raw[offset:offset + width] = replacement.to_bytes(width, "little")
     path.write_bytes(raw)
