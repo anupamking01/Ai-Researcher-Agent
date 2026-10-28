@@ -21,6 +21,11 @@ run 34783525480. The canonical-analysis run 36070798723 still exposed its
 not proof that the original reports are destroyed: local, restricted, offline
 or institutional backups may exist.
 
+For a current, read-only GitHub Actions artifact inventory that pins the three
+historical run identities and distinguishes absent, expired, and merely listed
+artifacts, see [Historical Actions artifact availability](HISTORICAL_ACTIONS_ARTIFACT_INVENTORY.md).
+It cannot establish original custody or replace a missing trace/report archive.
+
 ## Original treatment-run task-list anchor
 
 The two frozen automated CSVs are SHA-256-anchored, but that published
