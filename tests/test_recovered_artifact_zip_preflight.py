@@ -314,6 +314,62 @@ def test_central_directory_overrun_rejected_before_open(tmp_path, monkeypatch):
         audit.audit_recovered_zip(path)
 
 
+@pytest.mark.parametrize("placement", [
+    "before_first_member",
+    "between_members",
+    "before_central_directory",
+])
+def test_unindexed_local_region_padding_is_rejected(tmp_path, placement):
+    """A ZIP can decode correctly while concealing unindexed bytes.
+
+    Adjust both the EOCD central offset and central-directory local offsets,
+    so rejecting the archive cannot rely on ZipFile or EOCD inconsistency.
+    """
+    path = _zip(tmp_path / "padding.zip", {
+        "reports/one.md": b"# Synthetic one",
+        "reports/two.md": b"# Synthetic two",
+    })
+    raw = bytearray(path.read_bytes())
+    with zipfile.ZipFile(path) as archive:
+        infos = archive.infolist()
+        assert len(infos) == 2
+    eocd = raw.rfind(b"PK\\x05\\x06")
+    assert eocd == len(raw) - 22
+    old_cd = int.from_bytes(raw[eocd + 16:eocd + 20], "little")
+    assert raw[old_cd:old_cd + 4] == b"PK\\x01\\x02"
+    insert_at = {
+        "before_first_member": 0,
+        "between_members": infos[1].header_offset,
+        "before_central_directory": old_cd,
+    }[placement]
+    padding = b"UNINDEXED-VERA-PAYLOAD"
+    raw[insert_at:insert_at] = padding
+    new_cd = old_cd + len(padding)
+    eocd += len(padding)
+    raw[eocd + 16:eocd + 20] = new_cd.to_bytes(4, "little")
+    central_at = new_cd
+    for _ in infos:
+        assert raw[central_at:central_at + 4] == b"PK\\x01\\x02"
+        local_at = int.from_bytes(raw[central_at + 42:central_at + 46], "little")
+        if local_at >= insert_at:
+            raw[central_at + 42:central_at + 46] = (
+                local_at + len(padding)
+            ).to_bytes(4, "little")
+        name_len = int.from_bytes(raw[central_at + 28:central_at + 30], "little")
+        extra_len = int.from_bytes(raw[central_at + 30:central_at + 32], "little")
+        comment_len = int.from_bytes(raw[central_at + 32:central_at + 34], "little")
+        central_at += 46 + name_len + extra_len + comment_len
+    assert central_at == eocd
+    path.write_bytes(raw)
+
+    # The standard decoder accepts and reads both complete valid members.
+    with zipfile.ZipFile(path) as archive:
+        assert archive.read("reports/one.md") == b"# Synthetic one"
+        assert archive.read("reports/two.md") == b"# Synthetic two"
+    with pytest.raises(audit.RecoveredArchiveError, match="unaccounted ZIP bytes"):
+        audit.audit_recovered_zip(path)
+
+
 def test_unaccounted_trailing_bytes_rejected(tmp_path):
     """An ambiguous trailer is not part of a canonical GitHub artifact ZIP."""
     path = _zip(tmp_path / "extra-trailer.zip", {"good.txt": b"synthetic"})

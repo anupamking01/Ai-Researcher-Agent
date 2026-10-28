@@ -137,6 +137,13 @@ zero placeholders. For streaming entries, it additionally reads and checks the
 optional signature) against central metadata. It rejects missing or
 contradictory descriptors even if Python's ZIP decoder could read the payload.
 Local member regions, including any data descriptors, must not overlap.
+They must also cover **every byte from the beginning of the ZIP to the
+central directory**: unindexed prefixes or gaps between/after members are
+rejected even when Python can decode every advertised file. Otherwise bytes
+omitted from the per-file fingerprint receipt could be concealed in the
+archive and later misrepresented as part of an authenticated research bundle.
+Ordinary ZIP comments after the end-of-central-directory header remain
+supported. This is conservative structural triage, not historical custody proof.
 These checks prevent ambiguous ZIP byte interpretations; they are not
 independent evidence of original experimental provenance. Ordinary signed
 and unsigned non-ZIP64 streaming descriptors remain supported.

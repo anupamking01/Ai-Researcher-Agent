@@ -323,6 +323,23 @@ def audit_recovered_zip(path: Path, *, expected_archive_sha256: str | None = Non
                     )
                 ):
                     raise RecoveredArchiveError("overlapping ZIP local member regions")
+                # The central directory must account for every byte preceding
+                # it through non-overlapping local member regions. Otherwise a
+                # readable archive can conceal unindexed payloads/prefixes that
+                # never appear in the receipt or member SHA-256 inventory.
+                if (
+                    by_offset[0][0] != 0
+                    or by_offset[-1][1] != cd_offset
+                    or any(
+                        next_start > previous_end
+                        for (_, previous_end), (next_start, _) in zip(
+                            by_offset, by_offset[1:]
+                        )
+                    )
+                ):
+                    raise RecoveredArchiveError(
+                        "unaccounted ZIP bytes outside local member regions"
+                    )
                 if not file_keys:
                     raise RecoveredArchiveError("ZIP contains no regular files")
                 for key in seen:
