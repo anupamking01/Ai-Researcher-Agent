@@ -333,10 +333,10 @@ def test_unindexed_local_region_padding_is_rejected(tmp_path, placement):
     with zipfile.ZipFile(path) as archive:
         infos = archive.infolist()
         assert len(infos) == 2
-    eocd = raw.rfind(b"PK\x05\\x06")
+    eocd = raw.rfind(b"PK\x05\x06")
     assert eocd == len(raw) - 22
     old_cd = int.from_bytes(raw[eocd + 16:eocd + 20], "little")
-    assert raw[old_cd:old_cd + 4] == b"PK\x01\\x02"
+    assert raw[old_cd:old_cd + 4] == b"PK\x01\x02"
     insert_at = {
         "before_first_member": 0,
         "between_members": infos[1].header_offset,
@@ -349,7 +349,7 @@ def test_unindexed_local_region_padding_is_rejected(tmp_path, placement):
     raw[eocd + 16:eocd + 20] = new_cd.to_bytes(4, "little")
     central_at = new_cd
     for _ in infos:
-        assert raw[central_at:central_at + 4] == b"PK\x01\\x02"
+        assert raw[central_at:central_at + 4] == b"PK\x01\x02"
         local_at = int.from_bytes(raw[central_at + 42:central_at + 46], "little")
         if local_at >= insert_at:
             raw[central_at + 42:central_at + 46] = (
