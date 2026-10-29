@@ -226,13 +226,36 @@ necessary for historical custody. The Git commit records **the discovery of
 the two historical GitHub-generated ZIP fingerprints** for recovery triage,
 not an independent historical research-manifest checksum.
 
-If an authorized original ZIP backup is found, run the structural preflight
-**without** `--expected-archive-sha256` and compare the resulting
-`archive_sha256_observed_now` against the original GitHub-logged ZIP digest
-above. The preflight's `--expected-archive-sha256` argument explicitly denotes
-a *previously independently retained* ZIP pin: **do not populate it with this
-same-provider job-log digest**, or the receipt would misleadingly label that
-comparison an independent custody check. Record the source of each digest
-separately. A matching observed ZIP would strengthen provider-log-to-current-ZIP
-continuity but still would not authenticate per-trace/report historical bytes
-or satisfy coordinator/human-evaluation handoff gates.
+## Automated same-provider ZIP correspondence (without claiming independent custody)
+
+For an **authorized copy of the exact original GitHub artifact ZIP** (not a
+freshly re-zipped folder or regenerated report), run the existing read-only,
+bounded ZIP structural preflight with the historical GitHub job-log role:
+
+```bash
+python -m scripts.preflight_recovered_artifact_zip <original-candidate.zip> \
+  --github-job-log-artifact original_treatment
+```
+
+For an authorized copy of the distinct evaluator-recovery ZIP, select
+`--github-job-log-artifact evaluator_recovery` instead. The selector binds the
+comparison to the immutable role, run ID, job ID, artifact ID, ZIP byte count,
+and SHA-256 **recorded in the contemporaneous GitHub job logs**. A byte-size or
+SHA-256 mismatch fails the preflight; otherwise the normal comprehensive ZIP
+structure and per-member checks must still pass. No extraction, treatment
+generation, model inference, or human scoring occurs. A successful receipt
+reports `github_job_log_zip_correspondence` separately from
+`expected_archive_sha256_matched`. It explicitly labels the correspondence
+`github_actions_same_provider_job_log`, with
+`independent_archive_pin: false` and
+`historical_evidence_authenticated: false`.
+
+The existing `--expected-archive-sha256` remains **reserved exclusively for
+a previously, independently retained ZIP-byte pin**; do not copy the
+GitHub-logged digest into that flag. Both checks may be supplied if genuinely
+independent evidence also exists, and their receipt fields remain distinct.
+The software cannot authenticate the asserted source of an operator-supplied
+independent pin. Matching the GitHub-logged ZIP digest verifies ZIP-byte
+correspondence to a *same-provider record*, **not** original trace/report
+historical authenticity, archival custody, or human-evaluation readiness.
+Those separate gates in `HUMAN_EVAL_ARCHIVE_RECOVERY.md` remain mandatory.

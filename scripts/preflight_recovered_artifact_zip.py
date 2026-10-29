@@ -18,6 +18,8 @@ import unicodedata
 import zipfile
 import zlib
 
+from scripts.audit_historical_artifact_job_logs import ORIGINAL, RECOVERED
+
 MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
 MAX_MEMBERS = 2000
 MAX_MEMBER_BYTES = 64 * 1024 * 1024
@@ -31,6 +33,13 @@ CENTRAL_HEADER = struct.Struct("<4s6H3I5H2I")
 LOCAL_HEADER = struct.Struct("<4s2B4HL2L2H")
 CHUNK_BYTES = 1024 * 1024
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+
+# Fixed, same-provider ZIP fingerprints recovered from original GitHub job logs.
+# These are NOT independently retained research/trace/report archive pins.
+GITHUB_JOB_LOG_ARCHIVES = {
+    "original_treatment": ORIGINAL,
+    "evaluator_recovery": RECOVERED,
+}
 
 WINDOWS_FORBIDDEN_CHARS = frozenset('<>:"|?*')
 WINDOWS_DEVICE_NAMES = frozenset(
@@ -264,15 +273,29 @@ def _unchanged(original: os.stat_result, current: os.stat_result) -> bool:
     )
 
 
-def audit_recovered_zip(path: Path, *, expected_archive_sha256: str | None = None) -> dict:
+def audit_recovered_zip(
+    path: Path, *, expected_archive_sha256: str | None = None,
+    github_job_log_artifact: str | None = None,
+) -> dict:
     """Inspect one ZIP without extraction, model calls, or archive modifications.
 
-    An optional expected SHA-256 must have been independently recorded before
-    this inspection to serve as a historical custody anchor.
+    An optional expected_archive_sha256 must have been independently retained
+    before inspection. The separate GitHub job-log selector compares against
+    *same-provider* historical metadata and never establishes independent
+    custody, even if both bytes and digest match.
     """
     path = Path(path)
     if expected_archive_sha256 is not None and not HEX_SHA256.fullmatch(expected_archive_sha256):
         raise RecoveredArchiveError("expected archive SHA-256 must be lowercase 64-hex")
+    if github_job_log_artifact is not None and (
+        type(github_job_log_artifact) is not str
+        or github_job_log_artifact not in GITHUB_JOB_LOG_ARCHIVES
+    ):
+        raise RecoveredArchiveError("unknown historical GitHub job-log artifact role")
+    github_log_anchor = (
+        GITHUB_JOB_LOG_ARCHIVES[github_job_log_artifact]
+        if github_job_log_artifact is not None else None
+    )
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -283,9 +306,13 @@ def audit_recovered_zip(path: Path, *, expected_archive_sha256: str | None = Non
                 raise RecoveredArchiveError("archive must be a stable regular file, not a link")
             if not 0 < before.st_size <= MAX_ARCHIVE_BYTES:
                 raise RecoveredArchiveError("archive file exceeds the bounded ZIP size range")
+            if github_log_anchor is not None and before.st_size != github_log_anchor["size_bytes"]:
+                raise RecoveredArchiveError("archive byte size differs from historical GitHub job-log ZIP")
             archive_sha256 = _fingerprint(handle)
             if expected_archive_sha256 and archive_sha256 != expected_archive_sha256:
                 raise RecoveredArchiveError("archive SHA-256 differs from supplied independent pin")
+            if github_log_anchor is not None and archive_sha256 != github_log_anchor["zip_sha256"]:
+                raise RecoveredArchiveError("archive SHA-256 differs from historical GitHub job-log ZIP")
 
             # The ZipFile constructor otherwise parses every advertised record
             # before our MAX_MEMBERS check can run (a memory exhaustion risk).
@@ -395,6 +422,19 @@ def audit_recovered_zip(path: Path, *, expected_archive_sha256: str | None = Non
         "status": "zip_structurally_verified_not_historically_authenticated",
         "archive_sha256_observed_now": archive_sha256,
         "expected_archive_sha256_matched": expected_archive_sha256 is not None,
+        "github_job_log_zip_correspondence": (
+            {
+                "source": "github_actions_same_provider_job_log",
+                "artifact_role": github_job_log_artifact,
+                "source_run_id": github_log_anchor["run_id"],
+                "source_job_id": github_log_anchor["job_id"],
+                "source_artifact_id": github_log_anchor["artifact_id"],
+                "expected_archive_sha256": github_log_anchor["zip_sha256"],
+                "expected_archive_bytes": github_log_anchor["size_bytes"],
+                "sha256_and_byte_size_matched": True,
+                "independent_archive_pin": False,
+            } if github_log_anchor is not None else None
+        ),
         "archive_bytes": before.st_size,
         "file_count": len(files),
         "total_uncompressed_bytes": total,
@@ -410,10 +450,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive", type=Path, help="offline ZIP file; never extracted")
     parser.add_argument("--expected-archive-sha256", help="independently retained prior ZIP-byte pin")
+    parser.add_argument(
+        "--github-job-log-artifact", choices=tuple(GITHUB_JOB_LOG_ARCHIVES),
+        help="compare ZIP bytes/size with historically logged GitHub digest (NOT independent custody)",
+    )
     args = parser.parse_args()
     try:
         receipt = audit_recovered_zip(
-            args.archive, expected_archive_sha256=args.expected_archive_sha256
+            args.archive, expected_archive_sha256=args.expected_archive_sha256,
+            github_job_log_artifact=args.github_job_log_artifact,
         )
     except (RecoveredArchiveError, ValueError) as exc:
         parser.exit(1, f"VERA RECOVERED ZIP PREFLIGHT: FAIL: {exc}\n")
