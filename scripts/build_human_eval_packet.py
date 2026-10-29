@@ -568,6 +568,10 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
 
     records: list[dict] = []
     seen_cells: set[tuple[str, str]] = set()
+    # A run_id identifies one original treatment execution and its one report.
+    # Duplicate IDs across distinct matrix cells would silently reuse that
+    # report as though it were independent experimental evidence.
+    seen_run_ids: dict[str, tuple[str, str]] = {}
     total_source_bytes = 0
 
     for trace_path in sorted(trace_root.glob("*/*.json")):
@@ -627,6 +631,13 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
         if cell in seen_cells:
             raise ValueError(f"Duplicate variant/task cell: {variant_id}/{task_id}")
         seen_cells.add(cell)
+        previous_cell = seen_run_ids.get(run_id)
+        if previous_cell is not None:
+            raise ValueError(
+                f"Duplicate experiment run_id {run_id!r} across treatment/task cells: "
+                f"{previous_cell!r} and {cell!r}"
+            )
+        seen_run_ids[run_id] = cell
 
         report_md = _resolve_report_markdown(
             trace_root, str(trace.get("report_path") or ""), run_id=run_id

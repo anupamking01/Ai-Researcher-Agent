@@ -675,6 +675,35 @@ def test_build_packet_rejects_cross_run_report_substitution(tmp_path):
     assert not output_root.exists()
 
 
+
+@pytest.mark.parametrize(
+    ("target_variant", "target_task"),
+    [("D6", "main-01"), ("P6", "main-02")],
+)
+def test_build_packet_rejects_duplicate_run_id_across_distinct_cells(
+    tmp_path, target_variant, target_task
+):
+    """One report/run must not be repackaged as two independent treatment cells."""
+    trace_root = _write_complete_matrix(tmp_path)
+    original_path = (
+        trace_root / target_variant / f"{target_variant.lower()}-{target_task}.json"
+    )
+    payload = json.loads(original_path.read_text(encoding="utf-8"))
+    shared_run_id = "d3-main-01"
+    payload["trace"]["run_id"] = shared_run_id
+    payload["trace"]["report_path"] = (
+        f"./outputs/{shared_run_id}/research_report.pdf"
+    )
+    duplicate_path = trace_root / target_variant / f"{shared_run_id}.json"
+    original_path.unlink()
+    duplicate_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    output_root = tmp_path / "packet-shared-treatment-run"
+    with pytest.raises(ValueError, match="Duplicate experiment run_id"):
+        _build_packet(trace_root, output_root, tmp_path)
+    assert not output_root.exists()
+
+
 def test_build_packet_rejects_encoded_report_directory_traversal(tmp_path):
     trace_root = _write_complete_matrix(tmp_path)
     trace_path = trace_root / "D3" / "d3-main-01.json"

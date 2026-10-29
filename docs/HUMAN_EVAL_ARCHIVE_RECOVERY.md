@@ -26,6 +26,19 @@ historical run identities and distinguishes absent, expired, and merely listed
 artifacts, see [Historical Actions artifact availability](HISTORICAL_ACTIONS_ARTIFACT_INVENTORY.md).
 It cannot establish original custody or replace a missing trace/report archive.
 
+## Unique run-to-report binding before human packet publication
+
+The offline blinded packet builder now requires each treatment/task cell to
+reference a globally unique `run_id`, in addition to its balanced matrix
+and per-cell trace/report checks. Each run ID selects one Markdown report
+directory; reusing the same ID for two different treatment/task cells would
+silently duplicate that report and misrepresent the experimental inputs as
+independent outputs. Such candidates fail **before any packet, ratings
+template, blinding key, or manifest is published**. This is a prospective
+validity guard, not evidence that unavailable original traces or reports have
+been recovered or independently authenticated. Do not change identifiers or
+copy reports merely to make a failed recovery pass.
+
 ## Original treatment-run task-list anchor
 
 The two frozen automated CSVs are SHA-256-anchored, but that published
