@@ -14,16 +14,16 @@ The historical treatment and evaluator-recovery artifacts are still unavailable 
 
 These two GitHub Actions audits invoke Python modules with **transitive** first-party
 imports. Previously a modification to a shared verifier such as
-\`scripts/preflight_recovered_artifact_zip.py\`,
-\`scripts/verify_analysis_provenance.py\`, or
-\`scripts/verify_canonical_archive_checkout.py\` did not itself trigger
+`scripts/preflight_recovered_artifact_zip.py`,
+`scripts/verify_analysis_provenance.py`, or
+`scripts/verify_canonical_archive_checkout.py` did not itself trigger
 either real archive audit: their push path filters mostly listed only their
 direct entrypoints. Ordinary PR unit tests could pass without replaying the
 actual retained artifact on the altered verification implementation.
 
 Both workflows now watch their complete currently known static first-party
-\`scripts/*.py\` import closures. The offline test
-\`tests/test_canonical_archive_audit_trigger_coverage.py\` parses those
+`scripts/*.py` import closures. The offline test
+`tests/test_canonical_archive_audit_trigger_coverage.py` parses those
 imports using Python AST, follows indirect dependencies, and requires the
 workflow push path list to contain each reachable module plus the workflow
 itself. A newly imported local verifier therefore creates a failing CI
@@ -32,7 +32,7 @@ read-only verification workflows are scheduled; no model calls, treatment
 reruns, evaluator recovery, or human ratings are produced by this change.
 
 The check covers **static Python imports of flat scripts modules**, not dynamic
-\`importlib\`, shell-sourced code, or external packages. Such new dependencies
+`importlib`, shell-sourced code, or external packages. Such new dependencies
 require explicit reviewer inspection and corresponding trigger updates.
 The audits still rely on expiring GitHub-hosted artifacts: a successful
 trigger does not extend archival retention, establish independent custody
