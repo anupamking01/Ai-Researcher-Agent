@@ -919,7 +919,7 @@ def _require_original_treatment_task_source(task_manifest: dict) -> None:
 
 def _require_published_evaluator_run_ids(
     records: list[dict], *, repo_root: Path = REPO_ROOT
-) -> None:
+) -> tuple[Path, dict, tuple[int, int]]:
     """Prevent a production blinded packet from substituting evaluated runs.
 
     The original task-manifest pin alone cannot distinguish two executions of
@@ -983,7 +983,9 @@ def _require_published_evaluator_run_ids(
     return evaluator_path, _byte_fingerprint(evaluator_bytes), evaluator_identity[0]
 
 
-def _recheck_published_evaluator_source(capture: tuple) -> None:
+def _recheck_published_evaluator_source(
+    capture: tuple[Path, dict, tuple[int, int]],
+) -> None:
     """Reject evaluator-source drift before reserving any blinded packet files."""
     path, original_fingerprint, original_inode = capture
     identity: list[tuple[int, int]] = []
