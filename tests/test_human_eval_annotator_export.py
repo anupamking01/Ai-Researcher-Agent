@@ -98,6 +98,30 @@ def _opened_directory(directory_fd: int) -> Path:
     return Path(os.readlink(f"/proc/self/fd/{directory_fd}"))
 
 
+@pytest.mark.parametrize("artifact_name", sorted(build.COORDINATOR_PRIVATE_ARTIFACTS))
+def test_export_rejects_exposed_coordinator_only_artifacts(packet_case, artifact_name):
+    (packet_case["packet_root"] / artifact_name).chmod(0o644)
+    with pytest.raises(ValueError, match="coordinator-only artifact permissions are unsafe"):
+        _export(packet_case)
+    assert not packet_case["export_root"].exists()
+
+
+@pytest.mark.parametrize("artifact_name", sorted(build.COORDINATOR_PRIVATE_ARTIFACTS))
+def test_source_bound_verification_rejects_exposed_coordinator_artifacts(
+    packet_case, artifact_name
+):
+    _export(packet_case)
+    (packet_case["packet_root"] / artifact_name).chmod(0o644)
+    with pytest.raises(ValueError, match="coordinator-only artifact permissions are unsafe"):
+        exporter.verify_annotator_bundle_against_source(
+            packet_root=packet_case["packet_root"],
+            output_root=packet_case["export_root"],
+            task_manifest_path=packet_case["task_manifest"],
+            repo_root=packet_case["repo_root"],
+            expected_presentation_order="canonical",
+        )
+
+
 def test_bundle_verifier_rejects_coherently_rehashed_treatment_leakage(packet_case):
     _export(packet_case)
     packet_path = packet_case["export_root"] / "packet.jsonl"

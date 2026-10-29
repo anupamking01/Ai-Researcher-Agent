@@ -2,6 +2,7 @@ import csv
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -96,6 +97,29 @@ def _build_packet(trace_root: Path, output_root: Path, tmp_path: Path, *, seed=2
 
 def _read_jsonl(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_coordinator_secrets_are_private_at_creation_even_with_open_umask(tmp_path):
+    trace_root = _write_complete_matrix(tmp_path)
+    task_manifest = _write_task_manifest(tmp_path)
+    output_root = tmp_path / "human-eval"
+
+    original_umask = os.umask(0o000)
+    try:
+        build_packet(
+            trace_root,
+            output_root,
+            seed=20260915,
+            task_manifest_path=task_manifest,
+        )
+    finally:
+        os.umask(original_umask)
+
+    for name in packet_builder.COORDINATOR_PRIVATE_ARTIFACTS:
+        assert stat.S_IMODE((output_root / name).stat().st_mode) == 0o600
+    # Non-secret packet/template outputs retain the original umask semantics.
+    for name in ("packet.jsonl", "ratings_template.csv"):
+        assert stat.S_IMODE((output_root / name).stat().st_mode) == 0o666
 
 
 def test_build_packet_is_deterministic_and_blinds_variant_labels(tmp_path):

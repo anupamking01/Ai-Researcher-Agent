@@ -35,6 +35,7 @@ DEFAULT_TASK_MANIFEST = REPO_ROOT / "experiments" / "main_budget_tasks.json"
 EXPECTED_VARIANTS = ("D3", "D6", "P6", "P6V")
 BLINDING_SEED_BITS = 256
 PACKET_ARTIFACTS = ("packet.jsonl", "blinding_key.csv", "ratings_template.csv", "manifest.json")
+COORDINATOR_PRIVATE_ARTIFACTS = frozenset({"blinding_key.csv", "manifest.json"})
 CONTENT_VALIDATOR_PATH = "scripts/build_human_eval_packet.py"
 MANIFEST_FIELDS = frozenset(
     {
@@ -785,22 +786,35 @@ def _refuse_overwrite(path: Path) -> ValueError:
     )
 
 
-def _write_text_exclusive(path: Path, content: str) -> None:
+def _open_packet_artifact_exclusive(path: Path):
+    """Create each packet file once, with private modes for coordinator secrets.
+
+    Apply the mode at O_EXCL creation time: chmod after writing would expose a
+    live blinding key/seed under a permissive process umask.
+    """
+    mode = 0o600 if path.name in COORDINATOR_PRIVATE_ARTIFACTS else 0o666
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     try:
-        with path.open("x", encoding="utf-8", newline="") as handle:
-            handle.write(content)
+        fd = os.open(path, flags, mode)
     except FileExistsError as exc:
         raise _refuse_overwrite(path) from exc
+    try:
+        return os.fdopen(fd, "w", encoding="utf-8", newline="")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _write_text_exclusive(path: Path, content: str) -> None:
+    with _open_packet_artifact_exclusive(path) as handle:
+        handle.write(content)
 
 
 def _write_csv(path: Path, fieldnames: tuple[str, ...] | list[str], rows: list[dict]) -> None:
-    try:
-        with path.open("x", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
-    except FileExistsError as exc:
-        raise _refuse_overwrite(path) from exc
+    with _open_packet_artifact_exclusive(path) as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def _artifact_fingerprint(path: Path) -> dict:

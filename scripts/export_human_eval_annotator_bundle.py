@@ -193,7 +193,20 @@ def _publish_directory_noreplace(staging_root: Path, output_root: Path) -> None:
 def _snapshot_coordinator_bundle(packet_root: Path, snapshot_root: Path) -> dict[str, bytes]:
     captured = {}
     for name in COORDINATOR_ARTIFACTS:
-        content = _regular_bytes(packet_root / name, label=f"coordinator {name}")
+        path = packet_root / name
+        if name in build.COORDINATOR_PRIVATE_ARTIFACTS:
+            # Check the live source before copying it into a private temporary
+            # snapshot. A verified payload is not proof its key stayed secret.
+            source_mode = path.lstat().st_mode
+            if (
+                not stat.S_ISREG(source_mode)
+                or stat.S_IMODE(source_mode) & 0o077
+            ):
+                raise ValueError(
+                    f"coordinator-only artifact permissions are unsafe: {name}; "
+                    "do not distribute a packet whose blinding secrets may have been exposed"
+                )
+        content = _regular_bytes(path, label=f"coordinator {name}")
         captured[name] = content
         (snapshot_root / name).write_bytes(content)
     return captured
