@@ -1,0 +1,68 @@
+name: retained-canonical-archive-audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research-paper-eval-2027
+    paths:
+      - .github/workflows/retained-canonical-archive-audit.yml
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: retained-canonical-archive-audit-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-retained-archive:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact research revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+
+      - name: Download exact canonical-run artifact metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/10837878458" \
+            > "${RUNNER_TEMP}/canonical-source-metadata.json"
+
+      - name: Download raw retained canonical ZIP without extracting
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl --fail --location --silent --show-error --retry 3 --max-time 90 \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/10837878458/zip" \
+            --output "${RUNNER_TEMP}/retained-canonical.zip"
+
+      - name: Independently recompute checkout and verify actual archived bytes
+        run: |
+          python -m scripts.verify_retained_canonical_download \
+            "${RUNNER_TEMP}/canonical-source-metadata.json" \
+            "${RUNNER_TEMP}/retained-canonical.zip" \
+            --root "${GITHUB_WORKSPACE}" \
+            --receipt-out "${RUNNER_TEMP}/retained-canonical-verification.json"
+          cat "${RUNNER_TEMP}/retained-canonical-verification.json"
+
+      - name: Retain verified provider-observed ZIP and concordance receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: canonical-archive-concordance-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/canonical-source-metadata.json
+            ${{ runner.temp }}/retained-canonical.zip
+            ${{ runner.temp }}/retained-canonical-verification.json
+          if-no-files-found: error
+          retention-days: 90
