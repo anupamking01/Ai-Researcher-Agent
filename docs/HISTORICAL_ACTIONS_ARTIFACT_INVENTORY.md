@@ -178,3 +178,57 @@ retained provenance anchor, and an independently retained ZIP hash is not
 a substitute for the original trace/report and integrated human-evaluation
 handoff checks documented in HUMAN_EVAL_ARCHIVE_RECOVERY.md.
 The command does not regenerate reports, evaluator results, or human ratings.
+
+## Newly recovered contemporaneous upload and download fingerprints (2026-10-30)
+
+Although the two original run-scoped artifact listings are empty, their **GitHub
+Actions job logs remain readable**. They contain historical upload-artifact v4
+ZIP digests and artifact IDs, including a later successful download in the
+evaluator-recovery job. These are useful **GitHub-service-reported, contemporaneous
+ZIP-byte identifiers**, *not* independently retained out-of-band manifest hashes,
+original report or trace fingerprints, proof of present-day downloadability,
+or an independent signed archival attestation.
+
+| Evidence | Run / job ID | Artifact ID | ZIP bytes | GitHub-logged ZIP SHA-256 |
+| --- | --- | --- | ---: | --- |
+| Original treatment upload (2026-09-11) | 34620917346 / 103334373932 | 10275100801 | 608355 | `878205ff42267b85d71f478520a4a3ebe520915f22ae2d2307e930fa39545400` |
+| Evaluator recovery upload (2026-09-13) | 34783525480 / 103794737655 | 10324954205 | 618586 | `c357b068fa4c0b7e86f7c56cd1d3e346f6922106d7bde644db92feb7f8fc84cc` |
+
+The original job logged ZIP upload completion with the original digest, size,
+and artifact ID. Two days later the evaluator-only recovery job logged
+downloading that **same artifact ID, size, and expected digest**, then a
+computed downloaded SHA-256 equal to the original log and a successful
+download, before uploading its own separate ZIP. This confirms log-level
+continuity of the original ZIP *within GitHub Actions*. It does not mean the
+original ZIP remains available, or that all its internal reports/traces are
+authentic or independently archived.
+
+To rerun the **offline** correspondence audit, securely save the existing
+original **job 103334373932** and recovery **job 103794737655** text logs
+from their GitHub Actions pages (do not commit full logs, which contain
+research text and external URLs), then run:
+
+```bash
+python -m scripts.audit_historical_artifact_job_logs \
+  --original-job-log <original-job.log> \
+  --recovery-job-log <recovery-job.log>
+```
+
+The auditor accepts at most 2 MiB per log, reads without following symlinks,
+requires the named upload/download action boundaries and unique ordered event
+lines, and compares all artifact IDs, byte sizes, ZIP digests, run-scoped URLs
+and the cross-run original download digest against the recorded metadata.
+An invalid, ambiguous or modified transcript fails closed. Offline tests
+use only synthetic log excerpts. These supplied logs are not cryptographically
+authenticated as genuine GitHub output by the offline parser; retaining them
+separately along with signed or independently archived source bytes is still
+necessary for historical custody. The Git commit records **the discovery of
+the two historical GitHub-generated ZIP fingerprints** for recovery triage,
+not an independent historical research-manifest checksum.
+
+If an authorized original ZIP backup is found, compare its **ZIP bytes** against
+the original GitHub-logged SHA-256 using
+`scripts.preflight_recovered_artifact_zip --expected-archive-sha256`.
+A match would give stronger provider-log-to-current-ZIP continuity, but
+the original per-trace/report archive and coordinator handoff authentication
+gates still apply before any human-evaluation distribution.
