@@ -9,3 +9,31 @@ Both workflows also include all nine files in their push path filters. This matt
 This is a **concordance gate** rather than a ban on future research. Legitimate changes to the analysis plan, tasks, or prices must be treated as a separately versioned protocol/analysis and cannot be silently substituted for the frozen main study. The audit does not treat an old GitHub artifact as authentic original treatment evidence, regenerate treatments, or perform human evaluation. The diagnostic pilot, frozen automated confirmatory analysis, exploratory studies, and pending blinded human ratings remain separate.
 
 The historical treatment and evaluator-recovery artifacts are still unavailable through the original run listings. The verified canonical-analysis archive and its preservation package do **not** replace the original 40 trace/report pairs or independently retained historical fingerprints. Those custody and human-evaluation gates remain open.
+
+## Audit trigger coverage for verifier dependencies
+
+These two GitHub Actions audits invoke Python modules with **transitive** first-party
+imports. Previously a modification to a shared verifier such as
+\`scripts/preflight_recovered_artifact_zip.py\`,
+\`scripts/verify_analysis_provenance.py\`, or
+\`scripts/verify_canonical_archive_checkout.py\` did not itself trigger
+either real archive audit: their push path filters mostly listed only their
+direct entrypoints. Ordinary PR unit tests could pass without replaying the
+actual retained artifact on the altered verification implementation.
+
+Both workflows now watch their complete currently known static first-party
+\`scripts/*.py\` import closures. The offline test
+\`tests/test_canonical_archive_audit_trigger_coverage.py\` parses those
+imports using Python AST, follows indirect dependencies, and requires the
+workflow push path list to contain each reachable module plus the workflow
+itself. A newly imported local verifier therefore creates a failing CI
+contract until its path is added to the audit trigger. Only the existing
+read-only verification workflows are scheduled; no model calls, treatment
+reruns, evaluator recovery, or human ratings are produced by this change.
+
+The check covers **static Python imports of flat scripts modules**, not dynamic
+\`importlib\`, shell-sourced code, or external packages. Such new dependencies
+require explicit reviewer inspection and corresponding trigger updates.
+The audits still rely on expiring GitHub-hosted artifacts: a successful
+trigger does not extend archival retention, establish independent custody
+of the 40 original treatment reports, or complete human validation.
