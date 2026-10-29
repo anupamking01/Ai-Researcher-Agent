@@ -211,8 +211,12 @@ def test_packet_cli_emits_only_seed_free_receipt(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(packet_builder.secrets, "randbits", lambda bits: secret_seed)
     # This two-task receipt test is synthetic; the production CLI normally
     # requires the original 40-cell evaluator lineage before publication.
+    # Supply a synthetic evaluator generation, never a real 40-cell claim.
+    synthetic_evaluator = tmp_path / "synthetic-evaluator-fixture.csv"
+    synthetic_evaluator.write_text("fixture only\n", encoding="utf-8")
     monkeypatch.setattr(
-        packet_builder, "_require_published_evaluator_run_ids", lambda records: None
+        packet_builder, "_require_published_evaluator_run_ids",
+        lambda records: _fixture_evaluator_capture(synthetic_evaluator),
     )
     monkeypatch.setattr(
         "sys.argv",
@@ -1097,6 +1101,16 @@ def test_packet_refuses_changed_source_window_before_publication(
     assert not output_root.exists()
 
 
+def _fixture_evaluator_capture(path: Path) -> tuple:
+    """An isolated synthetic file generation, not a historical provenance pin."""
+    file_stat = path.stat()
+    return (
+        path,
+        packet_builder._byte_fingerprint(path.read_bytes()),
+        (file_stat.st_dev, file_stat.st_ino),
+    )
+
+
 def _write_synthetic_published_evaluator(tmp_path, monkeypatch):
     """Make a 40-cell evaluator for isolated pin/identity unit tests only."""
     from scripts import verify_human_eval_automated_run_lineage as lineage
@@ -1129,10 +1143,12 @@ def _write_synthetic_published_evaluator(tmp_path, monkeypatch):
 def test_production_run_lineage_accepts_exact_pinned_evaluator_matrix(
     tmp_path, monkeypatch
 ):
-    rows, _ = _write_synthetic_published_evaluator(tmp_path, monkeypatch)
-    assert packet_builder._require_published_evaluator_run_ids(
+    rows, path = _write_synthetic_published_evaluator(tmp_path, monkeypatch)
+    captured = packet_builder._require_published_evaluator_run_ids(
         rows, repo_root=tmp_path
-    ) is None
+    )
+    assert captured == _fixture_evaluator_capture(path)
+    packet_builder._recheck_published_evaluator_source(captured)
 
 
 def test_production_run_lineage_rejects_swapped_experiment_run_ids(
@@ -1208,3 +1224,48 @@ def test_build_packet_rejects_trace_without_explicit_filename_bound_run_id(
         )
     assert not output_root.exists()
 
+
+@pytest.mark.parametrize("mutation", ["bytes", "equal_bytes_replacement"])
+def test_production_packet_rechecks_pinned_evaluator_before_publication(
+    tmp_path, monkeypatch, mutation
+):
+    """A valid initial run-ID pin cannot authorize stale later publication."""
+    from scripts import verify_frozen_main_study_tasks as original_tasks
+
+    trace_root = _write_complete_matrix(tmp_path)
+    task_manifest = _write_task_manifest(tmp_path)
+    monkeypatch.setattr(
+        original_tasks, "ORIGINAL_TASK_MANIFEST_SHA256",
+        hashlib.sha256(task_manifest.read_bytes()).hexdigest(),
+    )
+    evaluator = tmp_path / "pinned-synthetic-evaluator.csv"
+    evaluator.write_text("synthetic source only\n", encoding="utf-8")
+    monkeypatch.setattr(
+        packet_builder, "_require_published_evaluator_run_ids",
+        lambda records: _fixture_evaluator_capture(evaluator),
+    )
+
+    original_window = packet_builder._verify_prepublication_source_window
+
+    def change_evaluator_after_other_source_checks(*args, **kwargs):
+        original_window(*args, **kwargs)
+        if mutation == "bytes":
+            evaluator.write_bytes(evaluator.read_bytes() + b"\n")
+        else:
+            replacement = evaluator.with_name("replacement-synthetic-evaluator.csv")
+            replacement.write_bytes(evaluator.read_bytes())
+            replacement.replace(evaluator)
+
+    monkeypatch.setattr(
+        packet_builder, "_verify_prepublication_source_window",
+        change_evaluator_after_other_source_checks,
+    )
+    output_root = tmp_path / "must-not-publish"
+    with pytest.raises(ValueError, match="evaluator CSV changed before packet publication"):
+        build_packet(
+            trace_root, output_root,
+            seed=20260915,
+            task_manifest_path=task_manifest,
+            require_original_task_manifest=True,
+        )
+    assert not output_root.exists()

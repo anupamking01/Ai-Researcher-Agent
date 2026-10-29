@@ -27,6 +27,14 @@ and filesystem device/inode identities must match those captured during the
 initial read. A changed file, replaced inode (even with equal bytes), or added
 source-tree entry fails before the output-root reservation.
 
+For **production** packets, the separate historical run-ID lineage gate also
+captures the exact fingerprint and device/inode of the pinned post-hoc evaluator
+CSV after verifying all 40 treatment/task/run-ID identities. The producer now
+re-reads this evaluator CSV after the trace/report source-window audit and before
+reserving the output. A changed CSV or same-byte file replacement fails closed.
+Direct synthetic test callers remain unpinned unless they explicitly request
+production source checks; no original evaluator results are recalculated.
+
 The original source fingerprints remain the ones recorded in the private
 coordinator manifest. No new private source identifiers enter annotator
 materials or the published packet schema. Regression tests inject source

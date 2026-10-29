@@ -951,8 +951,11 @@ def _require_published_evaluator_run_ids(
         )
 
     evaluator_path = Path(repo_root) / lineage.SUPPORT_REL
+    evaluator_identity: list[tuple[int, int]] = []
     evaluator_bytes = _read_regular_file_captured(
-        evaluator_path, label="published frozen post-hoc evaluator CSV"
+        evaluator_path,
+        label="published frozen post-hoc evaluator CSV",
+        identity_out=evaluator_identity,
     )
     if hashlib.sha256(evaluator_bytes).hexdigest() != PUBLISHED_EVALUATOR_CSV_SHA256:
         raise ValueError(
@@ -974,6 +977,28 @@ def _require_published_evaluator_run_ids(
                 "production human-evaluation packet run identity differs "
                 f"from published evaluator for {variant}/{task_id}"
             )
+    # Retain the exact generation that satisfied the original evaluator pin.
+    # The producer must not publish after this source changes while it checks
+    # the other 40 trace/report files and annotator-facing content.
+    return evaluator_path, _byte_fingerprint(evaluator_bytes), evaluator_identity[0]
+
+
+def _recheck_published_evaluator_source(capture: tuple) -> None:
+    """Reject evaluator-source drift before reserving any blinded packet files."""
+    path, original_fingerprint, original_inode = capture
+    identity: list[tuple[int, int]] = []
+    current_bytes = _read_regular_file_captured(
+        path, label="published frozen post-hoc evaluator CSV",
+        identity_out=identity,
+    )
+    if (
+        _byte_fingerprint(current_bytes) != original_fingerprint
+        or identity[0] != original_inode
+    ):
+        raise ValueError(
+            "Published evaluator CSV changed before packet publication; "
+            "do not publish blinded material from a stale run-identity check"
+        )
 
 
 def build_packet(
@@ -1008,8 +1033,9 @@ def build_packet(
     if require_original_task_manifest:
         _require_original_treatment_task_source(task_manifest)
     records = _load_records(trace_root, task_manifest=task_manifest)
+    original_evaluator_capture = None
     if require_original_task_manifest:
-        _require_published_evaluator_run_ids(records)
+        original_evaluator_capture = _require_published_evaluator_run_ids(records)
 
     # Sort first so filesystem traversal order can never affect randomization.
     shuffled = sorted(records, key=lambda row: (row["task_id"], row["variant_id"], row["run_id"]))
@@ -1074,6 +1100,10 @@ def build_packet(
     _verify_prepublication_source_window(
         trace_root, task_manifest_path, task_manifest, records
     )
+    if require_original_task_manifest:
+        if original_evaluator_capture is None:
+            raise ValueError("Production packet is missing original evaluator-source custody")
+        _recheck_published_evaluator_source(original_evaluator_capture)
 
     if output_root.is_symlink():
         raise ValueError(f"human-evaluation output root must not be a symbolic link: {output_root}")
