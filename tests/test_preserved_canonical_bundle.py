@@ -173,3 +173,16 @@ def test_offline_replay_rejects_naive_recheck_datetime(tmp_path, monkeypatch):
     paths = _bundle(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="timezone-aware"):
         _recheck(paths, checked_at=datetime(2027, 1, 1))
+
+def test_workflow_replays_preserved_inputs_before_reupload():
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github/workflows/retained-canonical-archive-audit.yml"
+    ).read_text(encoding="utf-8")
+    assert "scripts.verify_preserved_canonical_bundle" in workflow
+    assert "retained-canonical-offline-reverification.json" in workflow
+    assert (
+        workflow.index("python -m scripts.verify_retained_canonical_download")
+        < workflow.index("python -m scripts.verify_preserved_canonical_bundle")
+        < workflow.index("Retain verified provider-observed ZIP")
+    )

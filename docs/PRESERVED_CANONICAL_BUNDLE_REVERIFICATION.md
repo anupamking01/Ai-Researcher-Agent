@@ -8,7 +8,7 @@ expiration of the *source* must not make a previously retained, byte-verified
 archive impossible to audit offline.
 
 `scripts.verify_preserved_canonical_bundle` replays verification using the
-three files retained together:
+three required inputs retained together (the refreshed preservation workflow also uploads an offline replay receipt):
 
 - `canonical-source-metadata.json` — GitHub metadata captured when the
   original source existed, including its *historical* `expired=false` value.
