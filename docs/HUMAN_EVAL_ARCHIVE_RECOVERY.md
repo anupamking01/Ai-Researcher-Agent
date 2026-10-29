@@ -53,6 +53,26 @@ cryptographic authentication of original historical report custody; changes
 to the source tree between separate reads are not an atomic snapshot.
 Do not relink, copy, or rewrite original reports to force packet acceptance.
 
+## Complete source-tree selection before packet publication
+
+The packet builder now inventories the **entire dedicated treatment-trace
+directory**, rather than selecting only files matching `*/*.json`. It
+rejects unexpected root entries, unfamiliar treatment directories, nested or
+non-JSON files, and symbolic links before it can publish a blinded packet.
+A fully balanced selected matrix is insufficient when additional source
+material is silently omitted: that would leave report inclusion under the
+control of an unnoticed filename or directory layout decision.
+
+Inventory enumeration is bounded by the four frozen variants and the number of
+tasks in the supplied frozen task manifest, with one additional candidate
+allowed for diagnosis. Duplicate-cell, missing-task, and incomplete-run
+checks continue to apply to the selected JSON files. Recovery coordinators
+must preserve unexpected historical material separately with provenance
+documentation; **do not delete or rename original evidence merely to make
+the gate pass**. This is a local anti-selection safeguard, not an independently
+authenticated historical archive or an atomic multi-file source snapshot.
+The unavailable original treatment reports remain a blocker.
+
 ## Original treatment-run task-list anchor
 
 The two frozen automated CSVs are SHA-256-anchored, but that published

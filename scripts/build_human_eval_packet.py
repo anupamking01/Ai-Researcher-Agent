@@ -566,6 +566,68 @@ def _load_task_manifest(task_manifest_path: Path) -> dict:
     }
 
 
+def _enumerate_trace_sources(trace_root: Path, *, n_tasks: int) -> list[Path]:
+    """Reject unselected trace-tree entries before building a blinded packet.
+
+    A two-level glob silently ignores root files, unknown directories, nested
+    material, and non-JSON candidates. A complete accepted matrix must not
+    depend on silently choosing which recovered source files to consider.
+    Bound each scan before sorting to avoid unbounded external archives.
+    """
+    def bounded_entries(directory: Path, *, maximum: int):
+        entries = []
+        with os.scandir(directory) as scanner:
+            for entry in scanner:
+                if len(entries) >= maximum:
+                    raise ValueError(
+                        f"Experiment trace inventory exceeds {maximum} entries in {directory}"
+                    )
+                entries.append(entry)
+        return entries
+
+    # One additional candidate is enough to diagnose unexpected root material.
+    root_entries = bounded_entries(
+        trace_root, maximum=len(EXPECTED_VARIANTS) + 1
+    )
+    for entry in root_entries:
+        if entry.is_symlink():
+            raise ValueError(
+                f"Experiment trace source must not be a symbolic link: {entry.path}"
+            )
+    for entry in root_entries:
+        if entry.name not in EXPECTED_VARIANTS:
+            raise ValueError(
+                f"Unexpected experiment trace root entry: {entry.name!r}"
+            )
+        if not entry.is_dir(follow_symlinks=False):
+            raise ValueError(
+                f"Experiment trace variant must be a directory: {entry.path}"
+            )
+
+    paths: list[Path] = []
+    for variant in sorted(entry.name for entry in root_entries):
+        directory = trace_root / variant
+        # Permit one extra candidate so the existing duplicate-cell diagnostic
+        # still identifies a single extra completed run, rather than hiding it.
+        entries = bounded_entries(directory, maximum=n_tasks + 1)
+        for entry in entries:
+            if entry.is_symlink():
+                raise ValueError(
+                    f"Experiment trace source must not be a symbolic link: {entry.path}"
+                )
+        for entry in entries:
+            if (
+                not entry.is_file(follow_symlinks=False)
+                or not entry.name.endswith(".json")
+                or entry.name == ".json"
+            ):
+                raise ValueError(
+                    f"Unexpected experiment trace entry in {variant}: {entry.name!r}"
+                )
+            paths.append(directory / entry.name)
+    return sorted(paths)
+
+
 def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
     if trace_root.is_symlink():
         raise ValueError(f"Experiment trace root must not be a symbolic link: {trace_root}")
@@ -583,7 +645,9 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
     seen_report_inodes: dict[tuple[int, int], tuple[str, str]] = {}
     total_source_bytes = 0
 
-    for trace_path in sorted(trace_root.glob("*/*.json")):
+    for trace_path in _enumerate_trace_sources(
+        trace_root, n_tasks=len(task_manifest["tasks"])
+    ):
         if trace_path.is_symlink() or trace_path.parent.is_symlink():
             raise ValueError(
                 f"Experiment trace source must not traverse a symbolic link: {trace_path}"

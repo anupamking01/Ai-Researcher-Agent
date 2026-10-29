@@ -852,3 +852,63 @@ def test_build_packet_rejects_symlinked_trace_root(tmp_path):
     with pytest.raises(ValueError, match="symbolic link"):
         _build_packet(shortcut, tmp_path / "packet-linked-root", tmp_path)
     assert not (tmp_path / "packet-linked-root").exists()
+
+
+@pytest.mark.parametrize(
+    ("relative", "directory"),
+    [
+        ("coordinator-notes.json", False),
+        ("D3/unselected.json.bak", False),
+        ("D6/.unselected.jsonl", False),
+        ("P6/nested", True),
+        ("unrecognized-variant/trace.json", False),
+    ],
+    ids=[
+        "root-json-file",
+        "backup-trace-file",
+        "hidden-non-json-source",
+        "nested-variant-directory",
+        "unrecognized-variant-directory",
+    ],
+)
+def test_build_packet_rejects_unselected_trace_tree_entries(
+    tmp_path, relative, directory
+):
+    """A complete matrix cannot silently omit other source-tree material."""
+    trace_root = _write_complete_matrix(tmp_path)
+    candidate = trace_root / relative
+    if directory:
+        candidate.mkdir(parents=True)
+    else:
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_text("unselected original evidence", encoding="utf-8")
+    destination = tmp_path / "packet-incomplete-inventory"
+
+    with pytest.raises(ValueError, match="Unexpected experiment trace"):
+        _build_packet(trace_root, destination, tmp_path)
+    assert not destination.exists()
+
+
+def test_build_packet_rejects_symlinked_unselected_variant_alias(tmp_path):
+    trace_root = _write_complete_matrix(tmp_path)
+    (trace_root / "hidden-copy").symlink_to(
+        trace_root / "D3", target_is_directory=True
+    )
+    destination = tmp_path / "packet-variant-alias"
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        _build_packet(trace_root, destination, tmp_path)
+    assert not destination.exists()
+
+
+def test_build_packet_bounds_trace_tree_scan_before_parsing(tmp_path):
+    trace_root = _write_complete_matrix(tmp_path)
+    for index in range(3):
+        (trace_root / "D3" / f"extra-{index}.json").write_text(
+            "{}", encoding="utf-8"
+        )
+    destination = tmp_path / "packet-oversized-inventory"
+
+    with pytest.raises(ValueError, match="trace inventory exceeds"):
+        _build_packet(trace_root, destination, tmp_path)
+    assert not destination.exists()
