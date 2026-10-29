@@ -537,8 +537,9 @@ def _load_task_manifest(task_manifest_path: Path) -> dict:
     task_manifest_path = Path(task_manifest_path)
     if not task_manifest_path.is_file():
         raise FileNotFoundError(f"Frozen task manifest does not exist: {task_manifest_path}")
+    task_identity: list[tuple[int, int]] = []
     content = _read_regular_file_captured(
-        task_manifest_path, label="Frozen task manifest"
+        task_manifest_path, label="Frozen task manifest", identity_out=task_identity
     )
     payload = _load_json_object(content, label=f"Frozen task manifest {task_manifest_path}")
     if payload.get("frozen_before_execution") is not True:
@@ -563,6 +564,7 @@ def _load_task_manifest(task_manifest_path: Path) -> dict:
     return {
         "bytes": len(content),
         "sha256": hashlib.sha256(content).hexdigest(),
+        "_source_inode": task_identity[0],
         "task_set_id": task_set_id,
         "tasks": tasks,
     }
@@ -654,8 +656,10 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
             raise ValueError(
                 f"Experiment trace source must not traverse a symbolic link: {trace_path}"
             )
+        trace_identity: list[tuple[int, int]] = []
         trace_content = _read_regular_file_captured(
-            trace_path, label=f"Experiment trace {trace_path}"
+            trace_path, label=f"Experiment trace {trace_path}",
+            identity_out=trace_identity,
         )
         total_source_bytes += len(trace_content)
         _require_packet_byte_limit(
@@ -749,6 +753,9 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
                 "report_path": report_md.relative_to(repo_root).as_posix(),
                 "trace_fingerprint": _byte_fingerprint(trace_content),
                 "report_fingerprint": _byte_fingerprint(report_content),
+                # Internal only: never emit inode identifiers to annotators.
+                "_trace_inode": trace_identity[0],
+                "_report_inode": report_identity[0],
             }
         )
 
@@ -777,6 +784,61 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
             )
 
     return records
+
+
+def _verify_prepublication_source_window(
+    trace_root: Path, task_manifest_path: Path, task_manifest: dict,
+    records: list[dict],
+) -> None:
+    """Reject changed or newly selected evidence before reserving a packet.
+
+    The original reads were descriptor-bound, but a trace/report/task file
+    could change after its turn in the scan while later rows were processed.
+    Recheck both bytes and file identity, including the complete trace-file
+    selection, while the destination is still untouched.
+    """
+    repo_root = trace_root.parent.parent
+    original_paths = {repo_root / row["trace_path"] for row in records}
+    current_paths = set(_enumerate_trace_sources(
+        trace_root, n_tasks=len(task_manifest["tasks"])
+    ))
+    if current_paths != original_paths:
+        raise ValueError(
+            "Experiment trace source selection changed before packet publication"
+        )
+
+    task_identity: list[tuple[int, int]] = []
+    current_task_bytes = _read_regular_file_captured(
+        task_manifest_path, label="Frozen task manifest",
+        identity_out=task_identity,
+    )
+    if (
+        _byte_fingerprint(current_task_bytes)
+        != {key: task_manifest[key] for key in ("bytes", "sha256")}
+        or task_identity[0] != task_manifest["_source_inode"]
+    ):
+        raise ValueError("Frozen task manifest changed before packet publication")
+
+    for row in records:
+        for label, relative_path, fingerprint, inode in (
+            ("Experiment trace", row["trace_path"],
+             row["trace_fingerprint"], row["_trace_inode"]),
+            ("Markdown report", row["report_path"],
+             row["report_fingerprint"], row["_report_inode"]),
+        ):
+            source_path = repo_root / relative_path
+            source_identity: list[tuple[int, int]] = []
+            source_bytes = _read_regular_file_captured(
+                source_path, label=f"{label} {source_path}",
+                identity_out=source_identity,
+            )
+            if (
+                _byte_fingerprint(source_bytes) != fingerprint
+                or source_identity[0] != inode
+            ):
+                raise ValueError(
+                    f"{label} changed before packet publication: {source_path}"
+                )
 
 
 def _refuse_overwrite(path: Path) -> ValueError:
@@ -910,6 +972,9 @@ def build_packet(
     )
     validate_annotator_facing_content(packet_rows, label="packet")
     require_loaded_content_validator_unchanged(operation="packet construction")
+    _verify_prepublication_source_window(
+        trace_root, task_manifest_path, task_manifest, records
+    )
 
     if output_root.is_symlink():
         raise ValueError(f"human-evaluation output root must not be a symbolic link: {output_root}")

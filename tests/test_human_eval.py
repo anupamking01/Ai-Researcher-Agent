@@ -997,3 +997,51 @@ def test_build_packet_bounds_trace_tree_scan_before_parsing(tmp_path):
     with pytest.raises(ValueError, match="trace inventory exceeds"):
         _build_packet(trace_root, destination, tmp_path)
     assert not destination.exists()
+
+
+@pytest.mark.parametrize(
+    "mutation_kind",
+    ["trace_bytes", "report_inode", "task_manifest_bytes", "new_trace"],
+)
+def test_packet_refuses_changed_source_window_before_publication(
+    tmp_path, monkeypatch, mutation_kind
+):
+    """No partly selected or replaced source generation can be published."""
+    trace_root = _write_complete_matrix(tmp_path)
+    task_manifest = _write_task_manifest(tmp_path)
+    output_root = tmp_path / "unpublished"
+    trace = next((trace_root / "D3").glob("*.json"))
+    report = tmp_path / "outputs" / "d3-main-01" / "research_report.md"
+
+    def mutate_source():
+        if mutation_kind == "trace_bytes":
+            # JSON whitespace is harmless semantically, but changes custody bytes.
+            trace.write_bytes(trace.read_bytes() + b"\n")
+        elif mutation_kind == "report_inode":
+            replacement = report.with_name("replacement.md")
+            replacement.write_bytes(report.read_bytes())
+            replacement.replace(report)
+        elif mutation_kind == "task_manifest_bytes":
+            task_manifest.write_bytes(task_manifest.read_bytes() + b"\n")
+        else:
+            (trace_root / "D3" / "extra.json").write_text(
+                "{}", encoding="utf-8"
+            )
+
+    original_load_records = packet_builder._load_records
+
+    def load_then_change(*args, **kwargs):
+        records = original_load_records(*args, **kwargs)
+        mutate_source()
+        return records
+
+    monkeypatch.setattr(packet_builder, "_load_records", load_then_change)
+    with pytest.raises(
+        ValueError, match="changed before packet publication|"
+        "source selection changed before packet publication"
+    ):
+        build_packet(
+            trace_root, output_root, seed=20260915,
+            task_manifest_path=task_manifest,
+        )
+    assert not output_root.exists()
