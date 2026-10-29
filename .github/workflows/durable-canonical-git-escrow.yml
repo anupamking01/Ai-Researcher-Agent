@@ -107,6 +107,7 @@ jobs:
               exit 1
             }
           done
+          mkdir -p -- "$(dirname "$destination")"
           cp -- "$RUNNER_TEMP/retained-canonical.zip" "$destination.zip"
           cp -- "$RUNNER_TEMP/canonical-source-metadata.json" "$destination.metadata.json"
           cp -- "$RUNNER_TEMP/retained-canonical-verification.json" "$destination.verification.json"
