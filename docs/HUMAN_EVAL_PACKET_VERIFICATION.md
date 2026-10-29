@@ -73,6 +73,23 @@ rating freeze, agreement checks, or a preregistered human-evaluation analysis
 plan. No human-quality claim should be made until real ratings have been
 collected and the relevant post-freeze gates have passed.
 
+## Independent verification of execution IDs
+
+The packet builder and the **independent coordinator-side verifier** both require
+each persisted trace to contain a nonempty JSON string `trace.run_id` that
+exactly matches the trace filename and the coordinator mapping. The verifier
+must not reconstruct a missing run ID from a filename or silently trim one:
+doing so would allow anonymous or renamed recovered material to appear to
+retain its original execution identity after a manifest is rehashed.
+
+The verifier additionally rejects reuse of one run ID by distinct
+treatment/task cells, even when the coordinator CSV and per-source SHA-256
+entries have been updated consistently. This mirrors the builder's
+one-execution-per-cell rule without trusting a previous builder success as
+sufficient evidence. Synthetic regression tests exercise both tampering
+conditions. These checks do not authenticate the missing original archive:
+independent historical pins and the source-bound handoff gate remain necessary.
+
 ## Report-to-run binding
 
 Before distributing a newly generated packet, the builder and independent

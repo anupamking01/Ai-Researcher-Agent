@@ -345,12 +345,18 @@ def verify_packet(
     source_by_blind = {entry["blind_id"]: entry for entry in source_artifacts}
 
     seen_cells = set()
+    seen_run_ids = set()
     variants_by_task = {task_id: set() for task_id in task_manifest["tasks"]}
     for row in key_rows:
         blind_id = row["blind_id"].strip()
         variant_id = row["variant_id"].strip()
         task_id = row["task_id"].strip()
-        run_id = row["run_id"].strip()
+        run_id = row["run_id"]
+        if not run_id or run_id != run_id.strip():
+            raise ValueError(f"invalid coordinator run_id for {blind_id}")
+        if run_id in seen_run_ids:
+            raise ValueError(f"duplicate experiment run_id in blinding key: {run_id!r}")
+        seen_run_ids.add(run_id)
         if variant_id not in build.EXPECTED_VARIANTS:
             raise ValueError(f"unexpected key variant {variant_id!r} for {blind_id}")
         if task_id != packet_by_blind[blind_id]["task_id"]:
@@ -392,10 +398,22 @@ def verify_packet(
         observed_task_set = build._consistent_trace_identity(
             experiment, trace, "task_set_id", trace_path=trace_path
         )
-        observed_run = str(trace.get("run_id") or trace_path.stem).strip()
+        # The builder requires an explicit execution ID. Verifying a frozen
+        # packet must not reconstitute an absent or altered ID from its filename:
+        # a rehashed source manifest does not certify anonymous evidence.
+        observed_run = trace.get("run_id")
+        if (
+            type(observed_run) is not str
+            or not observed_run
+            or observed_run != run_id
+            or observed_run != trace_path.stem
+        ):
+            raise ValueError(
+                f"trace run_id for {blind_id} requires explicit run_id "
+                "matching filename and coordinator mapping"
+            )
         _require_equal(observed_variant, variant_id, label=f"trace variant for {blind_id}")
         _require_equal(observed_task, task_id, label=f"trace task for {blind_id}")
-        _require_equal(observed_run, run_id, label=f"trace run for {blind_id}")
         _require_equal(
             observed_task_set,
             task_manifest["task_set_id"],

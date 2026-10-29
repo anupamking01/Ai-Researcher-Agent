@@ -141,6 +141,88 @@ def _insert_duplicate_json_member(path: Path, needle: str, duplicate: str) -> No
     path.write_text(text.replace(needle, f"{duplicate}, {needle}", 1), encoding="utf-8")
 
 
+
+def _refresh_source_fingerprint(case, row: dict, kind: str) -> None:
+    """Synthetic test only: make a source edit coherent with its packet manifest."""
+    manifest_path = case["output_root"] / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entry = next(
+        item for item in manifest["source_artifacts"]
+        if item["blind_id"] == row["blind_id"]
+    )
+    raw = (case["repo_root"] / row[f"{kind}_path"]).read_bytes()
+    entry[kind] = {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize("bad_run_id", [None, "", 123, "d3-main-01 ", " d3-main-01"])
+def test_packet_verifier_requires_explicit_filename_bound_trace_run_id(
+    packet_case, bad_run_id
+):
+    """Independent verification must not infer or normalize a missing run ID."""
+    with (packet_case["output_root"] / "blinding_key.csv").open(
+        encoding="utf-8", newline=""
+    ) as handle:
+        row = next(
+            item for item in csv.DictReader(handle)
+            if item["variant_id"] == "D3" and item["task_id"] == "main-01"
+        )
+    trace_path = packet_case["repo_root"] / row["trace_path"]
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    if bad_run_id is None:
+        payload["trace"].pop("run_id")
+    else:
+        payload["trace"]["run_id"] = bad_run_id
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+    _refresh_source_fingerprint(packet_case, row, "trace")
+
+    with pytest.raises(ValueError, match="explicit run_id.*filename"):
+        _verify(packet_case)
+
+
+def test_packet_verifier_rejects_reused_run_id_with_coherent_packet_hashes(packet_case):
+    """Two different treatments cannot claim the same execution after rehashing."""
+    key_path = packet_case["output_root"] / "blinding_key.csv"
+    with key_path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    first = next(row for row in rows if row["variant_id"] == "D3"
+                 and row["task_id"] == "main-01")
+    second = next(row for row in rows if row["variant_id"] == "D6"
+                  and row["task_id"] == "main-01")
+    root = packet_case["repo_root"]
+    original_trace = root / second["trace_path"]
+    payload = json.loads(original_trace.read_text(encoding="utf-8"))
+    payload["trace"]["run_id"] = first["run_id"]
+    payload["trace"]["report_path"] = f"./outputs/{first['run_id']}/research_report.pdf"
+    substitute_trace = (
+        root / "outputs" / "experiment_traces" / "D6" / f"{first['run_id']}.json"
+    )
+    substitute_trace.write_text(json.dumps(payload), encoding="utf-8")
+    original_trace.unlink()
+
+    # Both synthetic reports have identical content for the same task; this
+    # test uses the same report path, not a change in observed score/content.
+    assert (root / first["report_path"]).read_bytes() == (
+        root / second["report_path"]
+    ).read_bytes()
+    second["run_id"] = first["run_id"]
+    second["trace_path"] = substitute_trace.relative_to(root).as_posix()
+    second["report_path"] = first["report_path"]
+    with key_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=KEY_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    _refresh_artifact(packet_case, "blinding_key")
+    _refresh_source_fingerprint(packet_case, second, "trace")
+    _refresh_source_fingerprint(packet_case, second, "report")
+
+    with pytest.raises(ValueError, match="duplicate experiment run_id"):
+        _verify(packet_case)
+
+
 def test_packet_verifier_rejects_coherently_rehashed_treatment_leakage(packet_case):
     packet_path = packet_case["output_root"] / "packet.jsonl"
     rows = [
