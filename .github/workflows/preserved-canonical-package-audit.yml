@@ -7,7 +7,6 @@ on:
       - research-paper-eval-2027
     paths:
       - .github/workflows/preserved-canonical-package-audit.yml
-      - scripts/verify_preserved_canonical_package.py
       - experiments/main_budget_tasks.json
       - experiments/openai_pricing_2026-09-08.json
       - paper/ANALYSIS_PLAN.md
@@ -17,6 +16,19 @@ on:
       - outputs/main_study_runs.csv
       - outputs/posthoc_support_runs.csv
       - paper/MAIN_STUDY_INFERENCE.md
+      - scripts/analyze_main_study.py
+      - scripts/analyze_main_study_task_influence.py
+      - scripts/build_analysis_provenance.py
+      - scripts/fingerprint_research_artifacts.py
+      - scripts/preflight_recovered_artifact_zip.py
+      - scripts/verify_analysis_provenance.py
+      - scripts/verify_canonical_archive_checkout.py
+      - scripts/verify_main_study_execution.py
+      - scripts/verify_main_study_outputs.py
+      - scripts/verify_preserved_canonical_bundle.py
+      - scripts/verify_preserved_canonical_package.py
+      - scripts/verify_research_artifact_manifest.py
+      - scripts/verify_retained_canonical_download.py
 
 permissions:
   actions: read
