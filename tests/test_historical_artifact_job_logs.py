@@ -59,7 +59,7 @@ def test_contemporaneous_upload_download_correspondence_is_not_custody():
     ("recovery", audit.RECOVERED["zip_sha256"], "e" * 64, "historical upload differs"),
     ("original", "Final size is 608355", "Final size is 608354", "historical upload differs"),
     ("recovery", "Size: 608355", "Size: 608356", "recovery download does not match"),
-    ("original", "artifacts/10275100801", "artifacts/10275100802", "artifact run-scoped URL"),
+    ("original", "artifacts/10275100801", "artifacts/10275100802", "historical upload differs"),
 ])
 def test_changed_log_metadata_fails_closed(source, original, replacement, error):
     a, b = _logs()
