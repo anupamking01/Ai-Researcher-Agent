@@ -408,7 +408,9 @@ def _stat_contract(value: os.stat_result) -> tuple[int, int, int, int, int]:
     )
 
 
-def _read_regular_file_captured(path: Path, *, label: str) -> bytes:
+def _read_regular_file_captured(
+    path: Path, *, label: str, identity_out: list[tuple[int, int]] | None = None
+) -> bytes:
     """Read one regular file while retaining and revalidating its descriptors."""
     path = Path(os.path.abspath(Path(path)))
     directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
@@ -452,6 +454,10 @@ def _read_regular_file_captured(path: Path, *, label: str) -> bytes:
             != (parent_after.st_dev, parent_after.st_ino)
         ):
             raise ValueError(f"{label} was replaced during capture: {path}")
+        # Record the identity of the exact descriptor whose bytes were captured.
+        # An independent pathname stat after close would reopen a race window.
+        if identity_out is not None:
+            identity_out.append((file_before.st_dev, file_before.st_ino))
         return b"".join(chunks)
     except (FileNotFoundError, NotADirectoryError) as exc:
         raise ValueError(f"{label} was replaced during capture: {path}") from exc
@@ -572,6 +578,9 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
     # Duplicate IDs across distinct matrix cells would silently reuse that
     # report as though it were independent experimental evidence.
     seen_run_ids: dict[str, tuple[str, str]] = {}
+    # Distinct run IDs must also refer to distinct underlying report files.
+    # Hard links can alias a report without reusing its pathname or run ID.
+    seen_report_inodes: dict[tuple[int, int], tuple[str, str]] = {}
     total_source_bytes = 0
 
     for trace_path in sorted(trace_root.glob("*/*.json")):
@@ -642,9 +651,18 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
         report_md = _resolve_report_markdown(
             trace_root, str(trace.get("report_path") or ""), run_id=run_id
         )
+        report_identity: list[tuple[int, int]] = []
         report_content = _read_regular_file_captured(
-            report_md, label=f"Markdown report {report_md}"
+            report_md, label=f"Markdown report {report_md}",
+            identity_out=report_identity,
         )
+        previous_report_cell = seen_report_inodes.get(report_identity[0])
+        if previous_report_cell is not None:
+            raise ValueError(
+                "Same Markdown report inode reused across treatment/task cells: "
+                f"{previous_report_cell!r} and {cell!r}"
+            )
+        seen_report_inodes[report_identity[0]] = cell
         total_source_bytes += len(report_content)
         _require_packet_byte_limit(
             total_source_bytes, label="aggregate packet source evidence"

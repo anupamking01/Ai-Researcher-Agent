@@ -704,6 +704,37 @@ def test_build_packet_rejects_duplicate_run_id_across_distinct_cells(
     assert not output_root.exists()
 
 
+@pytest.mark.parametrize("target_run", ["d6-main-01", "p6v-main-02"])
+def test_build_packet_rejects_hardlinked_report_across_distinct_runs(
+    tmp_path, target_run
+):
+    """Different run IDs must not read the same underlying report inode."""
+    trace_root = _write_complete_matrix(tmp_path)
+    source = tmp_path / "outputs" / "d3-main-01" / "research_report.md"
+    target = tmp_path / "outputs" / target_run / "research_report.md"
+    target.unlink()
+    os.link(source, target)
+    destination = tmp_path / "packet-aliased-report"
+
+    with pytest.raises(ValueError, match="Same Markdown report inode reused"):
+        _build_packet(trace_root, destination, tmp_path)
+    assert not destination.exists()
+
+
+def test_build_packet_allows_equal_bytes_in_distinct_report_files(tmp_path):
+    """Identical text is not itself proof of a duplicated execution."""
+    trace_root = _write_complete_matrix(tmp_path)
+    first = tmp_path / "outputs" / "d3-main-01" / "research_report.md"
+    second = tmp_path / "outputs" / "d6-main-01" / "research_report.md"
+    assert first.read_bytes() == second.read_bytes()
+    assert (first.stat().st_dev, first.stat().st_ino) != (
+        second.stat().st_dev, second.stat().st_ino
+    )
+
+    manifest = _build_packet(trace_root, tmp_path / "packet-distinct-files", tmp_path)
+    assert manifest["n_reports"] == 8
+
+
 def test_build_packet_rejects_encoded_report_directory_traversal(tmp_path):
     trace_root = _write_complete_matrix(tmp_path)
     trace_path = trace_root / "D3" / "d3-main-01.json"

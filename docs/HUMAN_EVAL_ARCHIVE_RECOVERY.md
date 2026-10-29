@@ -39,6 +39,20 @@ validity guard, not evidence that unavailable original traces or reports have
 been recovered or independently authenticated. Do not change identifiers or
 copy reports merely to make a failed recovery pass.
 
+## Shared report-inode guard for independent runs
+
+The packet builder also rejects two distinct run IDs whose Markdown report
+paths refer to the **same filesystem file identity** (device and inode), as
+can happen with hard links. A unique run ID and an individually valid path
+cannot on their own prevent this report reuse. File identity is captured from
+the same descriptor as the report bytes, after descriptor/path stability
+checks, before any annotator-facing output is published. Equal report bytes
+in **separate** files remain allowed: matching text is not proof that two
+executions were duplicated. This is a local source-alias safeguard, not
+cryptographic authentication of original historical report custody; changes
+to the source tree between separate reads are not an atomic snapshot.
+Do not relink, copy, or rewrite original reports to force packet acceptance.
+
 ## Original treatment-run task-list anchor
 
 The two frozen automated CSVs are SHA-256-anchored, but that published
