@@ -4,7 +4,7 @@ This repository treats evaluation as part of the research system rather than as 
 
 > **Where should a web-research agent spend limited retrieval and inference budget: deeper retrieval, explicit planning, or verification?**
 
-The project has progressed beyond the original proposed-study document. Pilot infrastructure, D3/D6/P6/P6V treatments, persisted traces, a common post-hoc support evaluator, cost accounting, a frozen paired analysis plan, evaluator-only recovery, and deterministic blinded-human-evaluation packet generation are implemented on the research branch.
+The project has progressed beyond the original proposed-study document. Pilot infrastructure, D3/D6/P6/P6V treatments, persisted traces, a common post-hoc support evaluator, cost accounting, a frozen paired analysis plan, evaluator-only recovery, and secret-seeded, replay-verifiable human-evaluation packet generation are implemented on the research branch.
 
 Human quality ratings are **not yet results**. They remain pending and must be collected under `paper/HUMAN_EVAL_PROTOCOL.md` before any human-quality claim is made.
 
@@ -37,7 +37,7 @@ Saved traces/evaluator records are summarized with a frozen paired analysis plan
 
 ### Layer D — Blinded human validation
 
-A deterministic offline packet builder hides variant identity and prepares the same reports for rubric-based human evaluation. Human annotations are a complementary measure of overall quality and usefulness, not a synthetic replacement for the automated support metric.
+An offline packet builder with a coordinator-secret shuffle seed hides variant identity and prepares the same reports for rubric-based human evaluation. Human annotations are a complementary measure of overall quality and usefulness, not a synthetic replacement for the automated support metric.
 
 The first two eligible annotators receive source-bound bundles containing the
 same blinded reports in canonical and exact reverse order. Section 11 records
@@ -353,7 +353,7 @@ The script creates:
 - `outputs/human_eval/blinding_key.csv` — coordinator-only treatment mapping;
 - `outputs/human_eval/manifest.json` — packet metadata.
 
-The packet is deterministic under a fixed seed and fails closed on duplicate treatment/task cells, incomplete runs, missing Markdown reports, unexpected variants, or incomplete task matrices. The annotator-facing leakage audit covers rendered text and recursively percent-decoded Markdown URL metadata so encoded treatment labels cannot be hidden in link destinations; metadata exceeding the bounded decoding depth is rejected instead of bypassing or exhausting the audit, and opaque `data:` destinations are not permitted. Annotator-facing reports are text-and-links only: all Markdown image nodes are rejected because externally fetched or inline pixels can reveal treatment identity or change after the packet is frozen. Only canonical schema-version-2 treatment traces with object-valued experiment and trace sections can enter or later verify against the packet. When a persisted trace carries task-set identity in both its experiment configuration and run-trace payload, those copies must agree and match the frozen task manifest; neither packet generation nor later packet verification silently prefers one conflicting identity.
+The packet is deterministic given the **coordinator-only 256-bit seed** generated afresh by the production CLI (not the former public fixed default). The seed is retained in the restricted packet manifest for exact replay, but is excluded from CLI stdout and annotator distribution; otherwise public task/variant ordering makes blind IDs predictable. Existing fixed-seed packets must not be used for genuine blinded human scoring. The builder fails closed on duplicate treatment/task cells, incomplete runs, missing Markdown reports, unexpected variants, or incomplete task matrices. The annotator-facing leakage audit covers rendered text and recursively percent-decoded Markdown URL metadata so encoded treatment labels cannot be hidden in link destinations; metadata exceeding the bounded decoding depth is rejected instead of bypassing or exhausting the audit, and opaque `data:` destinations are not permitted. Annotator-facing reports are text-and-links only: all Markdown image nodes are rejected because externally fetched or inline pixels can reveal treatment identity or change after the packet is frozen. Only canonical schema-version-2 treatment traces with object-valued experiment and trace sections can enter or later verify against the packet. When a persisted trace carries task-set identity in both its experiment configuration and run-trace payload, those copies must agree and match the frozen task manifest; neither packet generation nor later packet verification silently prefers one conflicting identity.
 
 Before report access, export the first eligible annotator's source-bound bundle
 in canonical order and the second's in exact reverse order:

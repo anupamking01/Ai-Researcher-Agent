@@ -18,6 +18,7 @@ import os
 import platform
 import random
 import re
+import secrets
 import stat
 import unicodedata
 from html.parser import HTMLParser
@@ -32,7 +33,7 @@ DEFAULT_TRACE_ROOT = REPO_ROOT / "outputs" / "experiment_traces"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "outputs" / "human_eval"
 DEFAULT_TASK_MANIFEST = REPO_ROOT / "experiments" / "main_budget_tasks.json"
 EXPECTED_VARIANTS = ("D3", "D6", "P6", "P6V")
-DEFAULT_SEED = 20260915
+BLINDING_SEED_BITS = 256
 PACKET_ARTIFACTS = ("packet.jsonl", "blinding_key.csv", "ratings_template.csv", "manifest.json")
 CONTENT_VALIDATOR_PATH = "scripts/build_human_eval_packet.py"
 MANIFEST_FIELDS = frozenset(
@@ -813,10 +814,17 @@ def build_packet(
     trace_root: Path,
     output_root: Path,
     *,
-    seed: int = DEFAULT_SEED,
+    seed: int | None = None,
     task_manifest_path: Path = DEFAULT_TASK_MANIFEST,
 ) -> dict:
-    """Build deterministic blinded evaluation artifacts from completed traces."""
+    """Build a reproducible packet with a coordinator-private blinding seed.
+
+    An explicit seed is retained for synthetic test fixtures only. Production
+    callers omit it: a known seed and known sorted task/variant cells would
+    reveal the treatment for each supposedly blind report ID.
+    """
+    if seed is None:
+        seed = secrets.randbits(BLINDING_SEED_BITS)
     if type(seed) is not int:
         raise TypeError("seed must be an integer")
 
@@ -957,19 +965,26 @@ def main() -> int:
     parser.add_argument("--trace-root", type=Path, default=DEFAULT_TRACE_ROOT)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--task-manifest", type=Path, default=DEFAULT_TASK_MANIFEST)
-    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     args = parser.parse_args()
 
     try:
         manifest = build_packet(
             args.trace_root,
             args.output_root,
-            seed=args.seed,
             task_manifest_path=args.task_manifest,
         )
     except (OSError, ValueError) as exc:
         raise SystemExit(f"HUMAN EVAL PACKET BUILD: FAIL: {exc}") from exc
-    print(json.dumps(manifest, indent=2, sort_keys=True))
+    # A full manifest contains the coordinator-private shuffle seed. Do not
+    # expose it via a terminal transcript, workflow log, or annotator handoff.
+    print(json.dumps({
+        "status": "created",
+        "packet_path": str(args.output_root / "packet.jsonl"),
+        "coordinator_manifest_path": str(args.output_root / "manifest.json"),
+        "n_reports": manifest["n_reports"],
+        "n_tasks": manifest["n_tasks"],
+        "packet_sha256": manifest["artifacts"]["packet"]["sha256"],
+    }, indent=2, sort_keys=True))
     return 0
 
 

@@ -26,7 +26,7 @@ This project is an end-to-end planner/execution web-research system **and** an e
 | Evaluator-only recovery without replacing treatments | ✅ Implemented |
 | Predeclared paired statistical analysis | ✅ Implemented and frozen |
 | Canonical recovered-study inference | ✅ Completed, provenance-verified, and preserved |
-| Deterministic blinded human-evaluation packets | ✅ Implemented |
+| Secret-seeded, reproducible blinded human-evaluation packets | ✅ Implemented |
 | Pre-unblinding human-rating freeze/agreement tooling | ✅ Implemented |
 | Human rubric annotations | ⏳ Pending real annotators |
 | Final paper-level claims | ⏳ Pending human validation and manuscript synthesis |
@@ -63,7 +63,7 @@ flowchart LR
     VCHECK --> TRACE
     TRACE --> COMMON[Common post-hoc support evaluator]
     COMMON --> ANALYSIS[Offline paired analysis]
-    TRACE --> BLIND[Deterministic blinded packet]
+    TRACE --> BLIND[Coordinator-secret blinded packet]
     BLIND --> HUMAN[Human rubric evaluation]
 ```
 
@@ -93,13 +93,13 @@ Automated evidence-support scoring cannot fully answer whether a report is usefu
 - synthesis / reasoning;
 - clarity.
 
-Build a deterministic offline packet from completed traces:
+Build an offline packet with a new, coordinator-private 256-bit blinding seed from completed original traces:
 
 ```bash
 python scripts/build_human_eval_packet.py
 ```
 
-The builder creates annotator-facing blinded reports and a ratings template while keeping the treatment mapping in a separate coordinator-only key. It fails closed on duplicate treatment/task cells, missing reports, incomplete runs, unexpected variants, or an incomplete task matrix. The packet manifest also binds the exact validator source and rendering/runtime contract, so later verification rejects semantic drift rather than silently reinterpreting a published packet.
+The builder creates annotator-facing blinded reports and a ratings template while keeping the treatment mapping **and shuffle seed** in coordinator-only artifacts. The previous public fixed seed permitted reconstruction of treatment identities from blind IDs; the production CLI now draws a secret seed and never prints it. Only the coordinator retains `manifest.json` and `blinding_key.csv` until ratings are frozen. It fails closed on duplicate treatment/task cells, missing reports, incomplete runs, unexpected variants, or an incomplete task matrix. The packet manifest also binds the exact validator source and rendering/runtime contract, so later verification rejects semantic drift rather than silently reinterpreting a published packet.
 
 Before any blinded ratings can be frozen, the coordinator must supply a
 pseudonymous annotator-attestation CSV covering exactly the submitted annotator

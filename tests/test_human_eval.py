@@ -148,6 +148,67 @@ def test_build_packet_is_deterministic_and_blinds_variant_labels(tmp_path):
     }
 
 
+
+def test_default_blinding_seed_is_coordinator_private_os_entropy(tmp_path, monkeypatch):
+    trace_root = _write_complete_matrix(tmp_path)
+    task_manifest = _write_task_manifest(tmp_path)
+    generated = iter(((1 << 255) + 17, (1 << 255) + 29))
+
+    def secret_seed(bits):
+        assert bits == packet_builder.BLINDING_SEED_BITS == 256
+        return next(generated)
+
+    monkeypatch.setattr(packet_builder.secrets, "randbits", secret_seed)
+    first = build_packet(
+        trace_root, tmp_path / "packet-random-a", task_manifest_path=task_manifest
+    )
+    second = build_packet(
+        trace_root, tmp_path / "packet-random-b", task_manifest_path=task_manifest
+    )
+    assert first["blind_seed"] == (1 << 255) + 17
+    assert second["blind_seed"] == (1 << 255) + 29
+    assert first["blind_seed"] != second["blind_seed"]
+
+
+def test_packet_cli_emits_only_seed_free_receipt(tmp_path, monkeypatch, capsys):
+    trace_root = _write_complete_matrix(tmp_path)
+    task_manifest = _write_task_manifest(tmp_path)
+    output_root = tmp_path / "packet-cli"
+    secret_seed = (1 << 255) + 301
+    monkeypatch.setattr(packet_builder.secrets, "randbits", lambda bits: secret_seed)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_human_eval_packet.py",
+            "--trace-root", str(trace_root),
+            "--task-manifest", str(task_manifest),
+            "--output-root", str(output_root),
+        ],
+    )
+
+    assert packet_builder.main() == 0
+    stdout = capsys.readouterr().out
+    receipt = json.loads(stdout)
+    assert receipt["status"] == "created"
+    assert receipt["n_reports"] == 8
+    assert "blind_seed" not in receipt
+    assert str(secret_seed) not in stdout
+    assert "source_artifacts" not in receipt
+    assert json.loads((output_root / "manifest.json").read_text(encoding="utf-8"))[
+        "blind_seed"
+    ] == secret_seed
+
+
+def test_packet_cli_rejects_predictable_user_supplied_seed(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "sys.argv", ["build_human_eval_packet.py", "--seed", "20260915"]
+    )
+    with pytest.raises(SystemExit) as exc:
+        packet_builder.main()
+    assert exc.value.code == 2
+    assert "unrecognized arguments: --seed" in capsys.readouterr().err
+
+
 def test_build_packet_rejects_treatment_leakage_before_publication(tmp_path):
     trace_root = _write_complete_matrix(tmp_path)
     leaked_report = tmp_path / "outputs" / "d3-main-01" / "research_report.md"

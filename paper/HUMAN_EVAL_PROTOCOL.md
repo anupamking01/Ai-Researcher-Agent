@@ -42,7 +42,25 @@ Generate the evaluation packet only from completed experiment traces and their p
 python scripts/build_human_eval_packet.py
 ```
 
-The builder is deterministic and offline. The default seed is `20260915`.
+The builder is offline and reproducible **conditional on its retained, private
+blinding seed**. The production CLI generates a new 256-bit seed from the
+operating system's cryptographic random source; it does not accept a public
+`--seed` argument or print the seed. The seed is retained only in the
+coordinator-only `manifest.json`, allowing later exact order verification
+without making the blind-ID mapping predictable to annotators. Do not publish
+this manifest or the coordinator key until the blinded ratings are frozen.
+
+**Pre-annotation blinding-security correction (2026-10-29):** The former
+publicly documented fixed default seed `20260915` made report-to-treatment
+assignments reconstructible from public task and variant ordering, even without
+the coordinator key. Packets made with that predictable seed are **not suitable
+for genuine blinded ratings**. If one exists, retain it as provenance and create
+a new, separately versioned secret-seeded packet only from unchanged,
+independently recovered original inputs *before* any annotator access. Do not
+rerun treatments or the evaluator to replace an exposed packet. Explicit
+seeds in the Python library remain solely for synthetic regression fixtures.
+This correction changes neither rubric nor estimands, automated confirmatory
+analysis, or collected human results (none exist).
 
 It writes four files under `outputs/human_eval/`:
 
