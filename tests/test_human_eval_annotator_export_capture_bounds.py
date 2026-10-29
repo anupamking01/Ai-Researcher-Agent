@@ -37,6 +37,9 @@ def test_coordinator_snapshot_rejects_oversized_artifact(tmp_path, oversized_nam
                 handle.truncate(packet.MAX_PACKET_CAPTURE_BYTES + 1)
             else:
                 handle.write(b"synthetic")
+        if name in packet.COORDINATOR_PRIVATE_ARTIFACTS:
+            # Isolate the size contract from the separate private-mode gate.
+            (source / name).chmod(0o600)
     with pytest.raises(ValueError, match="packet-capture limit"):
         exporter._snapshot_coordinator_bundle(source, target)
 
