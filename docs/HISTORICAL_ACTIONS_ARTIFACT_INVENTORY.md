@@ -226,9 +226,13 @@ necessary for historical custody. The Git commit records **the discovery of
 the two historical GitHub-generated ZIP fingerprints** for recovery triage,
 not an independent historical research-manifest checksum.
 
-If an authorized original ZIP backup is found, compare its **ZIP bytes** against
-the original GitHub-logged SHA-256 using
-`scripts.preflight_recovered_artifact_zip --expected-archive-sha256`.
-A match would give stronger provider-log-to-current-ZIP continuity, but
-the original per-trace/report archive and coordinator handoff authentication
-gates still apply before any human-evaluation distribution.
+If an authorized original ZIP backup is found, run the structural preflight
+**without** `--expected-archive-sha256` and compare the resulting
+`archive_sha256_observed_now` against the original GitHub-logged ZIP digest
+above. The preflight's `--expected-archive-sha256` argument explicitly denotes
+a *previously independently retained* ZIP pin: **do not populate it with this
+same-provider job-log digest**, or the receipt would misleadingly label that
+comparison an independent custody check. Record the source of each digest
+separately. A matching observed ZIP would strengthen provider-log-to-current-ZIP
+continuity but still would not authenticate per-trace/report historical bytes
+or satisfy coordinator/human-evaluation handoff gates.
