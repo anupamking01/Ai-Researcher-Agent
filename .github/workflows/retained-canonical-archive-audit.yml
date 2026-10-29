@@ -7,6 +7,8 @@ on:
       - research-paper-eval-2027
     paths:
       - .github/workflows/retained-canonical-archive-audit.yml
+      - scripts/verify_preserved_canonical_bundle.py
+      - scripts/verify_retained_canonical_download.py
 
 permissions:
   actions: read
@@ -80,6 +82,16 @@ jobs:
             --receipt-out "${RUNNER_TEMP}/retained-canonical-verification.json"
           cat "${RUNNER_TEMP}/retained-canonical-verification.json"
 
+      - name: Reverify preserved bundle without relying on live source expiry
+        run: |
+          python -m scripts.verify_preserved_canonical_bundle \
+            "${RUNNER_TEMP}/canonical-source-metadata.json" \
+            "${RUNNER_TEMP}/retained-canonical.zip" \
+            "${RUNNER_TEMP}/retained-canonical-verification.json" \
+            --root "${GITHUB_WORKSPACE}/frozen-analysis-checkout" \
+            --receipt-out "${RUNNER_TEMP}/retained-canonical-offline-reverification.json"
+          cat "${RUNNER_TEMP}/retained-canonical-offline-reverification.json"
+
       - name: Retain verified provider-observed ZIP and concordance receipt
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -88,5 +100,6 @@ jobs:
             ${{ runner.temp }}/canonical-source-metadata.json
             ${{ runner.temp }}/retained-canonical.zip
             ${{ runner.temp }}/retained-canonical-verification.json
+            ${{ runner.temp }}/retained-canonical-offline-reverification.json
           if-no-files-found: error
           retention-days: 90

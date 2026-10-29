@@ -69,8 +69,14 @@ def verify_download(
     *,
     root: Path = concordance.ROOT,
     checked_at: datetime | None = None,
+    require_source_unexpired: bool = True,
 ) -> dict:
-    """Fail closed on source identity, archive bytes, and actual checkout concordance."""
+    """Check captured provider metadata and ZIP; live-source mode rejects expiry.
+
+    Only previously captured preservation bundles may disable the live-expiry
+    check. The default still requires an unexpired GitHub source artifact.
+    Expiry-independent replay never establishes current provider availability.
+    """
     if checked_at is None:
         checked_at = datetime.now(timezone.utc)
     _require(
@@ -79,6 +85,8 @@ def verify_download(
         "checked_at must be timezone-aware",
     )
     checked_at = checked_at.astimezone(timezone.utc)
+    _require(type(require_source_unexpired) is bool,
+             "require_source_unexpired must be a boolean")
     try:
         metadata = json.loads(
             _read_regular(Path(metadata_path), MAX_METADATA_BYTES, "GitHub metadata").decode("utf-8"),
@@ -110,7 +118,8 @@ def verify_download(
         "historical workflow identity differs from canonical run",
     )
     expiry = _utc_expiry(metadata.get("expires_at"))
-    _require(expiry > checked_at, "artifact expiry has elapsed")
+    if require_source_unexpired:
+        _require(expiry > checked_at, "artifact expiry has elapsed")
     _require(
         type(metadata.get("size_in_bytes")) is int
         and metadata["size_in_bytes"] == OBSERVED_ZIP_BYTES,
