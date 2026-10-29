@@ -177,7 +177,14 @@ def _snapshot_file(source, destination, *, label):
         os.close(parent_descriptor)
 
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_bytes(content)
+    # Preserve the verified input's permission bits in the snapshot. In
+    # particular, a coordinator manifest/key captured with mode 0600 must
+    # remain private when the independent packet verifier examines the
+    # scratch copy. Do not silently launder an exposed original to 0600.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    destination_fd = os.open(destination, flags, stat.S_IMODE(before.st_mode) & 0o777)
+    with os.fdopen(destination_fd, "wb") as handle:
+        handle.write(content)
     return destination
 
 
