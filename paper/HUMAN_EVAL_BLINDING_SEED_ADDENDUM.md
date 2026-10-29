@@ -56,3 +56,24 @@ because other research validation gates pin its historical SHA-256. Its earlier
 fixed-seed implementation sentence is superseded only for *future packet
 construction*. No historical protocol fingerprint has been silently re-pinned
 or rewritten, and no empirical or human-validation claims are added.
+
+
+## Independent packet verifier: private-secret receipt gate
+
+The standalone `scripts/verify_human_eval_packet.py` now refuses to issue a
+successful provenance receipt if either coordinator-only `manifest.json`
+(the secret seed) or `blinding_key.csv` is readable, writable, or executable by
+group/other users. A matching content fingerprint alone is insufficient:
+the packet might remain byte-identical even after the treatment mapping or seed
+has become accessible. The check uses the exact stat-pinned file generations
+already captured for packet verification; its final full-window recheck also
+rejects a permission-mode or inode change during verification.
+
+This closes a gap in the **standalone** packet-verification success path.
+The annotator exporter and source-bound checks already reject unsafe
+coordinator permissions separately; this change does not loosen those gates.
+As with those checks, private permissions observed now cannot establish that
+a secret was *never* previously disclosed. Any historically exposed packet
+must remain disqualified from genuine blinded scoring; retain it as evidence
+and generate a new independently authenticated, versioned packet only before
+human scoring begins. No original experiments or human ratings were changed.

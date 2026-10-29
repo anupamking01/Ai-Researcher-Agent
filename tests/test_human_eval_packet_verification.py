@@ -913,3 +913,30 @@ def test_packet_verifier_requires_source_fingerprint_manifest(packet_case):
 
     with pytest.raises(ValueError, match="source_artifacts"):
         _verify(packet_case)
+
+@pytest.mark.parametrize(
+    ("name", "exposed_mode"),
+    [
+        ("manifest.json", 0o644),
+        ("manifest.json", 0o660),
+        ("blinding_key.csv", 0o640),
+        ("blinding_key.csv", 0o606),
+    ],
+)
+def test_packet_verifier_rejects_exposed_coordinator_files_without_byte_drift(
+    packet_case, name, exposed_mode
+):
+    """A matching SHA-256 cannot certify a publicly accessible blinding secret."""
+    path = packet_case["output_root"] / name
+    original_bytes = path.read_bytes()
+    path.chmod(exposed_mode)
+
+    with pytest.raises(ValueError, match="coordinator-only artifact permissions are unsafe"):
+        _verify(packet_case)
+    assert path.read_bytes() == original_bytes
+
+
+def test_packet_verifier_accepts_restrictive_coordinator_file_modes(packet_case):
+    for name in ("manifest.json", "blinding_key.csv"):
+        (packet_case["output_root"] / name).chmod(0o400)
+    assert _verify(packet_case)["status"] == "human_eval_packet_verified"

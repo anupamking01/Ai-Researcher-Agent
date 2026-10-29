@@ -72,6 +72,26 @@ def _capture_window_file(
     return content
 
 
+def _require_private_coordinator_generations(snapshots: dict, output_root: Path) -> None:
+    """Only certify blinding secrets whose captured file modes remain private.
+
+    Read permissions from the same generation already pinned alongside the
+    verified bytes, rather than making a separate vulnerable pathname check.
+    The final full-window recheck rejects any later mode or inode change.
+    """
+    for filename in sorted(build.COORDINATOR_PRIVATE_ARTIFACTS):
+        path = Path(os.path.abspath(output_root / filename))
+        captured = snapshots.get(path)
+        if captured is None:
+            raise ValueError(f"coordinator-only artifact was not captured: {filename}")
+        generation, _ = captured
+        if stat.S_IMODE(generation[2]) & 0o077:
+            raise ValueError(
+                f"coordinator-only artifact permissions are unsafe: {filename}; "
+                "a byte-valid packet is not proof that blinding secrets were protected"
+            )
+
+
 def _recheck_window_files(snapshots: dict) -> None:
     """Refuse a PASS if any previously checked input drifted in the meantime."""
     for path, (generation, fingerprint) in snapshots.items():
@@ -475,6 +495,7 @@ def verify_packet(
     # Capture-time file checks alone cannot detect an earlier artifact being
     # replaced while a later source is under review. Revisit every generation
     # before issuing a successful independent provenance receipt.
+    _require_private_coordinator_generations(snapshots, output_root)
     _recheck_window_files(snapshots)
 
     return {
