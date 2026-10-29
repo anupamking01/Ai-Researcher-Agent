@@ -362,6 +362,9 @@ def verify_packet(
     selected_trace_paths = set()
     seen_cells = set()
     seen_run_ids = set()
+    # The builder rejects hard-linked reports across independent run IDs.
+    # Recheck that invariant here, even for byte-identical packet sources.
+    seen_report_inodes: dict[tuple[int, int], tuple[str, str]] = {}
     variants_by_task = {task_id: set() for task_id in task_manifest["tasks"]}
     for row in key_rows:
         blind_id = row["blind_id"].strip()
@@ -466,6 +469,17 @@ def verify_packet(
         report_content = _capture_window_file(
             report_path, label=f"report for {blind_id}", snapshots=snapshots
         )
+        # Use the generation already bound to the captured report bytes.
+        # A separate stat here would reopen a pathname-substitution window.
+        report_generation, _ = snapshots[Path(os.path.abspath(report_path))]
+        report_inode = report_generation[:2]
+        previous_cell = seen_report_inodes.get(report_inode)
+        if previous_cell is not None:
+            raise ValueError(
+                "Same Markdown report inode reused across treatment/task cells: "
+                f"{previous_cell!r} and {cell!r}"
+            )
+        seen_report_inodes[report_inode] = cell
         try:
             report_text = report_content.decode("utf-8").strip()
         except UnicodeDecodeError as exc:

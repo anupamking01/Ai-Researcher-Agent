@@ -108,6 +108,25 @@ traces and reports or guarantee atomicity against hostile concurrent filesystem
 mutation. Do not delete unexpected historical material to force acceptance:
 quarantine the packet pending a documented source-custody review.
 
+## Independent report-inode uniqueness check
+
+The packet builder already rejects different run IDs that reference the same
+underlying Markdown report through hard links. The coordinator-side packet
+verifier now enforces the same condition independently. Otherwise two
+run-scoped paths with identical report text and unchanged SHA-256 fingerprints
+could pass verification even after one file was replaced by a hard link to
+another run's report.
+
+The verifier compares filesystem device/inode identities from the **same
+captured file generations** used to verify report bytes and rechecks those
+generations at the end of its verification window. It rejects any report
+inode reused across different treatment/task cells. Byte-identical reports
+stored in genuinely distinct files remain acceptable; equal text alone is
+not evidence of reused execution. This guards local source aliasing only:
+it does not authenticate missing historical report custody, establish
+independent executions, or replace the original-archive handoff gate.
+No treatments or human ratings are generated.
+
 ## Report-to-run binding
 
 Before distributing a newly generated packet, the builder and independent

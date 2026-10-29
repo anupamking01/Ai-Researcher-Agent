@@ -183,6 +183,40 @@ def test_packet_verifier_requires_explicit_filename_bound_trace_run_id(
         _verify(packet_case)
 
 
+
+def test_packet_verifier_rejects_hardlinked_reports_after_packet_build(packet_case):
+    """Unchanged SHA-256 hashes do not prove two runs have independent reports."""
+    key_path = packet_case["output_root"] / "blinding_key.csv"
+    with key_path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    first = next(
+        row for row in rows
+        if row["variant_id"] == "D3" and row["task_id"] == "main-01"
+    )
+    second = next(
+        row for row in rows
+        if row["variant_id"] == "D6" and row["task_id"] == "main-01"
+    )
+    original = packet_case["repo_root"] / first["report_path"]
+    alias = packet_case["repo_root"] / second["report_path"]
+    # Identical report text in separate files is legitimate and must pass.
+    assert original.read_bytes() == alias.read_bytes()
+    assert (original.stat().st_dev, original.stat().st_ino) != (
+        alias.stat().st_dev, alias.stat().st_ino
+    )
+    assert _verify(packet_case)["n_reports"] == 8
+
+    # Linking a second run's path to the first run's inode changes neither
+    # source bytes nor manifest fingerprints. The old verifier passed this.
+    alias.unlink()
+    os.link(original, alias)
+    assert (original.stat().st_dev, original.stat().st_ino) == (
+        alias.stat().st_dev, alias.stat().st_ino
+    )
+    with pytest.raises(ValueError, match="Same Markdown report inode reused"):
+        _verify(packet_case)
+
+
 def test_packet_verifier_rejects_reused_run_id_with_coherent_packet_hashes(packet_case):
     """Two different treatments cannot claim the same execution after rehashing."""
     key_path = packet_case["output_root"] / "blinding_key.csv"
