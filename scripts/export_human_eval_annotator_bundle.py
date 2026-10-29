@@ -208,7 +208,21 @@ def _snapshot_coordinator_bundle(packet_root: Path, snapshot_root: Path) -> dict
                 )
         content = _regular_bytes(path, label=f"coordinator {name}")
         captured[name] = content
-        (snapshot_root / name).write_bytes(content)
+        destination = snapshot_root / name
+        if name in build.COORDINATOR_PRIVATE_ARTIFACTS:
+            # Keep coordinator secrets private in the verification scratch copy
+            # from creation (the source mode was already checked above).
+            flags = (
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0)
+            )
+            descriptor = os.open(destination, flags, 0o600)
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(content)
+        else:
+            destination.write_bytes(content)
     return captured
 
 
