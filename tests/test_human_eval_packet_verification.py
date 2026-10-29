@@ -406,6 +406,8 @@ def test_packet_verifier_checks_source_mapping_and_artifact_fingerprints(packet_
         "status": "human_eval_packet_verified",
         "blinding_key_checked": True,
         "human_ratings_read": False,
+        "original_task_and_evaluator_run_pins_checked": False,
+        "historical_trace_report_authenticity_verified": False,
         "n_reports": 8,
         "n_tasks": 2,
         "n_variants": 4,
