@@ -198,6 +198,15 @@ def test_packet_cli_emits_only_seed_free_receipt(tmp_path, monkeypatch, capsys):
     trace_root = _write_complete_matrix(tmp_path)
     task_manifest = _write_task_manifest(tmp_path)
     output_root = tmp_path / "packet-cli"
+    # The CLI requires the real original task-source pin in production.
+    # Override only inside this two-task synthetic CLI receipt fixture.
+    from scripts import verify_frozen_main_study_tasks as original_tasks
+
+    monkeypatch.setattr(
+        original_tasks,
+        "ORIGINAL_TASK_MANIFEST_SHA256",
+        hashlib.sha256(task_manifest.read_bytes()).hexdigest(),
+    )
     secret_seed = (1 << 255) + 301
     monkeypatch.setattr(packet_builder.secrets, "randbits", lambda bits: secret_seed)
     monkeypatch.setattr(
@@ -221,6 +230,42 @@ def test_packet_cli_emits_only_seed_free_receipt(tmp_path, monkeypatch, capsys):
     assert json.loads((output_root / "manifest.json").read_text(encoding="utf-8"))[
         "blind_seed"
     ] == secret_seed
+
+
+def test_packet_cli_rejects_coherently_redefined_tasks_before_output(
+    tmp_path, monkeypatch
+):
+    # Both trace questions and this task manifest agree with each other.
+    # Without the original-run byte pin they could still redefine the study.
+    trace_root = _write_complete_matrix(tmp_path)
+    task_manifest = _write_task_manifest(tmp_path)
+    output_root = tmp_path / "untrusted-packet"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_human_eval_packet.py",
+            "--trace-root", str(trace_root),
+            "--task-manifest", str(task_manifest),
+            "--output-root", str(output_root),
+        ],
+    )
+    with pytest.raises(SystemExit, match="original treatment-run task manifest"):
+        packet_builder.main()
+    assert not output_root.exists()
+
+
+def test_packet_python_api_can_opt_into_original_task_source_gate(tmp_path):
+    trace_root = _write_complete_matrix(tmp_path)
+    output_root = tmp_path / "untrusted-packet"
+    with pytest.raises(ValueError, match="original treatment-run task manifest"):
+        build_packet(
+            trace_root,
+            output_root,
+            seed=20260915,
+            task_manifest_path=_write_task_manifest(tmp_path),
+            require_original_task_manifest=True,
+        )
+    assert not output_root.exists()
 
 
 def test_packet_cli_rejects_predictable_user_supplied_seed(monkeypatch, capsys):

@@ -886,18 +886,38 @@ def _artifact_fingerprint(path: Path) -> dict:
     return {"path": path.name, **_byte_fingerprint(content)}
 
 
+def _require_original_treatment_task_source(task_manifest: dict) -> None:
+    """Require the historical task bytes, not merely a self-declared frozen set.
+
+    The source anchor comes from the preserved original treatment checkout.
+    It does not authenticate recovered treatment traces or reports.
+    """
+    # Imported lazily: the source-anchor verifier also uses this module's
+    # bounded reader, and the lower-level API supports synthetic fixtures.
+    from scripts.verify_frozen_main_study_tasks import ORIGINAL_TASK_MANIFEST_SHA256
+
+    if task_manifest["sha256"] != ORIGINAL_TASK_MANIFEST_SHA256:
+        raise ValueError(
+            "production human-evaluation packet requires the original "
+            "treatment-run task manifest bytes; do not re-pin a changed task set"
+        )
+
+
 def build_packet(
     trace_root: Path,
     output_root: Path,
     *,
     seed: int | None = None,
     task_manifest_path: Path = DEFAULT_TASK_MANIFEST,
+    require_original_task_manifest: bool = False,
 ) -> dict:
     """Build a reproducible packet with a coordinator-private blinding seed.
 
     An explicit seed is retained for synthetic test fixtures only. Production
     callers omit it: a known seed and known sorted task/variant cells would
-    reveal the treatment for each supposedly blind report ID.
+    reveal the treatment for each supposedly blind report ID. The CLI always
+    requires the original source-anchored task manifest. Direct Python callers
+    must opt into this check when preparing genuine, non-synthetic packets.
     """
     if seed is None:
         seed = secrets.randbits(BLINDING_SEED_BITS)
@@ -910,6 +930,8 @@ def build_packet(
     output_root = Path(output_root)
     task_manifest_path = Path(task_manifest_path)
     task_manifest = _load_task_manifest(task_manifest_path)
+    if require_original_task_manifest:
+        _require_original_treatment_task_source(task_manifest)
     records = _load_records(trace_root, task_manifest=task_manifest)
 
     # Sort first so filesystem traversal order can never affect randomization.
@@ -1051,6 +1073,7 @@ def main() -> int:
             args.trace_root,
             args.output_root,
             task_manifest_path=args.task_manifest,
+            require_original_task_manifest=True,
         )
     except (OSError, ValueError) as exc:
         raise SystemExit(f"HUMAN EVAL PACKET BUILD: FAIL: {exc}") from exc

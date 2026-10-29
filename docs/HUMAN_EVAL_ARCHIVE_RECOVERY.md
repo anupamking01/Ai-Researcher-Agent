@@ -331,3 +331,27 @@ The pilot remains diagnostic, automated confirmatory findings remain frozen,
 secondary/Pareto observations remain exploratory, and **human validation
 remains pending**. Neither the inventory nor a passing archival handoff
 constitutes an independent human judgment.
+
+
+## Production packet task-source identity gate
+
+The command-line entry point `python -m scripts.build_human_eval_packet`
+now requires the supplied `--task-manifest` to match the **exact original
+treatment-run task-manifest bytes**, SHA-256
+`5701df80036edb354f4f7d1efc409ea8f554a215f8c37da9d1a0b8ed01fdfd5f`
+from source revision `c3c15e46a8eec3a8bbc24c968eedc0548172a897`.
+It checks the already captured source fingerprint before reading traces or
+creating any annotator-facing/coordinator outputs. Agreement between an
+altered task manifest and correspondingly altered trace questions is no
+longer sufficient for the **production CLI** to generate a packet. The
+subsequent prepublication source-window recheck still protects the captured
+task bytes and filesystem identity.
+
+The lower-level Python `build_packet` API keeps
+`require_original_task_manifest=False` for deliberately synthetic/offline
+test fixtures; callers preparing genuine study packets must set it to
+`True` (the CLI does so unconditionally). The original task-source pin is
+a version-controlled checkout identity, **not** an independently retained
+hash of the recovered 40 traces/reports, proof of archive custody, approval
+to distribute any packet, or evidence of human validation. The separate
+independent automated-handoff and original-evidence gates still apply.
