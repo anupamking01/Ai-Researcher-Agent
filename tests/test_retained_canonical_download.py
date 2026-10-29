@@ -173,3 +173,33 @@ def test_workflow_is_read_only_and_runs_real_concordance_before_archive_retentio
     )
     assert "10837878458/zip" in workflow
     assert "if-no-files-found: error" in workflow
+
+
+def test_retained_workflow_uses_exact_provenance_bound_revision_and_binds_live_results():
+    """Code drift must not weaken the frozen receipt or silently redefine outputs."""
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github/workflows/retained-canonical-archive-audit.yml"
+    ).read_text(encoding="utf-8")
+    anchor = "f333623380526fa05dcb14110e7ec1fb72d2d0e2"
+    assert f"ref: {anchor}" in workflow
+    assert "path: frozen-analysis-checkout" in workflow
+    assert 'test "$(git -C "$frozen" rev-parse HEAD)" = "' + anchor + '"' in workflow
+    for relative in (
+        "outputs/canonical_analysis_source.json",
+        "outputs/main_study_analysis_inputs_manifest.json",
+        "outputs/main_study_inference.json",
+        "outputs/main_study_runs.csv",
+        "outputs/posthoc_support_runs.csv",
+        "paper/MAIN_STUDY_INFERENCE.md",
+    ):
+        assert relative in workflow
+    assert 'cmp -- "${GITHUB_WORKSPACE}/${relative}" "$frozen/${relative}"' in workflow
+    assert '--root "${GITHUB_WORKSPACE}/frozen-analysis-checkout"' in workflow
+    assert (
+        workflow.index("Checkout provenance-bound canonical analysis revision")
+        < workflow.index("Bind current published scientific bytes")
+        < workflow.index("Download exact canonical-run artifact metadata")
+        < workflow.index("python -m scripts.verify_retained_canonical_download")
+        < workflow.index("Retain verified provider-observed ZIP")
+    )

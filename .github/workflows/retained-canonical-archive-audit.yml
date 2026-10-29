@@ -24,6 +24,30 @@ jobs:
       - name: Checkout exact research revision
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
+      - name: Checkout provenance-bound canonical analysis revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          # Last checked-in revision whose runner code matches the frozen v2
+          # provenance receipt. Do not silently reissue the research receipt.
+          ref: f333623380526fa05dcb14110e7ec1fb72d2d0e2
+          path: frozen-analysis-checkout
+          persist-credentials: false
+
+      - name: Bind current published scientific bytes to frozen analysis revision
+        run: |
+          set -euo pipefail
+          frozen="${GITHUB_WORKSPACE}/frozen-analysis-checkout"
+          test "$(git -C "$frozen" rev-parse HEAD)" = "f333623380526fa05dcb14110e7ec1fb72d2d0e2"
+          for relative in \
+            outputs/canonical_analysis_source.json \
+            outputs/main_study_analysis_inputs_manifest.json \
+            outputs/main_study_inference.json \
+            outputs/main_study_runs.csv \
+            outputs/posthoc_support_runs.csv \
+            paper/MAIN_STUDY_INFERENCE.md; do
+            cmp -- "${GITHUB_WORKSPACE}/${relative}" "$frozen/${relative}"
+          done
+
       - name: Set up pinned Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
@@ -52,7 +76,7 @@ jobs:
           python -m scripts.verify_retained_canonical_download \
             "${RUNNER_TEMP}/canonical-source-metadata.json" \
             "${RUNNER_TEMP}/retained-canonical.zip" \
-            --root "${GITHUB_WORKSPACE}" \
+            --root "${GITHUB_WORKSPACE}/frozen-analysis-checkout" \
             --receipt-out "${RUNNER_TEMP}/retained-canonical-verification.json"
           cat "${RUNNER_TEMP}/retained-canonical-verification.json"
 

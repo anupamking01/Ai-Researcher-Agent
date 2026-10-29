@@ -17,12 +17,24 @@ evaluators, analysis, or human annotations. The action:
 2. Downloads its **raw ZIP** without extraction or re-encoding.
 3. Validates the source run/branch/commit/repository identity, ID, name, expiry,
    reported byte size, provider digest, and actual downloaded ZIP digest.
-4. Invokes `scripts.verify_canonical_archive_checkout` to recompute current
-   checkout provenance, validate archive structure and fingerprints, and bind
-   all seven archive members to the verified checkout. The historical v1
-   provenance-receipt exception remains restricted to its exact observed hash;
-   the other six artifacts must match current verified checkout bytes.
-5. **Only after a passing end-to-end verification**, uploads the original raw
+4. Checks out the **immutable, provenance-compatible analysis revision**
+   `f333623380526fa05dcb14110e7ec1fb72d2d0e2` into a separate directory. The checked-in v2 provenance
+   receipt binds the analysis runner SHA-256
+   `a5c82d8f95f74a0b4777b243d301969c75172d34d14b6b5bab8d25706d3d561f`.
+   Subsequent runner-hardening commits changed those bytes without reissuing
+   the scientific receipt; thus verifying the **moving** research branch's
+   runner against the old receipt correctly failed in the first live audit
+   (Actions run 40794848479). This is toolchain drift, not evidence of a new
+   treatment result. The workflow also requires the current checkout's **six
+   published scientific artifacts** to byte-match the pinned checkout before
+   accepting any archive. It does not overwrite or regenerate either receipt.
+5. Invokes `scripts.verify_canonical_archive_checkout` against that exact
+   pinned source tree, independently recomputes frozen analysis provenance,
+   validates archive structure and fingerprints, and binds all seven archived
+   members to the verified checkout. The historical v1 provenance-receipt
+   exception remains restricted to its exact provider-observed hash. The
+   current v2 checkout receipt is checked normally against the pinned code.
+6. **Only after a passing end-to-end verification**, uploads the original raw
    ZIP, GitHub metadata response and machine-readable audit receipt as a new
    GitHub Actions artifact, for the repository's configured retention period.
 
@@ -35,13 +47,16 @@ confirmatory results, exploratory diagnostics, and pending human validation
 remain separate.
 
 For offline reproduction, retain the raw ZIP and GitHub artifact metadata JSON,
-then run from a checked-out `research-paper-eval-2027` revision:
+then run the **current** audit implementation with `--root` pointing to an
+independent checkout of pinned revision `f333623380526fa05dcb14110e7ec1fb72d2d0e2`, and verify that the
+six published scientific files in the moving branch still exactly match that
+pinned revision (the workflow performs this check automatically):
 
 ```bash
 python -m scripts.verify_retained_canonical_download \
   /path/to/canonical-source-metadata.json \
   /path/to/retained-canonical.zip \
-  --root /path/to/Ai-Researcher-Agent \
+  --root /path/to/frozen-analysis-checkout \
   --receipt-out /path/to/new-verification-receipt.json
 ```
 
