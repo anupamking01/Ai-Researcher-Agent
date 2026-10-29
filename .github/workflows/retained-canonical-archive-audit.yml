@@ -9,6 +9,15 @@ on:
       - .github/workflows/retained-canonical-archive-audit.yml
       - scripts/verify_preserved_canonical_bundle.py
       - scripts/verify_retained_canonical_download.py
+      - experiments/main_budget_tasks.json
+      - experiments/openai_pricing_2026-09-08.json
+      - paper/ANALYSIS_PLAN.md
+      - outputs/canonical_analysis_source.json
+      - outputs/main_study_analysis_inputs_manifest.json
+      - outputs/main_study_inference.json
+      - outputs/main_study_runs.csv
+      - outputs/posthoc_support_runs.csv
+      - paper/MAIN_STUDY_INFERENCE.md
 
 permissions:
   actions: read
@@ -46,6 +55,9 @@ jobs:
             outputs/main_study_inference.json \
             outputs/main_study_runs.csv \
             outputs/posthoc_support_runs.csv \
+            experiments/main_budget_tasks.json \
+            experiments/openai_pricing_2026-09-08.json \
+            paper/ANALYSIS_PLAN.md \
             paper/MAIN_STUDY_INFERENCE.md; do
             cmp -- "${GITHUB_WORKSPACE}/${relative}" "$frozen/${relative}"
           done
