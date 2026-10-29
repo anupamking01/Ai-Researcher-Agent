@@ -90,6 +90,24 @@ sufficient evidence. Synthetic regression tests exercise both tampering
 conditions. These checks do not authenticate the missing original archive:
 independent historical pins and the source-bound handoff gate remain necessary.
 
+## Complete trace-source inventory at independent verification
+
+The coordinator-side verifier now enumerates the complete bounded treatment-trace
+tree before verifying the selected key rows, rejects unexpected files,
+directories, non-JSON backups, and symlinks, and requires that the selected
+trace paths exactly equal the full inventory. It repeats the inventory after
+rechecking captured artifact bytes and generations, so an extra trace added
+during verification cannot be silently omitted from a successful receipt.
+
+This closes a gap between the packet builder's complete-tree source selection
+and independent verification of an already generated packet. A cryptographically
+consistent key and source-fingerprint table alone would not prove that
+unselected recovered traces were absent. This is an offline, read-only integrity
+check. It cannot establish the historical authenticity of unavailable original
+traces and reports or guarantee atomicity against hostile concurrent filesystem
+mutation. Do not delete unexpected historical material to force acceptance:
+quarantine the packet pending a documented source-custody review.
+
 ## Report-to-run binding
 
 Before distributing a newly generated packet, the builder and independent

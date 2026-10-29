@@ -700,6 +700,56 @@ def test_packet_verifier_rejects_truthy_non_boolean_completion(packet_case, inva
     with pytest.raises(ValueError, match="trace completed.*JSON boolean true"):
         _verify(packet_case)
 
+@pytest.mark.parametrize(
+    ("extra_name", "directory"),
+    [
+        ("unknown-treatment", True),
+        ("D3/unscheduled-run.json", False),
+        ("D6/nested", True),
+        ("P6/backup.json.old", False),
+    ],
+)
+def test_packet_verifier_rejects_unselected_trace_tree_material(
+    packet_case, extra_name, directory
+):
+    """A clean selected matrix cannot hide extra recovered source material."""
+    trace_root = packet_case["repo_root"] / "outputs" / "experiment_traces"
+    unexpected = trace_root / extra_name
+    if directory:
+        unexpected.mkdir()
+    else:
+        unexpected.write_text('{"unselected": true}', encoding="utf-8")
+
+    with pytest.raises(
+        ValueError, match="Unexpected experiment trace|complete trace-source inventory"
+    ):
+        _verify(packet_case)
+
+
+def test_packet_verifier_rejects_trace_inserted_after_window_recheck(
+    packet_case, monkeypatch
+):
+    """The final census must catch entries added after per-file verification."""
+    from scripts import verify_human_eval_packet as verifier
+
+    original_recheck = verifier._recheck_window_files
+    trace_root = packet_case["repo_root"] / "outputs" / "experiment_traces"
+    injected = False
+
+    def recheck_then_insert(snapshots):
+        nonlocal injected
+        original_recheck(snapshots)
+        (trace_root / "P6V" / "unselected-late-run.json").write_text(
+            '{"unselected": true}', encoding="utf-8"
+        )
+        injected = True
+
+    monkeypatch.setattr(verifier, "_recheck_window_files", recheck_then_insert)
+    with pytest.raises(ValueError, match="trace-source inventory changed"):
+        _verify(packet_case)
+    assert injected is True
+
+
 def test_packet_verifier_rejects_symlinked_trace_after_packet_freeze(packet_case):
     """Even identical trace bytes must not make a linked source valid."""
     trace_path = (

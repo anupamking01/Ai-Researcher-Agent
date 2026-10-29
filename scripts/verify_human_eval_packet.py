@@ -212,6 +212,15 @@ def _repo_file(repo_root: Path, relative_path: str, *, label: str) -> Path:
     return candidate
 
 
+def _trace_source_inventory(trace_root: Path, *, n_tasks: int) -> frozenset[Path]:
+    """Enumerate every treatment trace, not just rows selected by the key."""
+    if trace_root.is_symlink() or not trace_root.is_dir():
+        raise ValueError(f"experiment trace root must be a real directory: {trace_root}")
+    return frozenset(
+        build._enumerate_trace_sources(trace_root, n_tasks=n_tasks)
+    )
+
+
 def _verify_seeded_blinding_order(seed, packet_rows, key_rows, template_blind_ids):
     """Validate the exact seed-derived blinding assignment, independent of hashes."""
     expected_ids = [f"H{n:03d}" for n in range(1, len(key_rows) + 1)]
@@ -344,6 +353,13 @@ def verify_packet(
     )
     source_by_blind = {entry["blind_id"]: entry for entry in source_artifacts}
 
+    # Verify the whole recovered trace tree, not just the selected key rows.
+    # A complete-looking packet and valid per-row hashes can omit extras.
+    trace_root = repo_root.resolve() / "outputs" / "experiment_traces"
+    initial_trace_paths = _trace_source_inventory(
+        trace_root, n_tasks=len(task_manifest["tasks"])
+    )
+    selected_trace_paths = set()
     seen_cells = set()
     seen_run_ids = set()
     variants_by_task = {task_id: set() for task_id in task_manifest["tasks"]}
@@ -376,6 +392,7 @@ def verify_packet(
         if Path(row["trace_path"]) != expected_trace:
             raise ValueError(f"trace source mapping does not match variant/run for {blind_id}")
         trace_path = _repo_file(repo_root, row["trace_path"], label=f"trace for {blind_id}")
+        selected_trace_paths.add(trace_path)
         trace_content = _capture_window_file(
             trace_path, label=f"trace for {blind_id}", snapshots=snapshots
         )
@@ -464,6 +481,11 @@ def verify_packet(
             label=f"source report fingerprint for {blind_id}",
         )
 
+    _require_equal(
+        frozenset(selected_trace_paths),
+        initial_trace_paths,
+        label="complete trace-source inventory",
+    )
     expected_variants = set(build.EXPECTED_VARIANTS)
     for task_id in sorted(task_manifest["tasks"]):
         _require_equal(
@@ -515,6 +537,13 @@ def verify_packet(
     # before issuing a successful independent provenance receipt.
     _require_private_coordinator_generations(snapshots, output_root)
     _recheck_window_files(snapshots)
+    # An unexpected file inserted after the initial census must not escape
+    # the final window simply because its name was never selected.
+    _require_equal(
+        _trace_source_inventory(trace_root, n_tasks=len(task_manifest["tasks"])),
+        initial_trace_paths,
+        label="trace-source inventory changed during verification",
+    )
 
     return {
         "schema_version": 1,
