@@ -523,3 +523,56 @@ def test_reconciliation_accepts_same_ids_reordered_across_pages():
     assert receipt["expected_artifact"]["id"] == 9999
     assert receipt["listing_reconciliation"] == "two_matching_full_passes"
     assert page_calls == {1: 2, 2: 2}
+
+
+@pytest.mark.parametrize("field,changed", [
+    ("run_attempt", 2),
+    ("run_attempt", True),  # bool and int compare equal without a type guard.
+    ("status", "in_progress"),
+    ("conclusion", "cancelled"),
+    ("head_sha", "f" * 40),
+    ("updated_at", "2026-09-24T23:06:00Z"),
+])
+def test_run_reconciliation_fails_on_execution_drift_during_artifact_scan(
+    field, changed
+):
+    """Matching artifact pages cannot authorize a changed workflow execution."""
+    _, run_id, _, _, _, _ = audit.HISTORICAL_RUNS[0]
+    responses = _responses()
+    run_path = f"/repos/{audit.REPOSITORY}/actions/runs/{run_id}"
+    run_reads = []
+
+    def fetch(path):
+        observed = copy.deepcopy(responses[path])
+        if path == run_path:
+            run_reads.append(path)
+            if len(run_reads) == 2:
+                observed[field] = changed
+        return observed
+
+    with pytest.raises(audit.ArtifactInventoryError, match="workflow metadata changed"):
+        audit.audit_historical_artifact_inventory(fetch_json=fetch)
+    assert len(run_reads) == 2
+
+
+def test_reconciliation_rechecks_each_run_after_both_artifact_scans():
+    responses = _responses()
+    observations = []
+
+    def fetch(path):
+        observations.append(path)
+        return copy.deepcopy(responses[path])
+
+    receipt = audit.audit_historical_artifact_inventory(fetch_json=fetch)
+    for role, run_id, _, _, _, _ in audit.HISTORICAL_RUNS:
+        run_path = f"/repos/{audit.REPOSITORY}/actions/runs/{run_id}"
+        listing_path = run_path + "/artifacts?per_page=100&page=1"
+        assert observations.count(run_path) == 2
+        assert observations.count(listing_path) == 2
+        assert observations.index(run_path) < observations.index(listing_path)
+        assert max(i for i, p in enumerate(observations) if p == listing_path) < max(
+            i for i, p in enumerate(observations) if p == run_path
+        )
+        assert receipt["historical_runs"][role]["workflow_reconciliation"] == (
+            "two_matching_execution_snapshots"
+        )

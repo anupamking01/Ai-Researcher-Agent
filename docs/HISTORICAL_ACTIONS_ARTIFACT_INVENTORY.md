@@ -42,6 +42,24 @@ only a consistency check between two API observations, **not** an atomic
 GitHub snapshot, proof of absence after the scan, ZIP verification, or an
 independent historical fingerprint.
 
+## Workflow identity across the inventory window
+
+For each historical run, the audit now **re-reads execution metadata after
+both artifact listings** and requires matching run ID, workflow name/path,
+head SHA/branch, event, status, conclusion, attempt, start time and last-update
+time. A workflow rerun or changed execution record during inspection cannot
+produce a passing absence or availability receipt merely because both
+artifact-listing pages happen to match. A boolean replacing an integer attempt
+also fails. The receipt separately records two matching workflow snapshots
+and the already-existing two-pass artifact reconciliation.
+
+This remains a read-only, observational consistency check. It does not make
+GitHub metadata atomic, authenticate historical report bytes, prevent later
+changes, or establish independent custody. An unstable listing is an inventory
+error, not evidence of destroyed source archives. No treatment or evaluator is
+rerun.
+
+
 ## ZIP metadata and expiry checks (availability, not custody)
 
 For each listed artifact, the inventory checks that the GitHub-provided ZIP

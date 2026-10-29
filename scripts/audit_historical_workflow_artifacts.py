@@ -231,6 +231,16 @@ def _listing_identity(artifacts: list[dict]) -> dict[int, tuple]:
         for artifact in artifacts
     }
 
+def _workflow_snapshot_identity(run: dict) -> tuple:
+    """Compare only historical execution/custody fields, not volatile counters."""
+    fields = (
+        "id", "name", "head_sha", "status", "conclusion", "run_attempt",
+        "head_branch", "path", "event", "run_started_at", "updated_at",
+    )
+    # A JSON boolean must not silently compare equal to an integer attempt.
+    return tuple((type(run.get(name)), run.get(name)) for name in fields)
+
+
 def audit_historical_artifact_inventory(
     *,
     fetch_json: Callable[[str], object] = _fetch_json,
@@ -287,6 +297,15 @@ def audit_historical_artifact_inventory(
             raise ArtifactInventoryError(
                 f"{role} artifact listing changed across two complete scans"
             )
+        # Matching artifact pages cannot establish an unchanged historical
+        # execution if the run itself is rerun/updated between those reads.
+        rechecked_run = _require_object(
+            fetch_json(path), label=f"{role} workflow run recheck"
+        )
+        if _workflow_snapshot_identity(rechecked_run) != _workflow_snapshot_identity(run):
+            raise ArtifactInventoryError(
+                f"{role} workflow metadata changed across artifact scans"
+            )
         matching = [item for item in artifacts if item["name"] == expected_name]
         if len(matching) > 1:
             raise ArtifactInventoryError(f"{role} has duplicate expected artifact names")
@@ -311,6 +330,7 @@ def audit_historical_artifact_inventory(
             "expected_artifact_name": expected_name,
             "total_artifacts_listed": len(artifacts),
             "listing_reconciliation": "two_matching_full_passes",
+            "workflow_reconciliation": "two_matching_execution_snapshots",
             "expected_artifact": (
                 {
                     "id": matching[0]["id"],
