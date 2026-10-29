@@ -16,6 +16,7 @@ on:
       - outputs/main_study_runs.csv
       - outputs/posthoc_support_runs.csv
       - paper/MAIN_STUDY_INFERENCE.md
+      - scripts/audit_historical_artifact_job_logs.py
       - scripts/analyze_main_study.py
       - scripts/analyze_main_study_task_influence.py
       - scripts/build_analysis_provenance.py
