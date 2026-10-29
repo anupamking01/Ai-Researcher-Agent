@@ -1,0 +1,136 @@
+name: durable-canonical-git-escrow
+
+# One-time archival operation. The source GitHub artifact must still exist.
+# A later offline audit covers the committed copy after artifact expiry.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research-paper-eval-2027
+    paths:
+      - .github/workflows/durable-canonical-git-escrow.yml
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: durable-canonical-git-escrow
+  cancel-in-progress: false
+
+jobs:
+  escrow-verified-original-zip:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout research branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Checkout immutable provenance-compatible analysis
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: f333623380526fa05dcb14110e7ec1fb72d2d0e2
+          path: frozen-analysis-checkout
+          persist-credentials: false
+
+      - name: Compare frozen design and scientific outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          frozen="$GITHUB_WORKSPACE/frozen-analysis-checkout"
+          test "$(git -C "$frozen" rev-parse HEAD)" = f333623380526fa05dcb14110e7ec1fb72d2d0e2
+          for relative in \
+            experiments/main_budget_tasks.json \
+            experiments/openai_pricing_2026-09-08.json \
+            paper/ANALYSIS_PLAN.md \
+            outputs/canonical_analysis_source.json \
+            outputs/main_study_analysis_inputs_manifest.json \
+            outputs/main_study_inference.json \
+            outputs/main_study_runs.csv \
+            outputs/posthoc_support_runs.csv \
+            paper/MAIN_STUDY_INFERENCE.md; do
+            cmp -- "$GITHUB_WORKSPACE/$relative" "$frozen/$relative"
+          done
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+
+      - name: Fetch exact GitHub source metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/10837878458" \
+            > "$RUNNER_TEMP/canonical-source-metadata.json"
+
+      - name: Download original ZIP without extracting or re-encoding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 3 --max-time 90 \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/10837878458/zip" \
+            --output "$RUNNER_TEMP/retained-canonical.zip"
+
+      - name: Verify actual retained ZIP and replay the receipt offline
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "226f009ba6b158b77fc98f4e56ec96e1943d1749bc818b0876e90f76077de4b5  $RUNNER_TEMP/retained-canonical.zip" \
+            | sha256sum --check --status
+          python -m scripts.verify_retained_canonical_download \
+            "$RUNNER_TEMP/canonical-source-metadata.json" \
+            "$RUNNER_TEMP/retained-canonical.zip" \
+            --root "$GITHUB_WORKSPACE/frozen-analysis-checkout" \
+            --receipt-out "$RUNNER_TEMP/retained-canonical-verification.json"
+          python -m scripts.verify_preserved_canonical_bundle \
+            "$RUNNER_TEMP/canonical-source-metadata.json" \
+            "$RUNNER_TEMP/retained-canonical.zip" \
+            "$RUNNER_TEMP/retained-canonical-verification.json" \
+            --root "$GITHUB_WORKSPACE/frozen-analysis-checkout"
+
+      - name: Commit only the three verified, unchanged source-custody files
+        shell: bash
+        run: |
+          set -euo pipefail
+          destination="research-evidence/canonical-analysis-36070798723"
+          # Refuse any replacement, including a partial existing escrow.
+          for suffix in .zip .metadata.json .verification.json; do
+            test ! -e "$destination$suffix" || {
+              echo "Refusing to overwrite an existing evidence file: $destination$suffix" >&2
+              exit 1
+            }
+          done
+          cp -- "$RUNNER_TEMP/retained-canonical.zip" "$destination.zip"
+          cp -- "$RUNNER_TEMP/canonical-source-metadata.json" "$destination.metadata.json"
+          cp -- "$RUNNER_TEMP/retained-canonical-verification.json" "$destination.verification.json"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "$destination.zip" "$destination.metadata.json" "$destination.verification.json"
+
+          python - <<'PY'
+          import subprocess
+          from pathlib import Path
+          base = "research-evidence/canonical-analysis-36070798723"
+          expected = {base + suffix for suffix in (".zip", ".metadata.json", ".verification.json")}
+          staged = set(subprocess.check_output(
+              ["git", "diff", "--cached", "--name-only"], text=True,
+          ).splitlines())
+          if staged != expected:
+              raise SystemExit(f"Unexpected staged paths: {sorted(staged ^ expected)}")
+          if Path(base + ".zip").stat().st_size != 10270:
+              raise SystemExit("Canonical ZIP byte size differs from observed artifact")
+          PY
+          git diff --cached --check
+          # Fail closed on a concurrent branch update rather than force-push.
+          git fetch origin "$GITHUB_REF_NAME"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse FETCH_HEAD)"
+          git commit -m "research: escrow verified original canonical ZIP in Git"
+          git push origin "HEAD:$GITHUB_REF_NAME"
