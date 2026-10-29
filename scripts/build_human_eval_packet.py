@@ -37,6 +37,11 @@ BLINDING_SEED_BITS = 256
 PACKET_ARTIFACTS = ("packet.jsonl", "blinding_key.csv", "ratings_template.csv", "manifest.json")
 COORDINATOR_PRIVATE_ARTIFACTS = frozenset({"blinding_key.csv", "manifest.json"})
 CONTENT_VALIDATOR_PATH = "scripts/build_human_eval_packet.py"
+# Published file-byte SHA-256 from the frozen canonical analysis input manifest.
+# This pins run identities to the evaluated executions, not report authenticity.
+PUBLISHED_EVALUATOR_CSV_SHA256 = (
+    "5acd80d6115f269c7fab40180dec0d778a45eaafd7d5c23cb79c43fd7837773c"
+)
 MANIFEST_FIELDS = frozenset(
     {
         "schema_version",
@@ -903,6 +908,66 @@ def _require_original_treatment_task_source(task_manifest: dict) -> None:
         )
 
 
+
+def _require_published_evaluator_run_ids(
+    records: list[dict], *, repo_root: Path = REPO_ROOT
+) -> None:
+    """Prevent a production blinded packet from substituting evaluated runs.
+
+    The original task-manifest pin alone cannot distinguish two executions of
+    the same frozen question. Require every candidate (variant, task, run_id)
+    to agree with the 40 original post-hoc evaluator records whose *file bytes*
+    are pinned by the published canonical-analysis input manifest. Historical
+    report content/custody still needs separate independent authentication.
+    """
+    from scripts import verify_human_eval_automated_run_lineage as lineage
+
+    expected_cells = {
+        (variant, task_id)
+        for variant in lineage.VARIANTS
+        for task_id in lineage.TASKS
+    }
+    if len(records) != len(expected_cells):
+        raise ValueError(
+            "production human-evaluation packet requires exactly 40 original "
+            "published evaluator run identities"
+        )
+    observed = {
+        (record["variant_id"], record["task_id"]): record["run_id"]
+        for record in records
+    }
+    if len(observed) != len(records) or set(observed) != expected_cells:
+        raise ValueError(
+            "production human-evaluation packet cells differ from the "
+            "published evaluator matrix"
+        )
+
+    evaluator_path = Path(repo_root) / lineage.SUPPORT_REL
+    evaluator_bytes = _read_regular_file_captured(
+        evaluator_path, label="published frozen post-hoc evaluator CSV"
+    )
+    if hashlib.sha256(evaluator_bytes).hexdigest() != PUBLISHED_EVALUATOR_CSV_SHA256:
+        raise ValueError(
+            "published evaluator CSV fingerprint mismatch; do not re-pin "
+            "a changed run-identity table"
+        )
+    evaluator_rows = lineage._read_study_csv(
+        evaluator_bytes, path=evaluator_path
+    )
+    expected = lineage._matrix(
+        evaluator_rows,
+        label="published frozen evaluator run identities",
+        expected_cells=expected_cells,
+        run_identity=True,
+    )
+    for variant, task_id in sorted(expected_cells):
+        if observed[(variant, task_id)] != expected[(variant, task_id)]["run_id"]:
+            raise ValueError(
+                "production human-evaluation packet run identity differs "
+                f"from published evaluator for {variant}/{task_id}"
+            )
+
+
 def build_packet(
     trace_root: Path,
     output_root: Path,
@@ -918,6 +983,8 @@ def build_packet(
     reveal the treatment for each supposedly blind report ID. The CLI always
     requires the original source-anchored task manifest. Direct Python callers
     must opt into this check when preparing genuine, non-synthetic packets.
+    This production check also binds all run IDs to the pinned evaluator export
+    before any annotator-facing artifact can be published.
     """
     if seed is None:
         seed = secrets.randbits(BLINDING_SEED_BITS)
@@ -933,6 +1000,8 @@ def build_packet(
     if require_original_task_manifest:
         _require_original_treatment_task_source(task_manifest)
     records = _load_records(trace_root, task_manifest=task_manifest)
+    if require_original_task_manifest:
+        _require_published_evaluator_run_ids(records)
 
     # Sort first so filesystem traversal order can never affect randomization.
     shuffled = sorted(records, key=lambda row: (row["task_id"], row["variant_id"], row["run_id"]))

@@ -26,6 +26,24 @@ historical run identities and distinguishes absent, expired, and merely listed
 artifacts, see [Historical Actions artifact availability](HISTORICAL_ACTIONS_ARTIFACT_INVENTORY.md).
 It cannot establish original custody or replace a missing trace/report archive.
 
+## Prepublication binding to the original evaluated run IDs
+
+A frozen original task list is necessary but insufficient for publication:
+two different executions could answer the same question with different reports.
+The production packet CLI now additionally requires every one of its 40
+`(treatment, task, run_id)` identities to match the original frozen
+`outputs/posthoc_support_runs.csv` matrix. It checks the exact evaluator
+file-byte SHA-256
+`5acd80d6115f269c7fab40180dec0d778a45eaafd7d5c23cb79c43fd7837773c`
+from the published canonical-analysis inputs before parsing the 40-cell
+identity matrix. Substituted or swapped run IDs, missing cells, duplicate
+cells, and modified evaluator CSV bytes all fail **before** packet publication.
+The synthetic Python API can still omit this production-only source gate
+for offline fixture testing; genuine callers must enable the original-source
+gate. This does **not** independently authenticate recovered trace contents,
+original reports, or historical custody. Those remain blocked pending
+independent archives and their externally retained fingerprints.
+
 ## Unique run-to-report binding before human packet publication
 
 The offline blinded packet builder now requires each treatment/task cell to

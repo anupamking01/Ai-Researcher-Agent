@@ -209,6 +209,11 @@ def test_packet_cli_emits_only_seed_free_receipt(tmp_path, monkeypatch, capsys):
     )
     secret_seed = (1 << 255) + 301
     monkeypatch.setattr(packet_builder.secrets, "randbits", lambda bits: secret_seed)
+    # This two-task receipt test is synthetic; the production CLI normally
+    # requires the original 40-cell evaluator lineage before publication.
+    monkeypatch.setattr(
+        packet_builder, "_require_published_evaluator_run_ids", lambda records: None
+    )
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -1089,4 +1094,93 @@ def test_packet_refuses_changed_source_window_before_publication(
             trace_root, output_root, seed=20260915,
             task_manifest_path=task_manifest,
         )
+    assert not output_root.exists()
+
+
+def _write_synthetic_published_evaluator(tmp_path, monkeypatch):
+    """Make a 40-cell evaluator for isolated pin/identity unit tests only."""
+    from scripts import verify_human_eval_automated_run_lineage as lineage
+
+    path = tmp_path / lineage.SUPPORT_REL
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {
+            "variant_id": variant,
+            "task_id": task_id,
+            "run_id": f"{variant.lower()}-{task_id}",
+        }
+        for variant in lineage.VARIANTS
+        for task_id in lineage.TASKS
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle, fieldnames=("variant_id", "task_id", "run_id")
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+    monkeypatch.setattr(
+        packet_builder,
+        "PUBLISHED_EVALUATOR_CSV_SHA256",
+        hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
+    return rows, path
+
+
+def test_production_run_lineage_accepts_exact_pinned_evaluator_matrix(
+    tmp_path, monkeypatch
+):
+    rows, _ = _write_synthetic_published_evaluator(tmp_path, monkeypatch)
+    assert packet_builder._require_published_evaluator_run_ids(
+        rows, repo_root=tmp_path
+    ) is None
+
+
+def test_production_run_lineage_rejects_swapped_experiment_run_ids(
+    tmp_path, monkeypatch
+):
+    rows, _ = _write_synthetic_published_evaluator(tmp_path, monkeypatch)
+    swapped = [dict(row) for row in rows]
+    swapped[0]["run_id"], swapped[1]["run_id"] = (
+        swapped[1]["run_id"], swapped[0]["run_id"]
+    )
+    with pytest.raises(ValueError, match="run identity differs from published evaluator"):
+        packet_builder._require_published_evaluator_run_ids(
+            swapped, repo_root=tmp_path
+        )
+
+
+def test_production_run_lineage_rejects_modified_evaluator_even_if_cells_agree(
+    tmp_path, monkeypatch
+):
+    rows, path = _write_synthetic_published_evaluator(tmp_path, monkeypatch)
+    path.write_bytes(path.read_bytes() + b"\n")
+    with pytest.raises(ValueError, match="evaluator CSV fingerprint mismatch"):
+        packet_builder._require_published_evaluator_run_ids(
+            rows, repo_root=tmp_path
+        )
+
+
+def test_packet_cli_requires_published_run_identity_before_publication(
+    tmp_path, monkeypatch
+):
+    from scripts import verify_frozen_main_study_tasks as original_tasks
+
+    trace_root = _write_complete_matrix(tmp_path)
+    task_manifest = _write_task_manifest(tmp_path)
+    output_root = tmp_path / "untrusted-run-lineage"
+    monkeypatch.setattr(
+        original_tasks, "ORIGINAL_TASK_MANIFEST_SHA256",
+        hashlib.sha256(task_manifest.read_bytes()).hexdigest(),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_human_eval_packet.py",
+            "--trace-root", str(trace_root),
+            "--task-manifest", str(task_manifest),
+            "--output-root", str(output_root),
+        ],
+    )
+    with pytest.raises(SystemExit, match="40 original published evaluator run identities"):
+        packet_builder.main()
     assert not output_root.exists()
