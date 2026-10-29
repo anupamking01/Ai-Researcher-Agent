@@ -686,7 +686,7 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
         run_id = trace.get("run_id")
         if not isinstance(run_id, str) or not run_id or run_id != trace_path.stem:
             raise ValueError(
-                f"Experiment trace requires explicit run_id matching its filename: {trace_path}"
+                f"Trace file identity requires explicit run_id matching its filename: {trace_path}"
             )
         if trace_path.parent.name != variant_id or trace_path.is_symlink():
             raise ValueError(f"Trace file identity does not match variant/run: {trace_path}")
