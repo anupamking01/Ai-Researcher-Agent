@@ -673,10 +673,10 @@ def test_content_preflight_rejects_unstable_or_oversized_trace_capture(
 ):
     outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
     original = audit.packet_builder._read_regular_file_captured
-    def fail_trace_capture(path, *, label):
+    def fail_trace_capture(path, *, label, **kwargs):
         if Path(path).name == "d3-run-00.json":
             raise ValueError("trace source changed during capture")
-        return original(path, label=label)
+        return original(path, label=label, **kwargs)
     monkeypatch.setattr(
         audit.packet_builder, "_read_regular_file_captured", fail_trace_capture
     )
