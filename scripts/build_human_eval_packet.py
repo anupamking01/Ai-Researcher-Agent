@@ -679,8 +679,16 @@ def _load_records(trace_root: Path, *, task_manifest: dict) -> list[dict]:
         task_id = _consistent_trace_identity(
             experiment, trace, "task_id", trace_path=trace_path
         )
-        run_id = str(trace.get("run_id") or trace_path.stem).strip()
-        if trace_path.parent.name != variant_id or trace_path.stem != run_id or trace_path.is_symlink():
+        # The original treatment runner persisted an explicit trace.run_id.
+        # Never recover a missing identity from a renameable filename: doing
+        # so could make an anonymous substituted trace appear to match the
+        # published evaluator run-ID matrix.
+        run_id = trace.get("run_id")
+        if not isinstance(run_id, str) or not run_id or run_id != trace_path.stem:
+            raise ValueError(
+                f"Experiment trace requires explicit run_id matching its filename: {trace_path}"
+            )
+        if trace_path.parent.name != variant_id or trace_path.is_symlink():
             raise ValueError(f"Trace file identity does not match variant/run: {trace_path}")
         question = str(trace.get("question") or "").strip()
         trace_task_set_id = _consistent_trace_identity(

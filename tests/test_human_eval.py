@@ -1184,3 +1184,27 @@ def test_packet_cli_requires_published_run_identity_before_publication(
     with pytest.raises(SystemExit, match="40 original published evaluator run identities"):
         packet_builder.main()
     assert not output_root.exists()
+
+@pytest.mark.parametrize("bad_run_id", [None, "", 123, "d3-main-01 "])
+def test_build_packet_rejects_trace_without_explicit_filename_bound_run_id(
+    tmp_path, bad_run_id
+):
+    """A renameable filename cannot stand in for persisted execution identity."""
+    trace_root = _write_complete_matrix(tmp_path)
+    task_manifest = _write_task_manifest(tmp_path)
+    trace_path = trace_root / "D3" / "d3-main-01.json"
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    if bad_run_id is None:
+        del payload["trace"]["run_id"]
+    else:
+        payload["trace"]["run_id"] = bad_run_id
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    output_root = tmp_path / "packet-invalid-run-id"
+    with pytest.raises(ValueError, match="explicit run_id"):
+        build_packet(
+            trace_root, output_root,
+            seed=20260915, task_manifest_path=task_manifest,
+        )
+    assert not output_root.exists()
+

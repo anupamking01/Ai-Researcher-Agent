@@ -40,7 +40,15 @@ identity matrix. Substituted or swapped run IDs, missing cells, duplicate
 cells, and modified evaluator CSV bytes all fail **before** packet publication.
 The synthetic Python API can still omit this production-only source gate
 for offline fixture testing; genuine callers must enable the original-source
-gate. This does **not** independently authenticate recovered trace contents,
+gate. Additionally, every schema-v2 treatment trace must contain its own
+explicit, nonempty string `trace.run_id` exactly matching its trace filename.
+The packet builder no longer invents a missing run ID from the filename:
+otherwise an anonymous recovered trace renamed to a published run ID could
+pass the subsequent source-identity comparison. The original main-study
+treatment runner already required this persisted run-ID invariant. Missing,
+nonstring and whitespace-normalized identities are rejected before packet
+publication; do not rewrite an original trace merely to satisfy this guard.
+This does **not** independently authenticate recovered trace contents,
 original reports, or historical custody. Those remain blocked pending
 independent archives and their externally retained fingerprints.
 
