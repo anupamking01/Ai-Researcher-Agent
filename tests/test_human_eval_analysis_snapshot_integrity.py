@@ -978,3 +978,22 @@ def test_analysis_provenance_uses_manifest_snapshot_from_verification_boundary(
     payload = _analyze(case)
     provenance_key = "packet_manifest" if name == "packet_manifest" else "freeze_manifest"
     assert payload["provenance"][provenance_key]["sha256"] == _sha(original)
+
+
+@pytest.mark.parametrize("source_mode", [0o400, 0o600, 0o644])
+def test_snapshot_retains_coordinator_file_mode_for_independent_verification(
+    tmp_path: Path, source_mode: int
+):
+    """A scratch copy must neither disclose a private key nor hide an exposed one."""
+    source = tmp_path / "manifest.json"
+    payload = b'{"synthetic": true}\n'
+    source.write_bytes(payload)
+    source.chmod(source_mode)
+
+    captured = core._snapshot_file(
+        source,
+        tmp_path / "captured" / "manifest.json",
+        label="synthetic coordinator manifest",
+    )
+    assert captured.read_bytes() == payload
+    assert captured.stat().st_mode & 0o777 == source_mode
