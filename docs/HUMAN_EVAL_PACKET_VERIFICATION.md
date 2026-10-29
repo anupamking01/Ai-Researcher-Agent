@@ -233,3 +233,34 @@ Ordinary combining diacritics remain significant, and a passing audit still
 cannot guarantee that humans will never infer treatment identity from style.
 All four experimental conditions, frozen measurements, and the human rubric
 remain unchanged; genuine independent ratings are still outstanding.
+
+## Production verification must check original treatment/evaluator identities
+
+The standalone packet verifier previously accepted a locally coherent frozen
+task manifest and 40 run mappings even when a coordinator had consistently
+rewritten task questions or substituted different treatment executions.
+The packet builder's production CLI already checked the historical source
+fingerprints, but rebuilding is forbidden after genuine annotation starts;
+independent verification of an existing packet must enforce those anchors too.
+
+The `python -m scripts.verify_human_eval_packet` CLI now **requires** both:
+the exact task-manifest SHA-256 recorded in the original treatment-run source
+revision, and exact per-cell run IDs from the SHA-256-pinned original post-hoc
+evaluator CSV. A changed task list, substituted run ID, missing evaluator CSV,
+or altered evaluator export fails before a success receipt can be emitted.
+The evaluator CSV is captured and rechecked over the complete packet
+verification window, alongside all other evidence. The successful receipt
+explicitly records that both source pins were checked.
+
+For synthetic offline unit tests only, the direct Python API retains
+`require_original_sources=False` by default; this intentionally **does not
+claim historical anchoring**. Genuine packets checked through the Python API
+must pass `require_original_sources=True`. An API receipt also expressly
+states that historical trace/report authenticity remains unverified even when
+source-identity pins pass. The original archived traces and reports still need
+independent authentication; this check neither reconstructs them nor certifies
+actual human blinding or collected ratings.
+
+Do not edit the pinned CSV or task manifest, replace treatment runs, or
+regenerate a packet merely to make this check pass. Preserve problematic
+material and halt human-evaluation handoff pending original-source recovery.

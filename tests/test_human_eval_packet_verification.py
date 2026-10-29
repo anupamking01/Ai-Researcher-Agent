@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from scripts import build_human_eval_packet as build
+from scripts import verify_frozen_main_study_tasks as frozen_tasks
 from scripts.verify_human_eval_packet import verify_packet
 
 
@@ -95,6 +96,127 @@ def _verify(case):
         task_manifest_path=case["task_manifest_path"],
         repo_root=case["repo_root"],
     )
+
+
+
+@pytest.fixture
+def source_anchored_packet_case(tmp_path: Path, monkeypatch):
+    """A full 40-cell synthetic matrix with synthetic, test-local source pins."""
+    task_manifest = tmp_path / "experiments" / "main_budget_tasks.json"
+    task_manifest.parent.mkdir(parents=True, exist_ok=True)
+    tasks = [
+        {"id": f"main-{n:02d}", "question": f"Synthetic question {n}?"}
+        for n in range(1, 11)
+    ]
+    task_manifest.write_text(
+        json.dumps({
+            "task_set_id": "main-budget-v1-test",
+            "frozen_before_execution": True,
+            "tasks": tasks,
+        }) + "\n",
+        encoding="utf-8",
+    )
+    for task in tasks:
+        for variant in VARIANTS:
+            _write_source(tmp_path, variant, task["id"], task["question"])
+
+    output_root = tmp_path / "outputs" / "human_eval"
+    build.build_packet(
+        tmp_path / "outputs" / "experiment_traces",
+        output_root,
+        seed=12345,  # Synthetic fixture only, never a live blinded packet.
+        task_manifest_path=task_manifest,
+    )
+    csv_path = tmp_path / "outputs" / "posthoc_support_runs.csv"
+    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle, fieldnames=["variant_id", "task_id", "run_id"]
+        )
+        writer.writeheader()
+        for task in tasks:
+            for variant in VARIANTS:
+                writer.writerow({
+                    "variant_id": variant,
+                    "task_id": task["id"],
+                    "run_id": f"{variant.lower()}-{task['id']}",
+                })
+    monkeypatch.setattr(
+        frozen_tasks,
+        "ORIGINAL_TASK_MANIFEST_SHA256",
+        hashlib.sha256(task_manifest.read_bytes()).hexdigest(),
+    )
+    monkeypatch.setattr(
+        build,
+        "PUBLISHED_EVALUATOR_CSV_SHA256",
+        hashlib.sha256(csv_path.read_bytes()).hexdigest(),
+    )
+    return {
+        "repo_root": tmp_path,
+        "output_root": output_root,
+        "task_manifest_path": task_manifest,
+        "evaluator_path": csv_path,
+    }
+
+
+def test_production_packet_verifier_requires_historical_task_source(packet_case):
+    with pytest.raises(ValueError, match="original treatment-run task manifest bytes"):
+        verify_packet(
+            output_root=packet_case["output_root"],
+            task_manifest_path=packet_case["task_manifest_path"],
+            repo_root=packet_case["repo_root"],
+            require_original_sources=True,
+        )
+
+
+def test_production_packet_verifier_checks_pinned_original_run_ids(
+    source_anchored_packet_case,
+):
+    case = source_anchored_packet_case
+    receipt = verify_packet(
+        output_root=case["output_root"],
+        task_manifest_path=case["task_manifest_path"],
+        repo_root=case["repo_root"],
+        require_original_sources=True,
+    )
+    assert receipt["original_task_and_evaluator_run_pins_checked"] is True
+    assert receipt["historical_trace_report_authenticity_verified"] is False
+
+
+def test_production_packet_verifier_rejects_rehashed_substituted_run(
+    source_anchored_packet_case,
+):
+    case = source_anchored_packet_case
+    key_path = case["output_root"] / "blinding_key.csv"
+    with key_path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    rows[0]["run_id"] = "synthetic-substitute-id"
+    with key_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=KEY_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    _refresh_artifact(case, "blinding_key")
+    with pytest.raises(ValueError, match="run identity differs from published evaluator"):
+        verify_packet(
+            output_root=case["output_root"],
+            task_manifest_path=case["task_manifest_path"],
+            repo_root=case["repo_root"],
+            require_original_sources=True,
+        )
+
+
+def test_production_packet_verifier_rejects_changed_evaluator_csv(
+    source_anchored_packet_case,
+):
+    case = source_anchored_packet_case
+    with case["evaluator_path"].open("ab") as handle:
+        handle.write(b"\n")
+    with pytest.raises(ValueError, match="published evaluator CSV fingerprint mismatch"):
+        verify_packet(
+            output_root=case["output_root"],
+            task_manifest_path=case["task_manifest_path"],
+            repo_root=case["repo_root"],
+            require_original_sources=True,
+        )
 
 
 def test_packet_verifier_rejects_artifact_path_replacement_during_capture(
@@ -473,7 +595,7 @@ def test_missing_source_report_is_rejected(packet_case):
         _verify(packet_case)
 
 
-def test_cli_passes_without_reading_human_ratings(packet_case):
+def test_cli_refuses_unpinned_synthetic_sources_without_success_receipt(packet_case):
     result = subprocess.run(
         [
             sys.executable,
@@ -492,10 +614,10 @@ def test_cli_passes_without_reading_human_ratings(packet_case):
         check=False,
         timeout=10,
     )
-    assert result.returncode == 0
-    assert "HUMAN EVAL PACKET VERIFY: PASS (no human ratings read)" in result.stdout
-    assert '"human_ratings_read": false' in result.stdout.lower()
-    assert result.stderr == ""
+    assert result.returncode != 0
+    assert "original treatment-run task manifest bytes" in result.stderr
+    assert "HUMAN EVAL PACKET VERIFY: PASS" not in result.stdout
+    assert "Traceback" not in result.stderr
 
 
 def test_cli_failure_has_no_success_receipt_or_traceback(packet_case):

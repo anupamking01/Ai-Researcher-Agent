@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import io
 import json
 import os
@@ -241,13 +242,68 @@ def _verify_seeded_blinding_order(seed, packet_rows, key_rows, template_blind_id
                    label="seed-derived blinding mapping")
 
 
+
+def _require_original_evaluator_run_ids(
+    key_rows: list[dict], *, repo_root: Path, snapshots: dict
+) -> None:
+    """Independently bind the coordinator key to pinned evaluated executions.
+
+    A locally coherent packet and source manifest can still substitute runs.
+    This production-only gate uses the exact canonical evaluator CSV bytes,
+    rechecked with all other evidence through the end of verification.
+    """
+    from scripts import verify_human_eval_automated_run_lineage as lineage
+
+    cells = {
+        (variant, task)
+        for variant in lineage.VARIANTS
+        for task in lineage.TASKS
+    }
+    key_by_cell = lineage._matrix(
+        key_rows,
+        label="coordinator blinding key",
+        expected_cells=cells,
+        run_identity=True,
+    )
+    evaluator_path = Path(repo_root).resolve() / lineage.SUPPORT_REL
+    evaluator_bytes = _capture_window_file(
+        evaluator_path,
+        label="published frozen post-hoc evaluator CSV",
+        snapshots=snapshots,
+    )
+    if hashlib.sha256(evaluator_bytes).hexdigest() != build.PUBLISHED_EVALUATOR_CSV_SHA256:
+        raise ValueError(
+            "published evaluator CSV fingerprint mismatch; "
+            "do not re-pin a changed run-identity table"
+        )
+    evaluator_by_cell = lineage._matrix(
+        lineage._read_study_csv(evaluator_bytes, path=evaluator_path),
+        label="published frozen evaluator run identities",
+        expected_cells=cells,
+        run_identity=True,
+    )
+    for variant, task_id in sorted(cells):
+        if key_by_cell[(variant, task_id)]["run_id"] != evaluator_by_cell[
+            (variant, task_id)
+        ]["run_id"]:
+            raise ValueError(
+                "production packet verification run identity differs from "
+                f"published evaluator for {variant}/{task_id}"
+            )
+
 def verify_packet(
     *,
     output_root: Path = DEFAULT_OUTPUT_ROOT,
     task_manifest_path: Path = DEFAULT_TASK_MANIFEST,
     repo_root: Path = REPO_ROOT,
+    require_original_sources: bool = False,
 ) -> dict:
-    """Verify packet/key provenance without reading any human rating files."""
+    """Verify packet/key provenance without reading any human rating files.
+
+    The CLI always enforces historical task/evaluator source pins. Direct API
+    callers opt in for genuine packets; the default permits synthetic fixtures
+    without claiming their source histories are independently anchored.
+    """
     output_root = Path(output_root)
     task_manifest_path = Path(task_manifest_path)
     repo_root = Path(repo_root)
@@ -271,6 +327,9 @@ def verify_packet(
         {"bytes": task_manifest["bytes"], "sha256": task_manifest["sha256"]},
         label="frozen task manifest capture",
     )
+
+    if require_original_sources:
+        build._require_original_treatment_task_source(task_manifest)
 
     _require_equal(set(manifest), build.MANIFEST_FIELDS, label="packet manifest schema")
     _require_equal(manifest.get("schema_version"), 2, label="packet manifest schema_version")
@@ -337,6 +396,10 @@ def verify_packet(
     if any(not value for value in key_blind_ids) or len(set(key_blind_ids)) != len(key_blind_ids):
         raise ValueError("blinding_key.csv must contain one unique non-empty blind_id per row")
     _require_equal(set(key_blind_ids), packet_blind_ids, label="key/packet blind-id coverage")
+    if require_original_sources:
+        _require_original_evaluator_run_ids(
+            key_rows, repo_root=repo_root, snapshots=snapshots
+        )
 
     source_artifacts = manifest.get("source_artifacts")
     if not isinstance(source_artifacts, list):
@@ -565,6 +628,8 @@ def verify_packet(
         "status": "human_eval_packet_verified",
         "blinding_key_checked": True,
         "human_ratings_read": False,
+        "original_task_and_evaluator_run_pins_checked": require_original_sources,
+        "historical_trace_report_authenticity_verified": False,
         "n_reports": len(packet_rows),
         "n_tasks": len(task_manifest["tasks"]),
         "n_variants": len(build.EXPECTED_VARIANTS),
@@ -582,6 +647,7 @@ def main() -> int:
             output_root=args.output_root,
             task_manifest_path=args.task_manifest,
             repo_root=args.repo_root,
+            require_original_sources=True,
         )
     except (OSError, ValueError) as exc:
         raise SystemExit(f"HUMAN EVAL PACKET VERIFY: FAIL: {exc}") from exc
