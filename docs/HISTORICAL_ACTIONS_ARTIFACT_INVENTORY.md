@@ -278,7 +278,7 @@ the frozen automated evaluator. The following separate, offline, read-only
 triage check enforces that distinction **without extracting an untrusted ZIP**:
 
 ```bash
-python -m scripts.audit_recovered_artifact_treatment_matrix <authorized-candidate.zip> \\
+python -m scripts.audit_recovered_artifact_treatment_matrix <authorized-candidate.zip> \
   --artifact-role original_treatment
 ```
 
@@ -303,7 +303,7 @@ rather than silently excluded from the proposed human-evaluation corpus. The
 published evaluator CSV is recaptured after ZIP verification, and changed
 bytes or a replaced file generation invalidate the result.
 
-The successful receipt reports **member-path completeness and frozen
+A caller-provided independent fingerprint is recorded as a **claim**; the tool cannot\nverify that the pin was independently retained. The receipt therefore keeps\n\`independent_archive_custody_verified\` false even when that supplied hash matches.\n\nThe successful receipt reports **member-path completeness and frozen
 execution-ID correspondence only**. It does not read or validate JSON trace
 semantics, check the actual Markdown report contents against source provenance,
 authenticate the original run's independent archival custody, prove the ZIP
