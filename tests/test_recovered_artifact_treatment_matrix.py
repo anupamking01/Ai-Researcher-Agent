@@ -65,7 +65,8 @@ def test_complete_40_cell_member_matrix_is_a_non_authentication_diagnostic(
     assert receipt["source_layout_prefix"] == prefix
     assert receipt["unselected_trace_or_report_members"] == 0
     assert receipt["github_job_log_zip_correspondence"]["artifact_role"] == role
-    assert receipt["independent_zip_pin_supplied_and_matched"] is False
+    assert receipt["caller_claimed_independent_zip_pin_matched"] is False
+    assert receipt["independent_archive_custody_verified"] is False
     assert receipt["trace_contents_verified"] is False
     assert receipt["report_contents_verified"] is False
     assert receipt["historical_evidence_authenticated"] is False
@@ -96,6 +97,7 @@ def test_mislabelled_variant_trace_is_not_selected_by_count(tmp_path, monkeypatc
     "experiment_traces/D3/unselected.json",
     "outputs/experiment_traces/D3/hidden.json",
     "extra-run/research_report.md",
+    "research_report.md",
 ])
 def test_unselected_evidence_cannot_hide_beside_complete_frozen_matrix(
     tmp_path, monkeypatch, extra
