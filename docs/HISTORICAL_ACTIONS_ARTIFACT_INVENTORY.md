@@ -568,10 +568,12 @@ before either archive audit. The source is captured before and reread after
 both inspections, including same-byte replacement detection.
 
 The receipt counts original and recovery published-resource ledger checks
-separately (40 each). This confirms recorded resource-count correspondence,
-not independent recomputation of provider tokens, treatment costs, latency,
-web-source authenticity, or report quality. A matching published table does
-not establish independent historical custody. Original historical ZIPs remain
+separately (40 each). This subsection establishes recorded resource-count
+correspondence only; the later frozen-price gate separately recomputes the
+published estimated cost and compares the recorded latency. Neither gate
+independently measures provider billing, wall-clock time, web-source
+authenticity, or report quality. A matching published table does not
+establish independent historical custody. Original historical ZIPs remain
 unavailable; only explicitly synthetic ZIP fixtures test the new gate.
 No treatments, evaluators, or human ratings are run or generated.
 
