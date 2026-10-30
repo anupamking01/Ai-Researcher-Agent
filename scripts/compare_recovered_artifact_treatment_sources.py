@@ -371,8 +371,129 @@ def _verify_published_evaluator_measurements(
 
 
 
+
+# Mirror the historical evaluator's saved research-query text contract without
+# collecting new evidence. Bounds are separate from the whole-ZIP preflight.
+MAX_EVALUATOR_EVIDENCE_FILES_PER_RUN = 64
+MAX_EVALUATOR_EVIDENCE_MEMBER_BYTES = 8 * 1024 * 1024
+MAX_EVALUATOR_EVIDENCE_TOTAL_BYTES = 32 * 1024 * 1024
+FROZEN_NO_EVIDENCE_SENTINEL = (
+    "[NO RETRIEVED EVIDENCE WAS AVAILABLE FOR THIS TREATMENT RUN. "
+    "The run recorded zero successful retrieved sources. Do not use outside knowledge.]"
+)
+
+
+def _snapshot_archived_evaluator_evidence(
+    archive: Path,
+    audit: dict,
+    published_treatments: dict[tuple[str, str], dict[str, str]],
+    published_evaluators: dict[tuple[str, str], dict[str, str]],
+) -> dict[tuple[str, str], dict]:
+    """Preserve raw evidence files and reconstruct the frozen evaluator input.
+
+    This checks source consistency, not the truth of retrieved statements,
+    original ZIP custody or whether schema-v1 evaluation actually used them.
+    """
+    cells = audit["observed_source_content_manifest"]["cells"]
+    if len(cells) != 40:
+        raise RecoveryConcordanceError("historical evaluator evidence matrix is incomplete")
+    prefix = audit["source_layout_prefix"]
+    result = {}
+    try:
+        with zipfile.ZipFile(archive, "r") as source:
+            names = source.namelist()
+            for cell in cells:
+                variant, task, run_id = (
+                    cell["treatment"], cell["task_id"], cell["run_id"]
+                )
+                identity = (variant, task)
+                root = f"{prefix}{run_id}/"
+                selected = sorted(
+                    name for name in names
+                    if name.startswith(root)
+                    and "/" not in name[len(root):]
+                    and name[len(root):].startswith("research-query-")
+                    and name.endswith(".txt")
+                )
+                if len(selected) > MAX_EVALUATOR_EVIDENCE_FILES_PER_RUN:
+                    raise RecoveryConcordanceError(
+                        f"too many historical evaluator evidence files: {variant}/{task}"
+                    )
+                raw_members = []
+                parts = []
+                total = 0
+                for name in selected:
+                    info = source.getinfo(name)
+                    if not 0 <= info.file_size <= MAX_EVALUATOR_EVIDENCE_MEMBER_BYTES:
+                        raise RecoveryConcordanceError(
+                            f"historical evaluator evidence member exceeds bound: {name}"
+                        )
+                    total += info.file_size
+                    if total > MAX_EVALUATOR_EVIDENCE_TOTAL_BYTES:
+                        raise RecoveryConcordanceError(
+                            f"historical evaluator evidence aggregate exceeds bound: {variant}/{task}"
+                        )
+                    with source.open(name, "r") as member:
+                        raw = member.read(info.file_size + 1)
+                    if len(raw) != info.file_size:
+                        raise RecoveryConcordanceError(
+                            f"historical evaluator evidence ZIP size mismatch: {name}"
+                        )
+                    try:
+                        stripped = raw.decode("utf-8").strip()
+                    except UnicodeDecodeError as exc:
+                        raise RecoveryConcordanceError(
+                            f"historical evaluator evidence is not UTF-8: {name}"
+                        ) from exc
+                    raw_members.append((
+                        name[len(root):], len(raw), hashlib.sha256(raw).hexdigest()
+                    ))
+                    if stripped:
+                        parts.append(stripped)
+                joined = "\n\n".join(parts)
+                if joined:
+                    evidence = joined
+                    evidence_status = "retrieved_evidence"
+                else:
+                    try:
+                        successful = int(published_treatments[identity]["successful_sources"])
+                    except (KeyError, ValueError, TypeError) as exc:
+                        raise RecoveryConcordanceError(
+                            "frozen treatment successful-source accounting is invalid"
+                        ) from exc
+                    if successful != 0:
+                        raise RecoveryConcordanceError(
+                            f"historical evaluator has no saved evidence despite "
+                            f"successful treatment retrievals: {variant}/{task}"
+                        )
+                    evidence = FROZEN_NO_EVIDENCE_SENTINEL
+                    evidence_status = "zero_successful_sources"
+                published_status = published_evaluators[identity].get("evidence_status")
+                if published_status not in ("", evidence_status):
+                    raise RecoveryConcordanceError(
+                        f"archived evaluator evidence status differs from frozen "
+                        f"published evaluation: {variant}/{task}"
+                    )
+                raw_evidence = evidence.encode("utf-8")
+                result[identity] = {
+                    "member_fingerprints": tuple(raw_members),
+                    "input_fingerprint": {
+                        "byte_size": len(raw_evidence),
+                        "sha256": hashlib.sha256(raw_evidence).hexdigest(),
+                    },
+                }
+    except (zipfile.BadZipFile, KeyError) as exc:
+        raise RecoveryConcordanceError(
+            "historical evaluator evidence members cannot be read from verified ZIP"
+        ) from exc
+    if len(result) != 40:
+        raise RecoveryConcordanceError("historical evaluator evidence identities are incomplete")
+    return result
+
+
 def _verify_evaluator_report_input_fingerprint(
-    payload: dict, source_cell: dict, *, expected_question: str, path: str,
+    payload: dict, source_cell: dict, *, expected_question: str,
+    expected_evidence_fingerprint: dict, path: str,
 ) -> bool:
     """Bind schema-v2 evaluator inputs to the report and original task question.
 
@@ -427,12 +548,17 @@ def _verify_evaluator_report_input_fingerprint(
         raise RecoveryConcordanceError(
             "evaluator input question fingerprint does not match original frozen task: " + path
         )
+    if fingerprints["evidence"] != expected_evidence_fingerprint:
+        raise RecoveryConcordanceError(
+            "evaluator input evidence fingerprint does not match archived retrieval text: " + path
+        )
     return True
 
 
 def _verify_evaluator_cache_json_identities(
     archive: Path, audit: dict, published_rows: dict[tuple[str, str], dict[str, str]],
     frozen_questions: dict[str, str],
+    evidence_snapshots: dict[tuple[str, str], dict],
 ) -> tuple[int, int]:
     """Bind every archived evaluator record to its frozen execution identity.
 
@@ -503,7 +629,9 @@ def _verify_evaluator_cache_json_identities(
                 )
                 if _verify_evaluator_report_input_fingerprint(
                     payload, source_cells[(variant, task)],
-                    expected_question=frozen_questions[task], path=path,
+                    expected_question=frozen_questions[task],
+                    expected_evidence_fingerprint=evidence_snapshots[(variant, task)]["input_fingerprint"],
+                    path=path,
                 ):
                     report_input_bindings_checked += 1
     except (zipfile.BadZipFile, KeyError) as exc:
@@ -861,6 +989,27 @@ def compare_recovered_treatment_sources(
         != recovered["observed_source_content_manifest_sha256"]
     ):
         raise RecoveryConcordanceError("40-cell source manifest concordance failed")
+    # The common evaluator consumed saved query snippets, not just reports.
+    # Bind all 40 original/recovery raw evidence members and the reconstructed
+    # input, then check schema-v2 evaluator-input fingerprints independently.
+    original_evidence = _snapshot_archived_evaluator_evidence(
+        original_archive, original, treatment_start[0], published_rows,
+    )
+    recovered_evidence = _snapshot_archived_evaluator_evidence(
+        recovery_archive, recovered, treatment_start[0], published_rows,
+    )
+    if original_evidence != recovered_evidence:
+        mismatches = [
+            "/".join(identity) for identity in sorted(original_evidence)
+            if original_evidence[identity] != recovered_evidence[identity]
+        ]
+        raise RecoveryConcordanceError(
+            "original and evaluator-recovery saved evidence differs for "
+            + ", ".join(mismatches[:5])
+        )
+    preserved_evidence_members = sum(
+        len(item["member_fingerprints"]) for item in original_evidence.values()
+    )
     # Evaluator-only recovery must add exactly the three declared missing
     # cache cells, without rewriting any of the 37 preserved JSON outputs.
     # This cannot be inferred from treatment-source hashes alone.
@@ -870,11 +1019,13 @@ def compare_recovered_treatment_sources(
     original_identity_count, original_report_binding_count = (
         _verify_evaluator_cache_json_identities(
             original_archive, original, published_rows, frozen_questions,
+            original_evidence,
         )
     )
     recovered_identity_count, recovered_report_binding_count = (
         _verify_evaluator_cache_json_identities(
             recovery_archive, recovered, published_rows, frozen_questions,
+            recovered_evidence,
         )
     )
     original_traces_checked = _verify_archived_treatment_trace_identities(
@@ -917,6 +1068,8 @@ def compare_recovered_treatment_sources(
         "recovery_trace_report_path_and_word_counts_matched": recovered_traces_checked,
         "published_treatment_csv_sha256": PUBLISHED_TREATMENT_CSV_SHA256,
         "trace_sources_unchanged": 40,
+        "evaluator_evidence_source_cells_compared": len(original_evidence),
+        "evaluator_evidence_source_members_byte_identical": preserved_evidence_members,
         "report_sources_unchanged": 40,
         "preserved_evaluator_cache_members_byte_identical": preserved_count,
         "recovery_only_evaluator_cache_members_present": new_count,
@@ -926,10 +1079,13 @@ def compare_recovered_treatment_sources(
         "recovery_evaluator_cache_published_measurements_matched": recovered_identity_count,
         "original_schema_v2_evaluator_report_input_fingerprints_matched": original_report_binding_count,
         "recovery_schema_v2_evaluator_report_input_fingerprints_matched": recovered_report_binding_count,
+        "original_schema_v2_evaluator_evidence_input_fingerprints_matched": original_report_binding_count,
         "original_schema_v2_evaluator_question_input_fingerprints_matched": original_report_binding_count,
+        "recovery_schema_v2_evaluator_evidence_input_fingerprints_matched": recovered_report_binding_count,
         "recovery_schema_v2_evaluator_question_input_fingerprints_matched": recovered_report_binding_count,
         "original_treatment_task_manifest_sha256": frozen_tasks.ORIGINAL_TASK_MANIFEST_SHA256,
         "schema_v1_evaluator_report_input_binding_unavailable": True,
+        "schema_v1_evaluator_evidence_input_binding_unavailable": True,
         "schema_v1_evaluator_question_input_binding_unavailable": True,
         "evaluator_cache_json_duplicate_keys_rejected": True,
         "recovery_only_evaluator_cells": [
@@ -973,6 +1129,8 @@ def compare_recovered_treatment_sources(
             "original and recovery treatment trace completion, frozen task, "
             "treatment assignment, source-budget, query/URL scheduling, per-model provider usage "
             "aggregation, original-rate estimated cost and latency correspondence, "
+            "and byte-identical saved retrieval snippets across original/recovery "
+            "archives, with schema-v2 evaluator evidence-input correspondence; "
             "and report-pointer/actual-"
             "Markdown-word-count consistency; and "
             "exact published score/count/token/cost correspondence for 37 original "

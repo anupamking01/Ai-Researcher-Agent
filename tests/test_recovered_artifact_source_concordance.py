@@ -25,7 +25,8 @@ def _pair(
     bad_recovery_cache=None, tamper_original_measurements=None,
     tamper_trace=None, invalid_trace_bytes=None,
     tamper_recovery_measurements=None, schema2_recovery_cache=None,
-    invalid_report_bytes=None,
+    invalid_report_bytes=None, invalid_evidence_bytes=None,
+    omit_evidence_both=None,
 ):
     csv_path = matrix.REPO_ROOT / lineage.SUPPORT_REL
     csv_bytes, _ = matrix._capture_evaluator(csv_path)
@@ -176,6 +177,17 @@ def _pair(
         **{name: synthetic_trace(name) for name in sorted(traces)},
         **{name: synthetic_report(name) for name in sorted(reports)},
     }
+    # Entirely synthetic saved evidence: no research web retrieval is replayed.
+    for (variant, task), run_id in frozen_run_ids.items():
+        if int(published_treatments[(variant, task)]["successful_sources"]) > 0:
+            files[f"{run_id}/research-query-01.txt"] = (
+                f"SYNTHETIC EVIDENCE ONLY for {variant}/{task}\n"
+            ).encode("utf-8")
+    if invalid_evidence_bytes:
+        variant, task, replacement = invalid_evidence_bytes
+        files[f"{frozen_run_ids[(variant, task)]}/research-query-01.txt"] = replacement
+    if omit_evidence_both:
+        files.pop(f"{frozen_run_ids[omit_evidence_both]}/research-query-01.txt")
     if invalid_report_bytes:
         variant, task, replacement = invalid_report_bytes
         files[f"{frozen_run_ids[(variant, task)]}/research_report.md"] = replacement
@@ -241,6 +253,11 @@ def _pair(
             cell["question"] for cell in task_manifest["tasks"] if cell["id"] == task
         ).encode("utf-8")
         empty_sha = hashlib.sha256(b"").hexdigest()
+        evidence_bytes = (
+            recovered.get(f"{frozen_run_ids[(variant, task)]}/research-query-01.txt", b"")
+            .decode("utf-8").strip()
+            or concordance.FROZEN_NO_EVIDENCE_SENTINEL
+        ).encode("utf-8")
         fingerprints = {
             "algorithm": "sha256",
             "encoding": "utf-8",
@@ -248,10 +265,11 @@ def _pair(
                 "byte_size": len(question_bytes),
                 "sha256": hashlib.sha256(question_bytes).hexdigest(),
             },
-            **{
-                field: {"byte_size": 0, "sha256": empty_sha}
-                for field in ("evidence", "prompt")
+            "evidence": {
+                "byte_size": len(evidence_bytes),
+                "sha256": hashlib.sha256(evidence_bytes).hexdigest(),
             },
+            "prompt": {"byte_size": 0, "sha256": empty_sha},
             "report": {
                 "byte_size": len(report_bytes),
                 "sha256": hashlib.sha256(report_bytes).hexdigest(),
@@ -261,6 +279,10 @@ def _pair(
         record["input_fingerprints"] = fingerprints
         if mutation == "wrong_digest":
             fingerprints["report"]["sha256"] = empty_sha
+        elif mutation == "wrong_evidence_digest":
+            fingerprints["evidence"]["sha256"] = empty_sha
+        elif mutation == "wrong_evidence_size":
+            fingerprints["evidence"]["byte_size"] += 1
         elif mutation == "wrong_question_digest":
             fingerprints["question"]["sha256"] = empty_sha
         elif mutation == "wrong_question_size":
@@ -321,6 +343,8 @@ def test_matching_40_sources_survive_repackaging_and_extra_recovery_metadata(
     assert receipt["recovery_treatment_published_latency_and_cost_matched"] == 40
     assert receipt["published_treatment_csv_sha256"] == concordance.PUBLISHED_TREATMENT_CSV_SHA256
     assert receipt["report_sources_unchanged"] == 40
+    assert receipt["evaluator_evidence_source_cells_compared"] == 40
+    assert receipt["evaluator_evidence_source_members_byte_identical"] == 39
     assert receipt["preserved_evaluator_cache_members_byte_identical"] == 37
     assert receipt["recovery_only_evaluator_cache_members_present"] == 3
     assert receipt["evaluator_cache_payload_semantics_verified"] is False
@@ -1158,5 +1182,76 @@ def test_pricing_source_generation_drift_blocks_archive_comparison(
     monkeypatch.setattr(concordance, "_frozen_pricing_snapshot", drifted_snapshot)
     with pytest.raises(
         concordance.RecoveryConcordanceError, match="changed during comparison",
+    ):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+@pytest.mark.parametrize("variant,task", [("P6V", "main-02"), ("P6V", "main-10")])
+def test_schema_v2_evidence_fingerprint_matches_saved_evidence_or_sentinel(
+    tmp_path, monkeypatch, variant, task,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        schema2_recovery_cache=(variant, task, "valid"),
+    )
+    receipt = concordance.compare_recovered_treatment_sources(original, recovered)
+    assert receipt["recovery_schema_v2_evaluator_evidence_input_fingerprints_matched"] == 1
+    assert receipt["schema_v1_evaluator_evidence_input_binding_unavailable"] is True
+
+
+@pytest.mark.parametrize("mutation", ["wrong_evidence_digest", "wrong_evidence_size"])
+def test_schema_v2_cache_rejects_wrong_saved_evidence_fingerprint(
+    tmp_path, monkeypatch, mutation,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        schema2_recovery_cache=("P6V", "main-02", mutation),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match="evidence fingerprint"):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+@pytest.mark.parametrize("change", ["edit", "remove"])
+def test_evaluator_recovery_cannot_mutate_saved_retrieval_snippets(
+    tmp_path, monkeypatch, change,
+):
+    csv_path = matrix.REPO_ROOT / lineage.SUPPORT_REL
+    raw, _ = matrix._capture_evaluator(csv_path)
+    cells = lineage._matrix(
+        lineage._read_study_csv(raw, path=csv_path),
+        label="synthetic evidence test",
+        expected_cells=matrix.EXPECTED_CELLS, run_identity=True,
+    )
+    member = f"{cells[('D3', 'main-01')]['run_id']}/research-query-01.txt"
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        **({"mutate": member} if change == "edit" else {"drop": member}),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match="saved evidence differs"):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_identical_archives_reject_non_utf8_evidence(tmp_path, monkeypatch):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        invalid_evidence_bytes=("D3", "main-01", b"\xff"),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match="evidence is not UTF-8"):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_retrieved_sources_without_saved_evidence_fail_closed(tmp_path, monkeypatch):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch, omit_evidence_both=("D3", "main-01"),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match="no saved evidence"):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_saved_evidence_semantic_read_respects_size_bound(tmp_path, monkeypatch):
+    original, recovered, _, _ = _pair(tmp_path, monkeypatch)
+    monkeypatch.setattr(concordance, "MAX_EVALUATOR_EVIDENCE_MEMBER_BYTES", 3)
+    with pytest.raises(
+        concordance.RecoveryConcordanceError, match="evidence member exceeds bound"
     ):
         concordance.compare_recovered_treatment_sources(original, recovered)

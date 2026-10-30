@@ -659,3 +659,31 @@ billing, independently timed latency, historical pricing correctness, or
 original ZIP custody. The tests use deliberately synthetic prices, models
 and usage splits; they do not reconstruct historical treatment outputs.
 Unavailable original/recovery ZIPs still prevent a real-archive comparison.
+
+## Historical evaluator retrieval-evidence continuity (offline; not source authenticity)
+
+The post-hoc support evaluator consumes saved research-query text, not just
+the final Markdown. The two-ZIP verifier now checks every frozen run's sorted
+research-query-*.txt files without extraction. It compares original versus
+recovered raw member names, byte sizes and SHA-256 hashes across all 40 runs,
+including zero-evidence runs. Each file must be valid UTF-8 and satisfy a
+separate 8 MiB per-file / 32 MiB per-run / 64-files-per-run reading bound.
+
+It reconstructs the historical evaluator input by stripping each saved text,
+dropping empty snippets and joining the remainder with blank lines, or by using
+the frozen explicit no-evidence sentinel only when the published successful
+source count is zero. For schema-v2 evaluator caches, the reconstructed
+evidence bytes must match the cache's evidence input fingerprint (SHA-256 and
+byte count). The historical 37 schema-v1 caches do not have input fingerprints:
+saved-file continuity is **not** retroactive proof of which evidence they
+actually consumed. Receipt fields distinguish all-40 raw evidence-file
+continuity from schema-v2 evidence-input correspondence.
+
+This guards against an evaluator-only recovery changing the saved evidence
+while preserving the final report/trace, and against schema-v2 caches claiming
+different inputs while retaining frozen published measurements. It does
+not independently authenticate original archives, verify web source truth,
+validate evaluator judgments or prompts, or authorize human-evaluation packet
+distribution. The regression tests use synthetic snippets only; no treatment,
+web retrieval, automated evaluator or human rating is run.
+
