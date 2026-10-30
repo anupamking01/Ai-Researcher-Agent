@@ -938,7 +938,7 @@ def test_historical_trace_report_pointer_must_select_its_own_frozen_run(
 
 @pytest.mark.parametrize(("replacement", "message"), [
     (b"synthetic mismatch with frozen report count\n", "Markdown report word count"),
-    (b"\xff\xfeinvalid utf8", "Markdown report must be UTF-8"),
+    (b"\xff\xfeinvalid utf8", "report (?:must be|is not) UTF-8"),
     (b"   \n\t", "Markdown report word count"),
 ])
 def test_identical_archives_cannot_hide_report_content_disagreement_with_trace(
