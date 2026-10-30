@@ -523,3 +523,32 @@ custody. This check does not authenticate the evaluator's evidence or prompt,
 the original treatment report, the score's correctness, or human-annotation
 readiness. Only synthetic fixtures exercise the new gate while historical
 archives remain unavailable; no treatments or scoring are rerun.
+
+## Historical treatment-trace completion and frozen-assignment gate (offline)
+
+A ZIP path matching the published run ID is not proof that the enclosed
+**treatment trace JSON** actually records that treatment, task, or completion.
+The original/recovery concordance verifier now inspects all **40 original** and
+**40 recovered** trace JSON members after bounded ZIP preflight and
+source-hash comparison. Each independently reread member must retain the
+previously scanned decompressed SHA-256 and byte length. The verifier rejects
+ambiguous or malformed UTF-8/JSON, duplicate keys, nonfinite constants, and
+records larger than 16 MiB before semantic inspection.
+
+It requires trace schema v2, two matching experiment/trace identities and
+original task-set ID, the published execution ID, an explicitly completed
+run with complete provider usage status, and the **exact original frozen task
+question** from the SHA-256-pinned original-run task file. The recorded
+planning/verification modes and maximum source budget must match the
+predeclared D3/D6/P6/P6V assignments; completed source-success and -failure
+counts must sum to attempted sources and never exceed the assigned budget.
+A consistent pair of falsified trace documents can therefore no longer pass
+merely because filenames and report/cache bytes agree.
+
+The receipt separately counts 40 inspected original and 40 recovered traces.
+This check validates recorded metadata and budget-ledger consistency, **not**
+the truth of web retrieval, source attribution, report quality, independent
+historical archive custody, or automated measurement correctness. The original
+40 source traces remain unavailable for this inspection; regression tests use
+synthetic fixture archives only. It does not rerun treatments or evaluators,
+create human ratings, or permit human packet distribution.

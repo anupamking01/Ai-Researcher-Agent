@@ -12,6 +12,7 @@ import argparse
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import stat
@@ -434,6 +435,140 @@ def _verify_evaluator_cache_json_identities(
     return len(cache), report_input_bindings_checked
 
 
+# The original treatment runner freezes the assigned experimental conditions.
+# These are design checks, not observed-outcome filters or reexecution rules.
+FROZEN_TREATMENT_ASSIGNMENTS = {
+    "D3": ("direct", 3, "none"),
+    "D6": ("direct", 6, "none"),
+    "P6": ("planner", 6, "none"),
+    "P6V": ("planner", 6, "verify"),
+}
+MAX_TREATMENT_TRACE_JSON_BYTES = 16 * 1024 * 1024
+
+
+def _finite_trace_json_float(token: str) -> float:
+    value = float(token)
+    if not math.isfinite(value):
+        raise RecoveryConcordanceError("nonfinite number in archived treatment trace JSON")
+    return value
+
+
+def _verify_archived_treatment_trace_identities(
+    archive: Path, audit: dict, frozen_questions: dict[str, str],
+) -> int:
+    """Validate the *contents* of the 40 preserved treatment trace JSONs.
+
+    The matrix inventory previously proved only path and byte continuity: a
+    trace could still claim a different task, condition or completion state.
+    This is an offline source-consistency gate, not original-archive custody,
+    validation of retrieved content, or evidence that the reports are correct.
+    """
+    cells = audit["observed_source_content_manifest"]["cells"]
+    if len(cells) != 40:
+        raise RecoveryConcordanceError("historical trace matrix is incomplete")
+    prefix = audit["source_layout_prefix"]
+    try:
+        with zipfile.ZipFile(archive, "r") as source:
+            for cell in cells:
+                variant, task, run_id = (
+                    cell["treatment"], cell["task_id"], cell["run_id"]
+                )
+                path = f"{prefix}experiment_traces/{variant}/{run_id}.json"
+                size = cell["trace_uncompressed_bytes"]
+                if not 0 < size <= MAX_TREATMENT_TRACE_JSON_BYTES:
+                    raise RecoveryConcordanceError(
+                        "historical treatment trace JSON exceeds semantic size bound: " + path
+                    )
+                with source.open(path, "r") as member:
+                    raw = member.read(size + 1)
+                if len(raw) != size or hashlib.sha256(raw).hexdigest() != cell["trace_sha256"]:
+                    raise RecoveryConcordanceError(
+                        "historical treatment trace bytes disagree with ZIP preflight: " + path
+                    )
+                try:
+                    payload = json.loads(
+                        raw.decode("utf-8"),
+                        object_pairs_hook=_unique_json_pairs,
+                        parse_constant=_reject_nonfinite_json,
+                        parse_float=_finite_trace_json_float,
+                    )
+                except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+                    raise RecoveryConcordanceError(
+                        "invalid historical treatment trace JSON: " + path
+                    ) from exc
+                if (
+                    type(payload) is not dict
+                    or type(payload.get("schema_version")) is not int
+                    or payload["schema_version"] != 2
+                    or type(payload.get("experiment")) is not dict
+                    or type(payload.get("trace")) is not dict
+                ):
+                    raise RecoveryConcordanceError(
+                        "historical treatment trace schema/metadata is invalid: " + path
+                    )
+                experiment, trace = payload["experiment"], payload["trace"]
+                for label, record in (("experiment", experiment), ("trace", trace)):
+                    for field, expected in (
+                        ("variant_id", variant),
+                        ("task_id", task),
+                        ("task_set_id", "main-budget-v1-2026-09-11"),
+                    ):
+                        if record.get(field) != expected:
+                            raise RecoveryConcordanceError(
+                                f"historical treatment trace {label}.{field} disagrees with frozen run: {path}"
+                            )
+                if trace.get("run_id") != run_id:
+                    raise RecoveryConcordanceError(
+                        "historical treatment trace run_id disagrees with frozen run: " + path
+                    )
+                if trace.get("question") != frozen_questions[task]:
+                    raise RecoveryConcordanceError(
+                        "historical treatment trace question disagrees with pinned task: " + path
+                    )
+                if trace.get("completed") is not True:
+                    raise RecoveryConcordanceError(
+                        "historical treatment trace is not explicitly completed: " + path
+                    )
+                if trace.get("usage_accounting_status") != "provider_usage_complete":
+                    raise RecoveryConcordanceError(
+                        "historical treatment trace provider usage was not complete: " + path
+                    )
+                mode, budget, verification = FROZEN_TREATMENT_ASSIGNMENTS[variant]
+                for field, expected in (
+                    ("planning_mode", mode),
+                    ("verification_mode", verification),
+                    ("source_budget", budget),
+                ):
+                    value = experiment.get(field)
+                    if type(value) != type(expected) or value != expected:
+                        raise RecoveryConcordanceError(
+                            f"historical treatment trace experiment.{field} contradicts frozen assignment: {path}"
+                        )
+                if type(trace.get("source_budget")) is not int or trace["source_budget"] != budget:
+                    raise RecoveryConcordanceError(
+                        "historical treatment trace source_budget contradicts frozen assignment: " + path
+                    )
+                for field in ("source_count", "successful_source_count", "failed_source_count"):
+                    value = trace.get(field)
+                    if type(value) is not int or value < 0:
+                        raise RecoveryConcordanceError(
+                            f"historical treatment trace {field} is not a nonnegative integer: {path}"
+                        )
+                if (
+                    trace["source_count"] > budget
+                    or trace["successful_source_count"] + trace["failed_source_count"]
+                    != trace["source_count"]
+                ):
+                    raise RecoveryConcordanceError(
+                        "historical treatment trace source ledger violates budget/completion: " + path
+                    )
+    except (zipfile.BadZipFile, KeyError) as exc:
+        raise RecoveryConcordanceError(
+            "historical treatment trace member cannot be reread from verified ZIP"
+        ) from exc
+    return len(cells)
+
+
 def compare_recovered_treatment_sources(
     original_archive: Path,
     recovery_archive: Path,
@@ -543,6 +678,12 @@ def compare_recovered_treatment_sources(
             recovery_archive, recovered, published_rows, frozen_questions,
         )
     )
+    original_traces_checked = _verify_archived_treatment_trace_identities(
+        original_archive, original, frozen_questions,
+    )
+    recovered_traces_checked = _verify_archived_treatment_trace_identities(
+        recovery_archive, recovered, frozen_questions,
+    )
     # The second ZIP read must be inside the same source-generation custody
     # window. A change during JSON inspection cannot authorize this receipt.
     if (
@@ -558,6 +699,8 @@ def compare_recovered_treatment_sources(
         "schema_version": 1,
         "status": "original_and_evaluator_recovery_40_source_pairs_match_not_authenticated",
         "source_cells_compared": 40,
+        "original_completed_treatment_trace_identities_checked": original_traces_checked,
+        "recovery_completed_treatment_trace_identities_checked": recovered_traces_checked,
         "trace_sources_unchanged": 40,
         "report_sources_unchanged": 40,
         "preserved_evaluator_cache_members_byte_identical": preserved_count,
@@ -611,7 +754,9 @@ def compare_recovered_treatment_sources(
             "bytes for 40 frozen run identities; 37 pre-existing evaluator "
             "cache JSON byte streams also match, and only the three historically "
             "missing evaluator cache members appear in recovery. This checks "
-            "cache membership, byte continuity, JSON/schema/run identity, and "
+            "cache membership, byte continuity, JSON/schema/run identity, plus "
+            "original and recovery treatment trace completion, frozen task, "
+            "treatment assignment and source-budget consistency; and "
             "exact published score/count/token/cost correspondence for 37 original "
             "plus 40 recovered caches. Schema-v2 report and original treatment-task "
             "question fingerprints are also checked against their distinct "

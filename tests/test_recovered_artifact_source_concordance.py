@@ -23,6 +23,7 @@ def _pair(
     omit_original_evaluator=None, extra_original_evaluator=None,
     extra_recovery_evaluator=None, bad_original_cache=None,
     bad_recovery_cache=None, tamper_original_measurements=None,
+    tamper_trace=None, invalid_trace_bytes=None,
     tamper_recovery_measurements=None, schema2_recovery_cache=None,
 ):
     csv_path = matrix.REPO_ROOT / lineage.SUPPORT_REL
@@ -57,10 +58,51 @@ def _pair(
             record.update(overrides)
         return json.dumps(record, sort_keys=True).encode("utf-8")
 
+    task_manifest = json.loads(
+        (matrix.REPO_ROOT / frozen_tasks.TASK_MANIFEST_REL).read_text(encoding="utf-8")
+    )
+    original_questions = {task["id"]: task["question"] for task in task_manifest["tasks"]}
+    by_run_id = {run_id: cell for cell, run_id in frozen_run_ids.items()}
+
+    def synthetic_trace(name):
+        run_id = Path(name).stem
+        variant, task = by_run_id[run_id]
+        mode, budget, verification = concordance.FROZEN_TREATMENT_ASSIGNMENTS[variant]
+        record = {
+            "schema_version": 2,
+            "synthetic_fixture_only": True,
+            "experiment": {
+                "variant_id": variant, "task_id": task,
+                "task_set_id": "main-budget-v1-2026-09-11",
+                "planning_mode": mode, "source_budget": budget,
+                "verification_mode": verification,
+            },
+            "trace": {
+                "variant_id": variant, "task_id": task,
+                "task_set_id": "main-budget-v1-2026-09-11",
+                "run_id": run_id, "question": original_questions[task],
+                "completed": True, "usage_accounting_status": "provider_usage_complete",
+                "source_budget": budget, "source_count": 0,
+                "successful_source_count": 0, "failed_source_count": 0,
+            },
+        }
+        return json.dumps(record, sort_keys=True).encode("utf-8")
+
     files = {
-        **{name: b'{"synthetic_fixture_only":true}' for name in sorted(traces)},
+        **{name: synthetic_trace(name) for name in sorted(traces)},
         **{name: b"# Synthetic markdown; not a research result\n" for name in sorted(reports)},
     }
+    if tamper_trace or invalid_trace_bytes:
+        variant, task = (tamper_trace or invalid_trace_bytes)[:2]
+        trace_path = f"experiment_traces/{variant}/{frozen_run_ids[(variant, task)]}.json"
+        if tamper_trace:
+            _variant, _task, section, field, replacement = tamper_trace
+            record = json.loads(files[trace_path])
+            target = record if section == "top" else record[section]
+            target[field] = replacement
+            files[trace_path] = json.dumps(record, sort_keys=True).encode("utf-8")
+        else:
+            files[trace_path] = invalid_trace_bytes[2]
     # Reproduce only the frozen historical recovery *shape*, not real scores:
     # original archive contains 37 cached JSONs; recovery adds three.
     evaluator_path = lambda variant, task: f"posthoc_evaluations/{variant}/{task}.json"
@@ -178,6 +220,8 @@ def test_matching_40_sources_survive_repackaging_and_extra_recovery_metadata(
     original, recovered, _, _ = _pair(tmp_path, monkeypatch)
     receipt = concordance.compare_recovered_treatment_sources(original, recovered)
     assert receipt["trace_sources_unchanged"] == 40
+    assert receipt["original_completed_treatment_trace_identities_checked"] == 40
+    assert receipt["recovery_completed_treatment_trace_identities_checked"] == 40
     assert receipt["report_sources_unchanged"] == 40
     assert receipt["preserved_evaluator_cache_members_byte_identical"] == 37
     assert receipt["recovery_only_evaluator_cache_members_present"] == 3
@@ -608,3 +652,55 @@ def test_original_task_manifest_same_byte_replacement_during_audit_is_rejected(
         concordance.compare_recovered_treatment_sources(
             original, recovered, repo_root=root
         )
+
+
+@pytest.mark.parametrize(("section", "field", "replacement", "error"), [
+    ("trace", "run_id", "synthetic-false-run", "run_id disagrees"),
+    ("trace", "question", "Synthetic altered question", "question disagrees"),
+    ("trace", "completed", False, "not explicitly completed"),
+    ("trace", "task_set_id", "substituted-task-list", "trace.task_set_id"),
+    ("experiment", "variant_id", "P6", "experiment.variant_id"),
+    ("experiment", "planning_mode", "planner", "experiment.planning_mode"),
+    ("experiment", "verification_mode", "verify", "experiment.verification_mode"),
+    ("experiment", "source_budget", 6, "experiment.source_budget"),
+    ("trace", "source_count", 7, "source ledger"),
+    ("trace", "successful_source_count", True, "successful_source_count"),
+    ("top", "schema_version", 1, "schema/metadata"),
+])
+def test_historical_trace_identity_completion_assignment_are_not_inferred_from_zip_paths(
+    tmp_path, monkeypatch, section, field, replacement, error,
+):
+    # Apply the same synthetic corruption to BOTH role-pinned ZIPs: byte
+    # concordance succeeds, but the newly required trace semantics must not.
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        tamper_trace=("D3", "main-01", section, field, replacement),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match=error):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+@pytest.mark.parametrize(("raw", "error"), [
+    (b'{"schema_version":2,"experiment":{},"trace":{},"trace":{}}', "duplicate key"),
+    (b'{"schema_version":2,"experiment":{},"trace":{"value":NaN}}', "nonfinite"),
+    (b'{"schema_version":2,"experiment":{}', "invalid historical treatment trace JSON"),
+    (b'["synthetic-invalid-trace"]', "schema/metadata"),
+])
+def test_historical_trace_malformed_or_ambiguous_json_rejected_even_if_archives_agree(
+    tmp_path, monkeypatch, raw, error,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        invalid_trace_bytes=("D3", "main-01", raw),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match=error):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_historical_trace_semantic_read_has_independent_member_size_bound(
+    tmp_path, monkeypatch,
+):
+    original, recovered, _, _ = _pair(tmp_path, monkeypatch)
+    monkeypatch.setattr(concordance, "MAX_TREATMENT_TRACE_JSON_BYTES", 10)
+    with pytest.raises(concordance.RecoveryConcordanceError, match="semantic size bound"):
+        concordance.compare_recovered_treatment_sources(original, recovered)
