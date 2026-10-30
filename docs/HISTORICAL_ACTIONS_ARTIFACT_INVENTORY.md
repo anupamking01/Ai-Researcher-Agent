@@ -634,3 +634,26 @@ and usage split, not reconstructed historical outcomes. Original/recovery ZIPs
 are currently unavailable; the gate is not a real historical-source audit and
 does not authorize human evaluation or change pilot, confirmatory, exploratory,
 or pending human-validation findings.
+
+
+## Historical treatment latency and frozen-price cost lineage (offline)
+
+The original/recovery ZIP comparator now binds **both historical 40-cell trace
+matrices** to the frozen treatment CSV's recorded `latency_seconds` and
+`treatment_cost_usd`, in addition to the existing source, token, and
+provider-usage checks. Identical token totals are insufficient: changing
+prompt/completion splits or model names can alter estimated cost while
+preserving all aggregate counts. The verifier reuses the original
+extracted-archive readiness validator's uncached-token pricing method and
+the historical price table, pinned to SHA-256
+`35eb6aea8a4e494ea6b94a0905e893849958d37ac386915aac7958b00c4eeace`.
+It rechecks the price-source generation before ZIP inspection, after both
+ZIP audits, and after JSON inspection. Nonfinite/negative or mismatched
+latencies, unsupported cost methods, unpriced models and incompatible
+cost estimates fail closed. Receipt fields identify the 40+40 checks.
+
+This verifies internal correspondence of recorded estimates, not provider
+billing, independently timed latency, historical pricing correctness, or
+original ZIP custody. The tests use deliberately synthetic prices, models
+and usage splits; they do not reconstruct historical treatment outputs.
+Unavailable original/recovery ZIPs still prevent a real-archive comparison.

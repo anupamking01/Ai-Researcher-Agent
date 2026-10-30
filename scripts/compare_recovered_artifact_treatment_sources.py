@@ -123,6 +123,28 @@ def _frozen_questions_snapshot(
     return questions, after, digest
 
 
+def _frozen_pricing_snapshot(repo_root: Path) -> tuple[dict, tuple[int, ...], str]:
+    """Pin the original-run uncached price table across both archive audits.
+
+    Reuse the historical readiness validator's SHA-256-pinned pricing loader,
+    while monitoring the on-disk generation for swaps during verification.
+    """
+    path = Path(repo_root) / readiness.FROZEN_PRICING_REL
+    try:
+        before = matrix._generation(path)
+        pricing_models = readiness._load_original_run_pricing(repo_root)
+        after = matrix._generation(path)
+    except (OSError, ValueError) as exc:
+        raise RecoveryConcordanceError(
+            "cannot safely capture original treatment-run pricing table"
+        ) from exc
+    if before != after:
+        raise RecoveryConcordanceError(
+            "original treatment-run pricing table changed during capture"
+        )
+    return pricing_models, after, readiness.ORIGINAL_PRICING_SHA256
+
+
 # This treatment export is pinned by the published analysis input manifest.
 # Its correspondence check is not independently authenticated archive custody.
 PUBLISHED_TREATMENT_CSV_SHA256 = (
@@ -567,6 +589,7 @@ def _finite_trace_json_float(token: str) -> float:
 def _verify_archived_treatment_trace_identities(
     archive: Path, audit: dict, frozen_questions: dict[str, str],
     published_treatments: dict[tuple[str, str], dict[str, str]],
+    pricing_models: dict,
 ) -> int:
     """Validate the *contents* of the 40 preserved treatment trace JSONs.
 
@@ -720,6 +743,17 @@ def _verify_archived_treatment_trace_identities(
                         "historical treatment provider usage ledger violates "
                         f"original run accounting: {path}: {exc}"
                     ) from exc
+                # Token sums alone cannot anchor estimated treatment costs:
+                # use the frozen original-run pricing method and latency.
+                try:
+                    readiness._validate_recovered_efficiency_measurements(
+                        trace, published, pricing_models=pricing_models,
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise RecoveryConcordanceError(
+                        "historical treatment latency/cost disagrees with "
+                        f"frozen treatment CSV or original pricing: {path}: {exc}"
+                    ) from exc
                 _verify_archived_report_trace_binding(
                     source, prefix=prefix, cell=cell, trace=trace,
                 )
@@ -757,6 +791,7 @@ def compare_recovered_treatment_sources(
     evaluator_path = Path(repo_root) / matrix.lineage.SUPPORT_REL
     evaluator_start = matrix._capture_evaluator(evaluator_path)
     treatment_start = _frozen_treatment_snapshot(repo_root)
+    frozen_pricing_start = _frozen_pricing_snapshot(repo_root)
     frozen_questions_start = _frozen_questions_snapshot(repo_root)
     frozen_questions = frozen_questions_start[0]
     published_rows = matrix.lineage._matrix(
@@ -804,6 +839,7 @@ def compare_recovered_treatment_sources(
         or original_archive.samefile(recovery_archive)
         or _frozen_questions_snapshot(repo_root) != frozen_questions_start
         or _frozen_treatment_snapshot(repo_root) != treatment_start
+        or _frozen_pricing_snapshot(repo_root) != frozen_pricing_start
     ):
         raise RecoveryConcordanceError(
             "original, recovery, or evaluator source changed during comparison"
@@ -843,9 +879,11 @@ def compare_recovered_treatment_sources(
     )
     original_traces_checked = _verify_archived_treatment_trace_identities(
         original_archive, original, frozen_questions, treatment_start[0],
+        frozen_pricing_start[0],
     )
     recovered_traces_checked = _verify_archived_treatment_trace_identities(
         recovery_archive, recovered, frozen_questions, treatment_start[0],
+        frozen_pricing_start[0],
     )
     # The second ZIP read must be inside the same source-generation custody
     # window. A change during JSON inspection cannot authorize this receipt.
@@ -855,6 +893,7 @@ def compare_recovered_treatment_sources(
         or matrix._capture_evaluator(evaluator_path) != evaluator_start
         or _frozen_questions_snapshot(repo_root) != frozen_questions_start
         or _frozen_treatment_snapshot(repo_root) != treatment_start
+        or _frozen_pricing_snapshot(repo_root) != frozen_pricing_start
     ):
         raise RecoveryConcordanceError(
             "original, recovery, or evaluator source changed during comparison"
@@ -871,6 +910,9 @@ def compare_recovered_treatment_sources(
         "recovery_treatment_query_and_url_scheduling_checked": recovered_traces_checked,
         "original_treatment_provider_usage_ledgers_checked": original_traces_checked,
         "recovery_treatment_provider_usage_ledgers_checked": recovered_traces_checked,
+        "original_treatment_published_latency_and_cost_matched": original_traces_checked,
+        "recovery_treatment_published_latency_and_cost_matched": recovered_traces_checked,
+        "original_run_pricing_sha256": readiness.ORIGINAL_PRICING_SHA256,
         "original_trace_report_path_and_word_counts_matched": original_traces_checked,
         "recovery_trace_report_path_and_word_counts_matched": recovered_traces_checked,
         "published_treatment_csv_sha256": PUBLISHED_TREATMENT_CSV_SHA256,
@@ -930,7 +972,8 @@ def compare_recovered_treatment_sources(
             "cache membership, byte continuity, JSON/schema/run identity, plus "
             "original and recovery treatment trace completion, frozen task, "
             "treatment assignment, source-budget, query/URL scheduling, per-model provider usage "
-            "aggregation and report-pointer/actual-"
+            "aggregation, original-rate estimated cost and latency correspondence, "
+            "and report-pointer/actual-"
             "Markdown-word-count consistency; and "
             "exact published score/count/token/cost correspondence for 37 original "
             "plus 40 recovered caches. Schema-v2 report and original treatment-task "

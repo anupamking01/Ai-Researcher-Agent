@@ -45,6 +45,20 @@ def _pair(
         expected_cells=matrix.EXPECTED_CELLS, run_identity=False,
     )
 
+    # Artificial per-cell rates permit zero-completion *synthetic* token
+    # ledgers to reproduce the published cost column for contract testing.
+    # These are never original model assignments, prices or token splits.
+    synthetic_pricing = {}
+    for (variant, task), row in published_treatments.items():
+        synthetic_pricing[f"synthetic-fixture-model-{variant}-{task}"] = {
+            "input": float(row["treatment_cost_usd"]) * 1_000_000 / int(row["total_tokens"]),
+            "output": 0.0,
+        }
+    monkeypatch.setattr(
+        concordance, "_frozen_pricing_snapshot",
+        lambda _repo_root: (synthetic_pricing, (0,), "synthetic-test-only"),
+    )
+
     def synthetic_cache(variant, task, overrides=None):
         # Fake archive fixtures copy numbers from the pinned CSV. They are
         # never original evaluator outputs or new experimental measurements.
@@ -96,13 +110,14 @@ def _pair(
                 "search_call_count": int(published["search_calls"]),
                 "model_call_count": int(published["model_calls"]),
                 "total_tokens": int(published["total_tokens"]),
+                "latency_seconds": float(published["latency_seconds"]),
                 # Explicit synthetic, internally consistent provider usage.
                 # Not a reconstruction of historical model/token splits.
                 "prompt_tokens": int(published["total_tokens"]),
                 "completion_tokens": 0,
                 "unavailable_usage_call_count": 0,
                 "provider_usage_by_model": {
-                    "synthetic-fixture-model": {
+                    f"synthetic-fixture-model-{variant}-{task}": {
                         "model_calls": int(published["model_calls"]),
                         "unavailable_calls": 0,
                         "prompt_tokens": int(published["total_tokens"]),
@@ -302,6 +317,8 @@ def test_matching_40_sources_survive_repackaging_and_extra_recovery_metadata(
     assert receipt["recovery_completed_treatment_trace_identities_checked"] == 40
     assert receipt["original_treatment_published_resource_ledgers_matched"] == 40
     assert receipt["recovery_treatment_published_resource_ledgers_matched"] == 40
+    assert receipt["original_treatment_published_latency_and_cost_matched"] == 40
+    assert receipt["recovery_treatment_published_latency_and_cost_matched"] == 40
     assert receipt["published_treatment_csv_sha256"] == concordance.PUBLISHED_TREATMENT_CSV_SHA256
     assert receipt["report_sources_unchanged"] == 40
     assert receipt["preserved_evaluator_cache_members_byte_identical"] == 37
@@ -987,9 +1004,9 @@ def test_historical_planner_query_allocation_and_greedy_url_scheduling(
         "provider_usage_by_model",
         lambda ledger: {
             **ledger,
-            "synthetic-fixture-model": {
-                **ledger["synthetic-fixture-model"],
-                "total_tokens": ledger["synthetic-fixture-model"]["total_tokens"] + 1,
+            "synthetic-fixture-model-D3-main-07": {
+                **ledger["synthetic-fixture-model-D3-main-07"],
+                "total_tokens": ledger["synthetic-fixture-model-D3-main-07"]["total_tokens"] + 1,
             },
         },
         "total_tokens ledger mismatch",
@@ -998,8 +1015,8 @@ def test_historical_planner_query_allocation_and_greedy_url_scheduling(
         "provider_usage_by_model",
         lambda ledger: {
             **ledger,
-            "synthetic-fixture-model": {
-                **ledger["synthetic-fixture-model"],
+            "synthetic-fixture-model-D3-main-07": {
+                **ledger["synthetic-fixture-model-D3-main-07"],
                 "unavailable_calls": 1,
             },
         },
@@ -1014,9 +1031,9 @@ def test_historical_planner_query_allocation_and_greedy_url_scheduling(
         "provider_usage_by_model",
         lambda ledger: {
             **ledger,
-            "synthetic-fixture-model": {
-                **ledger["synthetic-fixture-model"],
-                "model_calls": ledger["synthetic-fixture-model"]["model_calls"] + 1,
+            "synthetic-fixture-model-D3-main-07": {
+                **ledger["synthetic-fixture-model-D3-main-07"],
+                "model_calls": ledger["synthetic-fixture-model-D3-main-07"]["model_calls"] + 1,
             },
         },
         "aggregate model_call_count ledger mismatch",
@@ -1045,3 +1062,101 @@ def test_historical_provider_usage_ledger_gate_is_explicit_in_receipt(
     assert receipt["recovery_treatment_provider_usage_ledgers_checked"] == 40
     assert receipt["historical_evidence_authenticated"] is False
     assert receipt["human_evaluation_ready"] is False
+
+
+@pytest.mark.parametrize(("replacement", "error"), [
+    (lambda original: original + 2.0, "latency_seconds differs"),
+    (lambda _original: True, "latency_seconds must be finite"),
+])
+def test_historical_trace_latency_disagreement_fails_with_identical_zip_sources(
+    tmp_path, monkeypatch, replacement, error,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        tamper_trace=("D3", "main-07", "trace", "latency_seconds", replacement),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match=error):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_historical_provider_totals_can_match_but_original_rate_cost_disagree(
+    tmp_path, monkeypatch,
+):
+    # Shifting one fixture prompt token to a completion token leaves the
+    # frozen model-call and total-token aggregates intact but alters cost.
+    total = 6432  # Published D3/main-07 tokens; fixture only.
+    model = "synthetic-fixture-model-D3-main-07"
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        tamper_trace=(
+            "D3", "main-07", "trace",
+            ("prompt_tokens", "completion_tokens", "provider_usage_by_model"),
+            (
+                total - 1, 1,
+                {model: {
+                    "model_calls": 3, "unavailable_calls": 0,
+                    "prompt_tokens": total - 1, "completion_tokens": 1,
+                    "total_tokens": total,
+                }},
+            ),
+        ),
+    )
+    with pytest.raises(
+        concordance.RecoveryConcordanceError,
+        match="provider ledger cost differs from frozen treatment_cost_usd",
+    ):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_historical_provider_cost_requires_original_priced_model(
+    tmp_path, monkeypatch,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        tamper_trace=(
+            "D3", "main-07", "trace", "provider_usage_by_model",
+            lambda ledger: {"unpriced-synthetic-model": next(iter(ledger.values()))},
+        ),
+    )
+    with pytest.raises(
+        concordance.RecoveryConcordanceError, match="has no original frozen price",
+    ):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_original_run_pricing_source_must_match_original_source_pin(tmp_path):
+    # Exercise real source capture, outside any synthetic fixture patch.
+    from scripts import audit_human_eval_archive_readiness as readiness
+    source = matrix.REPO_ROOT / readiness.FROZEN_PRICING_REL
+    target = tmp_path / readiness.FROZEN_PRICING_REL
+    target.parent.mkdir(parents=True)
+    target.write_bytes(source.read_bytes())
+    models, generation, digest = concordance._frozen_pricing_snapshot(tmp_path)
+    assert isinstance(models, dict) and models
+    assert generation
+    assert digest == readiness.ORIGINAL_PRICING_SHA256
+    target.write_bytes(target.read_bytes() + bytes([10]))
+    with pytest.raises(
+        concordance.RecoveryConcordanceError, match="pricing table",
+    ):
+        concordance._frozen_pricing_snapshot(tmp_path)
+
+
+def test_pricing_source_generation_drift_blocks_archive_comparison(
+    tmp_path, monkeypatch,
+):
+    original, recovered, _, _ = _pair(tmp_path, monkeypatch)
+    fixture_snapshot = concordance._frozen_pricing_snapshot
+    calls = 0
+
+    def drifted_snapshot(root):
+        nonlocal calls
+        calls += 1
+        prices, _, pin = fixture_snapshot(root)
+        return prices, (calls,), pin
+
+    monkeypatch.setattr(concordance, "_frozen_pricing_snapshot", drifted_snapshot)
+    with pytest.raises(
+        concordance.RecoveryConcordanceError, match="changed during comparison",
+    ):
+        concordance.compare_recovered_treatment_sources(original, recovered)
