@@ -95,6 +95,7 @@ def _verify_member_paths(
         if (
             name.startswith("experiment_traces/")
             or "/experiment_traces/" in name
+            or name == "research_report.md"
             or name.endswith("/research_report.md")
         ) and name not in expected
     }
@@ -145,7 +146,8 @@ def audit_recovered_treatment_matrix(
         "zip_preflight_status": archive_receipt["status"],
         "zip_sha256_observed_now": archive_receipt["archive_sha256_observed_now"],
         "github_job_log_zip_correspondence": archive_receipt["github_job_log_zip_correspondence"],
-        "independent_zip_pin_supplied_and_matched": archive_receipt["expected_archive_sha256_matched"],
+        "caller_claimed_independent_zip_pin_matched": archive_receipt["expected_archive_sha256_matched"],
+        "independent_archive_custody_verified": False,
         "trace_contents_verified": False,
         "report_contents_verified": False,
         "historical_evidence_authenticated": False,
