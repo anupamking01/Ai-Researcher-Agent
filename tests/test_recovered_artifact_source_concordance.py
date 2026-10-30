@@ -66,7 +66,7 @@ def test_matching_40_sources_survive_repackaging_and_extra_recovery_metadata(
     assert receipt["historical_evidence_authenticated"] is False
     assert receipt["human_evaluation_ready"] is False
     assert receipt["independent_archive_custody_verified"] is False
-    assert list(tmp_path.iterdir()) == [original, recovered]
+    assert set(tmp_path.iterdir()) == {original, recovered}
 
 
 @pytest.mark.parametrize("source", ("trace", "report"))
