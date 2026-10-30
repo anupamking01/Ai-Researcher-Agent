@@ -334,3 +334,40 @@ Original trace/report content validation, independently retained archival
 manifests, coordinator blinding packet checks, and two independent real human
 annotators remain separate mandatory research gates. No new pilot,
 confirmatory, exploratory, or human-validation outcome is inferred.
+
+
+## Comparing original and evaluator-recovery treatment bytes
+
+A source-completeness receipt from one archive cannot prove that evaluator-only
+recovery preserved the **same** reports and traces as the original treatment
+run. When authorized, unchanged copies of **both** historical GitHub artifact
+ZIPs become available, run the new read-only concordance check:
+
+```bash
+python -m scripts.compare_recovered_artifact_treatment_sources \
+  --original-zip <original-treatment.zip> \
+  --recovery-zip <evaluator-recovery.zip>
+```
+
+The command independently applies the bounded ZIP preflight and the frozen
+40-cell run-identity inventory to **each** archive using its distinct
+historically logged GitHub artifact ID, ZIP size, and SHA-256. It then requires
+all 40 pairs of **decompressed** trace/report bytes (their SHA-256 hashes and
+sizes) to agree, independent of ZIP compression, member order, optional
+`outputs/` prefix, or unrelated evaluator bookkeeping. A changed report or
+trace, missing source, incorrect historical ZIP, or reuse of the same archive
+for both roles fails closed. It never extracts archives, reruns treatments,
+resumes evaluation, or manufactures human ratings.
+
+Optional `--original-expected-archive-sha256` and
+`--recovery-expected-archive-sha256` arguments allow separately retained
+**independent historical** byte pins to be checked; do not supply hashes
+computed from the candidate ZIPs as though they were archived provenance.
+The success receipt names both GitHub-log correspondences, the deterministic
+40-cell content digest, and the equality result, but deliberately keeps
+`independent_archive_custody_verified`, `historical_evidence_authenticated`,
+and `human_evaluation_ready` false. Even a verified original-to-recovery
+byte match from two GitHub-sourced records is **not** an independent custody
+attestation, source-semantics audit, or permission to start blinded annotation.
+The separate historical trace/report, coordinator, and human-evaluation gates
+still apply. All unit tests for this comparison use synthetic sources only.
