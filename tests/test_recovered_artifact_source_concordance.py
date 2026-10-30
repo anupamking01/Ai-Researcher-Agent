@@ -14,6 +14,7 @@ from scripts import audit_recovered_artifact_treatment_matrix as matrix
 from scripts import compare_recovered_artifact_treatment_sources as concordance
 from scripts import preflight_recovered_artifact_zip as preflight
 from scripts import verify_human_eval_automated_run_lineage as lineage
+from scripts import verify_frozen_main_study_tasks as frozen_tasks
 
 
 def _pair(
@@ -98,13 +99,23 @@ def _pair(
         cache_path = evaluator_path(variant, task)
         record = json.loads(recovered[cache_path])
         report_bytes = recovered[f"{frozen_run_ids[(variant, task)]}/research_report.md"]
+        task_manifest = json.loads(
+            (matrix.REPO_ROOT / frozen_tasks.TASK_MANIFEST_REL).read_text(encoding="utf-8")
+        )
+        question_bytes = next(
+            cell["question"] for cell in task_manifest["tasks"] if cell["id"] == task
+        ).encode("utf-8")
         empty_sha = hashlib.sha256(b"").hexdigest()
         fingerprints = {
             "algorithm": "sha256",
             "encoding": "utf-8",
+            "question": {
+                "byte_size": len(question_bytes),
+                "sha256": hashlib.sha256(question_bytes).hexdigest(),
+            },
             **{
                 field: {"byte_size": 0, "sha256": empty_sha}
-                for field in ("question", "evidence", "prompt")
+                for field in ("evidence", "prompt")
             },
             "report": {
                 "byte_size": len(report_bytes),
@@ -115,6 +126,10 @@ def _pair(
         record["input_fingerprints"] = fingerprints
         if mutation == "wrong_digest":
             fingerprints["report"]["sha256"] = empty_sha
+        elif mutation == "wrong_question_digest":
+            fingerprints["question"]["sha256"] = empty_sha
+        elif mutation == "wrong_question_size":
+            fingerprints["question"]["byte_size"] += 1
         elif mutation == "wrong_size":
             fingerprints["report"]["byte_size"] += 1
         elif mutation == "missing_report":
@@ -296,6 +311,9 @@ def test_evaluator_same_byte_replacement_between_archive_audits_is_rejected(
     frozen_csv = root / lineage.SUPPORT_REL
     frozen_csv.parent.mkdir(parents=True)
     frozen_csv.write_bytes((matrix.REPO_ROOT / lineage.SUPPORT_REL).read_bytes())
+    task_source = root / frozen_tasks.TASK_MANIFEST_REL
+    task_source.parent.mkdir(parents=True)
+    task_source.write_bytes((matrix.REPO_ROOT / frozen_tasks.TASK_MANIFEST_REL).read_bytes())
     actual_audit = matrix.audit_recovered_treatment_matrix
 
     def replace_evaluator_after_first_audit(*args, **kwargs):
@@ -505,13 +523,18 @@ def test_schema_v2_recovery_cache_report_fingerprint_matches_verified_archive(
     receipt = concordance.compare_recovered_treatment_sources(original, recovered)
     assert receipt["original_schema_v2_evaluator_report_input_fingerprints_matched"] == 0
     assert receipt["recovery_schema_v2_evaluator_report_input_fingerprints_matched"] == 1
+    assert receipt["recovery_schema_v2_evaluator_question_input_fingerprints_matched"] == 1
+    assert receipt["original_treatment_task_manifest_sha256"] == frozen_tasks.ORIGINAL_TASK_MANIFEST_SHA256
     assert receipt["schema_v1_evaluator_report_input_binding_unavailable"] is True
+    assert receipt["schema_v1_evaluator_question_input_binding_unavailable"] is True
     assert receipt["historical_evidence_authenticated"] is False
 
 
 @pytest.mark.parametrize(("mutation", "error"), [
     ("wrong_digest", "report fingerprint does not match"),
     ("wrong_size", "report fingerprint does not match"),
+    ("wrong_question_digest", "question fingerprint does not match"),
+    ("wrong_question_size", "question fingerprint does not match"),
     ("missing_report", "invalid schema-version-2"),
     ("bool_size", "invalid schema-version-2"),
     ("missing_question", "invalid schema-version-2"),
@@ -527,3 +550,61 @@ def test_schema_v2_recovery_cache_cannot_misbind_report_or_fake_fingerprint_shap
     )
     with pytest.raises(concordance.RecoveryConcordanceError, match=error):
         concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_modified_original_task_manifest_blocks_question_lineage_before_archive_audit(
+    tmp_path, monkeypatch
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch, schema2_recovery_cache=("P6V", "main-02", "valid")
+    )
+    root = tmp_path / "modified-task-source"
+    evaluator = root / lineage.SUPPORT_REL
+    evaluator.parent.mkdir(parents=True)
+    evaluator.write_bytes((matrix.REPO_ROOT / lineage.SUPPORT_REL).read_bytes())
+    task_path = root / frozen_tasks.TASK_MANIFEST_REL
+    task_path.parent.mkdir(parents=True)
+    manifest = json.loads(
+        (matrix.REPO_ROOT / frozen_tasks.TASK_MANIFEST_REL).read_text(encoding="utf-8")
+    )
+    manifest["tasks"][1]["question"] = "Synthetic altered main-02 question?"
+    task_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(
+        concordance.RecoveryConcordanceError, match="original treatment-run source"
+    ):
+        concordance.compare_recovered_treatment_sources(
+            original, recovered, repo_root=root
+        )
+
+
+def test_original_task_manifest_same_byte_replacement_during_audit_is_rejected(
+    tmp_path, monkeypatch
+):
+    original, recovered, _, _ = _pair(tmp_path, monkeypatch)
+    root = tmp_path / "task-source-checkout"
+    evaluator = root / lineage.SUPPORT_REL
+    evaluator.parent.mkdir(parents=True)
+    evaluator.write_bytes((matrix.REPO_ROOT / lineage.SUPPORT_REL).read_bytes())
+    task_path = root / frozen_tasks.TASK_MANIFEST_REL
+    task_path.parent.mkdir(parents=True)
+    task_path.write_bytes((matrix.REPO_ROOT / frozen_tasks.TASK_MANIFEST_REL).read_bytes())
+    actual_audit = matrix.audit_recovered_treatment_matrix
+
+    def replace_task_source_after_first_audit(*args, **kwargs):
+        result = actual_audit(*args, **kwargs)
+        if kwargs["artifact_role"] == "original_treatment":
+            replacement = task_path.with_suffix(".replacement")
+            replacement.write_bytes(task_path.read_bytes())
+            os.replace(replacement, task_path)
+        return result
+
+    monkeypatch.setattr(
+        matrix, "audit_recovered_treatment_matrix", replace_task_source_after_first_audit
+    )
+    with pytest.raises(
+        concordance.RecoveryConcordanceError, match="changed during comparison"
+    ):
+        concordance.compare_recovered_treatment_sources(
+            original, recovered, repo_root=root
+        )

@@ -491,9 +491,35 @@ The receipt separately counts verified schema-v2 report-input bindings for
 the original and recovery archives. **Schema-v1 caches never recorded input
 fingerprints**, so they cannot be retrospectively claimed as linked to the
 report input; a zero count is not a failed score but a limitation of the
-historical schema. The verifier does not claim to validate the question,
-evidence, or prompt *content* from their format-valid fingerprints, nor
-does report-input correspondence prove that any automated judgment is correct,
-an original report is historically authentic, or independent evidence custody
-has been established. No new scores or human evaluations are produced; all
-new test fixtures are explicitly synthetic.
+historical schema. The verifier does not claim to validate evidence or prompt
+*content* from their format-valid fingerprints, nor does report-input
+correspondence prove that any automated judgment is correct, an original
+report is historically authentic, or independent evidence custody has been
+established. No new scores or human evaluations are produced; all new test
+fixtures are explicitly synthetic.
+
+## Schema-v2 evaluator-to-frozen-question source binding (offline; not human validation)
+
+A schema-v2 evaluator cache also carries a SHA-256 and byte length for the
+research **question it evaluated**. A correct run ID and report-byte hash do
+not rule out a substituted question. The concordance check now compares
+each schema-v2 `input_fingerprints.question` with the *exact UTF-8 bytes*
+of the corresponding original frozen task question. This is sourced from
+`experiments/main_budget_tasks.json` only after requiring its original
+treatment-run source SHA-256
+`5701df80036edb354f4f7d1efc409ea8f554a215f8c37da9d1a0b8ed01fdfd5f`.
+The task source is captured before both ZIP audits and checked again after
+them and after evaluator-cache JSON inspection, including detection of
+same-byte file replacement. A modified task manifest blocks the comparison;
+the verifier never recalculates a new authoritative question pin from a
+possibly edited local checkout.
+
+The receipt reports separate schema-v2 question-fingerprint counts for the
+original and recovered evaluator caches, plus the pinned task-manifest SHA-256.
+Schema-v1 records provide **no** question-input fingerprint and cannot
+support this backward-looking assertion. The task pin comes from the
+original Git source revision, **not** independently authenticated archival
+custody. This check does not authenticate the evaluator's evidence or prompt,
+the original treatment report, the score's correctness, or human-annotation
+readiness. Only synthetic fixtures exercise the new gate while historical
+archives remain unavailable; no treatments or scoring are rerun.

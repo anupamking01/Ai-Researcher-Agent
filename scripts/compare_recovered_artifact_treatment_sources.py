@@ -19,6 +19,7 @@ import zipfile
 
 from scripts import audit_recovered_artifact_treatment_matrix as matrix
 from scripts import preflight_recovered_artifact_zip as preflight
+from scripts import verify_frozen_main_study_tasks as frozen_tasks
 
 
 class RecoveryConcordanceError(ValueError):
@@ -59,6 +60,64 @@ def _archive_source_snapshot(path: Path) -> tuple[tuple[int, ...], str]:
     )
     return generation, digest
 
+
+
+def _frozen_questions_snapshot(
+    repo_root: Path,
+) -> tuple[dict[str, str], tuple[int, ...], str]:
+    """Capture the ten original-run questions from the SHA-256-pinned task file.
+
+    This is a Git-revision source anchor, not an independent historical archive.
+    Rechecking the file generation also protects the combined ZIP comparison
+    against same-byte replacement of this additional governing input.
+    """
+    path = Path(repo_root) / frozen_tasks.TASK_MANIFEST_REL
+    try:
+        before = matrix._generation(path)
+        raw = matrix.packet_builder._read_regular_file_captured(
+            path, label="original treatment-run task manifest"
+        )
+        after = matrix._generation(path)
+    except (OSError, ValueError) as exc:
+        raise RecoveryConcordanceError(
+            "cannot safely capture original treatment-run task manifest"
+        ) from exc
+    if before != after:
+        raise RecoveryConcordanceError(
+            "original treatment-run task manifest changed during capture"
+        )
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != frozen_tasks.ORIGINAL_TASK_MANIFEST_SHA256:
+        raise RecoveryConcordanceError(
+            "original treatment-run source task manifest differs from pinned bytes"
+        )
+    # The pinned bytes must also retain the original ten-task question contract.
+    manifest = json.loads(raw)
+    task_rows = manifest.get("tasks") if type(manifest) is dict else None
+    if (
+        type(manifest) is not dict
+        or manifest.get("task_set_id") != "main-budget-v1-2026-09-11"
+        or manifest.get("frozen_before_execution") is not True
+        or type(task_rows) is not list
+        or len(task_rows) != 10
+    ):
+        raise RecoveryConcordanceError(
+            "original treatment-run task manifest contract is invalid"
+        )
+    questions = {}
+    for number, task in enumerate(task_rows, 1):
+        task_id = f"main-{number:02d}"
+        if (
+            type(task) is not dict
+            or task.get("id") != task_id
+            or type(task.get("question")) is not str
+            or not task["question"].strip()
+        ):
+            raise RecoveryConcordanceError(
+                "original treatment-run task question contract is invalid"
+            )
+        questions[task_id] = task["question"]
+    return questions, after, digest
 
 
 # The original 2026-09-13 evaluator-only recovery workflow explicitly
@@ -234,13 +293,12 @@ def _verify_published_evaluator_measurements(
 
 
 def _verify_evaluator_report_input_fingerprint(
-    payload: dict, source_cell: dict, *, path: str,
+    payload: dict, source_cell: dict, *, expected_question: str, path: str,
 ) -> bool:
-    """Bind schema-v2 evaluator input to the ZIP's verified original report.
+    """Bind schema-v2 evaluator inputs to the report and original task question.
 
-    Schema v1 had no input fingerprints. Do not infer report-to-evaluator
-    input binding for those records, or assert that other prompt inputs are
-    independently authenticated merely because their digests are well-formed.
+    Schema v1 had no input fingerprints. Source-revision question binding is
+    not independent evidence custody, nor authentication of prompt/evidence.
     """
     version = payload["schema_version"]
     if version == 1:
@@ -281,11 +339,21 @@ def _verify_evaluator_report_input_fingerprint(
         raise RecoveryConcordanceError(
             "evaluator input report fingerprint does not match archived source report: " + path
         )
+    question_bytes = expected_question.encode("utf-8")
+    question = fingerprints["question"]
+    if (
+        question["byte_size"] != len(question_bytes)
+        or question["sha256"] != hashlib.sha256(question_bytes).hexdigest()
+    ):
+        raise RecoveryConcordanceError(
+            "evaluator input question fingerprint does not match original frozen task: " + path
+        )
     return True
 
 
 def _verify_evaluator_cache_json_identities(
     archive: Path, audit: dict, published_rows: dict[tuple[str, str], dict[str, str]],
+    frozen_questions: dict[str, str],
 ) -> tuple[int, int]:
     """Bind every archived evaluator record to its frozen execution identity.
 
@@ -355,7 +423,8 @@ def _verify_evaluator_cache_json_identities(
                     payload, published_rows[(variant, task)], path=path,
                 )
                 if _verify_evaluator_report_input_fingerprint(
-                    payload, source_cells[(variant, task)], path=path,
+                    payload, source_cells[(variant, task)],
+                    expected_question=frozen_questions[task], path=path,
                 ):
                     report_input_bindings_checked += 1
     except (zipfile.BadZipFile, KeyError) as exc:
@@ -391,6 +460,8 @@ def compare_recovered_treatment_sources(
     recovery_start = _archive_source_snapshot(recovery_archive)
     evaluator_path = Path(repo_root) / matrix.lineage.SUPPORT_REL
     evaluator_start = matrix._capture_evaluator(evaluator_path)
+    frozen_questions_start = _frozen_questions_snapshot(repo_root)
+    frozen_questions = frozen_questions_start[0]
     published_rows = matrix.lineage._matrix(
         matrix.lineage._read_study_csv(evaluator_start[0], path=evaluator_path),
         label="frozen published evaluator",
@@ -434,6 +505,7 @@ def compare_recovered_treatment_sources(
         or original["zip_sha256_observed_now"] != original_start[1]
         or recovered["zip_sha256_observed_now"] != recovery_start[1]
         or original_archive.samefile(recovery_archive)
+        or _frozen_questions_snapshot(repo_root) != frozen_questions_start
     ):
         raise RecoveryConcordanceError(
             "original, recovery, or evaluator source changed during comparison"
@@ -463,12 +535,12 @@ def compare_recovered_treatment_sources(
     )
     original_identity_count, original_report_binding_count = (
         _verify_evaluator_cache_json_identities(
-            original_archive, original, published_rows,
+            original_archive, original, published_rows, frozen_questions,
         )
     )
     recovered_identity_count, recovered_report_binding_count = (
         _verify_evaluator_cache_json_identities(
-            recovery_archive, recovered, published_rows,
+            recovery_archive, recovered, published_rows, frozen_questions,
         )
     )
     # The second ZIP read must be inside the same source-generation custody
@@ -477,6 +549,7 @@ def compare_recovered_treatment_sources(
         _archive_source_snapshot(original_archive) != original_start
         or _archive_source_snapshot(recovery_archive) != recovery_start
         or matrix._capture_evaluator(evaluator_path) != evaluator_start
+        or _frozen_questions_snapshot(repo_root) != frozen_questions_start
     ):
         raise RecoveryConcordanceError(
             "original, recovery, or evaluator source changed during comparison"
@@ -495,7 +568,11 @@ def compare_recovered_treatment_sources(
         "recovery_evaluator_cache_published_measurements_matched": recovered_identity_count,
         "original_schema_v2_evaluator_report_input_fingerprints_matched": original_report_binding_count,
         "recovery_schema_v2_evaluator_report_input_fingerprints_matched": recovered_report_binding_count,
+        "original_schema_v2_evaluator_question_input_fingerprints_matched": original_report_binding_count,
+        "recovery_schema_v2_evaluator_question_input_fingerprints_matched": recovered_report_binding_count,
+        "original_treatment_task_manifest_sha256": frozen_tasks.ORIGINAL_TASK_MANIFEST_SHA256,
         "schema_v1_evaluator_report_input_binding_unavailable": True,
+        "schema_v1_evaluator_question_input_binding_unavailable": True,
         "evaluator_cache_json_duplicate_keys_rejected": True,
         "recovery_only_evaluator_cells": [
             {"treatment": variant, "task_id": task}
@@ -536,7 +613,9 @@ def compare_recovered_treatment_sources(
             "missing evaluator cache members appear in recovery. This checks "
             "cache membership, byte continuity, JSON/schema/run identity, and "
             "exact published score/count/token/cost correspondence for 37 original "
-            "plus 40 recovered caches. This checks accounting consistency, not "
+            "plus 40 recovered caches. Schema-v2 report and original treatment-task "
+            "question fingerprints are also checked against their distinct "
+            "ZIP-member and Git-revision anchors. This checks consistency, not " 
             "independent score correctness, evidence inputs, or prompt validity. "
             "Same-provider "
             "log anchors and "
