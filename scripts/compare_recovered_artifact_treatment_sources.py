@@ -10,13 +10,51 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
+import stat
 
 from scripts import audit_recovered_artifact_treatment_matrix as matrix
+from scripts import preflight_recovered_artifact_zip as preflight
 
 
 class RecoveryConcordanceError(ValueError):
     """Original and evaluator-recovery experimental sources differ."""
+
+
+def _archive_source_snapshot(path: Path) -> tuple[tuple[int, ...], str]:
+    """Capture a stable, no-follow ZIP generation and its current byte digest.
+
+    Unlike each individual ZIP preflight, this snapshot also bounds the
+    *combined* two-archive comparison window. It does not authenticate custody.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        with os.fdopen(os.open(path, flags), "rb") as handle:
+            before = os.fstat(handle.fileno())
+            pathname = os.stat(path, follow_symlinks=False)
+            if not stat.S_ISREG(before.st_mode) or not preflight._unchanged(before, pathname):
+                raise RecoveryConcordanceError(
+                    "archive source must be an unchanged regular file, not a link"
+                )
+            if not 0 < before.st_size <= preflight.MAX_ARCHIVE_BYTES:
+                raise RecoveryConcordanceError("archive source size outside preflight bounds")
+            digest = preflight._fingerprint(handle)
+            if (
+                not preflight._unchanged(before, os.fstat(handle.fileno()))
+                or not preflight._unchanged(before, os.stat(path, follow_symlinks=False))
+            ):
+                raise RecoveryConcordanceError("archive changed during source snapshot")
+    except OSError as exc:
+        raise RecoveryConcordanceError(
+            f"cannot safely capture archive source {path}: {exc}"
+        ) from exc
+    generation = (
+        before.st_dev, before.st_ino, before.st_mode, before.st_size,
+        before.st_mtime_ns, before.st_ctime_ns,
+    )
+    return generation, digest
 
 
 def compare_recovered_treatment_sources(
@@ -38,6 +76,13 @@ def compare_recovered_treatment_sources(
         raise RecoveryConcordanceError(
             "original and recovery inputs must be distinct archive files"
         )
+    # Snapshot all three governing sources before either expensive archive audit.
+    # Individual per-ZIP custody checks cannot detect a source replaced in the
+    # gap between two otherwise successful independent audits.
+    original_start = _archive_source_snapshot(original_archive)
+    recovery_start = _archive_source_snapshot(recovery_archive)
+    evaluator_path = Path(repo_root) / matrix.lineage.SUPPORT_REL
+    evaluator_start = matrix._capture_evaluator(evaluator_path)
     original = matrix.audit_recovered_treatment_matrix(
         original_archive,
         artifact_role="original_treatment",
@@ -63,6 +108,23 @@ def compare_recovered_treatment_sources(
             fields = (f"{source}_sha256", f"{source}_uncompressed_bytes")
             if any(left[field] != right[field] for field in fields):
                 differences.append((identity, source))
+    # Recheck both ZIPs and the frozen evaluator after *both* audits, including
+    # replacement by a new inode containing the same bytes. Validate the
+    # preflight digests against the initial snapshots as well.
+    original_end = _archive_source_snapshot(original_archive)
+    recovery_end = _archive_source_snapshot(recovery_archive)
+    evaluator_end = matrix._capture_evaluator(evaluator_path)
+    if (
+        original_start != original_end
+        or recovery_start != recovery_end
+        or evaluator_start != evaluator_end
+        or original["zip_sha256_observed_now"] != original_start[1]
+        or recovered["zip_sha256_observed_now"] != recovery_start[1]
+        or original_archive.samefile(recovery_archive)
+    ):
+        raise RecoveryConcordanceError(
+            "original, recovery, or evaluator source changed during comparison"
+        )
     if differences:
         sample = ", ".join(
             f"{treatment}/{task}/{run_id}:{source}"

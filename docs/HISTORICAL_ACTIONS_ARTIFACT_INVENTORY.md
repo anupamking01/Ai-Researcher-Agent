@@ -371,3 +371,26 @@ byte match from two GitHub-sourced records is **not** an independent custody
 attestation, source-semantics audit, or permission to start blinded annotation.
 The separate historical trace/report, coordinator, and human-evaluation gates
 still apply. All unit tests for this comparison use synthetic sources only.
+
+
+## Cross-archive comparison-window source custody
+
+The recovered-source concordance command snapshots the two role-specific ZIPs
+and the fingerprint-pinned evaluator CSV **before** either archive audit, then
+recaptures all three **after both audits**. Each ZIP snapshot uses no-follow
+regular-file descriptors, records filesystem generation metadata (including
+device/inode, size, mode, modification and change times), and hashes its bounded
+byte stream. The initial ZIP digests must agree with the digests returned by
+their respective structural audits. Same-byte file replacement, altered ZIP
+bytes, a moved pathname, or replacement of the evaluator CSV anywhere across
+the combined inspection window invalidates the comparison receipt.
+
+This closes the interval between two independently passing per-archive audits:
+a previously audited original ZIP must not be swapped while the recovery ZIP is
+being inspected, nor can a same-byte evaluator CSV replacement between scans
+silently authorize a report-source concordance claim. These are present-day
+read-consistency checks, **not** atomic filesystem snapshots, a defense against
+post-receipt changes, historical ZIP authentication, or independent archival
+custody proof. The required original trace/report authentication and human
+evaluation handoff gates remain unchanged. Regression tests use synthetic
+ZIPs and unchanged synthetic research outcomes only.

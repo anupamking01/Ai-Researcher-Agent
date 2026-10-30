@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 import zipfile
@@ -136,3 +137,77 @@ def test_cli_emits_explicitly_non_authenticating_comparison_receipt(
     assert receipt["source_cells_compared"] == 40
     assert receipt["historical_evidence_authenticated"] is False
     assert receipt["human_ratings_generated"] is False
+
+
+def test_original_zip_same_byte_replacement_between_audits_is_rejected(
+    tmp_path, monkeypatch
+):
+    original, recovered, _, _ = _pair(tmp_path, monkeypatch)
+    actual_audit = matrix.audit_recovered_treatment_matrix
+
+    def replace_original_after_first_audit(*args, **kwargs):
+        result = actual_audit(*args, **kwargs)
+        if kwargs["artifact_role"] == "original_treatment":
+            replacement = tmp_path / "fresh-original.zip"
+            replacement.write_bytes(original.read_bytes())
+            os.replace(replacement, original)
+        return result
+
+    monkeypatch.setattr(matrix, "audit_recovered_treatment_matrix", replace_original_after_first_audit)
+    with pytest.raises(concordance.RecoveryConcordanceError, match="changed during comparison"):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_recovery_zip_same_byte_replacement_after_its_audit_is_rejected(
+    tmp_path, monkeypatch
+):
+    original, recovered, _, _ = _pair(tmp_path, monkeypatch)
+    actual_audit = matrix.audit_recovered_treatment_matrix
+
+    def replace_recovery_after_second_audit(*args, **kwargs):
+        result = actual_audit(*args, **kwargs)
+        if kwargs["artifact_role"] == "evaluator_recovery":
+            replacement = tmp_path / "fresh-recovery.zip"
+            replacement.write_bytes(recovered.read_bytes())
+            os.replace(replacement, recovered)
+        return result
+
+    monkeypatch.setattr(matrix, "audit_recovered_treatment_matrix", replace_recovery_after_second_audit)
+    with pytest.raises(concordance.RecoveryConcordanceError, match="changed during comparison"):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_evaluator_same_byte_replacement_between_archive_audits_is_rejected(
+    tmp_path, monkeypatch
+):
+    original, recovered, _, _ = _pair(tmp_path, monkeypatch)
+    root = tmp_path / "checkout"
+    frozen_csv = root / lineage.SUPPORT_REL
+    frozen_csv.parent.mkdir(parents=True)
+    frozen_csv.write_bytes((matrix.REPO_ROOT / lineage.SUPPORT_REL).read_bytes())
+    actual_audit = matrix.audit_recovered_treatment_matrix
+
+    def replace_evaluator_after_first_audit(*args, **kwargs):
+        result = actual_audit(*args, **kwargs)
+        if kwargs["artifact_role"] == "original_treatment":
+            replacement = frozen_csv.with_suffix(".replacement")
+            replacement.write_bytes(frozen_csv.read_bytes())
+            os.replace(replacement, frozen_csv)
+        return result
+
+    monkeypatch.setattr(matrix, "audit_recovered_treatment_matrix", replace_evaluator_after_first_audit)
+    with pytest.raises(concordance.RecoveryConcordanceError, match="changed during comparison"):
+        concordance.compare_recovered_treatment_sources(
+            original, recovered, repo_root=root,
+        )
+
+
+def test_archive_symlink_is_not_accepted_as_comparison_input(tmp_path, monkeypatch):
+    original, recovered, _, _ = _pair(tmp_path, monkeypatch)
+    alias = tmp_path / "aliased-original.zip"
+    try:
+        alias.symlink_to(original)
+    except (NotImplementedError, OSError):
+        pytest.skip("symlinks unavailable on this platform")
+    with pytest.raises(concordance.RecoveryConcordanceError, match="regular file"):
+        concordance.compare_recovered_treatment_sources(alias, recovered)
