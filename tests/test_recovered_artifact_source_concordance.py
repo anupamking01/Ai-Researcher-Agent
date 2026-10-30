@@ -1227,7 +1227,10 @@ def test_evaluator_recovery_cannot_mutate_saved_retrieval_snippets(
         tmp_path, monkeypatch,
         **({"mutate": member} if change == "edit" else {"drop": member}),
     )
-    with pytest.raises(concordance.RecoveryConcordanceError, match="saved evidence differs"):
+    # Deletion can fail earlier on the missing-input validity gate, whereas
+    # a content edit reaches the cross-archive byte-continuity gate.
+    expected = "saved evidence differs" if change == "edit" else "no saved evidence"
+    with pytest.raises(concordance.RecoveryConcordanceError, match=expected):
         concordance.compare_recovered_treatment_sources(original, recovered)
 
 
