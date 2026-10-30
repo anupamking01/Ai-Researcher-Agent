@@ -22,7 +22,7 @@ def _pair(
     omit_original_evaluator=None, extra_original_evaluator=None,
     extra_recovery_evaluator=None, bad_original_cache=None,
     bad_recovery_cache=None, tamper_original_measurements=None,
-    tamper_recovery_measurements=None,
+    tamper_recovery_measurements=None, schema2_recovery_cache=None,
 ):
     csv_path = matrix.REPO_ROOT / lineage.SUPPORT_REL
     csv_bytes, _ = matrix._capture_evaluator(csv_path)
@@ -93,6 +93,41 @@ def _pair(
     if tamper_recovery_measurements:
         variant, task, fields = tamper_recovery_measurements
         recovered[evaluator_path(variant, task)] = synthetic_cache(variant, task, fields)
+    if schema2_recovery_cache:
+        variant, task, mutation = schema2_recovery_cache
+        cache_path = evaluator_path(variant, task)
+        record = json.loads(recovered[cache_path])
+        report_bytes = recovered[f"{frozen_run_ids[(variant, task)]}/research_report.md"]
+        empty_sha = hashlib.sha256(b"").hexdigest()
+        fingerprints = {
+            "algorithm": "sha256",
+            "encoding": "utf-8",
+            **{
+                field: {"byte_size": 0, "sha256": empty_sha}
+                for field in ("question", "evidence", "prompt")
+            },
+            "report": {
+                "byte_size": len(report_bytes),
+                "sha256": hashlib.sha256(report_bytes).hexdigest(),
+            },
+        }
+        record["schema_version"] = 2
+        record["input_fingerprints"] = fingerprints
+        if mutation == "wrong_digest":
+            fingerprints["report"]["sha256"] = empty_sha
+        elif mutation == "wrong_size":
+            fingerprints["report"]["byte_size"] += 1
+        elif mutation == "missing_report":
+            del fingerprints["report"]
+        elif mutation == "bool_size":
+            fingerprints["report"]["byte_size"] = True
+        elif mutation == "missing_question":
+            del fingerprints["question"]
+        elif mutation == "wrong_algorithm":
+            fingerprints["algorithm"] = "md5"
+        elif mutation == "v1_claims_fingerprints":
+            record["schema_version"] = 1
+        recovered[cache_path] = json.dumps(record, sort_keys=True).encode("utf-8")
     if mutate_evaluator:
         recovered[evaluator_path(*mutate_evaluator)] += b"\nsynthetic cache modification"
     if drop_recovery_evaluator:
@@ -457,4 +492,38 @@ def test_recovery_only_cache_matching_published_counts_but_wrong_rate_rejected(
         ),
     )
     with pytest.raises(concordance.RecoveryConcordanceError, match="strict_support_rate"):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_schema_v2_recovery_cache_report_fingerprint_matches_verified_archive(
+    tmp_path, monkeypatch,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        schema2_recovery_cache=("P6V", "main-02", "valid"),
+    )
+    receipt = concordance.compare_recovered_treatment_sources(original, recovered)
+    assert receipt["original_schema_v2_evaluator_report_input_fingerprints_matched"] == 0
+    assert receipt["recovery_schema_v2_evaluator_report_input_fingerprints_matched"] == 1
+    assert receipt["schema_v1_evaluator_report_input_binding_unavailable"] is True
+    assert receipt["historical_evidence_authenticated"] is False
+
+
+@pytest.mark.parametrize(("mutation", "error"), [
+    ("wrong_digest", "report fingerprint does not match"),
+    ("wrong_size", "report fingerprint does not match"),
+    ("missing_report", "invalid schema-version-2"),
+    ("bool_size", "invalid schema-version-2"),
+    ("missing_question", "invalid schema-version-2"),
+    ("wrong_algorithm", "invalid schema-version-2"),
+    ("v1_claims_fingerprints", "schema-version-1 evaluator cache"),
+])
+def test_schema_v2_recovery_cache_cannot_misbind_report_or_fake_fingerprint_shape(
+    tmp_path, monkeypatch, mutation, error,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        schema2_recovery_cache=("P6V", "main-02", mutation),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match=error):
         concordance.compare_recovered_treatment_sources(original, recovered)

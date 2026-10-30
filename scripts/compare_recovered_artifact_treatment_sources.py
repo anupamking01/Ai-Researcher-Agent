@@ -232,9 +232,61 @@ def _verify_published_evaluator_measurements(
         )
 
 
+
+def _verify_evaluator_report_input_fingerprint(
+    payload: dict, source_cell: dict, *, path: str,
+) -> bool:
+    """Bind schema-v2 evaluator input to the ZIP's verified original report.
+
+    Schema v1 had no input fingerprints. Do not infer report-to-evaluator
+    input binding for those records, or assert that other prompt inputs are
+    independently authenticated merely because their digests are well-formed.
+    """
+    version = payload["schema_version"]
+    if version == 1:
+        if "input_fingerprints" in payload:
+            raise RecoveryConcordanceError(
+                "schema-version-1 evaluator cache cannot declare input fingerprints: " + path
+            )
+        return False
+    fingerprints = payload.get("input_fingerprints")
+    if (
+        type(fingerprints) is not dict
+        or set(fingerprints)
+        != {"algorithm", "encoding", "question", "report", "evidence", "prompt"}
+        or fingerprints.get("algorithm") != "sha256"
+        or fingerprints.get("encoding") != "utf-8"
+    ):
+        raise RecoveryConcordanceError(
+            "invalid schema-version-2 evaluator input_fingerprints: " + path
+        )
+    for name in ("question", "report", "evidence", "prompt"):
+        entry = fingerprints.get(name)
+        if (
+            type(entry) is not dict
+            or set(entry) != {"byte_size", "sha256"}
+            or type(entry.get("byte_size")) is not int
+            or entry["byte_size"] < 0
+            or type(entry.get("sha256")) is not str
+            or preflight.HEX_SHA256.fullmatch(entry["sha256"]) is None
+        ):
+            raise RecoveryConcordanceError(
+                "invalid schema-version-2 evaluator input_fingerprints: " + path
+            )
+    report = fingerprints["report"]
+    if (
+        report["sha256"] != source_cell["report_sha256"]
+        or report["byte_size"] != source_cell["report_uncompressed_bytes"]
+    ):
+        raise RecoveryConcordanceError(
+            "evaluator input report fingerprint does not match archived source report: " + path
+        )
+    return True
+
+
 def _verify_evaluator_cache_json_identities(
     archive: Path, audit: dict, published_rows: dict[tuple[str, str], dict[str, str]],
-) -> int:
+) -> tuple[int, int]:
     """Bind every archived evaluator record to its frozen execution identity.
 
     Audit identity and exact published numeric score/cost lineage. This does
@@ -245,10 +297,14 @@ def _verify_evaluator_cache_json_identities(
         (cell["treatment"], cell["task_id"]): cell["run_id"]
         for cell in cells
     }
+    source_cells = {
+        (cell["treatment"], cell["task_id"]): cell for cell in cells
+    }
     if len(cells) != 40 or len(expected_run_ids) != 40:
         raise RecoveryConcordanceError("frozen evaluator run identities are incomplete")
     cache = _evaluator_cache_map(audit, set(expected_run_ids))
     prefix = audit["source_layout_prefix"]
+    report_input_bindings_checked = 0
     try:
         with zipfile.ZipFile(archive, "r") as source:
             for (variant, task), (expected_digest, size) in sorted(cache.items()):
@@ -298,11 +354,15 @@ def _verify_evaluator_cache_json_identities(
                 _verify_published_evaluator_measurements(
                     payload, published_rows[(variant, task)], path=path,
                 )
+                if _verify_evaluator_report_input_fingerprint(
+                    payload, source_cells[(variant, task)], path=path,
+                ):
+                    report_input_bindings_checked += 1
     except (zipfile.BadZipFile, KeyError) as exc:
         raise RecoveryConcordanceError(
             "evaluator cache member cannot be read from verified ZIP"
         ) from exc
-    return len(cache)
+    return len(cache), report_input_bindings_checked
 
 
 def compare_recovered_treatment_sources(
@@ -401,11 +461,15 @@ def compare_recovered_treatment_sources(
     preserved_count, new_count = _verify_evaluator_cache_continuity(
         original, recovered,
     )
-    original_identity_count = _verify_evaluator_cache_json_identities(
-        original_archive, original, published_rows,
+    original_identity_count, original_report_binding_count = (
+        _verify_evaluator_cache_json_identities(
+            original_archive, original, published_rows,
+        )
     )
-    recovered_identity_count = _verify_evaluator_cache_json_identities(
-        recovery_archive, recovered, published_rows,
+    recovered_identity_count, recovered_report_binding_count = (
+        _verify_evaluator_cache_json_identities(
+            recovery_archive, recovered, published_rows,
+        )
     )
     # The second ZIP read must be inside the same source-generation custody
     # window. A change during JSON inspection cannot authorize this receipt.
@@ -429,6 +493,9 @@ def compare_recovered_treatment_sources(
         "recovery_evaluator_cache_json_identities_checked": recovered_identity_count,
         "original_evaluator_cache_published_measurements_matched": original_identity_count,
         "recovery_evaluator_cache_published_measurements_matched": recovered_identity_count,
+        "original_schema_v2_evaluator_report_input_fingerprints_matched": original_report_binding_count,
+        "recovery_schema_v2_evaluator_report_input_fingerprints_matched": recovered_report_binding_count,
+        "schema_v1_evaluator_report_input_binding_unavailable": True,
         "evaluator_cache_json_duplicate_keys_rejected": True,
         "recovery_only_evaluator_cells": [
             {"treatment": variant, "task_id": task}

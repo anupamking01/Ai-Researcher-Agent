@@ -472,3 +472,28 @@ correctness are established by these identity checks. It does not establish
 independent historical custody, genuine human-validation outcomes, or packet
 distribution readiness. Tests use synthetic cache records only; no original
 experimental ZIP has been recovered or scored during development.
+
+
+## Schema-v2 evaluator-to-report input correspondence (offline; not source authenticity)
+
+The recovered-archive concordance check additionally verifies an important
+evaluation-lineage distinction: a schema-v2 cached evaluator may report the
+correct treatment/run ID and numeric score while having **evaluated different
+report bytes**. For every schema-v2 cache, its recorded
+`input_fingerprints.report` SHA-256 and UTF-8 byte size must now match the
+corresponding original Markdown report's decompressed SHA-256 and size from
+the independently scanned archive member inventory. The complete
+schema-v2 input-fingerprint shape (question, report, evidence, prompt,
+algorithm, and encoding) must be well-formed. A schema-v1 cache must not
+claim fingerprint metadata, consistent with the original evaluator schema.
+
+The receipt separately counts verified schema-v2 report-input bindings for
+the original and recovery archives. **Schema-v1 caches never recorded input
+fingerprints**, so they cannot be retrospectively claimed as linked to the
+report input; a zero count is not a failed score but a limitation of the
+historical schema. The verifier does not claim to validate the question,
+evidence, or prompt *content* from their format-valid fingerprints, nor
+does report-input correspondence prove that any automated judgment is correct,
+an original report is historically authentic, or independent evidence custody
+has been established. No new scores or human evaluations are produced; all
+new test fixtures are explicitly synthetic.
