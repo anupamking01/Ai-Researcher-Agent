@@ -20,11 +20,27 @@ def _pair(
     tmp_path, monkeypatch, *, mutate=None, drop=None,
     mutate_evaluator=None, drop_recovery_evaluator=None,
     omit_original_evaluator=None, extra_original_evaluator=None,
-    extra_recovery_evaluator=None,
+    extra_recovery_evaluator=None, bad_original_cache=None,
+    bad_recovery_cache=None,
 ):
     csv_path = matrix.REPO_ROOT / lineage.SUPPORT_REL
     csv_bytes, _ = matrix._capture_evaluator(csv_path)
     traces, reports = matrix._expected_paths(csv_bytes, csv_path=csv_path)
+    frozen_run_ids = {
+        (cell["treatment"], cell["task_id"]): cell["run_id"]
+        for cell in matrix._expected_cells(csv_bytes, csv_path=csv_path)
+    }
+
+    def synthetic_cache(variant, task):
+        return json.dumps({
+            "schema_version": 1,
+            "study_id": "budget-main-v1",
+            "variant_id": variant,
+            "task_id": task,
+            "run_id": frozen_run_ids[(variant, task)],
+            "synthetic_fixture_only": True,
+        }, sort_keys=True).encode("utf-8")
+
     files = {
         **{name: b'{"synthetic_fixture_only":true}' for name in sorted(traces)},
         **{name: b"# Synthetic markdown; not a research result\n" for name in sorted(reports)},
@@ -37,9 +53,10 @@ def _pair(
     ]
     for variant, task in evaluator_cells:
         if (variant, task) not in concordance.RECOVERY_ONLY_EVALUATOR_CELLS:
-            files[evaluator_path(variant, task)] = (
-                f'{{"synthetic_only":true,"treatment":"{variant}","task":"{task}"}}'
-            ).encode("utf-8")
+            files[evaluator_path(variant, task)] = synthetic_cache(variant, task)
+    if bad_original_cache:
+        variant, task, payload = bad_original_cache
+        files[evaluator_path(variant, task)] = payload
     if omit_original_evaluator:
         files.pop(evaluator_path(*omit_original_evaluator))
     if extra_original_evaluator:
@@ -51,9 +68,10 @@ def _pair(
             out.writestr(name, data)
     recovered = dict(files)
     for variant, task in sorted(concordance.RECOVERY_ONLY_EVALUATOR_CELLS):
-        recovered[evaluator_path(variant, task)] = (
-            f'{{"synthetic_only":true,"new_cache":"{variant}/{task}"}}'
-        ).encode("utf-8")
+        recovered[evaluator_path(variant, task)] = synthetic_cache(variant, task)
+    if bad_recovery_cache:
+        variant, task, payload = bad_recovery_cache
+        recovered[evaluator_path(variant, task)] = payload
     if mutate_evaluator:
         recovered[evaluator_path(*mutate_evaluator)] += b"\nsynthetic cache modification"
     if drop_recovery_evaluator:
@@ -93,6 +111,8 @@ def test_matching_40_sources_survive_repackaging_and_extra_recovery_metadata(
     assert receipt["preserved_evaluator_cache_members_byte_identical"] == 37
     assert receipt["recovery_only_evaluator_cache_members_present"] == 3
     assert receipt["evaluator_cache_payload_semantics_verified"] is False
+    assert receipt["original_evaluator_cache_json_identities_checked"] == 37
+    assert receipt["recovery_evaluator_cache_json_identities_checked"] == 40
     assert receipt["original_zip_sha256_observed_now"] != receipt[
         "recovery_zip_sha256_observed_now"
     ]
@@ -309,4 +329,59 @@ def test_extra_or_mixed_layout_evaluator_cache_is_not_silently_ignored(
     with pytest.raises(
         concordance.RecoveryConcordanceError, match="unselected or mixed-layout"
     ):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_recovered_evaluator_wrong_execution_id_rejected_even_with_correct_zip_pin(
+    tmp_path, monkeypatch,
+):
+    payload = json.dumps({
+        "schema_version": 1, "study_id": "budget-main-v1",
+        "variant_id": "P6V", "task_id": "main-02",
+        "run_id": "fabricated-execution-id",
+    }).encode("utf-8")
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch, bad_recovery_cache=("P6V", "main-02", payload),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match="run_id differs"):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_preserved_evaluator_wrong_identity_blocked_even_when_byte_identical(
+    tmp_path, monkeypatch,
+):
+    payload = json.dumps({
+        "schema_version": 1, "study_id": "budget-main-v1",
+        "variant_id": "P6V", "task_id": "main-01", "run_id": "incorrect",
+    }).encode("utf-8")
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch, bad_original_cache=("D3", "main-01", payload),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match="variant_id differs"):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+@pytest.mark.parametrize(("payload", "expected_error"), [
+    (b'{"schema_version":1,"study_id":"budget-main-v1","study_id":"fake"}',
+     "duplicate key"),
+    (b'{"schema_version":1,"study_id":"budget-main-v1","x":NaN}',
+     "nonfinite numeric token"),
+    (b'{"schema_version":1,', "invalid evaluator cache JSON"),
+    (b'{"study_id":"budget-main-v1"}', "schema_version"),
+    (b'["not","a","cache"]', "must be an object"),
+])
+def test_recovery_only_evaluator_malformed_or_ambiguous_json_rejected(
+    tmp_path, monkeypatch, payload, expected_error,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch, bad_recovery_cache=("P6V", "main-02", payload),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match=expected_error):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_evaluator_json_member_size_bound_is_checked(tmp_path, monkeypatch):
+    original, recovered, _, _ = _pair(tmp_path, monkeypatch)
+    monkeypatch.setattr(concordance, "MAX_EVALUATOR_CACHE_JSON_BYTES", 10)
+    with pytest.raises(concordance.RecoveryConcordanceError, match="size outside"):
         concordance.compare_recovered_treatment_sources(original, recovered)

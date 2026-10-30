@@ -423,3 +423,28 @@ the truth or independent historical custody of an archive. The published frozen
 separate prerequisites. Until two authorized historical archives are recovered,
 the new integrity check is validated only with synthetic fixtures; no real
 archive comparison or human annotation has occurred.
+
+
+## Historical evaluator-cache JSON identity audit (offline, not score validation)
+
+The two-archive concordance check additionally reads the bounded archived JSON
+bytes of all **37 original and 40 recovery evaluator caches** without extracting
+them. It checks every record against the **frozen published run ID for its
+treatment/task cell**, requires the original study ID `budget-main-v1`, the
+canonical treatment/task identities, and an integer schema version 1 or 2.
+Malformed UTF-8/JSON, duplicate JSON keys, nonfinite JSON constants, top-level
+nonobjects, wrong execution IDs, and evaluator-cache files exceeding 4 MiB
+fail closed. Every reread byte stream must also agree with the decompressed
+SHA-256/size from the earlier bounded ZIP verification; archive and evaluator
+CSV source generations are checked again **after** these reads.
+
+This closes the possibility that a misleading JSON file under a valid cache
+filename appears to belong to a different treatment execution while still
+passing the historical 37-to-40 byte-continuity check. The success receipt
+separately records the two JSON-identity inspection counts. It deliberately
+leaves `evaluator_cache_payload_semantics_verified: false`: no score
+arithmetic, evidence-to-report fingerprints, model outputs, or scientific
+correctness are established by these identity checks. It does not establish
+independent historical custody, genuine human-validation outcomes, or packet
+distribution readiness. Tests use synthetic cache records only; no original
+experimental ZIP has been recovered or scored during development.

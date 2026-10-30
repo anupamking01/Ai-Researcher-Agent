@@ -9,10 +9,12 @@ evaluation packets. No extraction, evaluator runs, or treatments occur.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import stat
+import zipfile
 
 from scripts import audit_recovered_artifact_treatment_matrix as matrix
 from scripts import preflight_recovered_artifact_zip as preflight
@@ -126,6 +128,97 @@ def _verify_evaluator_cache_continuity(
     return len(preserved), len(RECOVERY_ONLY_EVALUATOR_CELLS)
 
 
+
+# A recovered cache record is expected to be small. Bound the second, semantic
+# inspection independently of the already-bounded structural ZIP preflight.
+MAX_EVALUATOR_CACHE_JSON_BYTES = 4 * 1024 * 1024
+
+
+def _unique_json_pairs(pairs: list[tuple[str, object]]) -> dict:
+    """Do not let JSON's last-key-wins behavior spoof evaluator identities."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise RecoveryConcordanceError("duplicate key in evaluator cache JSON")
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite_json(value: str) -> None:
+    raise RecoveryConcordanceError(
+        "nonfinite numeric token in evaluator cache JSON: " + value
+    )
+
+
+def _verify_evaluator_cache_json_identities(archive: Path, audit: dict) -> int:
+    """Bind every archived evaluator record to its frozen execution identity.
+
+    Only JSON well-formedness, nonambiguity, schema version, and identity are
+    checked here. Score arithmetic, evidence fingerprints, prompt inputs, and
+    correctness are governed by separate published evaluation audits.
+    """
+    cells = audit["observed_source_content_manifest"]["cells"]
+    expected_run_ids = {
+        (cell["treatment"], cell["task_id"]): cell["run_id"]
+        for cell in cells
+    }
+    if len(cells) != 40 or len(expected_run_ids) != 40:
+        raise RecoveryConcordanceError("frozen evaluator run identities are incomplete")
+    cache = _evaluator_cache_map(audit, set(expected_run_ids))
+    prefix = audit["source_layout_prefix"]
+    try:
+        with zipfile.ZipFile(archive, "r") as source:
+            for (variant, task), (expected_digest, size) in sorted(cache.items()):
+                path = f"{prefix}posthoc_evaluations/{variant}/{task}.json"
+                if not 0 < size <= MAX_EVALUATOR_CACHE_JSON_BYTES:
+                    raise RecoveryConcordanceError(
+                        "evaluator cache JSON size outside semantic audit bound: " + path
+                    )
+                with source.open(path, "r") as member:
+                    raw = member.read(size + 1)
+                if len(raw) != size or hashlib.sha256(raw).hexdigest() != expected_digest:
+                    raise RecoveryConcordanceError(
+                        "evaluator cache bytes disagree with verified ZIP scan: " + path
+                    )
+                try:
+                    payload = json.loads(
+                        raw.decode("utf-8"),
+                        object_pairs_hook=_unique_json_pairs,
+                        parse_constant=_reject_nonfinite_json,
+                    )
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise RecoveryConcordanceError(
+                        "invalid evaluator cache JSON: " + path
+                    ) from exc
+                if type(payload) is not dict:
+                    raise RecoveryConcordanceError(
+                        "evaluator cache JSON must be an object: " + path
+                    )
+                if (
+                    type(payload.get("schema_version")) is not int
+                    or payload["schema_version"] not in (1, 2)
+                ):
+                    raise RecoveryConcordanceError(
+                        "evaluator cache JSON schema_version must be 1 or 2: " + path
+                    )
+                expected_identity = {
+                    "study_id": "budget-main-v1",
+                    "variant_id": variant,
+                    "task_id": task,
+                    "run_id": expected_run_ids[(variant, task)],
+                }
+                for field, expected in expected_identity.items():
+                    if payload.get(field) != expected:
+                        raise RecoveryConcordanceError(
+                            f"evaluator cache {field} differs from frozen run: {path}"
+                        )
+    except (zipfile.BadZipFile, KeyError) as exc:
+        raise RecoveryConcordanceError(
+            "evaluator cache member cannot be read from verified ZIP"
+        ) from exc
+    return len(cache)
+
+
 def compare_recovered_treatment_sources(
     original_archive: Path,
     recovery_archive: Path,
@@ -217,6 +310,22 @@ def compare_recovered_treatment_sources(
     preserved_count, new_count = _verify_evaluator_cache_continuity(
         original, recovered,
     )
+    original_identity_count = _verify_evaluator_cache_json_identities(
+        original_archive, original,
+    )
+    recovered_identity_count = _verify_evaluator_cache_json_identities(
+        recovery_archive, recovered,
+    )
+    # The second ZIP read must be inside the same source-generation custody
+    # window. A change during JSON inspection cannot authorize this receipt.
+    if (
+        _archive_source_snapshot(original_archive) != original_start
+        or _archive_source_snapshot(recovery_archive) != recovery_start
+        or matrix._capture_evaluator(evaluator_path) != evaluator_start
+    ):
+        raise RecoveryConcordanceError(
+            "original, recovery, or evaluator source changed during comparison"
+        )
     return {
         "schema_version": 1,
         "status": "original_and_evaluator_recovery_40_source_pairs_match_not_authenticated",
@@ -225,6 +334,9 @@ def compare_recovered_treatment_sources(
         "report_sources_unchanged": 40,
         "preserved_evaluator_cache_members_byte_identical": preserved_count,
         "recovery_only_evaluator_cache_members_present": new_count,
+        "original_evaluator_cache_json_identities_checked": original_identity_count,
+        "recovery_evaluator_cache_json_identities_checked": recovered_identity_count,
+        "evaluator_cache_json_duplicate_keys_rejected": True,
         "recovery_only_evaluator_cells": [
             {"treatment": variant, "task_id": task}
             for variant, task in sorted(RECOVERY_ONLY_EVALUATOR_CELLS)
@@ -262,8 +374,10 @@ def compare_recovered_treatment_sources(
             "bytes for 40 frozen run identities; 37 pre-existing evaluator "
             "cache JSON byte streams also match, and only the three historically "
             "missing evaluator cache members appear in recovery. This checks "
-            "cache membership and byte continuity, not the semantic validity "
-            "of new evaluations. Same-provider log anchors and "
+            "cache membership, byte continuity, and JSON/schema/run identity "
+            "for 37 original plus 40 recovered caches. This does not verify "
+            "score arithmetic, evidence inputs, or correctness. Same-provider "
+            "log anchors and "
             "present-day comparisons do not prove independently retained custody, "
             "historical report authenticity, or human-evaluation readiness."
         ),
