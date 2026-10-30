@@ -209,5 +209,5 @@ def test_archive_symlink_is_not_accepted_as_comparison_input(tmp_path, monkeypat
         alias.symlink_to(original)
     except (NotImplementedError, OSError):
         pytest.skip("symlinks unavailable on this platform")
-    with pytest.raises(concordance.RecoveryConcordanceError, match="regular file"):
+    with pytest.raises(concordance.RecoveryConcordanceError, match="archive source"):
         concordance.compare_recovered_treatment_sources(alias, recovered)
