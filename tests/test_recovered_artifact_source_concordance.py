@@ -1740,3 +1740,44 @@ def test_saved_query_outputs_bind_to_search_success_per_query(
                 concordance._verify_historical_query_output_members(
                     archive, prefix="", run_id="run-one", trace=trace,
                 )
+
+@pytest.mark.parametrize("role", ("original", "recovery_only"))
+def test_historical_evaluator_rejects_pathological_json_integer(
+    tmp_path, monkeypatch, role,
+):
+    # Synthetic archives only. Both the legacy original cache and a resumed
+    # cache must fail before their oversized JSON integer is converted, even
+    # when the interpreter permits unlimited integer-string conversion.
+    huge = b"9" * (concordance.MAX_HISTORICAL_JSON_INTEGER_DIGITS + 1)
+    raw = b'{"schema_version":1,"examples":[' + huge + b"]}"
+    argument = "bad_original_cache" if role == "original" else "bad_recovery_cache"
+    cell = ("D3", "main-01") if role == "original" else ("P6V", "main-02")
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch, **{argument: (*cell, raw)},
+    )
+    with pytest.raises(
+        concordance.RecoveryConcordanceError, match="integer digit length",
+    ):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+@pytest.mark.parametrize("cell", (("D3", "main-01"), ("P6V", "main-10")))
+def test_historical_treatment_trace_rejects_pathological_json_integer(
+    tmp_path, monkeypatch, cell,
+):
+    # Agreeing original/recovery trace bytes do not legitimize an integer
+    # bomb in otherwise structural-valid archived trace JSON.
+    huge = b"9" * (concordance.MAX_HISTORICAL_JSON_INTEGER_DIGITS + 1)
+    raw = b'{"schema_version":2,"trace":{"oversized_integer":' + huge + b"}}"
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch, invalid_trace_bytes=(*cell, raw),
+    )
+    with pytest.raises(
+        concordance.RecoveryConcordanceError, match="integer digit length",
+    ):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_historical_archive_json_integer_parser_accepts_normal_ints():
+    assert concordance._bounded_historical_json_int("0") == 0
+    assert concordance._bounded_historical_json_int("-128") == -128

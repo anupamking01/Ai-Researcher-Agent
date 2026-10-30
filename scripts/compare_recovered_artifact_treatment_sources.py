@@ -272,6 +272,10 @@ def _verify_evaluator_cache_continuity(
 # A recovered cache record is expected to be small. Bound the second, semantic
 # inspection independently of the already-bounded structural ZIP preflight.
 MAX_EVALUATOR_CACHE_JSON_BYTES = 4 * 1024 * 1024
+# JSON archives may include extraneous integer values in nested metadata or
+# qualitative examples. Bound decimal conversion independently of the Python
+# interpreter's configurable integer-string limit and the whole-member size.
+MAX_HISTORICAL_JSON_INTEGER_DIGITS = 1024
 
 
 def _unique_json_pairs(pairs: list[tuple[str, object]]) -> dict:
@@ -288,6 +292,15 @@ def _reject_nonfinite_json(value: str) -> None:
     raise RecoveryConcordanceError(
         "nonfinite numeric token in evaluator cache JSON: " + value
     )
+
+
+def _bounded_historical_json_int(token: str) -> int:
+    """Reject pathological integer tokens before converting archive JSON."""
+    if len(token.lstrip("-")) > MAX_HISTORICAL_JSON_INTEGER_DIGITS:
+        raise RecoveryConcordanceError(
+            "historical archive JSON integer digit length exceeds bound"
+        )
+    return int(token)
 
 
 def _finite_evaluator_cache_json_float(token: str) -> float:
@@ -835,6 +848,7 @@ def _verify_evaluator_cache_json_identities(
                         object_pairs_hook=_unique_json_pairs,
                         parse_constant=_reject_nonfinite_json,
                         parse_float=_finite_evaluator_cache_json_float,
+                        parse_int=_bounded_historical_json_int,
                     )
                 except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
                     raise RecoveryConcordanceError(
@@ -1057,6 +1071,7 @@ def _verify_archived_treatment_trace_identities(
                         object_pairs_hook=_unique_json_pairs,
                         parse_constant=_reject_nonfinite_json,
                         parse_float=_finite_trace_json_float,
+                        parse_int=_bounded_historical_json_int,
                     )
                 except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
                     raise RecoveryConcordanceError(

@@ -847,3 +847,26 @@ the authenticity of historical archives, or independent evidence custody.
 The original 40-trace and evaluator-recovery ZIP artifacts remain unavailable,
 so no authentic archive has passed this new gate. No treatments, evaluators, or
 human ratings were run or fabricated, and human distribution remains blocked.
+
+## Bounded archive JSON integer parsing (offline robustness)
+
+The concordance audit inspects both historical treatment traces and evaluator
+cache records as untrusted JSON. A ZIP member can be within its byte-size limit
+yet contain an integer literal with thousands of digits. Depending on the
+Python runtime configuration, unbounded integer conversion may raise an
+unhandled interpreter exception or consume disproportionate CPU and memory.
+This can prevent auditors from receiving a controlled source-validation error.
+
+Both semantic JSON readers now reject integer tokens longer than **1,024
+decimal digits before conversion**, regardless of runtime integer-string
+settings. Normal recorded run IDs, counts, sizes and token ledgers are far
+below this intentionally generous parsing boundary. The check also applies to
+integers nested in ignored metadata or illustrative examples, so a matching
+original/recovery ZIP pair cannot bypass the limit. Both readers retain their
+existing duplicate-key, nonfinite-number, and recursion safeguards.
+
+Offline synthetic regression fixtures test both original and evaluator-recovery
+cache roles plus treatment trace identities. This is bounded input handling,
+not stronger proof of historical authenticity, report correctness, external
+archive custody, or human-evaluation readiness. No treatment, evaluator, or
+human study was rerun.
