@@ -21,7 +21,7 @@ def _paths():
     return matrix._expected_paths(csv_bytes, csv_path=csv_path)
 
 
-def _make_zip(tmp_path, *, prefix="", edit=None):
+def _make_zip(tmp_path, *, prefix="", edit=None, compression=zipfile.ZIP_STORED):
     traces, reports = _paths()
     files = {
         prefix + name: b'{"synthetic_fixture_only": true}'
@@ -34,7 +34,7 @@ def _make_zip(tmp_path, *, prefix="", edit=None):
     if edit is not None:
         edit(files, traces, reports)
     path = tmp_path / "synthetic-recovered.zip"
-    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as out:
+    with zipfile.ZipFile(path, "w", compression=compression) as out:
         for name, payload in sorted(files.items()):
             out.writestr(name, payload)
     return path
@@ -173,6 +173,107 @@ def test_same_byte_source_replacement_during_zip_inspection_fails_closed(
         matrix.audit_recovered_treatment_matrix(
             path, artifact_role="original_treatment", repo_root=root
         )
+
+
+def test_observed_content_manifest_binds_all_published_cells_without_authentication(
+    tmp_path, monkeypatch
+):
+    path = _make_zip(tmp_path)
+    _anchor_zip(monkeypatch, path)
+    receipt = matrix.audit_recovered_treatment_matrix(path, artifact_role="original_treatment")
+    manifest = receipt["observed_source_content_manifest"]
+    assert manifest["schema_version"] == 1
+    assert len(manifest["cells"]) == 40
+    assert len({(c["treatment"], c["task_id"], c["run_id"]) for c in manifest["cells"]}) == 40
+    assert manifest["cells"] == sorted(
+        manifest["cells"], key=lambda c: (c["treatment"], c["task_id"])
+    )
+    assert all(c["trace_uncompressed_bytes"] > 0 and
+               c["report_uncompressed_bytes"] > 0 for c in manifest["cells"])
+    encoded = json.dumps(
+        manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    assert receipt["observed_source_content_manifest_sha256"] == hashlib.sha256(
+        encoded
+    ).hexdigest()
+    assert receipt["source_content_fingerprint_independently_retained"] is False
+    assert receipt["historical_evidence_authenticated"] is False
+
+
+def test_source_content_digest_survives_zip_repackaging_and_outputs_prefix(
+    tmp_path, monkeypatch
+):
+    first_dir, second_dir = tmp_path / "first", tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    first = _make_zip(first_dir)
+    _anchor_zip(monkeypatch, first)
+    one = matrix.audit_recovered_treatment_matrix(first, artifact_role="original_treatment")
+    second = _make_zip(
+        second_dir, prefix="outputs/", compression=zipfile.ZIP_DEFLATED
+    )
+    _anchor_zip(monkeypatch, second)
+    two = matrix.audit_recovered_treatment_matrix(second, artifact_role="original_treatment")
+    assert one["zip_sha256_observed_now"] != two["zip_sha256_observed_now"]
+    assert one["observed_source_content_manifest"] == two["observed_source_content_manifest"]
+    assert (
+        one["observed_source_content_manifest_sha256"]
+        == two["observed_source_content_manifest_sha256"]
+    )
+
+
+def test_source_content_digest_changes_when_a_single_report_body_changes(
+    tmp_path, monkeypatch
+):
+    first_dir, second_dir = tmp_path / "first", tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    first = _make_zip(first_dir)
+    _anchor_zip(monkeypatch, first)
+    one = matrix.audit_recovered_treatment_matrix(first, artifact_role="original_treatment")
+
+    def mutate_one_report(files, traces, reports):
+        name = sorted(reports)[0]
+        files[name] += b"\nSynthetic change to original report bytes.\n"
+
+    second = _make_zip(second_dir, edit=mutate_one_report)
+    _anchor_zip(monkeypatch, second)
+    two = matrix.audit_recovered_treatment_matrix(second, artifact_role="original_treatment")
+    assert (
+        one["observed_source_content_manifest_sha256"]
+        != two["observed_source_content_manifest_sha256"]
+    )
+    assert sum(
+        a["report_sha256"] != b["report_sha256"]
+        for a, b in zip(
+            one["observed_source_content_manifest"]["cells"],
+            two["observed_source_content_manifest"]["cells"],
+        )
+    ) == 1
+
+
+def test_unrelated_zip_member_does_not_change_selected_source_digest(
+    tmp_path, monkeypatch
+):
+    first_dir, second_dir = tmp_path / "first", tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    first = _make_zip(first_dir)
+    _anchor_zip(monkeypatch, first)
+    one = matrix.audit_recovered_treatment_matrix(first, artifact_role="original_treatment")
+
+    def add_unrelated_member(files, traces, reports):
+        files["recovery_notes.txt"] = b"synthetic non-evidence metadata"
+
+    second = _make_zip(second_dir, edit=add_unrelated_member)
+    _anchor_zip(monkeypatch, second)
+    two = matrix.audit_recovered_treatment_matrix(second, artifact_role="original_treatment")
+    assert one["zip_sha256_observed_now"] != two["zip_sha256_observed_now"]
+    assert (
+        one["observed_source_content_manifest_sha256"]
+        == two["observed_source_content_manifest_sha256"]
+    )
+    assert two["historical_evidence_authenticated"] is False
 
 
 def test_cli_produces_explicit_non_custody_receipt(tmp_path, monkeypatch, capsys):

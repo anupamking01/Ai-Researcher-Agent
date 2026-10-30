@@ -303,6 +303,22 @@ rather than silently excluded from the proposed human-evaluation corpus. The
 published evaluator CSV is recaptured after ZIP verification, and changed
 bytes or a replaced file generation invalidate the result.
 
+The verifier now also emits an `observed_source_content_manifest`, with one
+deterministically ordered entry per frozen (treatment, task ID, run ID) cell.
+Each entry binds the preflight-verified **decompressed** SHA-256 and byte size
+of that cell's trace and Markdown report to the exact published evaluator
+identity. Its compact, sorted-key UTF-8 JSON encoding is summarized by
+`observed_source_content_manifest_sha256` (schema v1). This content digest
+is stable when source bytes are unchanged but ZIP compression, member ordering,
+the optional `outputs/` wrapper, or unrelated auxiliary files differ. Unlike
+a raw ZIP hash, it supports meaningful run-by-run comparisons between
+authorized original/recovery backups without extracting report text. One
+modified report or trace changes the corresponding cell hash and aggregate.
+It is **computed at inspection time**, is **not** a historical pin, and cannot
+authenticate the original report, a GitHub artifact, or any recovery source.
+Keep the complete receipt if later comparing two candidate archives; never
+treat matching present-day hashes as proof of independently retained custody.
+
 A caller-provided independent fingerprint is recorded as a **claim**; the tool cannot
 verify that the pin was independently retained. The receipt therefore keeps
 `independent_archive_custody_verified` false even when that supplied hash matches.

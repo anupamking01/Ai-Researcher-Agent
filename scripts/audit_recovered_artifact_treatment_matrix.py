@@ -52,23 +52,37 @@ def _capture_evaluator(path: Path) -> tuple[bytes, tuple[int, ...]]:
     return raw, after
 
 
-def _expected_paths(csv_bytes: bytes, *, csv_path: Path) -> tuple[set[str], set[str]]:
+def _expected_cells(csv_bytes: bytes, *, csv_path: Path) -> tuple[dict[str, str], ...]:
+    """Bind every published (treatment, task, run ID) to both source paths."""
     rows = lineage._read_study_csv(csv_bytes, path=csv_path)
     matrix = lineage._matrix(
         rows, label="published post-hoc evaluator",
         expected_cells=EXPECTED_CELLS, run_identity=True,
     )
-    traces = {
-        f"experiment_traces/{variant}/{row['run_id']}.json"
-        for (variant, _task), row in matrix.items()
-    }
-    reports = {
-        f"{row['run_id']}/research_report.md"
-        for row in matrix.values()
-    }
-    if len(traces) != 40 or len(reports) != 40:
+    cells = []
+    for variant, task in sorted(EXPECTED_CELLS):
+        run_id = matrix[(variant, task)]["run_id"]
+        cells.append({
+            "treatment": variant,
+            "task_id": task,
+            "run_id": run_id,
+            "trace_member": f"experiment_traces/{variant}/{run_id}.json",
+            "report_member": f"{run_id}/research_report.md",
+        })
+    if (
+        len({cell["trace_member"] for cell in cells}) != 40
+        or len({cell["report_member"] for cell in cells}) != 40
+    ):
         raise RecoveryMatrixError("published evaluator does not define 40 distinct source pairs")
-    return traces, reports
+    return tuple(cells)
+
+
+def _expected_paths(csv_bytes: bytes, *, csv_path: Path) -> tuple[set[str], set[str]]:
+    cells = _expected_cells(csv_bytes, csv_path=csv_path)
+    return (
+        {cell["trace_member"] for cell in cells},
+        {cell["report_member"] for cell in cells},
+    )
 
 
 def _verify_member_paths(
@@ -106,6 +120,44 @@ def _verify_member_paths(
     return prefix
 
 
+
+def _source_content_manifest(
+    files: list[dict], *, prefix: str,
+    cells: tuple[dict[str, str], ...],
+) -> tuple[dict, str]:
+    """Bind verified decompressed source hashes to frozen cells, not ZIP layout.
+
+    The structural preflight already validates decompressed bytes, CRCs and
+    member uniqueness. This canonical content-level receipt permits comparing
+    two separately packaged recovery candidates without assuming matching ZIP
+    compression, file ordering, or a shared outputs/ prefix. It is computed
+    NOW, not an independently retained historical fingerprint.
+    """
+    members = {item["path"]: item for item in files}
+    source_cells = []
+    for cell in cells:
+        trace = members[prefix + cell["trace_member"]]
+        report = members[prefix + cell["report_member"]]
+        source_cells.append({
+            "treatment": cell["treatment"],
+            "task_id": cell["task_id"],
+            "run_id": cell["run_id"],
+            "trace_sha256": trace["sha256"],
+            "trace_uncompressed_bytes": trace["uncompressed_bytes"],
+            "report_sha256": report["sha256"],
+            "report_uncompressed_bytes": report["uncompressed_bytes"],
+        })
+    manifest = {
+        "schema_version": 1,
+        "published_evaluator_csv_sha256": packet_builder.PUBLISHED_EVALUATOR_CSV_SHA256,
+        "cells": source_cells,
+    }
+    encoded = json.dumps(
+        manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode("utf-8")
+    return manifest, hashlib.sha256(encoded).hexdigest()
+
+
 def audit_recovered_treatment_matrix(
     archive: Path, *, artifact_role: str, repo_root: Path = REPO_ROOT,
     expected_archive_sha256: str | None = None,
@@ -121,13 +173,18 @@ def audit_recovered_treatment_matrix(
         raise RecoveryMatrixError("choose a pinned historical GitHub artifact role")
     csv_path = Path(repo_root) / lineage.SUPPORT_REL
     csv_bytes, csv_generation = _capture_evaluator(csv_path)
-    traces, reports = _expected_paths(csv_bytes, csv_path=csv_path)
+    cells = _expected_cells(csv_bytes, csv_path=csv_path)
+    traces = {cell["trace_member"] for cell in cells}
+    reports = {cell["report_member"] for cell in cells}
     archive_receipt = preflight.audit_recovered_zip(
         Path(archive), expected_archive_sha256=expected_archive_sha256,
         github_job_log_artifact=artifact_role,
     )
     names = {entry["path"] for entry in archive_receipt["files"]}
     layout_prefix = _verify_member_paths(names, traces=traces, reports=reports)
+    source_manifest, source_manifest_sha256 = _source_content_manifest(
+        archive_receipt["files"], prefix=layout_prefix, cells=cells,
+    )
     # The ZIP preflight can be lengthy. Do not authorize a result from an
     # evaluator CSV which changed or was replaced during archive inspection.
     csv_rechecked, generation_rechecked = _capture_evaluator(csv_path)
@@ -143,6 +200,10 @@ def audit_recovered_treatment_matrix(
         "trace_members_matched": len(traces),
         "report_members_matched": len(reports),
         "unselected_trace_or_report_members": 0,
+        "observed_source_content_manifest": source_manifest,
+        "observed_source_content_manifest_sha256": source_manifest_sha256,
+        "source_content_manifest_encoding": "utf8-json-sort-keys-compact-separators-v1",
+        "source_content_fingerprint_independently_retained": False,
         "zip_preflight_status": archive_receipt["status"],
         "zip_sha256_observed_now": archive_receipt["archive_sha256_observed_now"],
         "github_job_log_zip_correspondence": archive_receipt["github_job_log_zip_correspondence"],
@@ -157,9 +218,10 @@ def audit_recovered_treatment_matrix(
         "human_ratings_generated": False,
         "interpretation": (
             "Offline ZIP member-path completeness and published automated-run "
-            "identity correspondence only. Neither same-provider GitHub log "
-            "digests nor member paths authenticate historical trace/report "
-            "contents or independent archive custody. Human evaluation is blocked."
+            "identity correspondence and a current content-hash manifest only. "
+            "The SHA-256 of decompressed members is useful for comparing "
+            "recovery candidates, but is not an independently retained historical "
+            "pin or proof of report authenticity. Human evaluation is blocked."
         ),
     }
 
