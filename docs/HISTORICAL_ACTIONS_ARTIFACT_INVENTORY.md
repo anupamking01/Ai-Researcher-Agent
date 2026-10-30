@@ -618,8 +618,10 @@ whose calls and prompt/completion/total tokens are nonnegative integers, whose
 per-model token totals equal prompt plus completion tokens, and whose
 `unavailable_calls` remain zero under the recorded
 `provider_usage_complete` contract. The sum across models must reproduce the
-trace's model calls, unavailable calls and prompt/completion/total token fields,
-which were already checked against the published aggregate resource ledger.
+trace's model-call, unavailable-call, and prompt/completion/total-token
+fields. The fingerprint-pinned treatment CSV separately checks the aggregate
+model-call and total-token counts; it does not publish prompt/completion splits
+or independently authenticate provider billing.
 
 The comparator reuses the original-run extracted-archive readiness validator
 and rejects the same falsified per-model ledger in **both** otherwise matching
