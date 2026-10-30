@@ -268,3 +268,49 @@ independent pin. Matching the GitHub-logged ZIP digest verifies ZIP-byte
 correspondence to a *same-provider record*, **not** original trace/report
 historical authenticity, archival custody, or human-evaluation readiness.
 Those separate gates in `HUMAN_EVAL_ARCHIVE_RECOVERY.md` remain mandatory.
+
+## Recovered-ZIP 40-run source inventory before extraction
+
+A ZIP matching a historical GitHub upload fingerprint can still be an
+**uninterpreted archive**: the ordinary structural preflight does not check
+that its member paths are exactly the treatment/report sources measured by
+the frozen automated evaluator. The following separate, offline, read-only
+triage check enforces that distinction **without extracting an untrusted ZIP**:
+
+```bash
+python -m scripts.audit_recovered_artifact_treatment_matrix <authorized-candidate.zip> \\
+  --artifact-role original_treatment
+```
+
+Use `--artifact-role evaluator_recovery` only for the separately recovered
+and byte-matching evaluator ZIP. The role is mandatory: both size and SHA-256
+must first agree with the corresponding **GitHub-service-reported** historical
+job-log ZIP, and the complete conservative structural/CRC preflight must pass.
+An optional `--expected-archive-sha256` may be supplied **only** when a
+historical ZIP-byte pin was independently retained before recovery; never
+reuse the GitHub job-log digest as an allegedly independent pin.
+
+The audit reads `outputs/posthoc_support_runs.csv` from the checkout and
+requires its **exact published file-byte SHA-256** before using any run IDs.
+It checks the full frozen 40-cell D3/D6/P6/P6V task matrix and the uniqueness
+of all execution IDs, then requires **40 exact treatment trace member paths**
+(`experiment_traces/<variant>/<run_id>.json`) and the **40 corresponding
+Markdown report paths** (`<run_id>/research_report.md`). Since ZIP packaging
+may omit the shared `outputs/` parent, either a single root-level layout or
+a single `outputs/`-prefixed layout is accepted, never mixed. Unexpected
+trace or Markdown-report members anywhere else in the archive are rejected
+rather than silently excluded from the proposed human-evaluation corpus. The
+published evaluator CSV is recaptured after ZIP verification, and changed
+bytes or a replaced file generation invalidate the result.
+
+The successful receipt reports **member-path completeness and frozen
+execution-ID correspondence only**. It does not read or validate JSON trace
+semantics, check the actual Markdown report contents against source provenance,
+authenticate the original run's independent archival custody, prove the ZIP
+was recoverable on GitHub at inspection time, or authorize sending reports to
+annotators. The same-provider digest, path list, and observed-current member
+hashes are explicitly **not historical independent source fingerprints**.
+Original trace/report content validation, independently retained archival
+manifests, coordinator blinding packet checks, and two independent real human
+annotators remain separate mandatory research gates. No new pilot,
+confirmatory, exploratory, or human-validation outcome is inferred.
