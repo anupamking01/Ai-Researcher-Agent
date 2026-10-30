@@ -57,6 +57,75 @@ def _archive_source_snapshot(path: Path) -> tuple[tuple[int, ...], str]:
     return generation, digest
 
 
+
+# The original 2026-09-13 evaluator-only recovery workflow explicitly
+# documented this missing set before any recovery evaluator calls. It is
+# an operational lineage anchor, not a new research-analysis selection.
+RECOVERY_ONLY_EVALUATOR_CELLS = frozenset({
+    ("P6V", "main-02"),
+    ("P6V", "main-08"),
+    ("P6V", "main-10"),
+})
+
+
+def _evaluator_cache_map(
+    audit: dict, expected_cells: set[tuple[str, str]],
+) -> dict[tuple[str, str], tuple[str, int]]:
+    """Locate all evaluator caches without ignoring alternate ZIP layouts."""
+    prefix = audit["source_layout_prefix"]
+    expected_paths = {
+        f"{prefix}posthoc_evaluations/{variant}/{task}": (variant, task)
+        for variant, task in expected_cells
+    }
+    expected_paths = {
+        path + ".json": identity for path, identity in expected_paths.items()
+    }
+    observed = {}
+    for member in audit["observed_evaluator_cache_members"]:
+        path = member["path"]
+        if path not in expected_paths:
+            raise RecoveryConcordanceError(
+                "unselected or mixed-layout evaluator cache member: " + path
+            )
+        identity = expected_paths[path]
+        if identity in observed:
+            raise RecoveryConcordanceError("duplicate evaluator cache identity")
+        observed[identity] = (member["sha256"], member["uncompressed_bytes"])
+    return observed
+
+
+def _verify_evaluator_cache_continuity(
+    original: dict, recovered: dict,
+) -> tuple[int, int]:
+    """Check 37 historical evaluator caches survived the 3-cell resume.
+
+    This checks decompressed bytes and membership, not whether any evaluator
+    JSON is semantically valid or independently authentic.
+    """
+    cells = original["observed_source_content_manifest"]["cells"]
+    expected = {(cell["treatment"], cell["task_id"]) for cell in cells}
+    if len(expected) != 40 or not RECOVERY_ONLY_EVALUATOR_CELLS <= expected:
+        raise RecoveryConcordanceError("frozen evaluator cell matrix is incomplete")
+    original_cache = _evaluator_cache_map(original, expected)
+    recovery_cache = _evaluator_cache_map(recovered, expected)
+    preserved = expected - RECOVERY_ONLY_EVALUATOR_CELLS
+    if set(original_cache) != preserved:
+        raise RecoveryConcordanceError(
+            "original evaluator cache is not the historical 37-cell partial state"
+        )
+    if set(recovery_cache) != expected:
+        raise RecoveryConcordanceError(
+            "recovered evaluator cache is not the complete 40-cell state"
+        )
+    for identity in sorted(preserved):
+        if original_cache[identity] != recovery_cache[identity]:
+            raise RecoveryConcordanceError(
+                "preserved evaluator cache bytes changed for "
+                + "/".join(identity)
+            )
+    return len(preserved), len(RECOVERY_ONLY_EVALUATOR_CELLS)
+
+
 def compare_recovered_treatment_sources(
     original_archive: Path,
     recovery_archive: Path,
@@ -142,12 +211,25 @@ def compare_recovered_treatment_sources(
         != recovered["observed_source_content_manifest_sha256"]
     ):
         raise RecoveryConcordanceError("40-cell source manifest concordance failed")
+    # Evaluator-only recovery must add exactly the three declared missing
+    # cache cells, without rewriting any of the 37 preserved JSON outputs.
+    # This cannot be inferred from treatment-source hashes alone.
+    preserved_count, new_count = _verify_evaluator_cache_continuity(
+        original, recovered,
+    )
     return {
         "schema_version": 1,
         "status": "original_and_evaluator_recovery_40_source_pairs_match_not_authenticated",
         "source_cells_compared": 40,
         "trace_sources_unchanged": 40,
         "report_sources_unchanged": 40,
+        "preserved_evaluator_cache_members_byte_identical": preserved_count,
+        "recovery_only_evaluator_cache_members_present": new_count,
+        "recovery_only_evaluator_cells": [
+            {"treatment": variant, "task_id": task}
+            for variant, task in sorted(RECOVERY_ONLY_EVALUATOR_CELLS)
+        ],
+        "evaluator_cache_payload_semantics_verified": False,
         "source_content_manifest_sha256": original[
             "observed_source_content_manifest_sha256"
         ],
@@ -177,7 +259,11 @@ def compare_recovered_treatment_sources(
         "interpretation": (
             "Both candidate ZIPs match their separate historical GitHub job-log "
             "fingerprints and have exactly equal decompressed trace/report source "
-            "bytes for 40 frozen run identities. Same-provider log anchors and "
+            "bytes for 40 frozen run identities; 37 pre-existing evaluator "
+            "cache JSON byte streams also match, and only the three historically "
+            "missing evaluator cache members appear in recovery. This checks "
+            "cache membership and byte continuity, not the semantic validity "
+            "of new evaluations. Same-provider log anchors and "
             "present-day comparisons do not prove independently retained custody, "
             "historical report authenticity, or human-evaluation readiness."
         ),

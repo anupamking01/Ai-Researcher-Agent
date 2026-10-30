@@ -185,6 +185,17 @@ def audit_recovered_treatment_matrix(
     source_manifest, source_manifest_sha256 = _source_content_manifest(
         archive_receipt["files"], prefix=layout_prefix, cells=cells,
     )
+    # Capture evaluator-cache identities from the same already-validated ZIP
+    # scan as the treatment-source hashes. Their presence is not proof of
+    # evaluator validity; the cross-archive comparison enforces 37-to-40
+    # membership and unchanged bytes for the 37 pre-existing outputs.
+    evaluator_members = [
+        entry for entry in archive_receipt["files"]
+        if (
+            entry["path"].startswith("posthoc_evaluations/")
+            or "/posthoc_evaluations/" in entry["path"]
+        )
+    ]
     # The ZIP preflight can be lengthy. Do not authorize a result from an
     # evaluator CSV which changed or was replaced during archive inspection.
     csv_rechecked, generation_rechecked = _capture_evaluator(csv_path)
@@ -201,6 +212,7 @@ def audit_recovered_treatment_matrix(
         "report_members_matched": len(reports),
         "unselected_trace_or_report_members": 0,
         "observed_source_content_manifest": source_manifest,
+        "observed_evaluator_cache_members": evaluator_members,
         "observed_source_content_manifest_sha256": source_manifest_sha256,
         "source_content_manifest_encoding": "utf8-json-sort-keys-compact-separators-v1",
         "source_content_fingerprint_independently_retained": False,

@@ -16,7 +16,12 @@ from scripts import preflight_recovered_artifact_zip as preflight
 from scripts import verify_human_eval_automated_run_lineage as lineage
 
 
-def _pair(tmp_path, monkeypatch, *, mutate=None, drop=None):
+def _pair(
+    tmp_path, monkeypatch, *, mutate=None, drop=None,
+    mutate_evaluator=None, drop_recovery_evaluator=None,
+    omit_original_evaluator=None, extra_original_evaluator=None,
+    extra_recovery_evaluator=None,
+):
     csv_path = matrix.REPO_ROOT / lineage.SUPPORT_REL
     csv_bytes, _ = matrix._capture_evaluator(csv_path)
     traces, reports = matrix._expected_paths(csv_bytes, csv_path=csv_path)
@@ -24,12 +29,37 @@ def _pair(tmp_path, monkeypatch, *, mutate=None, drop=None):
         **{name: b'{"synthetic_fixture_only":true}' for name in sorted(traces)},
         **{name: b"# Synthetic markdown; not a research result\n" for name in sorted(reports)},
     }
+    # Reproduce only the frozen historical recovery *shape*, not real scores:
+    # original archive contains 37 cached JSONs; recovery adds three.
+    evaluator_path = lambda variant, task: f"posthoc_evaluations/{variant}/{task}.json"
+    evaluator_cells = [
+        (variant, task) for variant in lineage.VARIANTS for task in lineage.TASKS
+    ]
+    for variant, task in evaluator_cells:
+        if (variant, task) not in concordance.RECOVERY_ONLY_EVALUATOR_CELLS:
+            files[evaluator_path(variant, task)] = (
+                f'{{"synthetic_only":true,"treatment":"{variant}","task":"{task}"}}'
+            ).encode("utf-8")
+    if omit_original_evaluator:
+        files.pop(evaluator_path(*omit_original_evaluator))
+    if extra_original_evaluator:
+        files[extra_original_evaluator] = b'{"synthetic_only":true}'
     original_path = tmp_path / "original.zip"
     recovered_path = tmp_path / "evaluator-recovery.zip"
     with zipfile.ZipFile(original_path, "w", compression=zipfile.ZIP_STORED) as out:
         for name, data in sorted(files.items()):
             out.writestr(name, data)
     recovered = dict(files)
+    for variant, task in sorted(concordance.RECOVERY_ONLY_EVALUATOR_CELLS):
+        recovered[evaluator_path(variant, task)] = (
+            f'{{"synthetic_only":true,"new_cache":"{variant}/{task}"}}'
+        ).encode("utf-8")
+    if mutate_evaluator:
+        recovered[evaluator_path(*mutate_evaluator)] += b"\nsynthetic cache modification"
+    if drop_recovery_evaluator:
+        recovered.pop(evaluator_path(*drop_recovery_evaluator))
+    if extra_recovery_evaluator:
+        recovered[extra_recovery_evaluator] = b'{"synthetic_only":true}'
     if drop:
         del recovered[drop]
     if mutate:
@@ -60,6 +90,9 @@ def test_matching_40_sources_survive_repackaging_and_extra_recovery_metadata(
     receipt = concordance.compare_recovered_treatment_sources(original, recovered)
     assert receipt["trace_sources_unchanged"] == 40
     assert receipt["report_sources_unchanged"] == 40
+    assert receipt["preserved_evaluator_cache_members_byte_identical"] == 37
+    assert receipt["recovery_only_evaluator_cache_members_present"] == 3
+    assert receipt["evaluator_cache_payload_semantics_verified"] is False
     assert receipt["original_zip_sha256_observed_now"] != receipt[
         "recovery_zip_sha256_observed_now"
     ]
@@ -211,3 +244,69 @@ def test_archive_symlink_is_not_accepted_as_comparison_input(tmp_path, monkeypat
         pytest.skip("symlinks unavailable on this platform")
     with pytest.raises(concordance.RecoveryConcordanceError, match="archive source"):
         concordance.compare_recovered_treatment_sources(alias, recovered)
+
+
+def test_recovery_preserves_all_37_existing_evaluator_cache_bytes(
+    tmp_path, monkeypatch,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch, mutate_evaluator=("D3", "main-01"),
+    )
+    with pytest.raises(
+        concordance.RecoveryConcordanceError,
+        match="preserved evaluator cache bytes changed",
+    ):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_recovery_requires_all_three_missing_evaluator_cache_members(
+    tmp_path, monkeypatch,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch, drop_recovery_evaluator=("P6V", "main-08"),
+    )
+    with pytest.raises(
+        concordance.RecoveryConcordanceError, match="complete 40-cell state"
+    ):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_original_evaluator_cannot_claim_one_of_the_three_recovery_only_cells(
+    tmp_path, monkeypatch,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        extra_original_evaluator="posthoc_evaluations/P6V/main-02.json",
+    )
+    with pytest.raises(
+        concordance.RecoveryConcordanceError, match="historical 37-cell"
+    ):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_missing_preserved_original_evaluator_cell_fails(
+    tmp_path, monkeypatch,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch, omit_original_evaluator=("D3", "main-01"),
+    )
+    with pytest.raises(
+        concordance.RecoveryConcordanceError, match="historical 37-cell"
+    ):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+@pytest.mark.parametrize("unexpected_path", [
+    "posthoc_evaluations/P6V/main-99.json",
+    "unselected/posthoc_evaluations/D3/main-01.json",
+])
+def test_extra_or_mixed_layout_evaluator_cache_is_not_silently_ignored(
+    tmp_path, monkeypatch, unexpected_path,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch, extra_recovery_evaluator=unexpected_path,
+    )
+    with pytest.raises(
+        concordance.RecoveryConcordanceError, match="unselected or mixed-layout"
+    ):
+        concordance.compare_recovered_treatment_sources(original, recovered)

@@ -394,3 +394,32 @@ post-receipt changes, historical ZIP authentication, or independent archival
 custody proof. The required original trace/report authentication and human
 evaluation handoff gates remain unchanged. Regression tests use synthetic
 ZIPs and unchanged synthetic research outcomes only.
+
+
+## Original-to-recovery evaluator-cache byte continuity (offline; not human validation)
+
+The two-archive source comparator also now verifies that the evaluator-only
+recovery **retained all 37 pre-existing cached evaluator JSON outputs
+byte-for-byte**, and added exactly the three historical missing cells:
+P6V/main-02, P6V/main-08, and P6V/main-10. These cells are fixed by the
+historical evaluator-recovery workflow's *pre-execution* validation step,
+not chosen after inspecting research outcomes.
+
+Each archived JSON member is read through the bounded ZIP/CRC/SHA-256 preflight
+already used for trace/report concordance. The comparator requires the
+original ZIP to contain the exact 37 expected evaluator-cache member paths
+and the recovery ZIP to contain exactly 40. Any overwritten original cache,
+missing new member, unexpected treatment/task cache, or mixed directory
+layout blocks the comparison. This makes the "evaluator-only recovery" source
+integrity claim independently testable when both original ZIPs are recovered,
+without running the evaluator again or extracting potentially unsafe files.
+
+Run the same two-archive comparison command described above; the receipt now
+also reports 37 byte-identical preserved evaluator caches and three new
+cache members. **It does not parse or validate the semantic contents of the
+three new evaluator JSONs**, prove the accuracy of automated scores, or establish
+the truth or independent historical custody of an archive. The published frozen
+40-row evaluator CSV and its independent aggregate-verification gates remain
+separate prerequisites. Until two authorized historical archives are recovered,
+the new integrity check is validated only with synthetic fixtures; no real
+archive comparison or human annotation has occurred.
