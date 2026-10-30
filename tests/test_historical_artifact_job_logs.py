@@ -114,3 +114,69 @@ def test_cli_accepts_bounded_synthetic_job_logs(tmp_path, capsys, monkeypatch):
     ])
     assert audit.main() == 0
     assert "historical_github_job_log_zip_lineage_corresponds_not_authenticated" in capsys.readouterr().out
+
+
+
+def test_original_upload_log_line_order_does_not_mask_reversed_clock_times():
+    original, recovery = _logs()
+    original = original.replace(
+        "2026-09-11T17:22:40.4375561Z",
+        "2026-09-11T17:22:41.4375561Z",
+    )
+    with pytest.raises(audit.HistoricalLogError, match="timestamps are out of order"):
+        audit.audit_historical_job_logs(original, recovery)
+
+
+def test_recovery_download_reordered_timestamps_fail_closed():
+    original, recovery = _logs()
+    recovery = recovery.replace(
+        "2026-09-13T21:21:04.3207087Z",
+        "2026-09-13T21:21:06.3207087Z",
+    )
+    with pytest.raises(audit.HistoricalLogError, match="timestamps are out of order"):
+        audit.audit_historical_job_logs(original, recovery)
+
+
+def test_original_archive_cannot_be_logged_as_uploaded_after_recovery_download():
+    original, recovery = _logs()
+    original = original.replace("2026-09-11T", "2026-09-14T")
+    with pytest.raises(audit.HistoricalLogError, match="chronology contradicts archive lineage"):
+        audit.audit_historical_job_logs(original, recovery)
+
+
+def test_recovery_archive_cannot_be_logged_as_uploaded_before_source_download():
+    original, recovery = _logs()
+    recovery = recovery.replace("2026-09-13T21:21:3", "2026-09-13T21:20:3")
+    with pytest.raises(audit.HistoricalLogError, match="chronology contradicts archive lineage"):
+        audit.audit_historical_job_logs(original, recovery)
+
+
+def test_impossible_calendar_date_in_expected_event_fails_closed():
+    original, recovery = _logs()
+    original = original.replace(
+        "2026-09-11T17:22:40.4375561Z",
+        "2026-02-30T17:22:40.4375561Z",
+    )
+    with pytest.raises(audit.HistoricalLogError, match="invalid GitHub job-log UTC"):
+        audit.audit_historical_job_logs(original, recovery)
+
+
+def test_equal_timestamp_precision_does_not_invent_event_reversal():
+    original, recovery = _logs()
+    original = original.replace(
+        "2026-09-11T17:22:40.6897562Z",
+        "2026-09-11T17:22:40.6898529Z",
+    )
+    receipt = audit.audit_historical_job_logs(original, recovery)
+    assert receipt["two_workflow_github_log_digest_concordance"] is True
+    assert receipt["historical_treatment_evidence_authenticated"] is False
+
+
+def test_submicrosecond_clock_reversal_is_detected():
+    original, recovery = _logs()
+    original = original.replace(
+        "2026-09-11T17:22:40.6897562Z",
+        "2026-09-11T17:22:40.6898530Z",
+    )
+    with pytest.raises(audit.HistoricalLogError, match="timestamps are out of order"):
+        audit.audit_historical_job_logs(original, recovery)

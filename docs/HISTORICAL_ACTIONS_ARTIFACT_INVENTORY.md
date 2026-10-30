@@ -218,7 +218,16 @@ The auditor accepts at most 2 MiB per log, reads without following symlinks,
 requires the named upload/download action boundaries and unique ordered event
 lines, and compares all artifact IDs, byte sizes, ZIP digests, run-scoped URLs
 and the cross-run original download digest against the recorded metadata.
-An invalid, ambiguous or modified transcript fails closed. Offline tests
+An invalid, ambiguous or modified transcript fails closed. The audit also
+parses full-precision UTC event timestamps, rejects impossible calendar dates
+or event-time reversals even when log *line order* is plausible, and requires
+original upload to precede the recovery download and recovery download to
+precede the evaluator-recovery ZIP upload. It permits equal timestamps when
+the logger cannot distinguish two adjacent events; log line order still must
+be valid. These checks establish **internal recorded chronology only**:
+caller-supplied GitHub logs are not independently authenticated, clock
+metadata is not a cryptographic custody attestation, and no ZIP or report
+bytes are recovered by this audit. Offline tests
 use only synthetic log excerpts. These supplied logs are not cryptographically
 authenticated as genuine GitHub output by the offline parser; retaining them
 separately along with signed or independently archived source bytes is still

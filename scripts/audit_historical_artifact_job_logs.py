@@ -9,6 +9,8 @@ digests; a matching log excerpt is not an out-of-band signed attestation.
 from __future__ import annotations
 
 import argparse
+import calendar
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -48,6 +50,23 @@ _HEX = r"[0-9a-f]{64}"
 
 class HistoricalLogError(ValueError):
     """Logs cannot support the claimed historical GitHub ZIP metadata."""
+
+
+def _event_time_ns(timestamp: str) -> int:
+    """Parse action-log UTC timestamps with all nine fractional digits preserved."""
+    try:
+        seconds = datetime.strptime(timestamp[:19], "%Y-%m-%dT%H:%M:%S")
+        nanoseconds = int(timestamp[20:-1].ljust(9, "0"))
+    except ValueError as exc:
+        raise HistoricalLogError("invalid GitHub job-log UTC event timestamp") from exc
+    return calendar.timegm(seconds.timetuple()) * 1_000_000_000 + nanoseconds
+
+
+def _require_event_chronology(events: list[tuple[int, str, re.Match]], label: str) -> None:
+    """Log lines alone do not establish event-time order or a valid calendar date."""
+    instants = [_event_time_ns(event[1]) for event in events]
+    if any(later < earlier for earlier, later in zip(instants, instants[1:])):
+        raise HistoricalLogError(f"{label}: GitHub event timestamps are out of order")
 
 
 def _bounded_lines(content: str, label: str) -> list[tuple[str, str]]:
@@ -114,6 +133,7 @@ def _upload(step: list[tuple[str, str]], expected: dict) -> dict:
     )
     if not digest[0] < finalized[0] < success[0] < url[0]:
         raise HistoricalLogError("artifact upload events occur in unexpected order")
+    _require_event_chronology([digest, finalized, success, url], "artifact upload")
     if (
         digest[2]["sha"] != expected["zip_sha256"]
         or any(int(event[2]["id"]) != expected["artifact_id"] for event in (finalized, success, url))
@@ -124,6 +144,7 @@ def _upload(step: list[tuple[str, str]], expected: dict) -> dict:
         **expected,
         "upload_digest_logged_at_utc": digest[1],
         "upload_completed_logged_at_utc": success[1],
+        "upload_url_logged_at_utc": url[1],
         "source": "GitHub Actions upload-artifact@v4 job log",
     }
 
@@ -152,6 +173,7 @@ def _download(step: list[tuple[str, str]]) -> dict:
     count = _one(step, r"Total of 1 artifact\(s\) downloaded", "single recovered download")
     if not announced[0] < source[0] < observed[0] < complete[0] < count[0]:
         raise HistoricalLogError("recovery download events occur in unexpected order")
+    _require_event_chronology([announced, source, observed, complete, count], "recovery download")
     if (
         int(announced[2]["id"]) != expected["artifact_id"]
         or int(source[2]["id"]) != expected["artifact_id"]
@@ -165,7 +187,9 @@ def _download(step: list[tuple[str, str]]) -> dict:
         "to_run_id": RECOVERED["run_id"],
         "artifact_id": expected["artifact_id"],
         "zip_sha256": expected["zip_sha256"],
+        "download_announced_logged_at_utc": announced[1],
         "observed_download_logged_at_utc": observed[1],
+        "download_count_logged_at_utc": count[1],
         "source": "GitHub Actions download-artifact@v4 job log",
     }
 
@@ -177,6 +201,16 @@ def audit_historical_job_logs(original_log: str, recovery_log: str) -> dict:
     treatment = _upload(_action_step(original_lines, "upload-artifact"), ORIGINAL)
     download = _download(_action_step(recovery_lines, "download-artifact"))
     recovered = _upload(_action_step(recovery_lines, "upload-artifact"), RECOVERED)
+    # Even when all recorded SHA-256 digests agree, a transcript claiming that
+    # the original upload occurred after its recovery download (or that the
+    # recovered ZIP was uploaded before that download) is not provenance.
+    if not (
+        _event_time_ns(treatment["upload_url_logged_at_utc"])
+        <= _event_time_ns(download["download_announced_logged_at_utc"])
+        and _event_time_ns(download["download_count_logged_at_utc"])
+        <= _event_time_ns(recovered["upload_digest_logged_at_utc"])
+    ):
+        raise HistoricalLogError("historical GitHub event chronology contradicts archive lineage")
     return {
         "schema_version": 1,
         "study_id": "budget-main-v1",
