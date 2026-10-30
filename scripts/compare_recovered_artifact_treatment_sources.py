@@ -14,9 +14,10 @@ import hashlib
 import json
 import math
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import stat
 import zipfile
+from urllib.parse import unquote
 
 from scripts import audit_recovered_artifact_treatment_matrix as matrix
 from scripts import preflight_recovered_artifact_zip as preflight
@@ -498,6 +499,61 @@ FROZEN_TREATMENT_ASSIGNMENTS = {
     "P6V": ("planner", 6, "verify"),
 }
 MAX_TREATMENT_TRACE_JSON_BYTES = 16 * 1024 * 1024
+# Report bytes were already scanned under the ZIP preflight's member bound.
+# This second read verifies trace-to-report consistency, not external custody.
+MAX_TREATMENT_REPORT_BYTES = preflight.MAX_MEMBER_BYTES
+
+
+def _verify_archived_report_trace_binding(
+    source: zipfile.ZipFile, *, prefix: str, cell: dict, trace: dict,
+) -> None:
+    """Check the recorded report pointer and word count against the actual Markdown.
+
+    Treatment instrumentation counts report_text.split() before writing that
+    same string to research_report.md. Merely agreeing with the published CSV
+    does not establish that the archived report is that treatment's output.
+    """
+    run_id = cell["run_id"]
+    recorded = trace.get("report_path")
+    if type(recorded) is not str or not recorded or recorded != recorded.strip():
+        raise RecoveryConcordanceError(
+            "historical treatment trace report_path is missing or invalid: " + run_id
+        )
+    decoded = unquote(recorded)
+    if (
+        decoded.startswith("/")
+        or "\\" in decoded
+        or PurePosixPath(decoded).parts not in (
+            ("outputs", run_id, "research_report.pdf"),
+            ("outputs", run_id, "research_report.md"),
+        )
+    ):
+        raise RecoveryConcordanceError(
+            "historical treatment trace report_path does not identify its run: " + run_id
+        )
+    path = f"{prefix}{run_id}/research_report.md"
+    size = cell["report_uncompressed_bytes"]
+    if not 0 < size <= MAX_TREATMENT_REPORT_BYTES:
+        raise RecoveryConcordanceError(
+            "historical Markdown report exceeds semantic size bound: " + path
+        )
+    with source.open(path, "r") as member:
+        raw = member.read(size + 1)
+    if len(raw) != size or hashlib.sha256(raw).hexdigest() != cell["report_sha256"]:
+        raise RecoveryConcordanceError(
+            "historical Markdown report bytes disagree with ZIP preflight: " + path
+        )
+    try:
+        word_count = len(raw.decode("utf-8").split())
+    except UnicodeDecodeError as exc:
+        raise RecoveryConcordanceError(
+            "historical Markdown report must be UTF-8: " + path
+        ) from exc
+    if word_count == 0 or word_count != trace["report_words"]:
+        raise RecoveryConcordanceError(
+            "historical Markdown report word count disagrees with trace and "
+            "published treatment CSV: " + path
+        )
 
 
 def _finite_trace_json_float(token: str) -> float:
@@ -633,6 +689,9 @@ def _verify_archived_treatment_trace_identities(
                             f"historical treatment trace {trace_field} differs "
                             f"from frozen treatment CSV: {path}"
                         )
+                _verify_archived_report_trace_binding(
+                    source, prefix=prefix, cell=cell, trace=trace,
+                )
     except (zipfile.BadZipFile, KeyError) as exc:
         raise RecoveryConcordanceError(
             "historical treatment trace member cannot be reread from verified ZIP"
@@ -777,6 +836,8 @@ def compare_recovered_treatment_sources(
         "recovery_completed_treatment_trace_identities_checked": recovered_traces_checked,
         "original_treatment_published_resource_ledgers_matched": original_traces_checked,
         "recovery_treatment_published_resource_ledgers_matched": recovered_traces_checked,
+        "original_trace_report_path_and_word_counts_matched": original_traces_checked,
+        "recovery_trace_report_path_and_word_counts_matched": recovered_traces_checked,
         "published_treatment_csv_sha256": PUBLISHED_TREATMENT_CSV_SHA256,
         "trace_sources_unchanged": 40,
         "report_sources_unchanged": 40,
@@ -833,7 +894,8 @@ def compare_recovered_treatment_sources(
             "missing evaluator cache members appear in recovery. This checks "
             "cache membership, byte continuity, JSON/schema/run identity, plus "
             "original and recovery treatment trace completion, frozen task, "
-            "treatment assignment and source-budget consistency; and "
+            "treatment assignment, source-budget and report-pointer/actual-"
+            "Markdown-word-count consistency; and "
             "exact published score/count/token/cost correspondence for 37 original "
             "plus 40 recovered caches. Schema-v2 report and original treatment-task "
             "question fingerprints are also checked against their distinct "

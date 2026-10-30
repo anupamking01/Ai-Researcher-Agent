@@ -25,6 +25,7 @@ def _pair(
     bad_recovery_cache=None, tamper_original_measurements=None,
     tamper_trace=None, invalid_trace_bytes=None,
     tamper_recovery_measurements=None, schema2_recovery_cache=None,
+    invalid_report_bytes=None,
 ):
     csv_path = matrix.REPO_ROOT / lineage.SUPPORT_REL
     csv_bytes, _ = matrix._capture_evaluator(csv_path)
@@ -96,14 +97,26 @@ def _pair(
                 "model_call_count": int(published["model_calls"]),
                 "total_tokens": int(published["total_tokens"]),
                 "report_words": int(published["report_words"]),
+                "report_path": f"./outputs/{run_id}/research_report.pdf",
             },
         }
         return json.dumps(record, sort_keys=True).encode("utf-8")
 
+    def synthetic_report(name):
+        # Match only the *recorded* frozen word-count shape. No genuine report,
+        # experimental output, or claimed human observation is reconstructed.
+        run_id = Path(name).parent.name
+        cell = by_run_id[run_id]
+        words = int(published_treatments[cell]["report_words"])
+        return ("synthetic " * words).encode("utf-8")
+
     files = {
         **{name: synthetic_trace(name) for name in sorted(traces)},
-        **{name: b"# Synthetic markdown; not a research result\n" for name in sorted(reports)},
+        **{name: synthetic_report(name) for name in sorted(reports)},
     }
+    if invalid_report_bytes:
+        variant, task, replacement = invalid_report_bytes
+        files[f"{frozen_run_ids[(variant, task)]}/research_report.md"] = replacement
     if tamper_trace or invalid_trace_bytes:
         variant, task = (tamper_trace or invalid_trace_bytes)[:2]
         trace_path = f"experiment_traces/{variant}/{frozen_run_ids[(variant, task)]}.json"
@@ -798,5 +811,50 @@ def test_historical_trace_semantic_read_has_independent_member_size_bound(
 ):
     original, recovered, _, _ = _pair(tmp_path, monkeypatch)
     monkeypatch.setattr(concordance, "MAX_TREATMENT_TRACE_JSON_BYTES", 10)
+    with pytest.raises(concordance.RecoveryConcordanceError, match="semantic size bound"):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+@pytest.mark.parametrize(("report_path", "message"), [
+    ("", "report_path is missing or invalid"),
+    ("../main-01/research_report.pdf", "report_path does not identify its run"),
+    ("./outputs/different-run/research_report.pdf", "report_path does not identify its run"),
+    ("./outputs/%2e%2e/research_report.pdf", "report_path does not identify its run"),
+    ("./outputs/other\\run/research_report.pdf", "report_path does not identify its run"),
+])
+def test_historical_trace_report_pointer_must_select_its_own_frozen_run(
+    tmp_path, monkeypatch, report_path, message,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        tamper_trace=("D3", "main-01", "trace", "report_path", report_path),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match=message):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+@pytest.mark.parametrize(("replacement", "message"), [
+    (b"synthetic mismatch with frozen report count\n", "Markdown report word count"),
+    (b"\xff\xfeinvalid utf8", "Markdown report must be UTF-8"),
+    (b"   \n\t", "Markdown report word count"),
+])
+def test_identical_archives_cannot_hide_report_content_disagreement_with_trace(
+    tmp_path, monkeypatch, replacement, message,
+):
+    # Change both archives: source-concordance and the published trace count
+    # still match, but the actual archived report no longer corresponds.
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        invalid_report_bytes=("D3", "main-01", replacement),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match=message):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_historical_report_semantic_reread_has_independent_size_guard(
+    tmp_path, monkeypatch,
+):
+    original, recovered, _, _ = _pair(tmp_path, monkeypatch)
+    monkeypatch.setattr(concordance, "MAX_TREATMENT_REPORT_BYTES", 1)
     with pytest.raises(concordance.RecoveryConcordanceError, match="semantic size bound"):
         concordance.compare_recovered_treatment_sources(original, recovered)
