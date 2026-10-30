@@ -100,6 +100,39 @@ def _pair(
                 "report_path": f"./outputs/{run_id}/research_report.pdf",
             },
         }
+        # Strictly synthetic query/result URL ledgers. The counts are copied
+        # from the frozen CSV only to exercise its already-published shape;
+        # these URLs do not represent actual retrieved web sources.
+        scheduled_urls = [
+            f"https://fixture.invalid/{variant}/{task}/source-{index:02d}"
+            for index in range(success + failure)
+        ]
+        search_queries = (
+            [original_questions[task]] if variant in ("D3", "D6") else
+            [f"synthetic planner query {index + 1} for {task}" for index in range(4)]
+        )
+        base, remainder = divmod(budget, len(search_queries))
+        records = []
+        offset = 0
+        for index, query in enumerate(search_queries):
+            allocation = base + (1 if index < remainder else 0)
+            selected = scheduled_urls[offset:offset + allocation]
+            records.append({
+                "query": query,
+                "candidate_urls": list(selected),
+                "scheduled_urls": list(selected),
+            })
+            offset += len(selected)
+        assert offset == len(scheduled_urls)
+        assert len(records) == int(published["search_calls"])
+        record["trace"].update({
+            "query_count": len(search_queries),
+            "search_queries": search_queries,
+            "search_records": records,
+            "scheduled_urls": scheduled_urls,
+            "successful_urls": scheduled_urls[:success],
+            "failed_urls": scheduled_urls[success:],
+        })
         return json.dumps(record, sort_keys=True).encode("utf-8")
 
     def synthetic_report(name):
@@ -128,7 +161,9 @@ def _pair(
                 for key, value in zip(field, replacement, strict=True):
                     target[key] = value
             else:
-                target[field] = replacement
+                target[field] = (
+                    replacement(target[field]) if callable(replacement) else replacement
+                )
             files[trace_path] = json.dumps(record, sort_keys=True).encode("utf-8")
         else:
             files[trace_path] = invalid_trace_bytes[2]
@@ -857,4 +892,72 @@ def test_historical_report_semantic_reread_has_independent_size_guard(
     original, recovered, _, _ = _pair(tmp_path, monkeypatch)
     monkeypatch.setattr(concordance, "MAX_TREATMENT_REPORT_BYTES", 1)
     with pytest.raises(concordance.RecoveryConcordanceError, match="semantic size bound"):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+@pytest.mark.parametrize(("field", "replacement", "error"), [
+    ("query_count", 0, "query_count"),
+    ("search_queries", ["substituted query"], "query order"),
+    ("search_records", [], "search_records/search_call_count"),
+    ("scheduled_urls", ["https://fixture.invalid/fake"], "scheduled_urls"),
+    ("successful_urls", [], "successful_urls"),
+])
+def test_historical_source_query_ledgers_are_not_inferred_from_aggregate_counts(
+    tmp_path, monkeypatch, field, replacement, error,
+):
+    # Both synthetic ZIPs carry the SAME tampered trace: byte concordance
+    # and the frozen published counters still agree, but the nested source
+    # provenance contradicts the original research-agent execution contract.
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        tamper_trace=("D3", "main-07", "trace", field, replacement),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match=error):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def _synthetic_overallocated_first_planner_query(records):
+    rows = [
+        {**record,
+         "candidate_urls": list(record["candidate_urls"]),
+         "scheduled_urls": list(record["scheduled_urls"])}
+        for record in records
+    ]
+    # P6/main-01 has 6 scheduled URLs across four planned searches with
+    # per-query allocation [2,2,1,1]. Move one scheduled URL from the
+    # second query to the first: all global counts and URL order still match.
+    transferred = rows[1]["scheduled_urls"].pop(0)
+    assert transferred == rows[1]["candidate_urls"].pop(0)
+    rows[0]["candidate_urls"].append(transferred)
+    rows[0]["scheduled_urls"].append(transferred)
+    return rows
+
+
+def _synthetic_skipped_earliest_candidate(records):
+    rows = [
+        {**record,
+         "candidate_urls": list(record["candidate_urls"]),
+         "scheduled_urls": list(record["scheduled_urls"])}
+        for record in records
+    ]
+    # Scheduled URLs remain a valid subsequence and all global counts agree,
+    # yet an earlier unseen candidate was silently skipped.
+    rows[0]["candidate_urls"].insert(
+        0, "https://fixture.invalid/P6/main-01/skipped-earliest"
+    )
+    return rows
+
+
+@pytest.mark.parametrize(("mutation", "error"), [
+    (_synthetic_overallocated_first_planner_query, "per-query browse budget"),
+    (_synthetic_skipped_earliest_candidate, "greedy candidate URL scheduling"),
+])
+def test_historical_planner_query_allocation_and_greedy_url_scheduling(
+    tmp_path, monkeypatch, mutation, error,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        tamper_trace=("P6", "main-01", "trace", "search_records", mutation),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match=error):
         concordance.compare_recovered_treatment_sources(original, recovered)

@@ -19,6 +19,7 @@ import stat
 import zipfile
 from urllib.parse import unquote
 
+from scripts import audit_human_eval_archive_readiness as readiness
 from scripts import audit_recovered_artifact_treatment_matrix as matrix
 from scripts import preflight_recovered_artifact_zip as preflight
 from scripts import verify_frozen_main_study_tasks as frozen_tasks
@@ -689,6 +690,25 @@ def _verify_archived_treatment_trace_identities(
                             f"historical treatment trace {trace_field} differs "
                             f"from frozen treatment CSV: {path}"
                         )
+                # Provenance of retrieval scheduling matters for the study's
+                # retrieval-vs-planning contrast: published aggregate counts
+                # alone do not enforce which queries scheduled which URLs.
+                # Reuse the original-run contract already checked by the
+                # extracted-archive readiness diagnostic; do not trust ZIP
+                # filename/byte concordance as semantic provenance.
+                try:
+                    readiness._validate_recovered_source_ledgers(
+                        trace, variant=variant,
+                    )
+                    readiness._validate_recovered_search_provenance(trace)
+                    readiness._validate_recovered_query_budget_allocation(
+                        trace, variant=variant,
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise RecoveryConcordanceError(
+                        "historical treatment source-query provenance violates "
+                        f"original scheduling contract: {path}: {exc}"
+                    ) from exc
                 _verify_archived_report_trace_binding(
                     source, prefix=prefix, cell=cell, trace=trace,
                 )
@@ -836,6 +856,8 @@ def compare_recovered_treatment_sources(
         "recovery_completed_treatment_trace_identities_checked": recovered_traces_checked,
         "original_treatment_published_resource_ledgers_matched": original_traces_checked,
         "recovery_treatment_published_resource_ledgers_matched": recovered_traces_checked,
+        "original_treatment_query_and_url_scheduling_checked": original_traces_checked,
+        "recovery_treatment_query_and_url_scheduling_checked": recovered_traces_checked,
         "original_trace_report_path_and_word_counts_matched": original_traces_checked,
         "recovery_trace_report_path_and_word_counts_matched": recovered_traces_checked,
         "published_treatment_csv_sha256": PUBLISHED_TREATMENT_CSV_SHA256,
@@ -894,7 +916,7 @@ def compare_recovered_treatment_sources(
             "missing evaluator cache members appear in recovery. This checks "
             "cache membership, byte continuity, JSON/schema/run identity, plus "
             "original and recovery treatment trace completion, frozen task, "
-            "treatment assignment, source-budget and report-pointer/actual-"
+            "treatment assignment, source-budget, query/URL scheduling and report-pointer/actual-"
             "Markdown-word-count consistency; and "
             "exact published score/count/token/cost correspondence for 37 original "
             "plus 40 recovered caches. Schema-v2 report and original treatment-task "

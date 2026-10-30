@@ -598,3 +598,11 @@ archival chain of custody is independently authenticated. Synthetic fixtures
 exercise the consistency gate while the historic ZIPs are unavailable; do not
 alter original research reports to make a mismatch pass or describe this as
 human validation.
+
+## Historical treatment source-query scheduling provenance (offline)
+
+The original/recovery ZIP comparator now checks nested **planned queries, search-result records and scheduled source URLs** for all 40 treatment traces in each archive. A frozen treatment CSV can agree on total retrievals and model/search-call counts while a byte-identical original/recovery trace assigns the same URLs to different queries or silently skips an earlier candidate. These are material differences when interpreting the D3/D6 retrieval and P6/P6V planning contrasts.
+
+Each role-pinned trace must preserve the original runner's URL-ledger partition, query count and execution order, direct-arm exact-question search versus planner-arm four-query plan, per-query browse budget distribution, and greedy earliest-unvisited-candidate scheduling. The comparison reuses the independent extracted-archive recovery-diagnostic validators rather than maintaining a conflicting copy of the protocol. It remains offline, read-only and inside the existing preflight ZIP-byte and source-generation checks. The receipt reports `original_treatment_query_and_url_scheduling_checked: 40` and `recovery_treatment_query_and_url_scheduling_checked: 40` only when all checks pass.
+
+This is **internal recorded-provenance consistency**, not proof that the search service returned those URLs, that any source page was genuine or correctly interpreted, or that either historical ZIP was independently retained. The missing original/recovery archives still block authentic historical comparison; synthetic regression fixtures are not scientific observations, confirmatory outcomes or human annotations.
