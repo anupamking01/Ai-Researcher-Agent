@@ -552,3 +552,25 @@ historical archive custody, or automated measurement correctness. The original
 40 source traces remain unavailable for this inspection; regression tests use
 synthetic fixture archives only. It does not rerun treatments or evaluators,
 create human ratings, or permit human packet distribution.
+
+
+## Frozen published treatment-resource ledger correspondence (offline)
+
+An archived treatment trace may have the correct run ID, completed status,
+question, assigned treatment, and a *self-consistent* source budget while
+still contradicting the measurements in the published cost-quality study.
+The original/recovery ZIP comparator now checks every trace's source budget,
+successful and failed source counts, search/model call counts, treatment-token
+count, and report-word count against the **same frozen treatment/task cell**
+in `outputs/main_study_runs.csv`. That CSV must match the canonical-analysis
+input SHA-256 `966ea80519af5ea7b832c86d7868525a4ef75874f396f242291e3be949382a0e`
+before either archive audit. The source is captured before and reread after
+both inspections, including same-byte replacement detection.
+
+The receipt counts original and recovery published-resource ledger checks
+separately (40 each). This confirms recorded resource-count correspondence,
+not independent recomputation of provider tokens, treatment costs, latency,
+web-source authenticity, or report quality. A matching published table does
+not establish independent historical custody. Original historical ZIPs remain
+unavailable; only explicitly synthetic ZIP fixtures test the new gate.
+No treatments, evaluators, or human ratings are run or generated.

@@ -121,6 +121,60 @@ def _frozen_questions_snapshot(
     return questions, after, digest
 
 
+# This treatment export is pinned by the published analysis input manifest.
+# Its correspondence check is not independently authenticated archive custody.
+PUBLISHED_TREATMENT_CSV_SHA256 = (
+    "966ea80519af5ea7b832c86d7868525a4ef75874f396f242291e3be949382a0e"
+)
+TREATMENT_RESOURCE_FIELDS = {
+    "source_budget": "source_budget",
+    "successful_sources": "successful_source_count",
+    "failed_sources": "failed_source_count",
+    "search_calls": "search_call_count",
+    "model_calls": "model_call_count",
+    "total_tokens": "total_tokens",
+    "report_words": "report_words",
+}
+
+
+def _frozen_treatment_snapshot(
+    repo_root: Path,
+) -> tuple[dict[tuple[str, str], dict[str, str]], tuple[int, ...], str]:
+    """Pin published treatment-resource counts across the two-ZIP audit.
+
+    These historical export fields were produced from the archived traces.
+    Hash-pinned comparison catches contradictory resource-ledger claims even
+    when two archive copies are internally consistent and byte-identical.
+    """
+    path = Path(repo_root) / matrix.lineage.MAIN_REL
+    try:
+        before = matrix._generation(path)
+        raw = matrix.packet_builder._read_regular_file_captured(
+            path, label="published treatment resource CSV",
+        )
+        after = matrix._generation(path)
+    except (OSError, ValueError) as exc:
+        raise RecoveryConcordanceError(
+            "cannot safely capture published treatment resource CSV"
+        ) from exc
+    if before != after:
+        raise RecoveryConcordanceError(
+            "published treatment CSV changed during capture"
+        )
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != PUBLISHED_TREATMENT_CSV_SHA256:
+        raise RecoveryConcordanceError(
+            "published treatment CSV differs from frozen analysis input fingerprint"
+        )
+    rows = matrix.lineage._matrix(
+        matrix.lineage._read_study_csv(raw, path=path),
+        label="frozen published treatment resources",
+        expected_cells=matrix.EXPECTED_CELLS,
+        run_identity=False,
+    )
+    return rows, after, digest
+
+
 # The original 2026-09-13 evaluator-only recovery workflow explicitly
 # documented this missing set before any recovery evaluator calls. It is
 # an operational lineage anchor, not a new research-analysis selection.
@@ -455,6 +509,7 @@ def _finite_trace_json_float(token: str) -> float:
 
 def _verify_archived_treatment_trace_identities(
     archive: Path, audit: dict, frozen_questions: dict[str, str],
+    published_treatments: dict[tuple[str, str], dict[str, str]],
 ) -> int:
     """Validate the *contents* of the 40 preserved treatment trace JSONs.
 
@@ -562,6 +617,22 @@ def _verify_archived_treatment_trace_identities(
                     raise RecoveryConcordanceError(
                         "historical treatment trace source ledger violates budget/completion: " + path
                     )
+                # Internal count consistency is not enough: an original trace
+                # must agree with its canonical published treatment-side row.
+                published = published_treatments[(variant, task)]
+                for published_field, trace_field in TREATMENT_RESOURCE_FIELDS.items():
+                    try:
+                        expected = int(published[published_field])
+                    except (KeyError, TypeError, ValueError) as exc:
+                        raise RecoveryConcordanceError(
+                            "invalid published treatment resource field: " + published_field
+                        ) from exc
+                    observed = trace.get(trace_field)
+                    if type(observed) is not int or observed != expected:
+                        raise RecoveryConcordanceError(
+                            f"historical treatment trace {trace_field} differs "
+                            f"from frozen treatment CSV: {path}"
+                        )
     except (zipfile.BadZipFile, KeyError) as exc:
         raise RecoveryConcordanceError(
             "historical treatment trace member cannot be reread from verified ZIP"
@@ -595,6 +666,7 @@ def compare_recovered_treatment_sources(
     recovery_start = _archive_source_snapshot(recovery_archive)
     evaluator_path = Path(repo_root) / matrix.lineage.SUPPORT_REL
     evaluator_start = matrix._capture_evaluator(evaluator_path)
+    treatment_start = _frozen_treatment_snapshot(repo_root)
     frozen_questions_start = _frozen_questions_snapshot(repo_root)
     frozen_questions = frozen_questions_start[0]
     published_rows = matrix.lineage._matrix(
@@ -641,6 +713,7 @@ def compare_recovered_treatment_sources(
         or recovered["zip_sha256_observed_now"] != recovery_start[1]
         or original_archive.samefile(recovery_archive)
         or _frozen_questions_snapshot(repo_root) != frozen_questions_start
+        or _frozen_treatment_snapshot(repo_root) != treatment_start
     ):
         raise RecoveryConcordanceError(
             "original, recovery, or evaluator source changed during comparison"
@@ -679,10 +752,10 @@ def compare_recovered_treatment_sources(
         )
     )
     original_traces_checked = _verify_archived_treatment_trace_identities(
-        original_archive, original, frozen_questions,
+        original_archive, original, frozen_questions, treatment_start[0],
     )
     recovered_traces_checked = _verify_archived_treatment_trace_identities(
-        recovery_archive, recovered, frozen_questions,
+        recovery_archive, recovered, frozen_questions, treatment_start[0],
     )
     # The second ZIP read must be inside the same source-generation custody
     # window. A change during JSON inspection cannot authorize this receipt.
@@ -691,6 +764,7 @@ def compare_recovered_treatment_sources(
         or _archive_source_snapshot(recovery_archive) != recovery_start
         or matrix._capture_evaluator(evaluator_path) != evaluator_start
         or _frozen_questions_snapshot(repo_root) != frozen_questions_start
+        or _frozen_treatment_snapshot(repo_root) != treatment_start
     ):
         raise RecoveryConcordanceError(
             "original, recovery, or evaluator source changed during comparison"
@@ -701,6 +775,9 @@ def compare_recovered_treatment_sources(
         "source_cells_compared": 40,
         "original_completed_treatment_trace_identities_checked": original_traces_checked,
         "recovery_completed_treatment_trace_identities_checked": recovered_traces_checked,
+        "original_treatment_published_resource_ledgers_matched": original_traces_checked,
+        "recovery_treatment_published_resource_ledgers_matched": recovered_traces_checked,
+        "published_treatment_csv_sha256": PUBLISHED_TREATMENT_CSV_SHA256,
         "trace_sources_unchanged": 40,
         "report_sources_unchanged": 40,
         "preserved_evaluator_cache_members_byte_identical": preserved_count,

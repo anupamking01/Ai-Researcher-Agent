@@ -37,6 +37,12 @@ def _pair(
     frozen_run_ids = {
         cell: row["run_id"] for cell, row in frozen_rows.items()
     }
+    treatment_csv = matrix.REPO_ROOT / lineage.MAIN_REL
+    published_treatments = lineage._matrix(
+        lineage._read_study_csv(treatment_csv.read_bytes(), path=treatment_csv),
+        label="synthetic test's frozen treatment CSV reference",
+        expected_cells=matrix.EXPECTED_CELLS, run_identity=False,
+    )
 
     def synthetic_cache(variant, task, overrides=None):
         # Fake archive fixtures copy numbers from the pinned CSV. They are
@@ -68,6 +74,8 @@ def _pair(
         run_id = Path(name).stem
         variant, task = by_run_id[run_id]
         mode, budget, verification = concordance.FROZEN_TREATMENT_ASSIGNMENTS[variant]
+        published = published_treatments[(variant, task)]
+        success, failure = int(published["successful_sources"]), int(published["failed_sources"])
         record = {
             "schema_version": 2,
             "synthetic_fixture_only": True,
@@ -82,8 +90,12 @@ def _pair(
                 "task_set_id": "main-budget-v1-2026-09-11",
                 "run_id": run_id, "question": original_questions[task],
                 "completed": True, "usage_accounting_status": "provider_usage_complete",
-                "source_budget": budget, "source_count": 0,
-                "successful_source_count": 0, "failed_source_count": 0,
+                "source_budget": budget, "source_count": success + failure,
+                "successful_source_count": success, "failed_source_count": failure,
+                "search_call_count": int(published["search_calls"]),
+                "model_call_count": int(published["model_calls"]),
+                "total_tokens": int(published["total_tokens"]),
+                "report_words": int(published["report_words"]),
             },
         }
         return json.dumps(record, sort_keys=True).encode("utf-8")
@@ -99,7 +111,11 @@ def _pair(
             _variant, _task, section, field, replacement = tamper_trace
             record = json.loads(files[trace_path])
             target = record if section == "top" else record[section]
-            target[field] = replacement
+            if type(field) is tuple:
+                for key, value in zip(field, replacement, strict=True):
+                    target[key] = value
+            else:
+                target[field] = replacement
             files[trace_path] = json.dumps(record, sort_keys=True).encode("utf-8")
         else:
             files[trace_path] = invalid_trace_bytes[2]
@@ -222,6 +238,9 @@ def test_matching_40_sources_survive_repackaging_and_extra_recovery_metadata(
     assert receipt["trace_sources_unchanged"] == 40
     assert receipt["original_completed_treatment_trace_identities_checked"] == 40
     assert receipt["recovery_completed_treatment_trace_identities_checked"] == 40
+    assert receipt["original_treatment_published_resource_ledgers_matched"] == 40
+    assert receipt["recovery_treatment_published_resource_ledgers_matched"] == 40
+    assert receipt["published_treatment_csv_sha256"] == concordance.PUBLISHED_TREATMENT_CSV_SHA256
     assert receipt["report_sources_unchanged"] == 40
     assert receipt["preserved_evaluator_cache_members_byte_identical"] == 37
     assert receipt["recovery_only_evaluator_cache_members_present"] == 3
@@ -355,6 +374,9 @@ def test_evaluator_same_byte_replacement_between_archive_audits_is_rejected(
     frozen_csv = root / lineage.SUPPORT_REL
     frozen_csv.parent.mkdir(parents=True)
     frozen_csv.write_bytes((matrix.REPO_ROOT / lineage.SUPPORT_REL).read_bytes())
+    (root / lineage.MAIN_REL).write_bytes(
+        (matrix.REPO_ROOT / lineage.MAIN_REL).read_bytes()
+    )
     task_source = root / frozen_tasks.TASK_MANIFEST_REL
     task_source.parent.mkdir(parents=True)
     task_source.write_bytes((matrix.REPO_ROOT / frozen_tasks.TASK_MANIFEST_REL).read_bytes())
@@ -606,6 +628,9 @@ def test_modified_original_task_manifest_blocks_question_lineage_before_archive_
     evaluator = root / lineage.SUPPORT_REL
     evaluator.parent.mkdir(parents=True)
     evaluator.write_bytes((matrix.REPO_ROOT / lineage.SUPPORT_REL).read_bytes())
+    (root / lineage.MAIN_REL).write_bytes(
+        (matrix.REPO_ROOT / lineage.MAIN_REL).read_bytes()
+    )
     task_path = root / frozen_tasks.TASK_MANIFEST_REL
     task_path.parent.mkdir(parents=True)
     manifest = json.loads(
@@ -630,6 +655,9 @@ def test_original_task_manifest_same_byte_replacement_during_audit_is_rejected(
     evaluator = root / lineage.SUPPORT_REL
     evaluator.parent.mkdir(parents=True)
     evaluator.write_bytes((matrix.REPO_ROOT / lineage.SUPPORT_REL).read_bytes())
+    (root / lineage.MAIN_REL).write_bytes(
+        (matrix.REPO_ROOT / lineage.MAIN_REL).read_bytes()
+    )
     task_path = root / frozen_tasks.TASK_MANIFEST_REL
     task_path.parent.mkdir(parents=True)
     task_path.write_bytes((matrix.REPO_ROOT / frozen_tasks.TASK_MANIFEST_REL).read_bytes())
@@ -651,6 +679,74 @@ def test_original_task_manifest_same_byte_replacement_during_audit_is_rejected(
     ):
         concordance.compare_recovered_treatment_sources(
             original, recovered, repo_root=root
+        )
+
+
+@pytest.mark.parametrize(("field", "replacement", "error"), [
+    ("search_call_count", 0, "search_call_count differs"),
+    ("model_call_count", 0, "model_call_count differs"),
+    ("total_tokens", 0, "total_tokens differs"),
+    ("report_words", 0, "report_words differs"),
+    (("successful_source_count", "failed_source_count"), (2, 1),
+     "successful_source_count differs"),
+])
+def test_byte_identical_archived_trace_cannot_disagree_with_published_resource_ledger(
+    tmp_path, monkeypatch, field, replacement, error,
+):
+    # Frozen D3/main-07 reports one successful and two failed sources.
+    # Paired mutation keeps source_count and completion ledger consistent.
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        tamper_trace=("D3", "main-07", "trace", field, replacement),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match=error):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def _isolated_pinned_research_checkout(root):
+    for relative in (
+        lineage.MAIN_REL, lineage.SUPPORT_REL, frozen_tasks.TASK_MANIFEST_REL,
+    ):
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((matrix.REPO_ROOT / relative).read_bytes())
+
+
+def test_modified_frozen_treatment_csv_blocks_archive_audit(tmp_path, monkeypatch):
+    original, recovered, _, _ = _pair(tmp_path, monkeypatch)
+    root = tmp_path / "changed-treatment-source"
+    _isolated_pinned_research_checkout(root)
+    source = root / lineage.MAIN_REL
+    source.write_bytes(source.read_bytes() + b"\n")
+    with pytest.raises(concordance.RecoveryConcordanceError,
+                       match="published treatment CSV differs"):
+        concordance.compare_recovered_treatment_sources(
+            original, recovered, repo_root=root,
+        )
+
+
+def test_same_byte_replacement_of_treatment_csv_during_audit_is_rejected(
+    tmp_path, monkeypatch,
+):
+    original, recovered, _, _ = _pair(tmp_path, monkeypatch)
+    root = tmp_path / "replacement-treatment-source"
+    _isolated_pinned_research_checkout(root)
+    source = root / lineage.MAIN_REL
+    audit = matrix.audit_recovered_treatment_matrix
+
+    def swap_after_original(*args, **kwargs):
+        result = audit(*args, **kwargs)
+        if kwargs["artifact_role"] == "original_treatment":
+            replacement = source.with_suffix(".replacement")
+            replacement.write_bytes(source.read_bytes())
+            os.replace(replacement, source)
+        return result
+
+    monkeypatch.setattr(matrix, "audit_recovered_treatment_matrix", swap_after_original)
+    with pytest.raises(concordance.RecoveryConcordanceError,
+                       match="changed during comparison"):
+        concordance.compare_recovered_treatment_sources(
+            original, recovered, repo_root=root,
         )
 
 
