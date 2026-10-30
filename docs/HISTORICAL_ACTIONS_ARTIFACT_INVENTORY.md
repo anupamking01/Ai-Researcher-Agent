@@ -742,3 +742,25 @@ authenticate the historical ZIP archives, or substantiate the automated
 judgments. All new regressions use synthetic fixture caches. The original and
 recovery ZIPs remain unavailable for authentic inspection, and neither
 treatments, automated evaluations, nor human ratings are rerun or generated.
+
+
+## Historical evaluator provider-usage ledger consistency (offline)
+
+The original treatment and evaluator-only recovery source revisions both wrote
+`provider_usage_by_model` into each saved post-hoc evaluator JSON. The
+two-ZIP comparator now validates that this ledger identifies exactly the
+frozen `gpt-5.6-terra` model, records one model call with no missing usage,
+contains nonnegative integer prompt/completion/total token counts, and
+reconciles the per-model token sum to the frozen published evaluator
+`total_tokens`. Both the original 37 cache records and the complete
+recovered 40-record set must satisfy this check; byte-identical erroneous
+ledgers cannot pass simply because aggregate scores are unchanged.
+
+This is an **internal recorded-usage integrity check**, not verification of
+provider invoices, independently logged API calls, evaluator cost-estimate
+recomputation, model compliance, historical ZIP authenticity, or the accuracy
+of the automated scores. It cannot infer the original prompt/completion split
+from the published total alone. Tests use synthetic ledger fixtures and do
+not create, replace, select, or rerun experimental results. The authentic
+historical original/recovery ZIPs remain unavailable; human-validation
+distribution remains blocked pending independent source custody.

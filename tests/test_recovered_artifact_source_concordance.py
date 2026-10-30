@@ -82,6 +82,17 @@ def _pair(
                concordance.PUBLISHED_EVALUATOR_COUNT_FIELDS},
             **{field: float(row[field]) for field in
                concordance.PUBLISHED_EVALUATOR_DECIMAL_FIELDS},
+            # Test-only accounting: arbitrary prompt/completion split; never a
+            # historical model invocation or reconstructed billing record.
+            "provider_usage_by_model": {
+                concordance.HISTORICAL_EVALUATOR_MODEL: {
+                    "model_calls": 1,
+                    "unavailable_calls": 0,
+                    "prompt_tokens": int(row["total_tokens"]),
+                    "completion_tokens": 0,
+                    "total_tokens": int(row["total_tokens"]),
+                },
+            },
         }
         if overrides:
             record.update(overrides)
@@ -713,6 +724,109 @@ def test_preserved_cache_identically_wrong_evaluator_model_is_rejected(
         ),
     )
     with pytest.raises(concordance.RecoveryConcordanceError, match="evaluator_model"):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def _synthetic_evaluator_usage() -> dict:
+    # Synthetic token ledger for contract tests only: no model calls.
+    return {
+        "model_calls": 1,
+        "unavailable_calls": 0,
+        "prompt_tokens": 100,
+        "completion_tokens": 20,
+        "total_tokens": 120,
+    }
+
+
+def test_historical_evaluator_provider_usage_accepts_consistent_synthetic_ledger():
+    concordance._verify_historical_evaluator_provider_usage(
+        {
+            "total_tokens": 120,
+            "provider_usage_by_model": {
+                concordance.HISTORICAL_EVALUATOR_MODEL: _synthetic_evaluator_usage(),
+            },
+        },
+        path="synthetic/cache.json",
+    )
+
+
+@pytest.mark.parametrize("invalid", [None, {}, {"other-model": {}}])
+def test_historical_evaluator_provider_usage_requires_frozen_model(invalid):
+    with pytest.raises(
+        concordance.RecoveryConcordanceError, match="provider_usage_by_model"
+    ):
+        concordance._verify_historical_evaluator_provider_usage(
+            {"total_tokens": 120, "provider_usage_by_model": invalid},
+            path="synthetic/cache.json",
+        )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"model_calls": 0},
+        {"model_calls": 2},
+        {"unavailable_calls": 1},
+        {"prompt_tokens": True},
+        {"prompt_tokens": -1},
+        {"completion_tokens": "20"},
+        {"total_tokens": 121},
+    ],
+)
+def test_historical_evaluator_provider_usage_rejects_incoherent_ledger(change):
+    usage = {**_synthetic_evaluator_usage(), **change}
+    with pytest.raises(concordance.RecoveryConcordanceError, match="provider"):
+        concordance._verify_historical_evaluator_provider_usage(
+            {
+                "total_tokens": 120,
+                "provider_usage_by_model": {
+                    concordance.HISTORICAL_EVALUATOR_MODEL: usage,
+                },
+            },
+            path="synthetic/cache.json",
+        )
+
+
+def test_historical_evaluator_provider_usage_rejects_wrong_published_total():
+    with pytest.raises(concordance.RecoveryConcordanceError, match="token sums"):
+        concordance._verify_historical_evaluator_provider_usage(
+            {
+                "total_tokens": 119,
+                "provider_usage_by_model": {
+                    concordance.HISTORICAL_EVALUATOR_MODEL: _synthetic_evaluator_usage(),
+                },
+            },
+            path="synthetic/cache.json",
+        )
+
+
+def test_recovery_only_cache_rejects_missing_evaluator_provider_ledger(
+    tmp_path, monkeypatch,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        tamper_recovery_measurements=(
+            "P6V", "main-08", {"provider_usage_by_model": {}},
+        ),
+    )
+    with pytest.raises(
+        concordance.RecoveryConcordanceError, match="provider_usage_by_model"
+    ):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_preserved_identical_bogus_evaluator_provider_ledger_is_rejected(
+    tmp_path, monkeypatch,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        tamper_original_measurements=(
+            "D3", "main-01", {"provider_usage_by_model": {}},
+        ),
+    )
+    with pytest.raises(
+        concordance.RecoveryConcordanceError, match="provider_usage_by_model"
+    ):
         concordance.compare_recovered_treatment_sources(original, recovered)
 
 

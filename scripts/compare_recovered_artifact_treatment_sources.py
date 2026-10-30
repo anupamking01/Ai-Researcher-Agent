@@ -605,6 +605,54 @@ def _verify_historical_evaluator_configuration(
         )
 
 
+def _verify_historical_evaluator_provider_usage(
+    payload: dict, *, path: str,
+) -> None:
+    """Check the recorded one-call evaluator token ledger, not remote billing.
+
+    Original treatment/recovery evaluator writers persisted UsageTracker.by_model.
+    A matching published total alone does not establish a consistent recorded
+    prompt/completion split or that usage was attributed to the frozen model.
+    """
+    ledgers = payload.get("provider_usage_by_model")
+    if (
+        type(ledgers) is not dict
+        or set(ledgers) != {HISTORICAL_EVALUATOR_MODEL}
+        or type(ledgers[HISTORICAL_EVALUATOR_MODEL]) is not dict
+    ):
+        raise RecoveryConcordanceError(
+            "historical evaluator provider_usage_by_model must contain exactly "
+            "the frozen evaluator model: " + path
+        )
+    usage = ledgers[HISTORICAL_EVALUATOR_MODEL]
+    for field in (
+        "model_calls", "unavailable_calls", "prompt_tokens",
+        "completion_tokens", "total_tokens",
+    ):
+        value = usage.get(field)
+        if type(value) is not int or value < 0:
+            raise RecoveryConcordanceError(
+                f"historical evaluator provider_usage_by_model.{field} "
+                f"must be a nonnegative integer: {path}"
+            )
+    if usage["model_calls"] != 1 or usage["unavailable_calls"] != 0:
+        raise RecoveryConcordanceError(
+            "historical evaluator provider usage requires exactly one model "
+            "call with no unavailable usage: " + path
+        )
+    computed_total = usage["prompt_tokens"] + usage["completion_tokens"]
+    if (
+        computed_total <= 0
+        or usage["total_tokens"] != computed_total
+        or type(payload.get("total_tokens")) is not int
+        or payload["total_tokens"] != computed_total
+    ):
+        raise RecoveryConcordanceError(
+            "historical evaluator provider token sums disagree with published "
+            "total_tokens: " + path
+        )
+
+
 def _verify_evaluator_report_input_fingerprint(
     payload: dict, source_cell: dict, *, expected_question: str,
     expected_evidence_fingerprint: dict, expected_prompt_fingerprint: dict,
@@ -750,6 +798,9 @@ def _verify_evaluator_cache_json_identities(
                     payload,
                     expected_evidence_status=evidence_snapshots[(variant, task)]["evidence_status"],
                     path=path,
+                )
+                _verify_historical_evaluator_provider_usage(
+                    payload, path=path,
                 )
                 if _verify_evaluator_report_input_fingerprint(
                     payload, source_cells[(variant, task)],
@@ -1207,6 +1258,8 @@ def compare_recovered_treatment_sources(
         "recovery_evaluator_cache_published_measurements_matched": recovered_identity_count,
         "original_evaluator_frozen_configuration_matched": original_identity_count,
         "recovery_evaluator_frozen_configuration_matched": recovered_identity_count,
+        "original_evaluator_provider_usage_ledgers_checked": original_identity_count,
+        "recovery_evaluator_provider_usage_ledgers_checked": recovered_identity_count,
         "original_schema_v2_evaluator_report_input_fingerprints_matched": original_report_binding_count,
         "recovery_schema_v2_evaluator_report_input_fingerprints_matched": recovered_report_binding_count,
         "original_schema_v2_evaluator_evidence_input_fingerprints_matched": original_report_binding_count,
