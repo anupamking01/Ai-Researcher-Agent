@@ -56,6 +56,13 @@ def _pair(
             "input": float(row["treatment_cost_usd"]) * 1_000_000 / int(row["total_tokens"]),
             "output": 0.0,
         }
+    # Evaluator caches always declare the one frozen common evaluator model.
+    # Keep its original SHA-256-pinned rates alongside synthetic treatment prices.
+    synthetic_pricing[concordance.HISTORICAL_EVALUATOR_MODEL] = dict(
+        concordance.readiness._load_original_run_pricing(matrix.REPO_ROOT)[
+            concordance.HISTORICAL_EVALUATOR_MODEL
+        ]
+    )
     monkeypatch.setattr(
         concordance, "_frozen_pricing_snapshot",
         lambda _repo_root: (synthetic_pricing, (0,), "synthetic-test-only"),
@@ -65,6 +72,16 @@ def _pair(
         # Fake archive fixtures copy numbers from the pinned CSV. They are
         # never original evaluator outputs or new experimental measurements.
         row = frozen_rows[(variant, task)]
+        # Synthetic token split solving the *published* cost equation, not a
+        # reconstruction of any original provider usage or experimental result.
+        rates = synthetic_pricing[concordance.HISTORICAL_EVALUATOR_MODEL]
+        total = int(row["total_tokens"])
+        completion = round(
+            (float(row["estimated_cost_usd"]) * 1_000_000 - total * rates["input"])
+            / (rates["output"] - rates["input"])
+        )
+        prompt = total - completion
+        assert 0 <= completion <= total
         record = {
             "schema_version": 1,
             "study_id": "budget-main-v1",
@@ -88,9 +105,9 @@ def _pair(
                 concordance.HISTORICAL_EVALUATOR_MODEL: {
                     "model_calls": 1,
                     "unavailable_calls": 0,
-                    "prompt_tokens": int(row["total_tokens"]),
-                    "completion_tokens": 0,
-                    "total_tokens": int(row["total_tokens"]),
+                    "prompt_tokens": prompt,
+                    "completion_tokens": completion,
+                    "total_tokens": total,
                 },
             },
         }
@@ -826,6 +843,105 @@ def test_preserved_identical_bogus_evaluator_provider_ledger_is_rejected(
     )
     with pytest.raises(
         concordance.RecoveryConcordanceError, match="provider_usage_by_model"
+    ):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def _all_prompt_evaluator_usage_for_cell(variant, task):
+    """Deliberately incoherent synthetic cost split with a valid token total."""
+    raw, _ = matrix._capture_evaluator(matrix.REPO_ROOT / lineage.SUPPORT_REL)
+    rows = lineage._matrix(
+        lineage._read_study_csv(
+            raw, path=matrix.REPO_ROOT / lineage.SUPPORT_REL,
+        ),
+        label="synthetic test evaluator resources",
+        expected_cells=matrix.EXPECTED_CELLS,
+        run_identity=True,
+    )
+    total = int(rows[(variant, task)]["total_tokens"])
+    return {
+        concordance.HISTORICAL_EVALUATOR_MODEL: {
+            "model_calls": 1,
+            "unavailable_calls": 0,
+            "prompt_tokens": total,
+            "completion_tokens": 0,
+            "total_tokens": total,
+        },
+    }
+
+
+def test_historical_evaluator_frozen_cost_accepts_original_price_calculation():
+    rates = concordance.readiness._load_original_run_pricing(matrix.REPO_ROOT)
+    usage = _synthetic_evaluator_usage()
+    model = concordance.HISTORICAL_EVALUATOR_MODEL
+    expected = (
+        usage["prompt_tokens"] / 1_000_000 * rates[model]["input"]
+        + usage["completion_tokens"] / 1_000_000 * rates[model]["output"]
+    )
+    concordance._verify_historical_evaluator_estimated_cost(
+        {
+            "provider_usage_by_model": {model: usage},
+            "estimated_cost_usd": expected,
+        },
+        pricing_models=rates, path="synthetic/cache.json",
+    )
+
+
+@pytest.mark.parametrize("incorrect_cost", [0.0, True, "0.00044", float("nan")])
+def test_historical_evaluator_frozen_cost_rejects_wrong_stored_value(incorrect_cost):
+    rates = concordance.readiness._load_original_run_pricing(matrix.REPO_ROOT)
+    with pytest.raises(
+        concordance.RecoveryConcordanceError, match="estimated_cost_usd"
+    ):
+        concordance._verify_historical_evaluator_estimated_cost(
+            {
+                "provider_usage_by_model": {
+                    concordance.HISTORICAL_EVALUATOR_MODEL: _synthetic_evaluator_usage(),
+                },
+                "estimated_cost_usd": incorrect_cost,
+            },
+            pricing_models=rates, path="synthetic/cache.json",
+        )
+
+
+def test_historical_evaluator_frozen_cost_rejects_unpriced_model():
+    with pytest.raises(
+        concordance.RecoveryConcordanceError, match="original frozen price"
+    ):
+        concordance._verify_historical_evaluator_estimated_cost(
+            {
+                "provider_usage_by_model": {
+                    concordance.HISTORICAL_EVALUATOR_MODEL: _synthetic_evaluator_usage(),
+                },
+                "estimated_cost_usd": 0.00044,
+            },
+            pricing_models={}, path="synthetic/cache.json",
+        )
+
+
+@pytest.mark.parametrize(
+    "variant,task,role",
+    [
+        ("D3", "main-01", "original"),
+        ("P6V", "main-08", "recovery"),
+    ],
+)
+def test_archived_evaluator_cost_rejects_intact_totals_but_wrong_token_split(
+    tmp_path, monkeypatch, variant, task, role,
+):
+    # This ledger still passes the aggregate frozen token-count check, and
+    # the original/recovery cache identity and published score are unchanged.
+    bad_usage = _all_prompt_evaluator_usage_for_cell(variant, task)
+    override = (
+        "tamper_original_measurements" if role == "original"
+        else "tamper_recovery_measurements"
+    )
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        **{override: (variant, task, {"provider_usage_by_model": bad_usage})},
+    )
+    with pytest.raises(
+        concordance.RecoveryConcordanceError, match="estimated_cost_usd"
     ):
         concordance.compare_recovered_treatment_sources(original, recovered)
 

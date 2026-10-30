@@ -653,6 +653,50 @@ def _verify_historical_evaluator_provider_usage(
         )
 
 
+def _verify_historical_evaluator_estimated_cost(
+    payload: dict, *, pricing_models: dict, path: str,
+) -> None:
+    """Reprice the saved evaluator token split using original uncached rates.
+
+    The published evaluator CSV stores one cost per run, but cannot reveal
+    whether its archived provider-usage prompt/completion split supports it.
+    This duplicates no model request and verifies no provider invoice.
+    """
+    from scripts.summarize_pilot import _estimate_reported_token_cost
+
+    # The preceding provider-usage gate has already validated one model call,
+    # the exact model name, and nonnegative integer prompt/completion counts.
+    try:
+        expected, method = _estimate_reported_token_cost(
+            payload["provider_usage_by_model"], {"models": pricing_models},
+        )
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise RecoveryConcordanceError(
+            "historical evaluator cost cannot be repriced from recorded usage: " + path
+        ) from exc
+    if (
+        method != "estimated_from_frozen_uncached_rates"
+        or expected is None
+        or not math.isfinite(expected)
+        or expected < 0
+    ):
+        raise RecoveryConcordanceError(
+            "historical evaluator model has no valid original frozen price: " + path
+        )
+    stored = payload.get("estimated_cost_usd")
+    # Original evaluator resume validation used this exact float calculation
+    # and equality check, not a tolerance or a current-market rate.
+    if (
+        type(stored) not in (int, float)
+        or not math.isfinite(stored)
+        or float(stored) != expected
+    ):
+        raise RecoveryConcordanceError(
+            "historical evaluator estimated_cost_usd differs from provider "
+            "prompt/completion split at frozen rates: " + path
+        )
+
+
 def _verify_evaluator_report_input_fingerprint(
     payload: dict, source_cell: dict, *, expected_question: str,
     expected_evidence_fingerprint: dict, expected_prompt_fingerprint: dict,
@@ -726,6 +770,7 @@ def _verify_evaluator_cache_json_identities(
     archive: Path, audit: dict, published_rows: dict[tuple[str, str], dict[str, str]],
     frozen_questions: dict[str, str],
     evidence_snapshots: dict[tuple[str, str], dict],
+    pricing_models: dict,
 ) -> tuple[int, int]:
     """Bind every archived evaluator record to its frozen execution identity.
 
@@ -801,6 +846,9 @@ def _verify_evaluator_cache_json_identities(
                 )
                 _verify_historical_evaluator_provider_usage(
                     payload, path=path,
+                )
+                _verify_historical_evaluator_estimated_cost(
+                    payload, pricing_models=pricing_models, path=path,
                 )
                 if _verify_evaluator_report_input_fingerprint(
                     payload, source_cells[(variant, task)],
@@ -1198,13 +1246,13 @@ def compare_recovered_treatment_sources(
     original_identity_count, original_report_binding_count = (
         _verify_evaluator_cache_json_identities(
             original_archive, original, published_rows, frozen_questions,
-            original_evidence,
+            original_evidence, frozen_pricing_start[0],
         )
     )
     recovered_identity_count, recovered_report_binding_count = (
         _verify_evaluator_cache_json_identities(
             recovery_archive, recovered, published_rows, frozen_questions,
-            recovered_evidence,
+            recovered_evidence, frozen_pricing_start[0],
         )
     )
     original_traces_checked = _verify_archived_treatment_trace_identities(
@@ -1260,6 +1308,8 @@ def compare_recovered_treatment_sources(
         "recovery_evaluator_frozen_configuration_matched": recovered_identity_count,
         "original_evaluator_provider_usage_ledgers_checked": original_identity_count,
         "recovery_evaluator_provider_usage_ledgers_checked": recovered_identity_count,
+        "original_evaluator_frozen_costs_recomputed": original_identity_count,
+        "recovery_evaluator_frozen_costs_recomputed": recovered_identity_count,
         "original_schema_v2_evaluator_report_input_fingerprints_matched": original_report_binding_count,
         "recovery_schema_v2_evaluator_report_input_fingerprints_matched": recovered_report_binding_count,
         "original_schema_v2_evaluator_evidence_input_fingerprints_matched": original_report_binding_count,
@@ -1316,7 +1366,8 @@ def compare_recovered_treatment_sources(
             "original and recovery treatment trace completion, frozen task, "
             "treatment assignment, source-budget, query/URL scheduling, per-model provider usage "
             "aggregation, original-rate estimated cost and latency correspondence, "
-            "and byte-identical saved retrieval snippets across original/recovery "
+            "and frozen-rate evaluator cost recomputation from the per-model "
+            "prompt/completion split; and byte-identical saved retrieval snippets across original/recovery "
             "archives, with schema-v2 evaluator evidence-input correspondence; "
             "and report-pointer/actual-"
             "Markdown-word-count consistency; and "

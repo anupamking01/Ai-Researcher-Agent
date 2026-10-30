@@ -764,3 +764,28 @@ from the published total alone. Tests use synthetic ledger fixtures and do
 not create, replace, select, or rerun experimental results. The authentic
 historical original/recovery ZIPs remain unavailable; human-validation
 distribution remains blocked pending independent source custody.
+
+## Historical evaluator frozen-price cost recomputation (offline)
+
+Recorded evaluator token totals and the SHA-256-pinned published cost column
+do not, by themselves, establish that a saved prompt/completion split was
+priced correctly. The two-archive source comparator now recomputes each
+historical post-hoc evaluator cache's `estimated_cost_usd` from its already
+validated `provider_usage_by_model` ledger, using the original evaluator
+writer's `scripts.summarize_pilot._estimate_reported_token_cost` method.
+The exact dated price table is pinned to SHA-256
+`35eb6aea8a4e494ea6b94a0905e893849958d37ac386915aac7958b00c4eeace`
+and is generation-checked across the comparison window. Both original
+(37 cells) and recovered (40 cells) cache costs must exactly match their
+recorded split at the original uncached per-model rates. An unpriced model,
+invalid cost, or an internally consistent but mispriced token split fails
+closed. Success receipts identify both cache counts separately.
+
+This verifies **internal cost-estimate lineage**, not invoices, charged API
+usage, proof of a historical model call, archive custody, or evaluator
+judgment correctness. The regression test archives contain explicitly
+synthetic token splits that satisfy the frozen published cost equation;
+they are neither recovered historical usage nor experimental results.
+The original and evaluator-recovery ZIPs remain unavailable, so no authentic
+archive has passed this gate and blinded human-evaluation distribution
+remains blocked.
