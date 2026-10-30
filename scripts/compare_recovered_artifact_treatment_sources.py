@@ -23,6 +23,7 @@ from scripts import audit_human_eval_archive_readiness as readiness
 from scripts import audit_recovered_artifact_treatment_matrix as matrix
 from scripts import preflight_recovered_artifact_zip as preflight
 from scripts import verify_frozen_main_study_tasks as frozen_tasks
+from logic.prompts import generate_verification_prompt
 
 
 class RecoveryConcordanceError(ValueError):
@@ -372,11 +373,35 @@ def _verify_published_evaluator_measurements(
 
 
 
+# The original treatment and evaluator-recovery workflow revisions
+# c3c15e46a8eec3a8bbc24c968eedc0548172a897 and
+# 8733ce492abc74e7b2966ed22ce08d3fddec43ca render the same 12-claim
+# prompt. Pin a rendered canary independently of future template edits.
+# This anchors the prompt contract, not the model's response or historical custody.
+HISTORICAL_EVALUATOR_MAX_CLAIMS = 12
+HISTORICAL_EVALUATOR_PROMPT_CANARY_SHA256 = (
+    "cdc7a77cb3e8334722d768afbd71a033c51a2006793992ab670a1ff10c4aac4f"
+)
+
+
+def _verify_historical_evaluator_prompt_canary() -> None:
+    rendered = generate_verification_prompt(
+        "VERA_QUESTION_CANARY", "VERA_REPORT_CANARY", "VERA_EVIDENCE_CANARY",
+        max_claims=HISTORICAL_EVALUATOR_MAX_CLAIMS,
+    )
+    digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+    if digest != HISTORICAL_EVALUATOR_PROMPT_CANARY_SHA256:
+        raise RecoveryConcordanceError(
+            "current evaluator prompt template differs from historical 12-claim canary"
+        )
+
+
 # Mirror the historical evaluator's saved research-query text contract without
 # collecting new evidence. Bounds are separate from the whole-ZIP preflight.
 MAX_EVALUATOR_EVIDENCE_FILES_PER_RUN = 64
 MAX_EVALUATOR_EVIDENCE_MEMBER_BYTES = 8 * 1024 * 1024
 MAX_EVALUATOR_EVIDENCE_TOTAL_BYTES = 32 * 1024 * 1024
+MAX_EVALUATOR_PROMPT_REPORT_BYTES = 16 * 1024 * 1024
 FROZEN_NO_EVIDENCE_SENTINEL = (
     "[NO RETRIEVED EVIDENCE WAS AVAILABLE FOR THIS TREATMENT RUN. "
     "The run recorded zero successful retrieved sources. Do not use outside knowledge.]"
@@ -388,6 +413,7 @@ def _snapshot_archived_evaluator_evidence(
     audit: dict,
     published_treatments: dict[tuple[str, str], dict[str, str]],
     published_evaluators: dict[tuple[str, str], dict[str, str]],
+    frozen_questions: dict[str, str],
 ) -> dict[tuple[str, str], dict]:
     """Preserve raw evidence files and reconstruct the frozen evaluator input.
 
@@ -474,12 +500,46 @@ def _snapshot_archived_evaluator_evidence(
                         f"archived evaluator evidence status differs from frozen "
                         f"published evaluation: {variant}/{task}"
                     )
+                # An evaluator's schema-v2 prompt hash must describe the
+                # *rendered historical 12-claim rubric*, not an arbitrary
+                # plausible SHA. Preserve Markdown newlines exactly as read
+                # by _report_text in the original evaluator.
+                report_path = f"{root}research_report.md"
+                report_size = cell["report_uncompressed_bytes"]
+                if not 0 < report_size <= MAX_EVALUATOR_PROMPT_REPORT_BYTES:
+                    raise RecoveryConcordanceError(
+                        f"historical evaluator prompt report exceeds bound: {report_path}"
+                    )
+                with source.open(report_path, "r") as member:
+                    report_raw = member.read(report_size + 1)
+                if (
+                    len(report_raw) != report_size
+                    or hashlib.sha256(report_raw).hexdigest() != cell["report_sha256"]
+                ):
+                    raise RecoveryConcordanceError(
+                        f"historical prompt report disagrees with verified ZIP scan: {report_path}"
+                    )
+                try:
+                    report_text = report_raw.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise RecoveryConcordanceError(
+                        f"historical evaluator prompt report is not UTF-8: {report_path}"
+                    ) from exc
+                prompt = generate_verification_prompt(
+                    frozen_questions[task], report_text, evidence,
+                    max_claims=HISTORICAL_EVALUATOR_MAX_CLAIMS,
+                )
                 raw_evidence = evidence.encode("utf-8")
+                raw_prompt = prompt.encode("utf-8")
                 result[identity] = {
                     "member_fingerprints": tuple(raw_members),
                     "input_fingerprint": {
                         "byte_size": len(raw_evidence),
                         "sha256": hashlib.sha256(raw_evidence).hexdigest(),
+                    },
+                    "prompt_fingerprint": {
+                        "byte_size": len(raw_prompt),
+                        "sha256": hashlib.sha256(raw_prompt).hexdigest(),
                     },
                 }
     except (zipfile.BadZipFile, KeyError) as exc:
@@ -493,7 +553,8 @@ def _snapshot_archived_evaluator_evidence(
 
 def _verify_evaluator_report_input_fingerprint(
     payload: dict, source_cell: dict, *, expected_question: str,
-    expected_evidence_fingerprint: dict, path: str,
+    expected_evidence_fingerprint: dict, expected_prompt_fingerprint: dict,
+    path: str,
 ) -> bool:
     """Bind schema-v2 evaluator inputs to the report and original task question.
 
@@ -551,6 +612,10 @@ def _verify_evaluator_report_input_fingerprint(
     if fingerprints["evidence"] != expected_evidence_fingerprint:
         raise RecoveryConcordanceError(
             "evaluator input evidence fingerprint does not match archived retrieval text: " + path
+        )
+    if fingerprints["prompt"] != expected_prompt_fingerprint:
+        raise RecoveryConcordanceError(
+            "evaluator prompt fingerprint does not match the frozen 12-claim rubric and archived inputs: " + path
         )
     return True
 
@@ -631,6 +696,7 @@ def _verify_evaluator_cache_json_identities(
                     payload, source_cells[(variant, task)],
                     expected_question=frozen_questions[task],
                     expected_evidence_fingerprint=evidence_snapshots[(variant, task)]["input_fingerprint"],
+                    expected_prompt_fingerprint=evidence_snapshots[(variant, task)]["prompt_fingerprint"],
                     path=path,
                 ):
                     report_input_bindings_checked += 1
@@ -907,6 +973,7 @@ def compare_recovered_treatment_sources(
     """
     original_archive = Path(original_archive)
     recovery_archive = Path(recovery_archive)
+    _verify_historical_evaluator_prompt_canary()
     if original_archive.samefile(recovery_archive):
         raise RecoveryConcordanceError(
             "original and recovery inputs must be distinct archive files"
@@ -994,9 +1061,11 @@ def compare_recovered_treatment_sources(
     # input, then check schema-v2 evaluator-input fingerprints independently.
     original_evidence = _snapshot_archived_evaluator_evidence(
         original_archive, original, treatment_start[0], published_rows,
+        frozen_questions,
     )
     recovered_evidence = _snapshot_archived_evaluator_evidence(
         recovery_archive, recovered, treatment_start[0], published_rows,
+        frozen_questions,
     )
     if original_evidence != recovered_evidence:
         mismatches = [
@@ -1081,12 +1150,16 @@ def compare_recovered_treatment_sources(
         "recovery_schema_v2_evaluator_report_input_fingerprints_matched": recovered_report_binding_count,
         "original_schema_v2_evaluator_evidence_input_fingerprints_matched": original_report_binding_count,
         "original_schema_v2_evaluator_question_input_fingerprints_matched": original_report_binding_count,
+        "original_schema_v2_evaluator_prompt_input_fingerprints_matched": original_report_binding_count,
         "recovery_schema_v2_evaluator_evidence_input_fingerprints_matched": recovered_report_binding_count,
         "recovery_schema_v2_evaluator_question_input_fingerprints_matched": recovered_report_binding_count,
+        "recovery_schema_v2_evaluator_prompt_input_fingerprints_matched": recovered_report_binding_count,
+        "historical_evaluator_prompt_canary_sha256": HISTORICAL_EVALUATOR_PROMPT_CANARY_SHA256,
         "original_treatment_task_manifest_sha256": frozen_tasks.ORIGINAL_TASK_MANIFEST_SHA256,
         "schema_v1_evaluator_report_input_binding_unavailable": True,
         "schema_v1_evaluator_evidence_input_binding_unavailable": True,
         "schema_v1_evaluator_question_input_binding_unavailable": True,
+        "schema_v1_evaluator_prompt_input_binding_unavailable": True,
         "evaluator_cache_json_duplicate_keys_rejected": True,
         "recovery_only_evaluator_cells": [
             {"treatment": variant, "task_id": task}
@@ -1136,7 +1209,9 @@ def compare_recovered_treatment_sources(
             "exact published score/count/token/cost correspondence for 37 original "
             "plus 40 recovered caches. Schema-v2 report and original treatment-task "
             "question fingerprints are also checked against their distinct "
-            "ZIP-member and Git-revision anchors. This checks consistency, not " 
+            "ZIP-member and Git-revision anchors; schema-v2 prompt hashes are "
+            "recomputed using the original 12-claim rubric and the archived "
+            "question, report and evidence inputs. This checks consistency, not " 
             "independent score correctness, evidence inputs, or prompt validity. "
             "Same-provider "
             "log anchors and "

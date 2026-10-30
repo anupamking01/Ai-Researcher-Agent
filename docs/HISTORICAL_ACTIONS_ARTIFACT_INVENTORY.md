@@ -687,3 +687,29 @@ validate evaluator judgments or prompts, or authorize human-evaluation packet
 distribution. The regression tests use synthetic snippets only; no treatment,
 web retrieval, automated evaluator or human rating is run.
 
+
+## Historical schema-v2 evaluator prompt lineage (offline; not scoring validation)
+
+A cache can report the correct 40-cell run identity, frozen automated score,
+question, report and saved-evidence fingerprints while declaring an unrelated
+*prompt* fingerprint. That weakens the claim that a common evidence-only rubric
+measured every treatment. The two-ZIP comparator now reconstructs the precise
+post-hoc 12-claim verification prompt from each frozen research question, the
+unchanged UTF-8 Markdown report (including its original newlines), and the
+sorted saved evidence snippets or original no-evidence sentinel. It checks
+both SHA-256 and UTF-8 byte length against the `prompt` input fingerprint of
+every schema-v2 evaluator cache. Prompt/report reads have an independent
+16 MiB per-report bound. The original treatment and recovery workflow source
+revisions (`c3c15e46a8eec3a8bbc24c968eedc0548172a897` and
+`8733ce492abc74e7b2966ed22ce08d3fddec43ca`) contain the same rendered
+12-claim rubric. A fixed template canary, SHA-256
+`cdc7a77cb3e8334722d768afbd71a033c51a2006793992ab670a1ff10c4aac4f`
+for the sentinel question/report/evidence inputs, detects ordinary later
+changes to the rendering contract. The receipt distinguishes the schema-v2
+prompt bindings from schema-v1 records, which contain no input fingerprints.
+
+A matching hash establishes **recorded prompt-input consistency**, not that a
+specific remote API request used that prompt, that the model complied with the
+rubric, that its scores were correct, or that the missing archives have
+independent historical custody. It does not reconstruct experimental evidence,
+rerun automated/human evaluation, or authorize blinded packet distribution.

@@ -15,6 +15,7 @@ from scripts import compare_recovered_artifact_treatment_sources as concordance
 from scripts import preflight_recovered_artifact_zip as preflight
 from scripts import verify_human_eval_automated_run_lineage as lineage
 from scripts import verify_frozen_main_study_tasks as frozen_tasks
+from logic.prompts import generate_verification_prompt
 
 
 def _pair(
@@ -258,6 +259,11 @@ def _pair(
             .decode("utf-8").strip()
             or concordance.FROZEN_NO_EVIDENCE_SENTINEL
         ).encode("utf-8")
+        prompt_bytes = generate_verification_prompt(
+            question_bytes.decode("utf-8"), report_bytes.decode("utf-8"),
+            evidence_bytes.decode("utf-8"),
+            max_claims=concordance.HISTORICAL_EVALUATOR_MAX_CLAIMS,
+        ).encode("utf-8")
         fingerprints = {
             "algorithm": "sha256",
             "encoding": "utf-8",
@@ -269,7 +275,10 @@ def _pair(
                 "byte_size": len(evidence_bytes),
                 "sha256": hashlib.sha256(evidence_bytes).hexdigest(),
             },
-            "prompt": {"byte_size": 0, "sha256": empty_sha},
+            "prompt": {
+                "byte_size": len(prompt_bytes),
+                "sha256": hashlib.sha256(prompt_bytes).hexdigest(),
+            },
             "report": {
                 "byte_size": len(report_bytes),
                 "sha256": hashlib.sha256(report_bytes).hexdigest(),
@@ -283,6 +292,10 @@ def _pair(
             fingerprints["evidence"]["sha256"] = empty_sha
         elif mutation == "wrong_evidence_size":
             fingerprints["evidence"]["byte_size"] += 1
+        elif mutation == "wrong_prompt_digest":
+            fingerprints["prompt"]["sha256"] = empty_sha
+        elif mutation == "wrong_prompt_size":
+            fingerprints["prompt"]["byte_size"] += 1
         elif mutation == "wrong_question_digest":
             fingerprints["question"]["sha256"] = empty_sha
         elif mutation == "wrong_question_size":
@@ -1258,3 +1271,44 @@ def test_saved_evidence_semantic_read_respects_size_bound(tmp_path, monkeypatch)
         concordance.RecoveryConcordanceError, match="evidence member exceeds bound"
     ):
         concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+@pytest.mark.parametrize("mutation", ["wrong_prompt_digest", "wrong_prompt_size"])
+def test_schema_v2_cache_rejects_wrong_prompt_lineage(tmp_path, monkeypatch, mutation):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        schema2_recovery_cache=("P6V", "main-02", mutation),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match="evaluator prompt fingerprint"):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_historical_evaluator_prompt_canary_is_frozen():
+    concordance._verify_historical_evaluator_prompt_canary()
+    assert concordance.HISTORICAL_EVALUATOR_PROMPT_CANARY_SHA256 == (
+        "cdc7a77cb3e8334722d768afbd71a033c51a2006793992ab670a1ff10c4aac4f"
+    )
+
+
+def test_prompt_template_drift_fails_before_zip_inspection(tmp_path, monkeypatch):
+    original, recovered, _, _ = _pair(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        concordance, "generate_verification_prompt",
+        lambda *args, **kwargs: "synthetic wrong evaluator rubric",
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match="historical 12-claim canary"):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_schema_v2_prompt_lineage_receipt_is_explicit(tmp_path, monkeypatch):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        schema2_recovery_cache=("P6V", "main-02", "valid"),
+    )
+    receipt = concordance.compare_recovered_treatment_sources(original, recovered)
+    assert receipt["recovery_schema_v2_evaluator_prompt_input_fingerprints_matched"] == 1
+    assert receipt["original_schema_v2_evaluator_prompt_input_fingerprints_matched"] == 0
+    assert receipt["schema_v1_evaluator_prompt_input_binding_unavailable"] is True
+    assert receipt["historical_evaluator_prompt_canary_sha256"] == (
+        concordance.HISTORICAL_EVALUATOR_PROMPT_CANARY_SHA256
+    )
