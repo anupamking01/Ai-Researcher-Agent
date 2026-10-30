@@ -1369,6 +1369,7 @@ def compare_recovered_treatment_sources(
         "original_treatment_query_and_url_scheduling_checked": original_traces_checked,
         "original_treatment_saved_query_output_schedule_checked": original_traces_checked,
         "recovery_treatment_query_and_url_scheduling_checked": recovered_traces_checked,
+        "recovery_treatment_saved_query_output_schedule_checked": recovered_traces_checked,
         "original_treatment_provider_usage_ledgers_checked": original_traces_checked,
         "recovery_treatment_provider_usage_ledgers_checked": recovered_traces_checked,
         "original_treatment_published_latency_and_cost_matched": original_traces_checked,
