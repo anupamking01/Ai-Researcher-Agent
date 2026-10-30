@@ -821,3 +821,29 @@ correct. Tests use synthetic archives only; authentic historical treatment
 and recovery ZIPs remain unavailable. The automated confirmatory analysis
 is untouched, exploratory findings are not promoted to confirmatory claims,
 and human-validation ratings and independent custody remain pending.
+
+## Historical per-query evidence-file scheduling integrity (offline)
+
+The historical treatment agent persisted a `research-query-NN.txt` file after
+**every executed search query**, including an empty file when no browse returned
+content. The ordinal is the position in the planned query list, not the
+successful-source count. The common evaluator later reconstructed its evidence
+from the saved files in sorted order. Published total retrieval counts alone
+cannot detect an absent query file if another query still supplied some text.
+
+The two-ZIP concordance audit now cross-checks the exact direct-child
+`research-query-NN.txt` member set for each of the 40 original and 40
+recovered traces against the trace's validated ordered search records and
+planned-query ordinals. It also checks the original writer's empty/nonempty
+rule against each query's successful browse URLs. Missing, inserted, or
+contradictory query files fail even when **both** archives contain the same
+alteration and their published aggregate counts agree. The earlier independent
+byte-fingerprint and schema-v2 input checks remain in place; new regression
+cases use synthetic query schedules and archives only.
+
+This verifies **recorded query-to-evidence-file consistency**, not the truth
+or completeness of source text, that a remote browse actually occurred,
+the authenticity of historical archives, or independent evidence custody.
+The original 40-trace and evaluator-recovery ZIP artifacts remain unavailable,
+so no authentic archive has passed this new gate. No treatments, evaluators, or
+human ratings were run or fabricated, and human distribution remains blocked.

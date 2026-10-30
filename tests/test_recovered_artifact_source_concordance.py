@@ -27,7 +27,7 @@ def _pair(
     tamper_trace=None, invalid_trace_bytes=None,
     tamper_recovery_measurements=None, schema2_recovery_cache=None,
     invalid_report_bytes=None, invalid_evidence_bytes=None,
-    omit_evidence_both=None,
+    omit_evidence_both=None, alter_query_evidence_both=None,
 ):
     csv_path = matrix.REPO_ROOT / lineage.SUPPORT_REL
     csv_bytes, _ = matrix._capture_evaluator(csv_path)
@@ -213,12 +213,40 @@ def _pair(
         **{name: synthetic_trace(name) for name in sorted(traces)},
         **{name: synthetic_report(name) for name in sorted(reports)},
     }
-    # Entirely synthetic saved evidence: no research web retrieval is replayed.
+    # Entirely synthetic saved evidence: one file for EVERY executed query,
+    # including empty files for zero-success query calls. This mimics the
+    # original writer's shape without making a historical retrieval claim.
+    expected_query_file_count = 0
     for (variant, task), run_id in frozen_run_ids.items():
-        if int(published_treatments[(variant, task)]["successful_sources"]) > 0:
-            files[f"{run_id}/research-query-01.txt"] = (
-                f"SYNTHETIC EVIDENCE ONLY for {variant}/{task}\n"
-            ).encode("utf-8")
+        trace = json.loads(
+            files[f"experiment_traces/{variant}/{run_id}.json"]
+        )["trace"]
+        succeeded = set(trace["successful_urls"])
+        index = 0
+        for record in trace["search_records"]:
+            while trace["search_queries"][index] != record["query"]:
+                index += 1
+            ordinal = index + 1
+            has_success = any(url in succeeded for url in record["scheduled_urls"])
+            files[f"{run_id}/research-query-{ordinal:02d}.txt"] = (
+                f"SYNTHETIC EVIDENCE ONLY for {variant}/{task}/query-{ordinal:02d}\n"
+            ).encode("utf-8") if has_success else b""
+            expected_query_file_count += 1
+            index += 1
+    assert expected_query_file_count == sum(
+        int(row["search_calls"]) for row in published_treatments.values()
+    )
+    if alter_query_evidence_both:
+        variant, task, ordinal, action = alter_query_evidence_both
+        run_id = frozen_run_ids[(variant, task)]
+        member = f"{run_id}/research-query-{ordinal:02d}.txt"
+        if action == "remove":
+            del files[member]
+        elif action == "extra":
+            assert member not in files
+            files[member] = b""
+        else:
+            raise AssertionError("unknown synthetic query-evidence fixture mutation")
     if invalid_evidence_bytes:
         variant, task, replacement = invalid_evidence_bytes
         files[f"{frozen_run_ids[(variant, task)]}/research-query-01.txt"] = replacement
@@ -289,9 +317,14 @@ def _pair(
             cell["question"] for cell in task_manifest["tasks"] if cell["id"] == task
         ).encode("utf-8")
         empty_sha = hashlib.sha256(b"").hexdigest()
+        prefix = f"{frozen_run_ids[(variant, task)]}/research-query-"
+        snippets = [
+            raw.decode("utf-8").strip()
+            for name, raw in sorted(recovered.items())
+            if name.startswith(prefix) and name.endswith(".txt")
+        ]
         evidence_bytes = (
-            recovered.get(f"{frozen_run_ids[(variant, task)]}/research-query-01.txt", b"")
-            .decode("utf-8").strip()
+            "\n\n".join(part for part in snippets if part)
             or concordance.FROZEN_NO_EVIDENCE_SENTINEL
         ).encode("utf-8")
         prompt_bytes = generate_verification_prompt(
@@ -392,7 +425,9 @@ def test_matching_40_sources_survive_repackaging_and_extra_recovery_metadata(
     assert receipt["published_treatment_csv_sha256"] == concordance.PUBLISHED_TREATMENT_CSV_SHA256
     assert receipt["report_sources_unchanged"] == 40
     assert receipt["evaluator_evidence_source_cells_compared"] == 40
-    assert receipt["evaluator_evidence_source_members_byte_identical"] == 39
+    assert receipt["evaluator_evidence_source_members_byte_identical"] == 100
+    assert receipt["original_treatment_saved_query_output_schedule_checked"] == 40
+    assert receipt["recovery_treatment_saved_query_output_schedule_checked"] == 40
     assert receipt["preserved_evaluator_cache_members_byte_identical"] == 37
     assert receipt["recovery_only_evaluator_cache_members_present"] == 3
     assert receipt["evaluator_cache_payload_semantics_verified"] is False
@@ -1652,3 +1687,56 @@ def test_schema_v2_prompt_lineage_receipt_is_explicit(tmp_path, monkeypatch):
     assert receipt["historical_evaluator_prompt_canary_sha256"] == (
         concordance.HISTORICAL_EVALUATOR_PROMPT_CANARY_SHA256
     )
+
+@pytest.mark.parametrize(("action", "ordinal"), [
+    ("remove", 2),
+    ("extra", 99),
+])
+def test_identical_archives_reject_incomplete_or_invented_query_output_schedule(
+    tmp_path, monkeypatch, action, ordinal,
+):
+    # An altered original and recovery ZIP still share the same treatment
+    # source bytes and all frozen aggregate counts. Query-output membership
+    # must be independently checked against the recorded search schedule.
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        alter_query_evidence_both=("P6", "main-01", ordinal, action),
+    )
+    with pytest.raises(
+        concordance.RecoveryConcordanceError,
+        match="saved query-output file set",
+    ):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+@pytest.mark.parametrize(("files", "successful", "expected_error"), [
+    ({"research-query-01.txt": b"source"}, ["url-one"], None),
+    ({"research-query-01.txt": b""}, ["url-one"], "content presence"),
+    ({"research-query-01.txt": b"fake evidence"}, [], "content presence"),
+    ({"research-query-01.txt": b"source", "research-query-02.txt": b""},
+     ["url-one"], "file set"),
+])
+def test_saved_query_outputs_bind_to_search_success_per_query(
+    tmp_path, files, successful, expected_error,
+):
+    archive_path = tmp_path / "query-evidence.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        for name, raw in files.items():
+            archive.writestr(f"run-one/{name}", raw)
+    trace = {
+        "search_queries": ["question one"],
+        "search_records": [{"query": "question one", "scheduled_urls": ["url-one"]}],
+        "successful_urls": successful,
+    }
+    with zipfile.ZipFile(archive_path) as archive:
+        if expected_error is None:
+            concordance._verify_historical_query_output_members(
+                archive, prefix="", run_id="run-one", trace=trace,
+            )
+        else:
+            with pytest.raises(
+                concordance.RecoveryConcordanceError, match=expected_error
+            ):
+                concordance._verify_historical_query_output_members(
+                    archive, prefix="", run_id="run-one", trace=trace,
+                )

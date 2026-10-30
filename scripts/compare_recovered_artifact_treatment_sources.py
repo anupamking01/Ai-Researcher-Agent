@@ -958,6 +958,58 @@ def _verify_archived_report_trace_binding(
         )
 
 
+def _verify_historical_query_output_members(
+    source: zipfile.ZipFile, *, prefix: str, run_id: str, trace: dict,
+) -> None:
+    """Bind each saved query text file to an executed frozen search query.
+
+    ResearchAgent.run_search_summary wrote research-query-NN.txt after *every*
+    attempted query, including searches with no successful browses (empty
+    files). The ordinal comes from the position in search_queries, not the
+    number of successful sources. A missing file can silently remove
+    evaluator evidence even when the frozen total source count still matches.
+    """
+    planned = trace["search_queries"]
+    succeeded = set(trace["successful_urls"])
+    expected: dict[str, bool] = {}
+    next_query = 0
+    for record in trace["search_records"]:
+        while next_query < len(planned) and planned[next_query] != record["query"]:
+            next_query += 1
+        if next_query == len(planned):
+            raise RecoveryConcordanceError(
+                "historical search record has no matching planned query"
+            )
+        member_path = f"{prefix}{run_id}/research-query-{next_query + 1:02d}.txt"
+        expected[member_path] = any(
+            url in succeeded for url in record["scheduled_urls"]
+        )
+        next_query += 1
+
+    root = f"{prefix}{run_id}/"
+    observed = {
+        name for name in source.namelist()
+        if name.startswith(root)
+        and "/" not in name[len(root):]
+        and name[len(root):].startswith("research-query-")
+        and name.endswith(".txt")
+    }
+    if observed != set(expected):
+        raise RecoveryConcordanceError(
+            "historical saved query-output file set disagrees with executed "
+            f"search query schedule: {run_id}"
+        )
+    for member_path, had_successful_browse in expected.items():
+        # Original writer persists an empty string for zero successful
+        # responses; a successful browse contributes a nonempty str(response).
+        # The ZIP scan and evaluator-evidence reread independently bind bytes.
+        if bool(source.getinfo(member_path).file_size) != had_successful_browse:
+            raise RecoveryConcordanceError(
+                "historical saved query-output content presence disagrees with "
+                f"successful browse accounting: {member_path}"
+            )
+
+
 def _finite_trace_json_float(token: str) -> float:
     value = float(token)
     if not math.isfinite(value):
@@ -1122,6 +1174,9 @@ def _verify_archived_treatment_trace_identities(
                         "historical treatment provider usage ledger violates "
                         f"original run accounting: {path}: {exc}"
                     ) from exc
+                _verify_historical_query_output_members(
+                    source, prefix=prefix, run_id=run_id, trace=trace,
+                )
                 # Token sums alone cannot anchor estimated treatment costs:
                 # use the frozen original-run pricing method and latency.
                 try:
@@ -1312,6 +1367,7 @@ def compare_recovered_treatment_sources(
         "original_treatment_published_resource_ledgers_matched": original_traces_checked,
         "recovery_treatment_published_resource_ledgers_matched": recovered_traces_checked,
         "original_treatment_query_and_url_scheduling_checked": original_traces_checked,
+        "original_treatment_saved_query_output_schedule_checked": original_traces_checked,
         "recovery_treatment_query_and_url_scheduling_checked": recovered_traces_checked,
         "original_treatment_provider_usage_ledgers_checked": original_traces_checked,
         "recovery_treatment_provider_usage_ledgers_checked": recovered_traces_checked,
@@ -1393,7 +1449,8 @@ def compare_recovered_treatment_sources(
             "missing evaluator cache members appear in recovery. This checks "
             "cache membership, byte continuity, JSON/schema/run identity, plus "
             "original and recovery treatment trace completion, frozen task, "
-            "treatment assignment, source-budget, query/URL scheduling, per-model provider usage "
+            "treatment assignment, source-budget, query/URL scheduling, saved query-output file "
+            "membership and per-query success/empty-content correspondence, per-model provider usage "
             "aggregation, original-rate estimated cost and latency correspondence, "
             "and frozen-rate evaluator cost recomputation from the per-model "
             "prompt/completion split; and byte-identical saved retrieval snippets across original/recovery "
