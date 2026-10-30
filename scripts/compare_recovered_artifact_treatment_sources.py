@@ -290,6 +290,31 @@ def _reject_nonfinite_json(value: str) -> None:
     )
 
 
+def _finite_evaluator_cache_json_float(token: str) -> float:
+    """Reject JSON exponent overflow even in non-score evaluator metadata."""
+    value = float(token)
+    if not math.isfinite(value):
+        raise RecoveryConcordanceError(
+            "nonfinite exponent in evaluator cache JSON: " + token
+        )
+    return value
+
+
+def _verify_historical_evaluator_examples(payload: dict, *, path: str) -> None:
+    """Match the original normalized cache's bounded qualitative-examples shape.
+
+    Historical verifier normalization always saved a list of at most eight
+    examples, even if the model supplied none or an invalid examples field.
+    Shape verification does not corroborate the model's claim judgments.
+    """
+    examples = payload.get("examples")
+    if type(examples) is not list or len(examples) > 8:
+        raise RecoveryConcordanceError(
+            "historical evaluator examples must be a list of at most eight items: "
+            + path
+        )
+
+
 # The CSV is the published, byte-fingerprint-pinned automated measurement export.
 # Compare archived measurements to it, without recomputing or optimizing any scores.
 PUBLISHED_EVALUATOR_COUNT_FIELDS = (
@@ -809,8 +834,9 @@ def _verify_evaluator_cache_json_identities(
                         raw.decode("utf-8"),
                         object_pairs_hook=_unique_json_pairs,
                         parse_constant=_reject_nonfinite_json,
+                        parse_float=_finite_evaluator_cache_json_float,
                     )
-                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
                     raise RecoveryConcordanceError(
                         "invalid evaluator cache JSON: " + path
                     ) from exc
@@ -839,6 +865,7 @@ def _verify_evaluator_cache_json_identities(
                 _verify_published_evaluator_measurements(
                     payload, published_rows[(variant, task)], path=path,
                 )
+                _verify_historical_evaluator_examples(payload, path=path)
                 _verify_historical_evaluator_configuration(
                     payload,
                     expected_evidence_status=evidence_snapshots[(variant, task)]["evidence_status"],
@@ -1304,6 +1331,8 @@ def compare_recovered_treatment_sources(
         "recovery_evaluator_cache_json_identities_checked": recovered_identity_count,
         "original_evaluator_cache_published_measurements_matched": original_identity_count,
         "recovery_evaluator_cache_published_measurements_matched": recovered_identity_count,
+        "original_evaluator_normalized_examples_checked": original_identity_count,
+        "recovery_evaluator_normalized_examples_checked": recovered_identity_count,
         "original_evaluator_frozen_configuration_matched": original_identity_count,
         "recovery_evaluator_frozen_configuration_matched": recovered_identity_count,
         "original_evaluator_provider_usage_ledgers_checked": original_identity_count,

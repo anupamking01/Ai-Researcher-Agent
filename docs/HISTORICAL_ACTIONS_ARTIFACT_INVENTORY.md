@@ -789,3 +789,35 @@ they are neither recovered historical usage nor experimental results.
 The original and evaluator-recovery ZIPs remain unavailable, so no authentic
 archive has passed this gate and blinded human-evaluation distribution
 remains blocked.
+
+## Historical evaluator-cache normalized qualitative fields (offline)
+
+The original treatment and evaluator-only recovery source revisions
+(`c3c15e46a8eec3a8bbc24c968eedc0548172a897` and
+`8733ce492abc74e7b2966ed22ce08d3fddec43ca`) called
+`normalize_verifier_output` before persisting each common-evaluator cache.
+That historical normalizer always wrote an `examples` **list of at most
+eight entries**, even if the model response omitted examples. Because these
+illustrative claim excerpts are the only qualitative evaluator output retained
+alongside the frozen counts, the two-archive comparator now verifies their
+historical *stored shape* on both the 37 original and 40 recovered cache
+records. Malformed or omitted lists and more than eight entries fail even
+when the published numeric scores and costs are unchanged. Existing receipt
+fields separately count the original/recovered example-list checks.
+
+The read-only JSON audit also rejects floating-point exponents that overflow
+to infinity anywhere in a cached record and converts excessive JSON nesting
+into an explicit validation failure rather than an uncontrolled recursion
+exception. The historical numeric claims, input-fingerprint, configuration,
+cost, and provider-usage checks remain unchanged. Example content itself is
+**not** reclassified: the original normalizer did not require a schema for
+individual example entries, so imposing one retrospectively would fabricate
+a stricter historical contract.
+
+Passing proves only bounded recorded-cache shape and finite JSON parsing.
+It cannot establish that illustrative examples correspond to actual
+retrieval evidence, that a model produced them, or that a claim judgment is
+correct. Tests use synthetic archives only; authentic historical treatment
+and recovery ZIPs remain unavailable. The automated confirmatory analysis
+is untouched, exploratory findings are not promoted to confirmatory claims,
+and human-validation ratings and independent custody remain pending.

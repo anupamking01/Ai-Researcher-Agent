@@ -93,6 +93,7 @@ def _pair(
             "temperature": concordance.HISTORICAL_EVALUATOR_TEMPERATURE,
             "max_claims": concordance.HISTORICAL_EVALUATOR_MAX_CLAIMS,
             "cost_method": concordance.HISTORICAL_EVALUATOR_COST_METHOD,
+            "examples": [],  # Historical normalization always saved a <=8-item list.
             # The original schema-v1 records legitimately lacked this field.
             **({"evidence_status": row["evidence_status"]} if row.get("evidence_status") else {}),
             **{field: int(row[field]) for field in
@@ -399,6 +400,8 @@ def test_matching_40_sources_survive_repackaging_and_extra_recovery_metadata(
     assert receipt["recovery_evaluator_cache_json_identities_checked"] == 40
     assert receipt["original_evaluator_cache_published_measurements_matched"] == 37
     assert receipt["recovery_evaluator_cache_published_measurements_matched"] == 40
+    assert receipt["original_evaluator_normalized_examples_checked"] == 37
+    assert receipt["recovery_evaluator_normalized_examples_checked"] == 40
     assert receipt["original_evaluator_frozen_configuration_matched"] == 37
     assert receipt["recovery_evaluator_frozen_configuration_matched"] == 40
     assert receipt["original_zip_sha256_observed_now"] != receipt[
@@ -660,6 +663,10 @@ def test_preserved_evaluator_wrong_identity_blocked_even_when_byte_identical(
      "duplicate key"),
     (b'{"schema_version":1,"study_id":"budget-main-v1","x":NaN}',
      "nonfinite numeric token"),
+    (b'{"schema_version":1,"examples":[1e9999]}',
+     "nonfinite exponent in evaluator cache JSON"),
+    (b'{"schema_version":1,"examples":' + b'[' * 1100 + b'0' + b']' * 1100 + b'}',
+     "invalid evaluator cache JSON"),
     (b'{"schema_version":1,', "invalid evaluator cache JSON"),
     (b'{"study_id":"budget-main-v1"}', "schema_version"),
     (b'["not","a","cache"]', "must be an object"),
@@ -672,6 +679,50 @@ def test_recovery_only_evaluator_malformed_or_ambiguous_json_rejected(
     )
     with pytest.raises(concordance.RecoveryConcordanceError, match=expected_error):
         concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+@pytest.mark.parametrize(("role", "bad_examples"), [
+    ("original", None),
+    ("original", {"not": "a list"}),
+    ("original", list(range(9))),
+    ("recovery_only", None),
+    ("recovery_only", "not a list"),
+    ("recovery_only", list(range(9))),
+])
+def test_historical_evaluator_cache_preserves_normalized_example_list_shape(
+    tmp_path, monkeypatch, role, bad_examples,
+):
+    # Both ZIP roles may preserve a numerically correct cache whose
+    # qualitative examples contradict the original verifier writer's shape.
+    key = (
+        "tamper_original_measurements"
+        if role == "original" else "tamper_recovery_measurements"
+    )
+    cell = ("D3", "main-01") if role == "original" else ("P6V", "main-02")
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        **{key: (*cell, {"examples": bad_examples})},
+    )
+    with pytest.raises(
+        concordance.RecoveryConcordanceError,
+        match="historical evaluator examples must be a list of at most eight",
+    ):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_historical_evaluator_cache_allows_eight_synthetic_example_entries(
+    tmp_path, monkeypatch,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        tamper_recovery_measurements=(
+            "P6V", "main-02", {"examples": [{"synthetic_example_only": True}] * 8},
+        ),
+    )
+    receipt = concordance.compare_recovered_treatment_sources(original, recovered)
+    assert receipt["original_evaluator_normalized_examples_checked"] == 37
+    assert receipt["recovery_evaluator_normalized_examples_checked"] == 40
+    assert receipt["historical_evidence_authenticated"] is False
 
 
 def test_evaluator_json_member_size_bound_is_checked(tmp_path, monkeypatch):
