@@ -72,6 +72,12 @@ def _pair(
             "task_id": task,
             "run_id": frozen_run_ids[(variant, task)],
             "synthetic_fixture_only": True,
+            "evaluator_model": concordance.HISTORICAL_EVALUATOR_MODEL,
+            "temperature": concordance.HISTORICAL_EVALUATOR_TEMPERATURE,
+            "max_claims": concordance.HISTORICAL_EVALUATOR_MAX_CLAIMS,
+            "cost_method": concordance.HISTORICAL_EVALUATOR_COST_METHOD,
+            # The original schema-v1 records legitimately lacked this field.
+            **({"evidence_status": row["evidence_status"]} if row.get("evidence_status") else {}),
             **{field: int(row[field]) for field in
                concordance.PUBLISHED_EVALUATOR_COUNT_FIELDS},
             **{field: float(row[field]) for field in
@@ -365,6 +371,8 @@ def test_matching_40_sources_survive_repackaging_and_extra_recovery_metadata(
     assert receipt["recovery_evaluator_cache_json_identities_checked"] == 40
     assert receipt["original_evaluator_cache_published_measurements_matched"] == 37
     assert receipt["recovery_evaluator_cache_published_measurements_matched"] == 40
+    assert receipt["original_evaluator_frozen_configuration_matched"] == 37
+    assert receipt["recovery_evaluator_frozen_configuration_matched"] == 40
     assert receipt["original_zip_sha256_observed_now"] != receipt[
         "recovery_zip_sha256_observed_now"
     ]
@@ -667,6 +675,57 @@ def test_recovery_only_cache_numeric_disagreement_with_frozen_csv_is_rejected(
         tamper_recovery_measurements=("P6V", "main-02", {field: replacement}),
     )
     with pytest.raises(concordance.RecoveryConcordanceError, match=field):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+
+@pytest.mark.parametrize(("field", "replacement"), [
+    ("evaluator_model", "different-model"),
+    ("temperature", 0.0),
+    ("temperature", True),
+    ("max_claims", 11),
+    ("max_claims", True),
+    ("cost_method", "current API prices"),
+    ("evidence_status", "wrong_evidence_status"),
+])
+def test_recovery_only_cache_rejects_changed_common_evaluator_configuration(
+    tmp_path, monkeypatch, field, replacement,
+):
+    # A matching score/cost CSV cannot certify how the evaluation was run.
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        tamper_recovery_measurements=(
+            "P6V", "main-08", {field: replacement},
+        ),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match=field):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_preserved_cache_identically_wrong_evaluator_model_is_rejected(
+    tmp_path, monkeypatch,
+):
+    # Changing a preserved cache in BOTH archives cannot bypass the role audit.
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        tamper_original_measurements=(
+            "D3", "main-01", {"evaluator_model": "different-model"},
+        ),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match="evaluator_model"):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_schema_v2_requires_explicit_evidence_status_even_when_scores_match(
+    tmp_path, monkeypatch,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        tamper_recovery_measurements=(
+            "P6V", "main-08", {"schema_version": 2, "evidence_status": None},
+        ),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match="evidence_status"):
         concordance.compare_recovered_treatment_sources(original, recovered)
 
 

@@ -713,3 +713,32 @@ specific remote API request used that prompt, that the model complied with the
 rubric, that its scores were correct, or that the missing archives have
 independent historical custody. It does not reconstruct experimental evidence,
 rerun automated/human evaluation, or authorize blinded packet distribution.
+
+
+## Historical common-evaluator configuration metadata gate (offline)
+
+The original and recovered caches must now retain the **same frozen post-hoc
+measurement configuration**, not just the correct run IDs, input fingerprints
+and published numeric summaries. The archive comparator requires the historical
+`gpt-5.6-terra` evaluator model, temperature `1.0`, 12-claim cap, and
+`frozen uncached rates` accounting label on each of the 37 original and 40
+recovery JSON records. These constants follow the original treatment and
+recovery workflow environments and evaluator record writers at source revisions
+`c3c15e46a8eec3a8bbc24c968eedc0548172a897` and
+`8733ce492abc74e7b2966ed22ce08d3fddec43ca`.
+
+When a cache declares `evidence_status`, it must match the **independently
+reconstructed status** of the archived saved retrieval evidence. Schema-v2
+caches must declare it; schema-v1 caches may omit it because the original
+schema-v1 treatment-run writer did not yet record this field. Omission is
+reported as a historical limitation, not evidence that the original evaluator
+saw the reconstructed evidence. The success receipt separately reports original
+and recovered configuration-validation counts.
+
+These checks reject metadata claiming a different common measurement setup
+without changing a single frozen score. They do **not** independently attest
+the actual remote model request, verify provider token accounting or billing,
+authenticate the historical ZIP archives, or substantiate the automated
+judgments. All new regressions use synthetic fixture caches. The original and
+recovery ZIPs remain unavailable for authentic inspection, and neither
+treatments, automated evaluations, nor human ratings are rerun or generated.

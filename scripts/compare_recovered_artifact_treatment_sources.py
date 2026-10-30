@@ -378,6 +378,12 @@ def _verify_published_evaluator_measurements(
 # 8733ce492abc74e7b2966ed22ce08d3fddec43ca render the same 12-claim
 # prompt. Pin a rendered canary independently of future template edits.
 # This anchors the prompt contract, not the model's response or historical custody.
+# Workflow source revisions c3c15e46 and 8733ce49 fixed the evaluator's
+# environment to this model/temperature and its record-writing cost label.
+# These are metadata checks, not proof of a remote model request or billing.
+HISTORICAL_EVALUATOR_MODEL = "gpt-5.6-terra"
+HISTORICAL_EVALUATOR_TEMPERATURE = 1.0
+HISTORICAL_EVALUATOR_COST_METHOD = "frozen uncached rates"
 HISTORICAL_EVALUATOR_MAX_CLAIMS = 12
 HISTORICAL_EVALUATOR_PROMPT_CANARY_SHA256 = (
     "cdc7a77cb3e8334722d768afbd71a033c51a2006793992ab670a1ff10c4aac4f"
@@ -541,6 +547,7 @@ def _snapshot_archived_evaluator_evidence(
                         "byte_size": len(raw_prompt),
                         "sha256": hashlib.sha256(raw_prompt).hexdigest(),
                     },
+                    "evidence_status": evidence_status,
                 }
     except (zipfile.BadZipFile, KeyError) as exc:
         raise RecoveryConcordanceError(
@@ -549,6 +556,53 @@ def _snapshot_archived_evaluator_evidence(
     if len(result) != 40:
         raise RecoveryConcordanceError("historical evaluator evidence identities are incomplete")
     return result
+
+
+
+def _verify_historical_evaluator_configuration(
+    payload: dict, *, expected_evidence_status: str, path: str,
+) -> None:
+    """Check the fixed post-hoc measurement configuration in archived caches.
+
+    Source revisions c3c15e46 and 8733ce49 use the same model, temperature,
+    12-claim cap and frozen-cost label. The original schema-v1 record writer
+    omitted evidence_status; schema-v2 requires it, and any recorded status
+    must agree with the reconstructed archived evidence, not merely a CSV.
+    This checks recorded metadata, not remote API requests or billed costs.
+    """
+    if payload.get("evaluator_model") != HISTORICAL_EVALUATOR_MODEL:
+        raise RecoveryConcordanceError(
+            "historical evaluator_model differs from frozen common evaluator: " + path
+        )
+    temperature = payload.get("temperature")
+    if (
+        type(temperature) not in (int, float)
+        or not math.isfinite(temperature)
+        or float(temperature) != HISTORICAL_EVALUATOR_TEMPERATURE
+    ):
+        raise RecoveryConcordanceError(
+            "historical evaluator temperature differs from frozen common evaluator: " + path
+        )
+    if (
+        type(payload.get("max_claims")) is not int
+        or payload["max_claims"] != HISTORICAL_EVALUATOR_MAX_CLAIMS
+    ):
+        raise RecoveryConcordanceError(
+            "historical evaluator max_claims differs from frozen rubric: " + path
+        )
+    if payload.get("cost_method") != HISTORICAL_EVALUATOR_COST_METHOD:
+        raise RecoveryConcordanceError(
+            "historical evaluator cost_method differs from frozen accounting: " + path
+        )
+    status = payload.get("evidence_status")
+    if (
+        (status is None and payload["schema_version"] != 1)
+        or (status is not None and status != expected_evidence_status)
+    ):
+        raise RecoveryConcordanceError(
+            "historical evaluator evidence_status disagrees with archived retrieval inputs: "
+            + path
+        )
 
 
 def _verify_evaluator_report_input_fingerprint(
@@ -691,6 +745,11 @@ def _verify_evaluator_cache_json_identities(
                         )
                 _verify_published_evaluator_measurements(
                     payload, published_rows[(variant, task)], path=path,
+                )
+                _verify_historical_evaluator_configuration(
+                    payload,
+                    expected_evidence_status=evidence_snapshots[(variant, task)]["evidence_status"],
+                    path=path,
                 )
                 if _verify_evaluator_report_input_fingerprint(
                     payload, source_cells[(variant, task)],
@@ -1146,6 +1205,8 @@ def compare_recovered_treatment_sources(
         "recovery_evaluator_cache_json_identities_checked": recovered_identity_count,
         "original_evaluator_cache_published_measurements_matched": original_identity_count,
         "recovery_evaluator_cache_published_measurements_matched": recovered_identity_count,
+        "original_evaluator_frozen_configuration_matched": original_identity_count,
+        "recovery_evaluator_frozen_configuration_matched": recovered_identity_count,
         "original_schema_v2_evaluator_report_input_fingerprints_matched": original_report_binding_count,
         "recovery_schema_v2_evaluator_report_input_fingerprints_matched": recovered_report_binding_count,
         "original_schema_v2_evaluator_evidence_input_fingerprints_matched": original_report_binding_count,
