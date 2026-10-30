@@ -21,25 +21,40 @@ def _pair(
     mutate_evaluator=None, drop_recovery_evaluator=None,
     omit_original_evaluator=None, extra_original_evaluator=None,
     extra_recovery_evaluator=None, bad_original_cache=None,
-    bad_recovery_cache=None,
+    bad_recovery_cache=None, tamper_original_measurements=None,
+    tamper_recovery_measurements=None,
 ):
     csv_path = matrix.REPO_ROOT / lineage.SUPPORT_REL
     csv_bytes, _ = matrix._capture_evaluator(csv_path)
     traces, reports = matrix._expected_paths(csv_bytes, csv_path=csv_path)
+    frozen_rows = lineage._matrix(
+        lineage._read_study_csv(csv_bytes, path=csv_path),
+        label="synthetic test's frozen CSV reference",
+        expected_cells=matrix.EXPECTED_CELLS, run_identity=True,
+    )
     frozen_run_ids = {
-        (cell["treatment"], cell["task_id"]): cell["run_id"]
-        for cell in matrix._expected_cells(csv_bytes, csv_path=csv_path)
+        cell: row["run_id"] for cell, row in frozen_rows.items()
     }
 
-    def synthetic_cache(variant, task):
-        return json.dumps({
+    def synthetic_cache(variant, task, overrides=None):
+        # Fake archive fixtures copy numbers from the pinned CSV. They are
+        # never original evaluator outputs or new experimental measurements.
+        row = frozen_rows[(variant, task)]
+        record = {
             "schema_version": 1,
             "study_id": "budget-main-v1",
             "variant_id": variant,
             "task_id": task,
             "run_id": frozen_run_ids[(variant, task)],
             "synthetic_fixture_only": True,
-        }, sort_keys=True).encode("utf-8")
+            **{field: int(row[field]) for field in
+               concordance.PUBLISHED_EVALUATOR_COUNT_FIELDS},
+            **{field: float(row[field]) for field in
+               concordance.PUBLISHED_EVALUATOR_DECIMAL_FIELDS},
+        }
+        if overrides:
+            record.update(overrides)
+        return json.dumps(record, sort_keys=True).encode("utf-8")
 
     files = {
         **{name: b'{"synthetic_fixture_only":true}' for name in sorted(traces)},
@@ -57,6 +72,9 @@ def _pair(
     if bad_original_cache:
         variant, task, payload = bad_original_cache
         files[evaluator_path(variant, task)] = payload
+    if tamper_original_measurements:
+        variant, task, fields = tamper_original_measurements
+        files[evaluator_path(variant, task)] = synthetic_cache(variant, task, fields)
     if omit_original_evaluator:
         files.pop(evaluator_path(*omit_original_evaluator))
     if extra_original_evaluator:
@@ -72,6 +90,9 @@ def _pair(
     if bad_recovery_cache:
         variant, task, payload = bad_recovery_cache
         recovered[evaluator_path(variant, task)] = payload
+    if tamper_recovery_measurements:
+        variant, task, fields = tamper_recovery_measurements
+        recovered[evaluator_path(variant, task)] = synthetic_cache(variant, task, fields)
     if mutate_evaluator:
         recovered[evaluator_path(*mutate_evaluator)] += b"\nsynthetic cache modification"
     if drop_recovery_evaluator:
@@ -113,6 +134,8 @@ def test_matching_40_sources_survive_repackaging_and_extra_recovery_metadata(
     assert receipt["evaluator_cache_payload_semantics_verified"] is False
     assert receipt["original_evaluator_cache_json_identities_checked"] == 37
     assert receipt["recovery_evaluator_cache_json_identities_checked"] == 40
+    assert receipt["original_evaluator_cache_published_measurements_matched"] == 37
+    assert receipt["recovery_evaluator_cache_published_measurements_matched"] == 40
     assert receipt["original_zip_sha256_observed_now"] != receipt[
         "recovery_zip_sha256_observed_now"
     ]
@@ -384,4 +407,54 @@ def test_evaluator_json_member_size_bound_is_checked(tmp_path, monkeypatch):
     original, recovered, _, _ = _pair(tmp_path, monkeypatch)
     monkeypatch.setattr(concordance, "MAX_EVALUATOR_CACHE_JSON_BYTES", 10)
     with pytest.raises(concordance.RecoveryConcordanceError, match="size outside"):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+@pytest.mark.parametrize(("field", "replacement"), [
+    ("claims_checked", 0),
+    ("supported", 99),
+    ("partially_supported", -1),
+    ("unsupported", True),
+    ("contradicted", 1),
+    ("strict_support_rate", 0.123456789),
+    ("total_tokens", 0),
+    ("estimated_cost_usd", -1.0),
+    ("estimated_cost_usd", "0.01"),
+])
+def test_recovery_only_cache_numeric_disagreement_with_frozen_csv_is_rejected(
+    tmp_path, monkeypatch, field, replacement,
+):
+    # P6V/main-02 is one of the three *historically missing* cache cells.
+    # Its synthetic fixture is deliberately altered after its other metadata
+    # is copied from the published CSV; no real evaluator scores are created.
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        tamper_recovery_measurements=("P6V", "main-02", {field: replacement}),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match=field):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_preserved_original_and_recovery_identical_wrong_numeric_cache_blocked(
+    tmp_path, monkeypatch,
+):
+    # Byte continuity alone must not bless a preexisting incorrect measurement.
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        tamper_original_measurements=("D3", "main-01", {"supported": 99}),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match="supported"):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_recovery_only_cache_matching_published_counts_but_wrong_rate_rejected(
+    tmp_path, monkeypatch,
+):
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        tamper_recovery_measurements=(
+            "P6V", "main-08", {"strict_support_rate": 1.0e-10},
+        ),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match="strict_support_rate"):
         concordance.compare_recovered_treatment_sources(original, recovered)

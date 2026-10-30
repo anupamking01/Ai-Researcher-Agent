@@ -425,6 +425,29 @@ the new integrity check is validated only with synthetic fixtures; no real
 archive comparison or human annotation has occurred.
 
 
+## Frozen evaluator numeric-score correspondence (offline; not independent grading)
+
+The original-to-recovery comparator now also checks the **published numeric
+measurement lineage** of every evaluator-cache JSON against the exact
+SHA-256-pinned `outputs/posthoc_support_runs.csv` bytes. It checks all 37
+original and 40 recovered cache records for exact claims-checked, support
+category counts, total tokens, strict support rate, and estimated evaluator
+cost. Integer/bool substitution, nonfinite values, score/cost disagreement,
+incorrect category totals, impossible claim counts, and a zero-retrieved-source
+cell credited with positive support fail closed. Decimal comparisons preserve
+the published numeric values without tolerance-based score drift.
+
+A passing receipt reports `original_evaluator_cache_published_measurements_matched: 37`
+and `recovery_evaluator_cache_published_measurements_matched: 40`.
+This detects a cache/CSV mismatch even when all 37 preserved cache files
+are byte-identical between ZIPs. It **does not** independently grade the
+research reports, verify the evaluator's evidence/prompt input fingerprints,
+prove the score truthfulness, establish independently retained historical
+custody, or unblock human evaluation. Published CSV and archived caches can
+share a common upstream measurement error. Tests use synthetic ZIP contents
+and copy reference numeric values from the frozen CSV; the historical ZIPs
+have not been recovered or scored by this change.
+
 ## Historical evaluator-cache JSON identity audit (offline, not score validation)
 
 The two-archive concordance check additionally reads the bounded archived JSON
@@ -442,8 +465,9 @@ This closes the possibility that a misleading JSON file under a valid cache
 filename appears to belong to a different treatment execution while still
 passing the historical 37-to-40 byte-continuity check. The success receipt
 separately records the two JSON-identity inspection counts. It deliberately
-leaves `evaluator_cache_payload_semantics_verified: false`: no score
-arithmetic, evidence-to-report fingerprints, model outputs, or scientific
+leaves `evaluator_cache_payload_semantics_verified: false`: the separate
+numeric correspondence check does not independently score evidence, verify
+evidence-to-report fingerprints, model outputs, or scientific
 correctness are established by these identity checks. It does not establish
 independent historical custody, genuine human-validation outcomes, or packet
 distribution readiness. Tests use synthetic cache records only; no original

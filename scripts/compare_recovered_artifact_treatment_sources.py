@@ -9,6 +9,7 @@ evaluation packets. No extraction, evaluator runs, or treatments occur.
 from __future__ import annotations
 
 import argparse
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import os
@@ -150,12 +151,94 @@ def _reject_nonfinite_json(value: str) -> None:
     )
 
 
-def _verify_evaluator_cache_json_identities(archive: Path, audit: dict) -> int:
+# The CSV is the published, byte-fingerprint-pinned automated measurement export.
+# Compare archived measurements to it, without recomputing or optimizing any scores.
+PUBLISHED_EVALUATOR_COUNT_FIELDS = (
+    "claims_checked", "supported", "partially_supported",
+    "unsupported", "contradicted", "total_tokens",
+)
+PUBLISHED_EVALUATOR_DECIMAL_FIELDS = (
+    "strict_support_rate", "estimated_cost_usd",
+)
+
+
+def _verify_published_evaluator_measurements(
+    payload: dict, published: dict[str, str], *, path: str,
+) -> None:
+    """Reject a cache whose recorded measurements disagree with frozen CSV.
+
+    Exact numeric correspondence is not independent scoring validation:
+    the archive and published CSV could share an upstream error.
+    """
+    for field in PUBLISHED_EVALUATOR_COUNT_FIELDS:
+        value = payload.get(field)
+        try:
+            expected = int(published[field])
+        except (ValueError, TypeError, KeyError) as exc:
+            raise RecoveryConcordanceError(
+                "published evaluator has an invalid integer field: " + field
+            ) from exc
+        if type(value) is not int or value != expected:
+            raise RecoveryConcordanceError(
+                f"archived evaluator {field} differs from published CSV: {path}"
+            )
+
+    checked = payload["claims_checked"]
+    categories = ("supported", "partially_supported", "unsupported", "contradicted")
+    if (
+        not 0 < checked <= 12
+        or payload["total_tokens"] < 0
+        or any(payload[field] < 0 for field in categories)
+        or sum(payload[field] for field in categories) != checked
+    ):
+        raise RecoveryConcordanceError(
+            "archived evaluator claim accounting is inconsistent: " + path
+        )
+
+    for field in PUBLISHED_EVALUATOR_DECIMAL_FIELDS:
+        value = payload.get(field)
+        if type(value) not in (int, float):
+            raise RecoveryConcordanceError(
+                f"archived evaluator {field} must be numeric: {path}"
+            )
+        try:
+            observed = Decimal(str(value))
+            expected = Decimal(published[field])
+        except (InvalidOperation, TypeError, KeyError, ValueError) as exc:
+            raise RecoveryConcordanceError(
+                f"invalid published evaluator decimal value for {field}: {path}"
+            ) from exc
+        if not observed.is_finite() or not expected.is_finite() or observed != expected:
+            raise RecoveryConcordanceError(
+                f"archived evaluator {field} differs from published CSV: {path}"
+            )
+
+    if (
+        not Decimal(0) <= Decimal(str(payload["strict_support_rate"])) <= Decimal(1)
+        or Decimal(str(payload["estimated_cost_usd"])) < 0
+        or float(payload["strict_support_rate"]) != payload["supported"] / checked
+    ):
+        raise RecoveryConcordanceError(
+            "archived evaluator support rate or cost is inconsistent: " + path
+        )
+    if published.get("evidence_status") == "zero_successful_sources" and (
+        payload["unsupported"] != checked
+        or any(payload[field] != 0 for field in (
+            "supported", "partially_supported", "contradicted",
+        ))
+    ):
+        raise RecoveryConcordanceError(
+            "zero-source published evaluator cell has unsupported score: " + path
+        )
+
+
+def _verify_evaluator_cache_json_identities(
+    archive: Path, audit: dict, published_rows: dict[tuple[str, str], dict[str, str]],
+) -> int:
     """Bind every archived evaluator record to its frozen execution identity.
 
-    Only JSON well-formedness, nonambiguity, schema version, and identity are
-    checked here. Score arithmetic, evidence fingerprints, prompt inputs, and
-    correctness are governed by separate published evaluation audits.
+    Audit identity and exact published numeric score/cost lineage. This does
+    not independently score claims, validate input evidence, or prove custody.
     """
     cells = audit["observed_source_content_manifest"]["cells"]
     expected_run_ids = {
@@ -212,6 +295,9 @@ def _verify_evaluator_cache_json_identities(archive: Path, audit: dict) -> int:
                         raise RecoveryConcordanceError(
                             f"evaluator cache {field} differs from frozen run: {path}"
                         )
+                _verify_published_evaluator_measurements(
+                    payload, published_rows[(variant, task)], path=path,
+                )
     except (zipfile.BadZipFile, KeyError) as exc:
         raise RecoveryConcordanceError(
             "evaluator cache member cannot be read from verified ZIP"
@@ -245,6 +331,11 @@ def compare_recovered_treatment_sources(
     recovery_start = _archive_source_snapshot(recovery_archive)
     evaluator_path = Path(repo_root) / matrix.lineage.SUPPORT_REL
     evaluator_start = matrix._capture_evaluator(evaluator_path)
+    published_rows = matrix.lineage._matrix(
+        matrix.lineage._read_study_csv(evaluator_start[0], path=evaluator_path),
+        label="frozen published evaluator",
+        expected_cells=matrix.EXPECTED_CELLS, run_identity=True,
+    )
     original = matrix.audit_recovered_treatment_matrix(
         original_archive,
         artifact_role="original_treatment",
@@ -311,10 +402,10 @@ def compare_recovered_treatment_sources(
         original, recovered,
     )
     original_identity_count = _verify_evaluator_cache_json_identities(
-        original_archive, original,
+        original_archive, original, published_rows,
     )
     recovered_identity_count = _verify_evaluator_cache_json_identities(
-        recovery_archive, recovered,
+        recovery_archive, recovered, published_rows,
     )
     # The second ZIP read must be inside the same source-generation custody
     # window. A change during JSON inspection cannot authorize this receipt.
@@ -336,6 +427,8 @@ def compare_recovered_treatment_sources(
         "recovery_only_evaluator_cache_members_present": new_count,
         "original_evaluator_cache_json_identities_checked": original_identity_count,
         "recovery_evaluator_cache_json_identities_checked": recovered_identity_count,
+        "original_evaluator_cache_published_measurements_matched": original_identity_count,
+        "recovery_evaluator_cache_published_measurements_matched": recovered_identity_count,
         "evaluator_cache_json_duplicate_keys_rejected": True,
         "recovery_only_evaluator_cells": [
             {"treatment": variant, "task_id": task}
@@ -374,9 +467,11 @@ def compare_recovered_treatment_sources(
             "bytes for 40 frozen run identities; 37 pre-existing evaluator "
             "cache JSON byte streams also match, and only the three historically "
             "missing evaluator cache members appear in recovery. This checks "
-            "cache membership, byte continuity, and JSON/schema/run identity "
-            "for 37 original plus 40 recovered caches. This does not verify "
-            "score arithmetic, evidence inputs, or correctness. Same-provider "
+            "cache membership, byte continuity, JSON/schema/run identity, and "
+            "exact published score/count/token/cost correspondence for 37 original "
+            "plus 40 recovered caches. This checks accounting consistency, not "
+            "independent score correctness, evidence inputs, or prompt validity. "
+            "Same-provider "
             "log anchors and "
             "present-day comparisons do not prove independently retained custody, "
             "historical report authenticity, or human-evaluation readiness."
