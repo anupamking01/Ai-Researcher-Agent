@@ -709,6 +709,17 @@ def _verify_archived_treatment_trace_identities(
                         "historical treatment source-query provenance violates "
                         f"original scheduling contract: {path}: {exc}"
                     ) from exc
+                # Published aggregate tokens/model calls alone cannot establish
+                # that each source trace preserves a complete per-model provider
+                # ledger. Check the original runner's provider-usage contract
+                # without recomputing, rerunning, or selecting any outcomes.
+                try:
+                    readiness._validate_recovered_provider_usage(trace)
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise RecoveryConcordanceError(
+                        "historical treatment provider usage ledger violates "
+                        f"original run accounting: {path}: {exc}"
+                    ) from exc
                 _verify_archived_report_trace_binding(
                     source, prefix=prefix, cell=cell, trace=trace,
                 )
@@ -858,6 +869,8 @@ def compare_recovered_treatment_sources(
         "recovery_treatment_published_resource_ledgers_matched": recovered_traces_checked,
         "original_treatment_query_and_url_scheduling_checked": original_traces_checked,
         "recovery_treatment_query_and_url_scheduling_checked": recovered_traces_checked,
+        "original_treatment_provider_usage_ledgers_checked": original_traces_checked,
+        "recovery_treatment_provider_usage_ledgers_checked": recovered_traces_checked,
         "original_trace_report_path_and_word_counts_matched": original_traces_checked,
         "recovery_trace_report_path_and_word_counts_matched": recovered_traces_checked,
         "published_treatment_csv_sha256": PUBLISHED_TREATMENT_CSV_SHA256,
@@ -916,7 +929,8 @@ def compare_recovered_treatment_sources(
             "missing evaluator cache members appear in recovery. This checks "
             "cache membership, byte continuity, JSON/schema/run identity, plus "
             "original and recovery treatment trace completion, frozen task, "
-            "treatment assignment, source-budget, query/URL scheduling and report-pointer/actual-"
+            "treatment assignment, source-budget, query/URL scheduling, per-model provider usage "
+            "aggregation and report-pointer/actual-"
             "Markdown-word-count consistency; and "
             "exact published score/count/token/cost correspondence for 37 original "
             "plus 40 recovered caches. Schema-v2 report and original treatment-task "

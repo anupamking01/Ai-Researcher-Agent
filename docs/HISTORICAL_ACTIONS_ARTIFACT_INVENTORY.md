@@ -606,3 +606,29 @@ The original/recovery ZIP comparator now checks nested **planned queries, search
 Each role-pinned trace must preserve the original runner's URL-ledger partition, query count and execution order, direct-arm exact-question search versus planner-arm four-query plan, per-query browse budget distribution, and greedy earliest-unvisited-candidate scheduling. The comparison reuses the independent extracted-archive recovery-diagnostic validators rather than maintaining a conflicting copy of the protocol. It remains offline, read-only and inside the existing preflight ZIP-byte and source-generation checks. The receipt reports `original_treatment_query_and_url_scheduling_checked: 40` and `recovery_treatment_query_and_url_scheduling_checked: 40` only when all checks pass.
 
 This is **internal recorded-provenance consistency**, not proof that the search service returned those URLs, that any source page was genuine or correctly interpreted, or that either historical ZIP was independently retained. The missing original/recovery archives still block authentic historical comparison; synthetic regression fixtures are not scientific observations, confirmatory outcomes or human annotations.
+
+
+## Historical provider-reported token/model-call ledger consistency (offline)
+
+The original/recovery comparator now verifies each completed treatment trace's
+**per-model provider usage**, not only its aggregate model-call and token counts
+in the frozen treatment CSV. Both candidate ZIPs must retain a nonempty
+`provider_usage_by_model` dictionary whose model names and entries are valid,
+whose calls and prompt/completion/total tokens are nonnegative integers, whose
+per-model token totals equal prompt plus completion tokens, and whose
+`unavailable_calls` remain zero under the recorded
+`provider_usage_complete` contract. The sum across models must reproduce the
+trace's model calls, unavailable calls and prompt/completion/total token fields,
+which were already checked against the published aggregate resource ledger.
+
+The comparator reuses the original-run extracted-archive readiness validator
+and rejects the same falsified per-model ledger in **both** otherwise matching
+archives. The receipt reports original and recovered provider-usage checks
+separately (40 each). This is an internal accounting-consistency check, **not**
+verification that the provider billed those tokens, that every real API call
+was logged, that model prices/costs are accurate, or that historical ZIP custody
+is authenticated. The regression fixtures use a deliberately synthetic model
+and usage split, not reconstructed historical outcomes. Original/recovery ZIPs
+are currently unavailable; the gate is not a real historical-source audit and
+does not authorize human evaluation or change pilot, confirmatory, exploratory,
+or pending human-validation findings.

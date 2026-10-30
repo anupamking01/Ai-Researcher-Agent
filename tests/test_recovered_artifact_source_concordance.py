@@ -96,6 +96,20 @@ def _pair(
                 "search_call_count": int(published["search_calls"]),
                 "model_call_count": int(published["model_calls"]),
                 "total_tokens": int(published["total_tokens"]),
+                # Explicit synthetic, internally consistent provider usage.
+                # Not a reconstruction of historical model/token splits.
+                "prompt_tokens": int(published["total_tokens"]),
+                "completion_tokens": 0,
+                "unavailable_usage_call_count": 0,
+                "provider_usage_by_model": {
+                    "synthetic-fixture-model": {
+                        "model_calls": int(published["model_calls"]),
+                        "unavailable_calls": 0,
+                        "prompt_tokens": int(published["total_tokens"]),
+                        "completion_tokens": 0,
+                        "total_tokens": int(published["total_tokens"]),
+                    },
+                },
                 "report_words": int(published["report_words"]),
                 "report_path": f"./outputs/{run_id}/research_report.pdf",
             },
@@ -961,3 +975,73 @@ def test_historical_planner_query_allocation_and_greedy_url_scheduling(
     )
     with pytest.raises(concordance.RecoveryConcordanceError, match=error):
         concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+@pytest.mark.parametrize(("field", "replacement", "error"), [
+    (
+        "provider_usage_by_model",
+        {},
+        "provider_usage_by_model must be nonempty",
+    ),
+    (
+        "provider_usage_by_model",
+        lambda ledger: {
+            **ledger,
+            "synthetic-fixture-model": {
+                **ledger["synthetic-fixture-model"],
+                "total_tokens": ledger["synthetic-fixture-model"]["total_tokens"] + 1,
+            },
+        },
+        "total_tokens ledger mismatch",
+    ),
+    (
+        "provider_usage_by_model",
+        lambda ledger: {
+            **ledger,
+            "synthetic-fixture-model": {
+                **ledger["synthetic-fixture-model"],
+                "unavailable_calls": 1,
+            },
+        },
+        "unavailable_calls contradict complete usage",
+    ),
+    (
+        "prompt_tokens",
+        lambda prompt_tokens: prompt_tokens + 1,
+        "aggregate prompt_tokens ledger mismatch",
+    ),
+    (
+        "provider_usage_by_model",
+        lambda ledger: {
+            **ledger,
+            "synthetic-fixture-model": {
+                **ledger["synthetic-fixture-model"],
+                "model_calls": ledger["synthetic-fixture-model"]["model_calls"] + 1,
+            },
+        },
+        "aggregate model_call_count ledger mismatch",
+    ),
+])
+def test_historical_provider_usage_ledger_cannot_hide_behind_frozen_aggregate(
+    tmp_path, monkeypatch, field, replacement, error,
+):
+    # Identical synthetic original/recovery ZIPs and matching published
+    # model-call/token totals must not hide missing or inconsistent usage
+    # at the per-model level. This does not simulate provider billing.
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        tamper_trace=("D3", "main-07", "trace", field, replacement),
+    )
+    with pytest.raises(concordance.RecoveryConcordanceError, match=error):
+        concordance.compare_recovered_treatment_sources(original, recovered)
+
+
+def test_historical_provider_usage_ledger_gate_is_explicit_in_receipt(
+    tmp_path, monkeypatch,
+):
+    original, recovered, _, _ = _pair(tmp_path, monkeypatch)
+    receipt = concordance.compare_recovered_treatment_sources(original, recovered)
+    assert receipt["original_treatment_provider_usage_ledgers_checked"] == 40
+    assert receipt["recovery_treatment_provider_usage_ledgers_checked"] == 40
+    assert receipt["historical_evidence_authenticated"] is False
+    assert receipt["human_evaluation_ready"] is False
