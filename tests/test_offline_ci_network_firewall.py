@@ -30,7 +30,12 @@ def _fake_iptables(family: str) -> str:
         + 'if [[ "$*" == "-w -S $chain" && -n "$chain" ]]; then\n'
         + '  if [[ "$VERA_FAKE_POLICY" == "' + family + '_query_failure" ]]; then exit 44; fi\n'
         + '  printf -- "-N %s\\n-A %s -o lo -j RETURN\\n" "$chain" "$chain"\n'
-        + '  if [[ "$VERA_FAKE_POLICY" != "' + family + '_missing_reject" ]]; then printf -- "-A %s -j REJECT\\n" "$chain"; fi\n'
+        + '  if [[ "$VERA_FAKE_POLICY" != "' + family + '_missing_reject" ]]; then\n'
+        + '    if [[ "$VERA_FAKE_POLICY" == "' + family + '_normalized_reject" ]]; then\n'
+        + '      if [[ "' + family + '" == "v4" ]]; then suffix="icmp-port-unreachable"; else suffix="icmp6-port-unreachable"; fi\n'
+        + '      printf -- "-A %s -j REJECT --reject-with %s\\n" "$chain" "$suffix"\n'
+        + '    else printf -- "-A %s -j REJECT\\n" "$chain"; fi\n'
+        + '  fi\n'
         + 'elif [[ "$*" == "-w -S OUTPUT" ]]; then\n'
         + '  printf -- "-P OUTPUT ACCEPT\\n"\n'
         + '  if [[ "$VERA_FAKE_POLICY" == "' + family + '_shadowed_output" ]]; then printf -- "-A OUTPUT -j ACCEPT\\n"; fi\n'
@@ -51,6 +56,8 @@ def _fake_iptables(family: str) -> str:
         (False, 0, "v6_shadowed_output", 1),
         (False, 0, "v4_query_failure", 1),
         (False, 0, "v6_query_failure", 1),
+        (False, 0, "v4_normalized_reject", 0),
+        (False, 0, "v6_normalized_reject", 0),
     ],
 )
 def test_firewall_order_failure_rollback_and_exit_code(

@@ -82,9 +82,23 @@ verify_family_policy() {
   if [[ "$actual_chain" == "-N $chain"* ]]; then
     actual_chain="$(printf '%s\n' "$actual_chain" | tail -n +2)"
   fi
-  expected_chain="$(printf -- '-A %s -o lo -j RETURN\n-A %s -j REJECT' "$chain" "$chain")"
-  if [[ "$actual_chain" != "$expected_chain" ]]; then
-    echo "Unsafe $executable offline chain policy" >&2
+  # iptables -S can print a normalized default --reject-with option.
+  # Both serializations reject egress; do not accept other ICMP target modes.
+  local expected_reject="-A $chain -j REJECT" default_reject
+  local observed_allow observed_reject line_count
+  observed_allow="$(printf '%s\n' "$actual_chain" | sed -n '1p')"
+  observed_reject="$(printf '%s\n' "$actual_chain" | sed -n '2p')"
+  line_count="$(printf '%s\n' "$actual_chain" | wc -l)"
+  if [[ "$executable" == "iptables" ]]; then
+    default_reject="$expected_reject --reject-with icmp-port-unreachable"
+  else
+    default_reject="$expected_reject --reject-with icmp6-port-unreachable"
+  fi
+  if [[ "$line_count" -ne 2 ||
+        "$observed_allow" != "-A $chain -o lo -j RETURN" ||
+        ( "$observed_reject" != "$expected_reject" &&
+          "$observed_reject" != "$default_reject" ) ]]; then
+    echo "Unsafe $executable offline chain policy: $actual_chain" >&2
     return 1
   fi
   if ! output_rules="$(sudo -n "$executable" -w -S OUTPUT)"; then

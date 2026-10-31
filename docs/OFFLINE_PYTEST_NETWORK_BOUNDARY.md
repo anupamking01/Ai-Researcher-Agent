@@ -134,3 +134,9 @@ rules, and failed inspection abort before pytest and trigger cleanup. Synthetic
 regressions cover these cases without actual outbound connections or host
 firewall modification. This protects against accidental misconfiguration,
 not malicious privileged rule changes or missing historical source evidence.
+
+The policy inspector accepts either a plain REJECT rule or the same rule
+rendered with the tooling's explicit default ICMP port-unreachable option
+(IPv4 `icmp-port-unreachable`, IPv6 `icmp6-port-unreachable`). It rejects
+different targets, additional rules, or an OUTPUT bypass. This handles
+iptables serialization without permitting a weaker firewall policy.
