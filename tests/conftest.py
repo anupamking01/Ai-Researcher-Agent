@@ -13,6 +13,7 @@ import socket
 from pytest import MonkeyPatch
 
 
+_ORIGINAL_BIND = socket.socket.bind
 _ORIGINAL_CONNECT = socket.socket.connect
 _ORIGINAL_CONNECT_EX = socket.socket.connect_ex
 _ORIGINAL_SENDTO = socket.socket.sendto
@@ -50,6 +51,23 @@ def _is_loopback_host(host: object) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+def _guarded_bind(sock: socket.socket, address: object):
+    """Refuse publicly reachable TCP/UDP listeners in offline tests.
+
+    Binding to 0.0.0.0, ::, or a non-loopback interface can expose a test
+    service to other machines even if the test itself makes no outbound calls.
+    The rule applies only to internet-family sockets; Unix sockets are local.
+    """
+    if sock.family in (socket.AF_INET, socket.AF_INET6):
+        host = address[0] if isinstance(address, tuple) and address else None
+        if not _is_loopback_host(host):
+            raise RuntimeError(
+                "offline tests prohibit non-loopback network listeners: "
+                f"{address!r}"
+            )
+    return _ORIGINAL_BIND(sock, address)
 
 
 def _guarded_connect(sock: socket.socket, destination: object):
@@ -118,6 +136,7 @@ def pytest_sessionstart(session):
     """Install before test collection, including import-time network calls."""
     global _PATCHER
     _PATCHER = MonkeyPatch()
+    _PATCHER.setattr(socket.socket, "bind", _guarded_bind)
     _PATCHER.setattr(socket.socket, "connect", _guarded_connect)
     _PATCHER.setattr(socket.socket, "connect_ex", _guarded_connect_ex)
     _PATCHER.setattr(socket.socket, "sendto", _guarded_sendto)

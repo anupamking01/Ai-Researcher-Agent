@@ -13,6 +13,15 @@ and blocks non-loopback hostnames/addresses in `socket.getaddrinfo`,
 before resolution. Python's `socket.getfqdn` calls the guarded
 `gethostbyaddr` function. These older and reverse-lookup entry points matter:
 `getaddrinfo` alone does not intercept every Python DNS request.
+The boundary also prevents an offline test from accidentally exposing a
+TCP/UDP listener on a publicly reachable interface. Internet-family
+`socket.socket.bind` is restricted to explicit loopback hosts; wildcard binds
+(`0.0.0.0`, `::`, or the empty host) and non-loopback interface addresses fail
+before the OS bind call. This also covers Python `socket.create_server`,
+which uses `bind` internally. Loopback TCP/UDP listeners and Unix-domain
+socket paths remain supported for integration tests. This is an inbound
+exposure safeguard, not a claim that the runner has no reachable interfaces.
+
 Loopback (`127.0.0.0/8`, `::1`, and `localhost`) remains usable by local
 application-integration tests, as do Unix-domain sockets. The guard is removed
 at `pytest_sessionfinish`. No external endpoint is contacted by its regression
@@ -29,7 +38,8 @@ custody. Code requiring genuine web browsing/model calls belongs in a separate,
 explicitly authorized workflow, never in offline unit tests. Running or
 rerunning treatments to select more favorable results remains prohibited.
 
-`tests/test_offline_network_guard.py` exercises blocked TCP, UDP, forward
+`tests/test_offline_network_guard.py` exercises blocked TCP, UDP, public
+listener binds (including `socket.create_server`), forward
 and reverse DNS (including legacy resolver entry points), external IPv6/name
 targets, and permitted local socket communication. A CI
 failure from an attempted external connection should be investigated and the

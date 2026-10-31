@@ -75,3 +75,45 @@ def test_standard_local_numeric_name_lookups_remain_available():
     assert "127.0.0.1" in socket.gethostbyname_ex("127.0.0.1")[2]
     flags = socket.NI_NUMERICHOST | socket.NI_NUMERICSERV
     assert socket.getnameinfo(("127.0.0.1", 443), flags) == ("127.0.0.1", "443")
+
+
+@pytest.mark.parametrize(
+    ("family", "host"),
+    [
+        (socket.AF_INET, "0.0.0.0"),
+        (socket.AF_INET, ""),
+        (socket.AF_INET, "198.51.100.42"),
+        (socket.AF_INET6, "::"),
+        (socket.AF_INET6, "2001:db8::42"),
+    ],
+)
+def test_nonloopback_tcp_listener_is_rejected_before_bind(family, host):
+    with socket.socket(family, socket.SOCK_STREAM) as listener:
+        with pytest.raises(RuntimeError, match="offline tests prohibit non-loopback network listeners"):
+            listener.bind((host, 0))
+
+
+def test_wildcard_udp_listener_is_rejected_before_bind():
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as listener:
+        with pytest.raises(RuntimeError, match="offline tests prohibit non-loopback network listeners"):
+            listener.bind(("0.0.0.0", 0))
+
+
+def test_socket_create_server_cannot_bind_public_interface():
+    with pytest.raises(RuntimeError, match="offline tests prohibit non-loopback network listeners"):
+        with socket.create_server(("0.0.0.0", 0)):
+            pytest.fail("public listener must not be created")
+
+
+def test_loopback_udp_listener_is_allowed():
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        assert listener.getsockname()[0] == "127.0.0.1"
+
+
+def test_unix_domain_listener_bind_remains_available(tmp_path):
+    if not hasattr(socket, "AF_UNIX"):
+        pytest.skip("Unix-domain sockets are not supported here")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        listener.bind(str(tmp_path / "offline-listener.sock"))
+        listener.listen(1)
