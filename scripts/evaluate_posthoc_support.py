@@ -199,6 +199,48 @@ def _validate_trace_task_contract(
         )
 
 
+def _require_complete_frozen_treatment_matrix(
+    expected: list[tuple[str, Path, dict, str, str]],
+    expected_questions: dict[str, str],
+) -> None:
+    """Reject partial, repeated, or substituted frozen cells before API calls.
+
+    This is structural preflight for an acknowledged *noncanonical* replay;
+    it does not authenticate original treatment traces or evaluator results.
+    """
+    frozen_ids = {f"main-{index:02d}" for index in range(1, 11)}
+    if set(expected_questions) != frozen_ids:
+        raise SystemExit(
+            "Refusing evaluator replay: expected exactly the ten frozen "
+            "main-01..main-10 task identifiers"
+        )
+
+    required = {(variant, task_id) for variant in VARIANTS for task_id in frozen_ids}
+    found: set[tuple[str, str]] = set()
+    duplicates: set[tuple[str, str]] = set()
+    seen_run_ids: set[str] = set()
+    repeated_run_ids: set[str] = set()
+    for variant, _trace_path, _trace, task_id, run_id in expected:
+        cell = (variant, task_id)
+        if cell in found:
+            duplicates.add(cell)
+        found.add(cell)
+        if run_id in seen_run_ids:
+            repeated_run_ids.add(run_id)
+        seen_run_ids.add(run_id)
+
+    missing = required - found
+    unexpected = found - required
+    if missing or unexpected or duplicates or repeated_run_ids:
+        raise SystemExit(
+            "Refusing evaluator replay: incomplete or ambiguous frozen "
+            "40-cell treatment matrix; "
+            f"missing={sorted(missing)} unexpected={sorted(unexpected)} "
+            f"duplicate_cells={sorted(duplicates)} "
+            f"reused_run_ids={sorted(repeated_run_ids)}"
+        )
+
+
 def _publish_evaluation_cache(path: Path, record: dict) -> None:
     """Durably publish one evaluator result without exposing partial bytes."""
     path = Path(path)
@@ -864,8 +906,10 @@ def main() -> int:
         raise SystemExit("TEMPERATURE must be finite")
     _validate_frozen_evaluator_config(evaluator_model, evaluator_temperature)
     expected = []
+    selected_trace_paths: set[Path] = set()
     for variant in VARIANTS:
         for trace_path in sorted((TRACE_ROOT / variant).glob("*.json")):
+            selected_trace_paths.add(trace_path)
             payload = _load_json(trace_path)
             raw_trace = payload.get("trace")
             if not isinstance(raw_trace, dict):
@@ -883,7 +927,10 @@ def main() -> int:
                 expected_questions=expected_questions,
             )
             if not completed:
-                continue
+                raise SystemExit(
+                    "Refusing evaluator replay: incomplete treatment trace "
+                    f"{trace_path}"
+                )
             _validated_trace_cost(
                 payload,
                 path=trace_path,
@@ -896,8 +943,15 @@ def main() -> int:
             )
             expected.append((variant, trace_path, trace, task_id, run_id))
 
-    if not expected:
-        raise SystemExit("No completed main-study traces found")
+    unexpected_trace_paths = sorted(
+        set(TRACE_ROOT.glob("*/*.json")) - selected_trace_paths
+    )
+    if unexpected_trace_paths:
+        raise SystemExit(
+            "Refusing evaluator replay: unselected treatment trace files: "
+            + ", ".join(str(path) for path in unexpected_trace_paths)
+        )
+    _require_complete_frozen_treatment_matrix(expected, expected_questions)
 
     rows, pending = _preflight_evaluator_resume(
         expected,
