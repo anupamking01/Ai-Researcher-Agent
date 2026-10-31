@@ -380,7 +380,8 @@ def _inventory_evaluator_cache_tree(
                         ):
                             raise SystemExit(
                                 "Refusing evaluator replay: unselected evaluator "
-                                f"cache file or nonregular cache: {cache_entry.path}"
+                                f"cache file or nonregular cache: {cache_entry.path}; "
+                                "must be a regular non-symlink file"
                             )
                         found.add(Path(cache_entry.path))
     except OSError as exc:
