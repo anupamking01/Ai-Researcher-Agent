@@ -49,3 +49,17 @@ only, not a scientific result.
 recovery run 34783525480 currently have no downloadable Actions artifacts;
 an independently authenticated original report/trace archive and two eligible
 blinded human annotators are still required for human-validation claims.
+
+## Strict numeric integrity for local replay JSON
+
+Treatment traces and cached evaluator records are **untrusted local JSON inputs**.
+The common decoder now rejects `NaN`, `Infinity`, `-Infinity`, exponent
+overflow (for example, `1e400`), numeric tokens longer than 128 characters,
+and structures beyond the JSON parser nesting limit. Checks apply recursively,
+including unconsumed metadata; ordinary finite integers and floats are retained.
+Duplicate-key rejection remains in effect. Malformed local trace/cache JSON
+fails before importing the model client or generating additional measurements.
+
+This safeguard does not authenticate the lost historical sources or authorize
+a treatment/evaluator rerun. It does not change the frozen pilot, confirmatory
+or exploratory analyses, and real blinded human evaluation remains pending.

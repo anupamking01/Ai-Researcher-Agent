@@ -36,6 +36,8 @@ PRICING_FILE = REPO_ROOT / "experiments" / "openai_pricing_2026-09-08.json"
 TASK_FILE = REPO_ROOT / "experiments" / "main_budget_tasks.json"
 VARIANTS = ("D3", "D6", "P6", "P6V")
 MAX_CLAIMS = 12
+# Bound even ignored JSON numbers in local treatment traces and evaluator caches.
+MAX_EVALUATOR_JSON_NUMBER_TOKEN_CHARS = 128
 STUDY_ID = "budget-main-v1"
 NONCANONICAL_EVALUATOR_REPLAY_ACK = "NONCANONICAL_EVALUATOR_RECOVERY"
 ORIGINAL_EVALUATOR_RECOVERY_ACTIONS_RUN_ID = 34783525480
@@ -136,15 +138,35 @@ def _evaluator_input_fingerprints(
 
 
 def _load_json(path: Path) -> dict:
+    """Reject nonfinite or pathological numbers, including unused metadata."""
     from scripts.run_budget_main_study import _reject_duplicate_json_keys
+
+    def reject_nonstandard_constant(token: str):
+        raise ValueError(f"nonstandard JSON numeric constant: {token}")
+
+    def bounded_integer(token: str) -> int:
+        if len(token) > MAX_EVALUATOR_JSON_NUMBER_TOKEN_CHARS:
+            raise ValueError("oversized JSON numeric token")
+        return int(token)
+
+    def finite_float(token: str) -> float:
+        if len(token) > MAX_EVALUATOR_JSON_NUMBER_TOKEN_CHARS:
+            raise ValueError("oversized JSON numeric token")
+        number = float(token)
+        if not math.isfinite(number):
+            raise ValueError("nonfinite JSON numeric value")
+        return number
 
     try:
         raw = _read_regular_bytes(path, label="JSON input")
         payload = json.loads(
             raw.decode("utf-8"),
             object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=reject_nonstandard_constant,
+            parse_int=bounded_integer,
+            parse_float=finite_float,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError) as exc:
         raise SystemExit(f"Invalid JSON file {path}: {exc}") from exc
     if not isinstance(payload, dict):
         raise SystemExit(f"Invalid JSON file {path}: top level must be an object")
