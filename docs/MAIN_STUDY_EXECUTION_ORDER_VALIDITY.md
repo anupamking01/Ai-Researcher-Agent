@@ -178,3 +178,34 @@ to the exact writer schema could still pass. Independent recovery, custody,
 and source-to-evaluation verification remain mandatory before blinded
 human-evaluation packet distribution. Pilot, automated confirmatory,
 exploratory, and pending human-validation evidence remain separate.
+
+
+
+## Frozen per-run latency versus recovered execution clock (retrospective)
+
+The original runner at commit `c3c15e46a8eec3a8bbc24c968eedc0548172a897`
+records each event's UTC start immediately before invoking `run_agent` and
+its UTC finish immediately after that invocation. The published,
+SHA-256-pinned `outputs/main_study_runs.csv` also retains the trace-reported
+`latency_seconds` for each of the same 40 completed treatment/task cells.
+The read-only chronology CLI now cross-checks **each matched cell**, not just
+the total treatment cost: a recovered runner event cannot have an outer UTC
+duration more than **five seconds shorter** than its corresponding frozen
+trace latency without failing the provenance consistency audit. A five-second
+allowance accommodates modest differences between UTC wall clocks and elapsed
+trace timing, not changes to any measured latency or treatment outcome.
+The exact published CSV fingerprint and complete 40-cell identity matrix remain
+mandatory; nonfinite, nonpositive, missing, and malformed latency values fail.
+
+This is a **one-sided consistency check**, not a claim that the two clocks
+must agree exactly or that their differences measure external web conditions.
+An event longer than the trace latency is possible because the runner wraps
+the agent invocation; large intervals are still bounded by the historical
+GitHub Actions treatment-step window and existing chronology checks. If an
+authentic recovered log fails, preserve it unchanged and investigate clock
+adjustments or source mismatch; do not edit the evidence or weaken the frozen
+latency values to obtain a passing result. A positive receipt does not verify
+trace authenticity, third-party clocks, billing, historical custody, or resolve
+fixed-order temporal confounding. Tests use synthetic timing fixtures and
+the existing frozen CSV; **the original historical progress file is still
+unavailable**, and no historical event-latency concordance is claimed.

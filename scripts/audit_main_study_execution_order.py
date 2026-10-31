@@ -55,6 +55,9 @@ PUBLISHED_TREATMENT_CSV_SHA256 = (
 MAX_PUBLISHED_CSV_BYTES = 128 * 1024
 # Accommodate only float summation-order rounding, not changed study costs.
 TREATMENT_COST_FLOAT_TOLERANCE_USD = 1e-12
+# Bound only materially impossible outer UTC durations, allowing a small
+# difference between wall-clock and trace latency clocks.
+TREATMENT_LATENCY_CLOCK_TOLERANCE_MICROSECONDS = 5_000_000
 
 # Original Actions run 34620917346, attempt 1, job 103334373932,
 # "Run 10-task four-variant treatment matrix" step; inspected 2026-10-31.
@@ -150,8 +153,8 @@ def _capture_progress(path: Path) -> tuple[dict, str, int]:
 
 
 
-def _load_published_treatment_cost(path: Path) -> float:
-    """Pin and sum the original complete 40-cell treatment-cost resource ledger.
+def _load_published_treatment_cost(path: Path, *, include_latencies: bool = False):
+    """Pin the 40-cell resource ledger; optionally capture trace latency by cell.
 
     Verify capture stability, not historical source custody or provider bills.
     The source digest is fixed in code; no new pin is derived from a candidate.
@@ -195,11 +198,14 @@ def _load_published_treatment_cost(path: Path) -> float:
         reader = csv.DictReader(io.StringIO(raw.decode("utf-8"), newline=""), strict=True)
         header = reader.fieldnames
         required = {"variant_id", "task_id", "completed", "treatment_cost_usd"}
+        if include_latencies:
+            required.add("latency_seconds")
         if (header is None or len(set(header)) != len(header)
                 or not required <= set(header)):
             raise ChronologyError("published treatment CSV has missing/ambiguous columns")
         observed = set()
         costs = []
+        latencies = {}
         for row in reader:
             if None in row or any(value is None for value in row.values()):
                 raise ChronologyError("published treatment CSV has malformed row")
@@ -216,13 +222,24 @@ def _load_published_treatment_cost(path: Path) -> float:
             if not math.isfinite(cost) or cost < 0:
                 raise ChronologyError("published treatment CSV has nonfinite/negative cost")
             costs.append(cost)
+            if include_latencies:
+                latency_token = row["latency_seconds"]
+                if not latency_token or len(latency_token) > MAX_JSON_NUMBER_TOKEN_CHARS:
+                    raise ChronologyError("published treatment CSV has invalid latency token")
+                latency = float(latency_token)
+                if not math.isfinite(latency) or latency <= 0:
+                    raise ChronologyError(
+                        "published treatment CSV has nonpositive or nonfinite latency"
+                    )
+                latencies[key] = latency
     except (UnicodeDecodeError, csv.Error, ValueError, OverflowError) as exc:
         if isinstance(exc, ChronologyError):
             raise
         raise ChronologyError("cannot parse published treatment CSV ledger") from exc
     if observed != set(EXPECTED_ORDER):
         raise ChronologyError("published treatment CSV lacks frozen 40-cell matrix")
-    return math.fsum(costs)
+    total_cost = math.fsum(costs)
+    return (total_cost, latencies) if include_latencies else total_cost
 
 
 def _utc(value, label: str) -> datetime:
@@ -282,8 +299,11 @@ def audit_progress(payload: dict, *, sha256: str, byte_size: int,
             "progress estimated_treatment_cost_usd must be finite and nonnegative"
         )
     cost_concordance = {"checked": False}
+    published_latencies = None
     if published_treatment_csv is not None:
-        published_cost = _load_published_treatment_cost(published_treatment_csv)
+        published_cost, published_latencies = _load_published_treatment_cost(
+            published_treatment_csv, include_latencies=True
+        )
         if not math.isclose(
             cost, published_cost, rel_tol=0.0,
             abs_tol=TREATMENT_COST_FLOAT_TOLERANCE_USD,
@@ -327,6 +347,17 @@ def audit_progress(payload: dict, *, sha256: str, byte_size: int,
         finished = _utc(event.get("finished_at_utc"), f"event {index + 1} finish")
         if started < previous_finish or finished < started:
             raise ChronologyError(f"progress event {index + 1} timestamps overlap or reverse")
+        if published_latencies is not None:
+            recorded_microseconds = _elapsed_microseconds(finished, started)
+            frozen_microseconds = round(
+                published_latencies[(task, variant)] * 1_000_000
+            )
+            if (recorded_microseconds + TREATMENT_LATENCY_CLOCK_TOLERANCE_MICROSECONDS
+                    < frozen_microseconds):
+                raise ChronologyError(
+                    f"progress event {index + 1} UTC interval is shorter than "
+                    "frozen published treatment latency beyond clock tolerance"
+                )
         previous_finish = finished
         recorded_starts[(task, variant)] = started
     if study_end < previous_finish:
@@ -394,6 +425,20 @@ def audit_progress(payload: dict, *, sha256: str, byte_size: int,
             "independently_authenticated": False,
         },
         "frozen_treatment_cost_concordance": cost_concordance,
+        "frozen_treatment_latency_concordance": (
+            {
+                "checked": True,
+                "published_treatment_csv_sha256": PUBLISHED_TREATMENT_CSV_SHA256,
+                "published_treatment_cells_checked": len(EXPECTED_ORDER),
+                "maximum_wall_clock_shortfall_tolerance_seconds": (
+                    TREATMENT_LATENCY_CLOCK_TOLERANCE_MICROSECONDS / 1_000_000
+                ),
+                "recorded_utc_intervals_not_materially_shorter_than_frozen_latency": True,
+                "historical_archive_custody_authenticated": False,
+                "trace_latency_clock_authenticated": False,
+            }
+            if published_latencies is not None else {"checked": False}
+        ),
         "historical_actions_step_window_concordance": actions_window,
         "recorded_task_major_schedule": True,
         "recorded_clock_exposure": {

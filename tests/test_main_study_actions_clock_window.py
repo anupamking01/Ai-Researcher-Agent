@@ -78,7 +78,13 @@ def test_module_fixture_can_remain_unanchored_but_receipt_discloses_it():
 
 def test_production_cli_cannot_bypass_window_with_synthetic_file(tmp_path, monkeypatch, capsys):
     # Replace only the unrelated frozen-cost source with a synthetic fixture.
-    monkeypatch.setattr(order, "_load_published_treatment_cost", lambda path: 0.625)
+    monkeypatch.setattr(
+        order, "_load_published_treatment_cost",
+        lambda path, *, include_latencies=False: (
+            (0.625, {cell: 60.0 for cell in order.EXPECTED_ORDER})
+            if include_latencies else 0.625
+        ),
+    )
     path = tmp_path / "synthetic-progress.json"
     path.write_text(json.dumps(synthetic_progress()), encoding="utf-8")
     assert order.main(["--progress-json", str(path)]) == 0

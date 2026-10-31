@@ -178,9 +178,9 @@ def _synthetic_published_cost_csv() -> bytes:
     import io
     handle = io.StringIO(newline="")
     writer = csv.writer(handle)
-    writer.writerow(("variant_id", "task_id", "completed", "treatment_cost_usd"))
+    writer.writerow(("variant_id", "task_id", "completed", "treatment_cost_usd", "latency_seconds"))
     for task, variant in order.EXPECTED_ORDER:
-        writer.writerow((variant, task, "True", "0.015625"))
+        writer.writerow((variant, task, "True", "0.015625", "60.0"))
     return handle.getvalue().encode("utf-8")
 
 
@@ -325,3 +325,87 @@ def test_rejects_incomplete_original_writer_event_fields(missing):
     del progress["events"][0][missing]
     with pytest.raises(order.ChronologyError, match="event 1 fields differ"):
         order.audit_progress(progress, sha256="a" * 64, byte_size=100)
+
+
+
+def _pinned_synthetic_latency_ledger(tmp_path, monkeypatch, *, latency=None):
+    """Synthetic published-input fixture; its numbers are not historical data."""
+    import hashlib
+
+    raw = _synthetic_published_cost_csv()
+    if latency is not None:
+        raw = raw.replace(b"60.0", str(latency).encode("ascii"), 1)
+    path = tmp_path / "synthetic-pinned-ledger.csv"
+    path.write_bytes(raw)
+    monkeypatch.setattr(
+        order, "PUBLISHED_TREATMENT_CSV_SHA256", hashlib.sha256(raw).hexdigest()
+    )
+    return path
+
+
+def test_latency_concordance_success_is_only_a_structural_receipt(tmp_path, monkeypatch):
+    path = _pinned_synthetic_latency_ledger(tmp_path, monkeypatch)
+    receipt = order.audit_progress(
+        _fixture(), sha256="a" * 64, byte_size=1, published_treatment_csv=path
+    )
+    check = receipt["frozen_treatment_latency_concordance"]
+    assert check["checked"] is True
+    assert check["published_treatment_cells_checked"] == 40
+    assert check["maximum_wall_clock_shortfall_tolerance_seconds"] == 5
+    assert check["recorded_utc_intervals_not_materially_shorter_than_frozen_latency"] is True
+    assert check["historical_archive_custody_authenticated"] is False
+    assert check["trace_latency_clock_authenticated"] is False
+
+
+def test_latency_concordance_detects_shortened_progress_event(tmp_path, monkeypatch):
+    path = _pinned_synthetic_latency_ledger(tmp_path, monkeypatch)
+    progress = _fixture()
+    original_end = datetime.fromisoformat(progress["events"][0]["finished_at_utc"])
+    progress["events"][0]["finished_at_utc"] = (
+        original_end - timedelta(seconds=10)
+    ).isoformat()
+    with pytest.raises(order.ChronologyError, match="shorter than frozen published treatment latency"):
+        order.audit_progress(
+            progress, sha256="a" * 64, byte_size=1, published_treatment_csv=path
+        )
+
+
+def test_latency_concordance_allows_minor_clock_difference(tmp_path, monkeypatch):
+    path = _pinned_synthetic_latency_ledger(tmp_path, monkeypatch)
+    progress = _fixture()
+    original_end = datetime.fromisoformat(progress["events"][0]["finished_at_utc"])
+    progress["events"][0]["finished_at_utc"] = (
+        original_end - timedelta(seconds=3)
+    ).isoformat()
+    receipt = order.audit_progress(
+        progress, sha256="a" * 64, byte_size=1, published_treatment_csv=path
+    )
+    assert receipt["frozen_treatment_latency_concordance"]["checked"] is True
+
+
+def test_per_cell_latency_mismatch_detected_even_when_total_cost_matches(tmp_path, monkeypatch):
+    # First trace latency contradicts the outer UTC interval by >5 seconds.
+    path = _pinned_synthetic_latency_ledger(tmp_path, monkeypatch, latency="80.0")
+    with pytest.raises(order.ChronologyError, match="shorter than frozen published treatment latency"):
+        order.audit_progress(
+            _fixture(), sha256="a" * 64, byte_size=1, published_treatment_csv=path
+        )
+
+
+@pytest.mark.parametrize("token", ["NaN", "Infinity", "1e400", "-1", "0", "bad", "9" * 160])
+def test_latency_ledger_rejects_malformed_nonpositive_or_unbounded_numbers(
+    tmp_path, monkeypatch, token
+):
+    path = _pinned_synthetic_latency_ledger(tmp_path, monkeypatch, latency=token)
+    with pytest.raises(order.ChronologyError):
+        order._load_published_treatment_cost(path, include_latencies=True)
+
+
+def test_original_frozen_latency_ledger_is_pinned_and_complete():
+    """Read the published input only; no treatment/evaluator execution."""
+    total, by_cell = order._load_published_treatment_cost(
+        order.PUBLISHED_TREATMENT_CSV, include_latencies=True
+    )
+    assert total > 0
+    assert set(by_cell) == set(order.EXPECTED_ORDER)
+    assert all(value > 0 for value in by_cell.values())
