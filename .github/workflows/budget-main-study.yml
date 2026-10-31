@@ -2,6 +2,11 @@ name: budget-main-study
 
 on:
   workflow_dispatch:
+    inputs:
+      replication_ack:
+        description: "Type NONCANONICAL_REPLICATION to acknowledge a new run cannot replace frozen 2026 data"
+        required: true
+        type: string
 
 concurrency:
   group: budget-main-study-${{ github.ref }}
@@ -21,6 +26,18 @@ jobs:
       PYTHONUNBUFFERED: "1"
 
     steps:
+      # This historical workflow is retained for reproducibility, not to
+      # regenerate missing original study evidence or select better outcomes.
+      - name: Require explicit noncanonical replication acknowledgement
+        env:
+          VERA_REPLICATION_ACK: ${{ inputs.replication_ack }}
+        run: |
+          if [ "$VERA_REPLICATION_ACK" != "NONCANONICAL_REPLICATION" ]; then
+            echo "::error::The original budget-main-v1 treatments are frozen. Any new execution is a distinct noncanonical replication, never a replacement for historical evidence."
+            exit 1
+          fi
+          printf '%s\\n' 'NONCANONICAL REPLICATION: new outputs must never replace the frozen original treatments or missing historical archives.' >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout research branch
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
@@ -121,7 +138,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: budget-main-study-${{ github.run_id }}
+          name: noncanonical-replication-budget-study-${{ github.run_id }}
           path: |
             outputs/main_study_manifest.json
             outputs/main_study_progress.json

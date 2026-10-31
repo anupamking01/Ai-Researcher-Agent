@@ -48,3 +48,33 @@ Disclose fixed-order temporal confounding explicitly in the eventual manuscript'
 A separately authorized future replication could prospectively predeclare randomized/counterbalanced order and time-sensitive evidence capture, but must be labeled separately; it does not retroactively randomize the original main study. Full recovery and independent custody of original treatment traces, reports, retrieval evidence and progress remain blocked, as does distribution to two eligible blinded human annotators.
 
 Keep the five-task pilot diagnostic; label the original ten-task automated inference as frozen confirmatory **under its assumptions**, the task-influence/Pareto diagnostics exploratory, and genuine independent human validation pending. Human ratings, even when available, cannot repair treatment-order confounding or prove historical archive authenticity.
+
+## Prospective manual-run labeling boundary (31 October 2026)
+
+The original main-study workflow at Actions run `34620917346` has already
+executed. Re-running its historical treatment command to replace lost traces,
+obtain more favorable outcomes, or fill the original evidence gap would
+misrepresent the frozen first-execution dataset. The current
+`.github/workflows/budget-main-study.yml` therefore requires an **explicit
+manual acknowledgment** of `NONCANONICAL_REPLICATION` as its unconditional
+first step, **before checkout, provider secrets, preflight, or paid model
+execution**. The required text input has no accepting default. A missing or
+different acknowledgement fails the workflow immediately. A future authorized
+execution's artifact name begins `noncanonical-replication-budget-study-`
+and its Actions summary warns that new outputs cannot substitute for original
+historical evidence.
+
+This is an **anti-accidental-rerun and provenance-labeling boundary**, not a
+claim that future reruns are preregistered or scientifically comparable. The
+legacy runner still emits its historical internal `study_id`, so the new
+artifact label and execution date must be retained when interpreting any
+future dataset. A genuinely independent replication still needs a separately
+versioned, prospectively frozen protocol and should address fixed-order
+time confounding through deliberate counterbalancing/randomization.
+The guard applies to **dispatches using this updated workflow revision**; it
+cannot retroactively prevent someone from executing an old commit or using
+GitHub's rerun facility, and it cannot authenticate the missing original
+archives. `tests/test_historical_treatment_dispatch_gate.py` checks the
+dispatch restriction and explicit artifact separation in ordinary offline CI.
+No treatment, evaluator, scientific result, or human-rating output was changed
+by introducing this guard.
