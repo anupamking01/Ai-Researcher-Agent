@@ -120,3 +120,31 @@ archival custody. Original progress archives remain unavailable, so the
 new behavior is validated only against explicitly synthetic progress fixtures
 and the already frozen published CSV. No treatments, evaluator or human
 ratings are produced or changed, and temporal confounding remains unresolved.
+
+## GitHub Actions original-treatment step clock concordance (offline)
+
+The original main-study workflow
+[run 34620917346](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/34620917346),
+**attempt 1**, job **103334373932**, reports the **"Run 10-task
+four-variant treatment matrix"** step at **2026-09-11 16:15:52Z to
+17:12:08Z** (GitHub Actions jobs API, checked 2026-10-31). That treatment
+step succeeded; the workflow's subsequent common-evaluator step failed.
+The treatment step's time window must not be confused with the workflow's
+later completion or with the independent evaluator-recovery run.
+
+The production chronology CLI now fails closed if a candidate progress
+log's enclosing study-start or study-finish timestamp falls outside the
+original GitHub treatment-step window, with **five seconds of tolerance**
+on either edge for second-resolution GitHub timestamps and modest clock
+skew. The auditor already checks that all 40 sequential event intervals
+fall inside those two enclosing timestamps. The read-only JSON receipt
+includes `historical_actions_step_window_concordance`; the production
+CLI does not offer an opt-out. Synthetic Python callers may explicitly
+pass `require_historical_actions_step_window=True` to test the gate.
+
+This rejects an internally consistent but **temporally impossible**
+candidate history. GitHub's own service metadata is not an independent,
+signed custody record. Matching this window cannot authenticate missing
+historical trace/report bytes, prove wall-clock accuracy or web stability,
+resolve fixed-order confounding, or authorize distributing blinded packets.
+No recovered original progress log has yet passed this check.

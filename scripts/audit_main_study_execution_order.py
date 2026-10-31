@@ -43,6 +43,15 @@ MAX_PUBLISHED_CSV_BYTES = 128 * 1024
 # Accommodate only float summation-order rounding, not changed study costs.
 TREATMENT_COST_FLOAT_TOLERANCE_USD = 1e-12
 
+# Original Actions run 34620917346, attempt 1, job 103334373932,
+# "Run 10-task four-variant treatment matrix" step; inspected 2026-10-31.
+# These second-resolution GitHub service timestamps are not a signed archive.
+HISTORICAL_TREATMENT_STEP_STARTED = "2026-09-11T16:15:52+00:00"
+HISTORICAL_TREATMENT_STEP_COMPLETED = "2026-09-11T17:12:08+00:00"
+HISTORICAL_TREATMENT_JOB_ID = 103334373932
+HISTORICAL_TREATMENT_RUN_ID = 34620917346
+HISTORICAL_STEP_BOUNDARY_TOLERANCE = timedelta(seconds=5)
+
 
 class ChronologyError(ValueError):
     """The observed file cannot establish a valid recorded schedule."""
@@ -223,7 +232,8 @@ def _elapsed_microseconds(later: datetime, earlier: datetime) -> int:
 
 def audit_progress(payload: dict, *, sha256: str, byte_size: int,
                    expected_sha256: str | None = None,
-                   published_treatment_csv: Path | None = None) -> dict:
+                   published_treatment_csv: Path | None = None,
+                    require_historical_actions_step_window: bool = False) -> dict:
     """Validate a *recorded* task-major, fixed-arm schedule without outcomes."""
     if expected_sha256 is not None:
         if re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
@@ -295,6 +305,32 @@ def audit_progress(payload: dict, *, sha256: str, byte_size: int,
     if study_end < previous_finish:
         raise ChronologyError("study finish predates final event")
 
+    # All 40 event intervals fall within the validated study interval above.
+    # Compare that enclosing interval to the historical treatment *step*, not
+    # to the broader workflow (which later failed in the evaluator step).
+    actions_window = {"checked": False}
+    if require_historical_actions_step_window:
+        step_start = _utc(HISTORICAL_TREATMENT_STEP_STARTED, "Actions step start")
+        step_end = _utc(HISTORICAL_TREATMENT_STEP_COMPLETED, "Actions step end")
+        if (study_start < step_start - HISTORICAL_STEP_BOUNDARY_TOLERANCE
+                or study_end > step_end + HISTORICAL_STEP_BOUNDARY_TOLERANCE):
+            raise ChronologyError(
+                "recorded study interval is outside original GitHub Actions treatment step"
+            )
+        actions_window = {
+            "checked": True,
+            "original_actions_run_id": HISTORICAL_TREATMENT_RUN_ID,
+            "original_actions_job_id": HISTORICAL_TREATMENT_JOB_ID,
+            "original_actions_run_attempt": 1,
+            "step_started_at_utc": HISTORICAL_TREATMENT_STEP_STARTED,
+            "step_completed_at_utc": HISTORICAL_TREATMENT_STEP_COMPLETED,
+            "timestamp_resolution": "seconds",
+            "boundary_tolerance_seconds": int(HISTORICAL_STEP_BOUNDARY_TOLERANCE.total_seconds()),
+            "recorded_study_within_treatment_step": True,
+            "source": "GitHub Actions original treatment-step job metadata",
+            "independently_authenticated": False,
+        }
+
     # Observed timing, not proof of time-varying evidence or a causal correction.
     contrast_lags = {}
     for left, right, label in PRIMARY_CONTRAST_START_PAIRS:
@@ -324,6 +360,7 @@ def audit_progress(payload: dict, *, sha256: str, byte_size: int,
         "independent_archive_custody_authenticated": False,
         "recorded_events_checked": len(EXPECTED_ORDER),
         "frozen_treatment_cost_concordance": cost_concordance,
+        "historical_actions_step_window_concordance": actions_window,
         "recorded_task_major_schedule": True,
         "recorded_clock_exposure": {
             "interpretation": "recorded_start_time_separation_only_not_web_drift",
@@ -357,6 +394,7 @@ def main(argv: list[str] | None = None) -> int:
             payload, sha256=sha256, byte_size=size,
             expected_sha256=args.expected_sha256,
             published_treatment_csv=args.published_treatment_csv,
+            require_historical_actions_step_window=True,
         )
     except ChronologyError as exc:
         parser.exit(1, f"MAIN-STUDY CHRONOLOGY: FAIL: {exc}\n")
