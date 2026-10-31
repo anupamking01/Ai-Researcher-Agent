@@ -120,4 +120,4 @@ def test_guard_must_run_before_checkout_or_any_live_secret():
         "      - name: " + GUARD,
         1,
     )
-    assert "unconditional first step" in dispatch_gate_problems(changed)
+    assert any("unconditional first step" in item for item in dispatch_gate_problems(changed))
