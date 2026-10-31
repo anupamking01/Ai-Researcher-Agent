@@ -1,0 +1,34 @@
+# Offline pytest network boundary for VERA research validation
+
+The research branch's ordinary GitHub Actions `tests` workflow runs the full
+pytest suite without live research treatments or evaluator calls. To make
+accidental network dependencies fail immediately rather than silently fetching
+changing web evidence or spending model budget, `tests/conftest.py` installs a
+Python-socket guard at `pytest_sessionstart`, **before test-module collection**.
+
+Within the pytest process it rejects non-loopback IPv4/IPv6 destinations for
+`socket.socket.connect`, `connect_ex`, `sendto`, and `sendmsg` (where available),
+and blocks non-loopback hostnames in `socket.getaddrinfo` before DNS lookup.
+Loopback (`127.0.0.0/8`, `::1`, and `localhost`) remains usable by local
+application-integration tests, as do Unix-domain sockets. The guard is removed
+at `pytest_sessionfinish`. No external endpoint is contacted by its regression
+tests: they use documentation-only public test addresses and assert that the
+Python call is refused *before* invoking the original socket method.
+
+This guard addresses **accidental Python-socket network use**, not hostile or
+arbitrary code execution. It does not firewall the host or cover external
+processes, native libraries bypassing Python's `socket` wrapper, alternative
+name-resolution APIs, or operations outside pytest (including dependency
+installation and separate opt-in live-smoke workflows). It is therefore not
+proof of a perfectly disconnected CI runner or of any historical evidence
+custody. Code requiring genuine web browsing/model calls belongs in a separate,
+explicitly authorized workflow, never in offline unit tests. Running or
+rerunning treatments to select more favorable results remains prohibited.
+
+`tests/test_offline_network_guard.py` exercises blocked TCP, UDP, DNS,
+external IPv6/name targets, and permitted local socket communication. A CI
+failure from an attempted external connection should be investigated and the
+test converted to a synthetic/mocked fixture; do not disable the guard simply
+to get a green badge. This change does not modify the frozen pilot,
+confirmatory, exploratory, or human-evaluation measurements, and does not
+remove the original-source recovery or blinded-human-annotation gates.
