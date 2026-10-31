@@ -111,14 +111,13 @@ def test_guard_must_run_before_checkout_or_any_live_secret():
     guard = source.index("- name: " + GUARD)
     checkout = source.index("- name: Checkout research branch")
     assert guard < checkout < source.index("- name: Validate API secret")
+    # Inject a structurally valid YAML step without modifying an unrelated
+    # literal backslash-n in the workflow's printf format string.
     changed = source.replace(
-        "      - name: Checkout research branch",
-        "      - name: Checkout research branch",
-        1,
-    ).replace(
         "      - name: " + GUARD,
-        "      - name: Inserted pre-guard step\\n        run: echo premature\\n"
+        "      - name: Inserted pre-guard step\n"
+        "        run: echo premature\n"
         "      - name: " + GUARD,
         1,
-    ).replace("\\n", "\n")
+    )
     assert "unconditional first step" in dispatch_gate_problems(changed)
