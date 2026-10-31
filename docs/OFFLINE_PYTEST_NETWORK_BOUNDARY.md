@@ -53,3 +53,25 @@ test converted to a synthetic/mocked fixture; do not disable the guard simply
 to get a green badge. This change does not modify the frozen pilot,
 confirmatory, exploratory, or human-evaluation measurements, and does not
 remove the original-source recovery or blinded-human-annotation gates.
+
+
+## Ordinary CI GitHub token least-privilege boundary
+
+The normal push/PR pytest workflow (\`.github/workflows/tests.yml\`) now explicitly
+grants its \`GITHUB_TOKEN\` only \`contents: read\`; all other GitHub token scopes
+have no permissions. It also sets \`persist-credentials: false\` on the
+SHA-pinned \`actions/checkout\` step, so checkout's authentication is not
+left in Git configuration for tests or subprocesses to reuse. The unit-test
+job has a 20-minute maximum runtime. This limits accidental repository
+mutation and implicit credential reuse during offline scientific validation.
+\`tests/test_offline_ci_token_permissions.py\` prevents an unnoticed
+workflow-level scope escalation, job-level override, or reintroduction of
+persisted checkout credentials.
+
+The workflow still needs transient read access to check out code and access
+public Python dependency indexes during installation. The settings do
+**not** turn GitHub Actions into a network-disconnected sandbox, prevent
+all credential access by arbitrary subprocesses, or prove anything about
+historical experiment archives or human annotators. They do not alter,
+rerun, or reinterpret pilot, frozen confirmatory, exploratory, or
+pending human-validation measurements.
