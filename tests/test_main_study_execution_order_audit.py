@@ -171,3 +171,101 @@ def test_capture_rejects_overflow_and_unbounded_numbers_even_if_not_used(tmp_pat
     path.write_bytes(raw)
     with pytest.raises(order.ChronologyError, match="numeric bound|finite range"):
         order._capture_progress(path)
+
+def _synthetic_published_cost_csv() -> bytes:
+    """Invented uniform costs are test fixtures, never VERA results."""
+    import csv
+    import io
+    handle = io.StringIO(newline="")
+    writer = csv.writer(handle)
+    writer.writerow(("variant_id", "task_id", "completed", "treatment_cost_usd"))
+    for task, variant in order.EXPECTED_ORDER:
+        writer.writerow((variant, task, "True", "0.015625"))
+    return handle.getvalue().encode("utf-8")
+
+
+def test_synthetic_progress_final_cost_matches_complete_pinned_resource_ledger(tmp_path, monkeypatch):
+    import hashlib
+    raw = _synthetic_published_cost_csv()
+    path = tmp_path / "published.csv"
+    path.write_bytes(raw)
+    monkeypatch.setattr(order, "PUBLISHED_TREATMENT_CSV_SHA256", hashlib.sha256(raw).hexdigest())
+    receipt = order.audit_progress(
+        _fixture(), sha256="a" * 64, byte_size=10, published_treatment_csv=path
+    )
+    audit = receipt["frozen_treatment_cost_concordance"]
+    assert audit["checked"] is True
+    assert audit["published_treatment_cells_checked"] == 40
+    assert audit["published_treatment_cost_sum_usd"] == 0.625
+    assert audit["recorded_final_treatment_cost_usd"] == 0.625
+    assert audit["historical_archive_custody_authenticated"] is False
+    assert audit["provider_billing_authenticated"] is False
+
+
+def test_synthetic_progress_final_cost_disagreement_blocks_receipt(tmp_path, monkeypatch):
+    import hashlib
+    raw = _synthetic_published_cost_csv()
+    path = tmp_path / "published.csv"
+    path.write_bytes(raw)
+    monkeypatch.setattr(order, "PUBLISHED_TREATMENT_CSV_SHA256", hashlib.sha256(raw).hexdigest())
+    progress = _fixture()
+    progress["estimated_treatment_cost_usd"] += 0.01
+    with pytest.raises(order.ChronologyError, match="differs from frozen published"):
+        order.audit_progress(
+            progress, sha256="a" * 64, byte_size=10, published_treatment_csv=path
+        )
+
+
+@pytest.mark.parametrize("mutation", [
+    "digest", "duplicate", "missing", "incomplete", "nan", "negative", "extra_field",
+    "symlink",
+])
+def test_published_treatment_csv_rejects_ambiguous_and_changed_sources(
+    tmp_path, monkeypatch, mutation
+):
+    import hashlib
+    raw = _synthetic_published_cost_csv()
+    path = tmp_path / "published.csv"
+    if mutation == "symlink":
+        target = tmp_path / "original.csv"
+        target.write_bytes(raw)
+        path.symlink_to(target)
+        monkeypatch.setattr(order, "PUBLISHED_TREATMENT_CSV_SHA256",
+                            hashlib.sha256(raw).hexdigest())
+    else:
+        lines = raw.decode("utf-8").splitlines()
+        if mutation == "digest":
+            lines[1] = lines[1].replace("0.015625", "0.015626")
+        elif mutation == "duplicate":
+            lines[2] = lines[1]
+        elif mutation == "missing":
+            lines.pop()
+        elif mutation == "incomplete":
+            lines[1] = lines[1].replace("True", "False")
+        elif mutation == "nan":
+            lines[1] = lines[1].replace("0.015625", "NaN")
+        elif mutation == "negative":
+            lines[1] = lines[1].replace("0.015625", "-0.01")
+        elif mutation == "extra_field":
+            lines[1] += ",unexpected"
+        candidate = ("\n".join(lines) + "\n").encode("utf-8")
+        path.write_bytes(candidate)
+        monkeypatch.setattr(order, "PUBLISHED_TREATMENT_CSV_SHA256",
+                            hashlib.sha256(raw if mutation == "digest" else candidate).hexdigest())
+    with pytest.raises(order.ChronologyError):
+        order._load_published_treatment_cost(path)
+
+
+def test_original_published_resource_csv_matches_immutable_input_pin():
+    """Read already published, unchanged measurement input; do not rerun models."""
+    cost = order._load_published_treatment_cost(order.PUBLISHED_TREATMENT_CSV)
+    assert 0 < cost < 3.0
+
+
+def test_cli_does_not_report_success_for_synthetic_wrong_total(tmp_path, capsys):
+    path = tmp_path / "progress.json"
+    path.write_text(json.dumps(_fixture()), encoding="utf-8")
+    with pytest.raises(SystemExit) as failure:
+        order.main(["--progress-json", str(path)])
+    assert failure.value.code == 1
+    assert "differs from frozen published" in capsys.readouterr().err

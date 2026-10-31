@@ -7,8 +7,10 @@ No provider calls, inference, or report publication are performed.
 from __future__ import annotations
 
 import argparse
+import csv
 from datetime import datetime, timedelta
 import hashlib
+import io
 import json
 import math
 import os
@@ -32,6 +34,14 @@ MAX_PROGRESS_BYTES = 1024 * 1024
 # The historical writer serializes ordinary bounded Python ints/floats. Bounds
 # apply even to uninspected JSON fields in a recovered, untrusted progress log.
 MAX_JSON_NUMBER_TOKEN_CHARS = 128
+PUBLISHED_TREATMENT_CSV = Path(__file__).resolve().parents[1] / "outputs" / "main_study_runs.csv"
+# Pinned file-byte SHA-256 from the canonical automated-analysis manifest.
+PUBLISHED_TREATMENT_CSV_SHA256 = (
+    "966ea80519af5ea7b832c86d7868525a4ef75874f396f242291e3be949382a0e"
+)
+MAX_PUBLISHED_CSV_BYTES = 128 * 1024
+# Accommodate only float summation-order rounding, not changed study costs.
+TREATMENT_COST_FLOAT_TOLERANCE_USD = 1e-12
 
 
 class ChronologyError(ValueError):
@@ -117,6 +127,82 @@ def _capture_progress(path: Path) -> tuple[dict, str, int]:
     return payload, hashlib.sha256(raw).hexdigest(), len(raw)
 
 
+
+def _load_published_treatment_cost(path: Path) -> float:
+    """Pin and sum the original complete 40-cell treatment-cost resource ledger.
+
+    Verify capture stability, not historical source custody or provider bills.
+    The source digest is fixed in code; no new pin is derived from a candidate.
+    """
+    path = Path(path)
+    try:
+        before = path.stat(follow_symlinks=False)
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= MAX_PUBLISHED_CSV_BYTES:
+            raise ChronologyError("published treatment CSV must be a bounded regular file")
+        fd = os.open(
+            path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+    except OSError as exc:
+        raise ChronologyError("cannot safely open published treatment CSV") from exc
+
+    def generation(s):
+        return (s.st_dev, s.st_ino, s.st_mode, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode) or generation(opened) != generation(before):
+            raise ChronologyError("published treatment CSV changed before capture")
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            raw = handle.read(MAX_PUBLISHED_CSV_BYTES + 1)
+        after = os.fstat(fd)
+        named_after = path.stat(follow_symlinks=False)
+        if (len(raw) != opened.st_size or generation(opened) != generation(after)
+                or generation(after) != generation(named_after)):
+            raise ChronologyError("published treatment CSV changed during capture")
+    except OSError as exc:
+        raise ChronologyError("cannot safely capture published treatment CSV") from exc
+    finally:
+        os.close(fd)
+
+    if hashlib.sha256(raw).hexdigest() != PUBLISHED_TREATMENT_CSV_SHA256:
+        raise ChronologyError(
+            "published treatment CSV differs from frozen analysis input SHA-256"
+        )
+    try:
+        reader = csv.DictReader(io.StringIO(raw.decode("utf-8"), newline=""), strict=True)
+        header = reader.fieldnames
+        required = {"variant_id", "task_id", "completed", "treatment_cost_usd"}
+        if (header is None or len(set(header)) != len(header)
+                or not required <= set(header)):
+            raise ChronologyError("published treatment CSV has missing/ambiguous columns")
+        observed = set()
+        costs = []
+        for row in reader:
+            if None in row or any(value is None for value in row.values()):
+                raise ChronologyError("published treatment CSV has malformed row")
+            key = (row["task_id"], row["variant_id"])
+            if key not in EXPECTED_ORDER or key in observed or row["completed"] != "True":
+                raise ChronologyError(
+                    "published treatment CSV has duplicate, unknown, or incomplete cell"
+                )
+            observed.add(key)
+            token = row["treatment_cost_usd"]
+            if not token or len(token) > MAX_JSON_NUMBER_TOKEN_CHARS:
+                raise ChronologyError("published treatment CSV has invalid cost token")
+            cost = float(token)
+            if not math.isfinite(cost) or cost < 0:
+                raise ChronologyError("published treatment CSV has nonfinite/negative cost")
+            costs.append(cost)
+    except (UnicodeDecodeError, csv.Error, ValueError, OverflowError) as exc:
+        if isinstance(exc, ChronologyError):
+            raise
+        raise ChronologyError("cannot parse published treatment CSV ledger") from exc
+    if observed != set(EXPECTED_ORDER):
+        raise ChronologyError("published treatment CSV lacks frozen 40-cell matrix")
+    return math.fsum(costs)
+
+
 def _utc(value, label: str) -> datetime:
     if type(value) is not str:
         raise ChronologyError(f"{label} must be an ISO 8601 UTC timestamp")
@@ -136,7 +222,8 @@ def _elapsed_microseconds(later: datetime, earlier: datetime) -> int:
 
 
 def audit_progress(payload: dict, *, sha256: str, byte_size: int,
-                   expected_sha256: str | None = None) -> dict:
+                   expected_sha256: str | None = None,
+                   published_treatment_csv: Path | None = None) -> dict:
     """Validate a *recorded* task-major, fixed-arm schedule without outcomes."""
     if expected_sha256 is not None:
         if re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
@@ -161,6 +248,27 @@ def audit_progress(payload: dict, *, sha256: str, byte_size: int,
         raise ChronologyError(
             "progress estimated_treatment_cost_usd must be finite and nonnegative"
         )
+    cost_concordance = {"checked": False}
+    if published_treatment_csv is not None:
+        published_cost = _load_published_treatment_cost(published_treatment_csv)
+        if not math.isclose(
+            cost, published_cost, rel_tol=0.0,
+            abs_tol=TREATMENT_COST_FLOAT_TOLERANCE_USD,
+        ):
+            raise ChronologyError(
+                "recorded final treatment cost differs from frozen published 40-cell sum"
+            )
+        cost_concordance = {
+            "checked": True,
+            "published_treatment_csv_sha256": PUBLISHED_TREATMENT_CSV_SHA256,
+            "published_treatment_cells_checked": len(EXPECTED_ORDER),
+            "published_treatment_cost_sum_usd": published_cost,
+            "recorded_final_treatment_cost_usd": cost,
+            "difference_usd": cost - published_cost,
+            "float_summation_tolerance_usd": TREATMENT_COST_FLOAT_TOLERANCE_USD,
+            "provider_billing_authenticated": False,
+            "historical_archive_custody_authenticated": False,
+        }
     if payload.get("current", "missing") is not None:
         raise ChronologyError("progress has an unfinished current run")
     events = payload.get("events")
@@ -215,6 +323,7 @@ def audit_progress(payload: dict, *, sha256: str, byte_size: int,
         "supplied_digest_matched": expected_sha256 is not None,
         "independent_archive_custody_authenticated": False,
         "recorded_events_checked": len(EXPECTED_ORDER),
+        "frozen_treatment_cost_concordance": cost_concordance,
         "recorded_task_major_schedule": True,
         "recorded_clock_exposure": {
             "interpretation": "recorded_start_time_separation_only_not_web_drift",
@@ -237,11 +346,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--progress-json", required=True, type=Path)
     parser.add_argument("--expected-sha256", help="Previously retained file hash; matching alone does not authenticate custody")
+    parser.add_argument(
+        "--published-treatment-csv", type=Path, default=PUBLISHED_TREATMENT_CSV,
+        help="Frozen published 40-cell CSV; must match immutable SHA-256 pin",
+    )
     args = parser.parse_args(argv)
-    payload, sha256, size = _capture_progress(args.progress_json)
-    print(json.dumps(audit_progress(payload, sha256=sha256, byte_size=size,
-                                    expected_sha256=args.expected_sha256),
-                     indent=2, sort_keys=True, allow_nan=False))
+    try:
+        payload, sha256, size = _capture_progress(args.progress_json)
+        receipt = audit_progress(
+            payload, sha256=sha256, byte_size=size,
+            expected_sha256=args.expected_sha256,
+            published_treatment_csv=args.published_treatment_csv,
+        )
+    except ChronologyError as exc:
+        parser.exit(1, f"MAIN-STUDY CHRONOLOGY: FAIL: {exc}\n")
+    print(json.dumps(receipt, indent=2, sort_keys=True, allow_nan=False))
     return 0
 
 

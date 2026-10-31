@@ -94,3 +94,29 @@ archives. `tests/test_historical_treatment_dispatch_gate.py` checks the
 dispatch restriction and explicit artifact separation in ordinary offline CI.
 No treatment, evaluator, scientific result, or human-rating output was changed
 by introducing this guard.
+
+## Frozen published treatment-cost correspondence (offline, not provider billing)
+
+A recovered main-study progress file may report the correct 40 events and
+plausible chronological timestamps while its final cumulative cost contradicts
+the original frozen treatment-resource ledger. The read-only chronology CLI now
+requires the original `outputs/main_study_runs.csv` bytes to match their
+published SHA-256
+`966ea80519af5ea7b832c86d7868525a4ef75874f396f242291e3be949382a0e`.
+It checks exactly 40 distinct completed treatment/task cells and sums their
+`treatment_cost_usd` values. The progress log's final
+`estimated_treatment_cost_usd` must agree within `1e-12` USD, an allowance
+only for floating-point summation order. Changed CSV bytes, missing/duplicate
+cells, irregular rows, nonfinite/negative costs and contradictory progress
+totals now fail closed. The published CSV is captured with a size bound,
+regular-file/non-symlink checks, and descriptor/path generation checks.
+
+Use the original chronology command above; by default it reads the pinned
+frozen CSV in this checkout. `--published-treatment-csv` may point at another
+copy, but **cannot** override the immutable digest requirement. This is an
+internal recorded-cost consistency gate, not verification of provider billing,
+historical source authenticity, retrieval correctness or independent
+archival custody. Original progress archives remain unavailable, so the
+new behavior is validated only against explicitly synthetic progress fixtures
+and the already frozen published CSV. No treatments, evaluator or human
+ratings are produced or changed, and temporal confounding remains unresolved.
