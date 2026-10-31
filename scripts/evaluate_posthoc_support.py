@@ -241,6 +241,67 @@ def _require_complete_frozen_treatment_matrix(
         )
 
 
+def _inventory_evaluator_treatment_trace_tree(
+    root: Path, *, variants: tuple[str, ...] = VARIANTS
+) -> dict[str, list[Path]]:
+    """Inventory the full replay trace tree without silently selecting files.
+
+    The evaluator previously globbed only known variants/*.json, so hidden,
+    misnamed, nested, symlinked, or alternate-variant traces could be omitted
+    while a valid-looking 40-cell subset was evaluated. Inspect every immediate
+    entry with bounded scandir iteration before parsing any treatment trace.
+    This is local selection integrity, not historical archive authentication.
+    """
+    root = Path(root)
+    if root.is_symlink() or not root.is_dir():
+        raise SystemExit(
+            "Refusing evaluator replay: treatment trace root must be a "
+            f"regular non-symlink directory: {root}"
+        )
+
+    found: dict[str, list[Path]] = {variant: [] for variant in variants}
+    try:
+        with os.scandir(root) as root_entries:
+            for root_count, variant_entry in enumerate(root_entries, 1):
+                if root_count > len(variants):
+                    raise SystemExit(
+                        "Refusing evaluator replay: unselected treatment trace "
+                        "files or directories; more root entries than frozen variants"
+                    )
+                if (
+                    variant_entry.name not in found
+                    or variant_entry.is_symlink()
+                    or not variant_entry.is_dir(follow_symlinks=False)
+                ):
+                    raise SystemExit(
+                        "Refusing evaluator replay: unselected treatment trace "
+                        f"files or nonregular variant directory: {variant_entry.path}"
+                    )
+                with os.scandir(variant_entry.path) as variant_entries:
+                    for trace_count, trace_entry in enumerate(variant_entries, 1):
+                        if trace_count > 10:
+                            raise SystemExit(
+                                "Refusing evaluator replay: more than ten treatment "
+                                f"trace entries in {variant_entry.path}"
+                            )
+                        if (
+                            trace_entry.is_symlink()
+                            or not trace_entry.is_file(follow_symlinks=False)
+                            or not trace_entry.name.endswith(".json")
+                        ):
+                            raise SystemExit(
+                                "Refusing evaluator replay: unselected treatment "
+                                f"trace files or nonregular trace: {trace_entry.path}"
+                            )
+                        found[variant_entry.name].append(Path(trace_entry.path))
+    except OSError as exc:
+        raise SystemExit(
+            f"Refusing evaluator replay: cannot inventory treatment traces: {exc}"
+        ) from exc
+
+    return {variant: sorted(paths) for variant, paths in found.items()}
+
+
 def _publish_evaluation_cache(path: Path, record: dict) -> None:
     """Durably publish one evaluator result without exposing partial bytes."""
     path = Path(path)
@@ -905,11 +966,13 @@ def main() -> int:
     if not math.isfinite(evaluator_temperature):
         raise SystemExit("TEMPERATURE must be finite")
     _validate_frozen_evaluator_config(evaluator_model, evaluator_temperature)
+    # Reject unselected or nonregular evidence before reading any trace body.
+    trace_files = _inventory_evaluator_treatment_trace_tree(
+        TRACE_ROOT, variants=VARIANTS
+    )
     expected = []
-    selected_trace_paths: set[Path] = set()
     for variant in VARIANTS:
-        for trace_path in sorted((TRACE_ROOT / variant).glob("*.json")):
-            selected_trace_paths.add(trace_path)
+        for trace_path in trace_files[variant]:
             payload = _load_json(trace_path)
             raw_trace = payload.get("trace")
             if not isinstance(raw_trace, dict):
@@ -943,14 +1006,6 @@ def main() -> int:
             )
             expected.append((variant, trace_path, trace, task_id, run_id))
 
-    unexpected_trace_paths = sorted(
-        set(TRACE_ROOT.glob("*/*.json")) - selected_trace_paths
-    )
-    if unexpected_trace_paths:
-        raise SystemExit(
-            "Refusing evaluator replay: unselected treatment trace files: "
-            + ", ".join(str(path) for path in unexpected_trace_paths)
-        )
     _require_complete_frozen_treatment_matrix(expected, expected_questions)
 
     rows, pending = _preflight_evaluator_resume(

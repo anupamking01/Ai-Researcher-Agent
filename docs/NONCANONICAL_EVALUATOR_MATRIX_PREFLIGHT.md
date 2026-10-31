@@ -17,6 +17,18 @@ The offline structural preflight in
 - incomplete treatment traces, even if a full set of other traces exists;
 - JSON trace files under unselected variant directories.
 
+The direct replay now also performs a **closed-world trace-directory
+inventory** before loading treatment JSON. Every immediate entry under the
+dedicated trace root must be one of the four frozen variant directories; each
+variant directory may contain only regular, non-symlink `.json` trace files,
+with no nested directories, hidden backup files, alternate variants, or
+misnamed traces. The scan stops after five root entries or eleven entries
+inside any arm, rather than sorting an unbounded untrusted directory. A
+missing variant directory is left to the existing complete-40-cell gate to
+reject. This prevents a valid selected matrix from masking additional
+unselected treatment evidence. It does not inspect ancestor symlinks, make
+the directory tree an atomic snapshot, or authenticate the original reports.
+
 No candidate is selectively dropped to make the available evaluator results
 look complete. Missing, failed, or incomplete treatments require provenance
 adjudication, **not** a replacement rerun. The original 40-cell evaluation
