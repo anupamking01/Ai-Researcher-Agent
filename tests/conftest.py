@@ -14,6 +14,7 @@ from pytest import MonkeyPatch
 
 
 _ORIGINAL_BIND = socket.socket.bind
+_ORIGINAL_LISTEN = socket.socket.listen
 _ORIGINAL_CONNECT = socket.socket.connect
 _ORIGINAL_CONNECT_EX = socket.socket.connect_ex
 _ORIGINAL_SENDTO = socket.socket.sendto
@@ -68,6 +69,29 @@ def _guarded_bind(sock: socket.socket, address: object):
                 f"{address!r}"
             )
     return _ORIGINAL_BIND(sock, address)
+
+
+def _guarded_listen(sock: socket.socket, *args, **kwargs):
+    """Reject implicit wildcard binds from listen() on an unbound TCP socket.
+
+    On Linux, calling listen() without bind() can automatically expose a
+    listener on 0.0.0.0 or ::. The bind guard alone cannot intercept that.
+    Require the socket's actual local address to be loopback before listen().
+    """
+    if sock.family in (socket.AF_INET, socket.AF_INET6):
+        try:
+            address = sock.getsockname()
+        except OSError as exc:
+            raise RuntimeError(
+                "offline tests cannot verify network listener address"
+            ) from exc
+        host = address[0] if isinstance(address, tuple) and address else None
+        if not _is_loopback_host(host):
+            raise RuntimeError(
+                "offline tests prohibit non-loopback network listeners: "
+                f"{address!r}"
+            )
+    return _ORIGINAL_LISTEN(sock, *args, **kwargs)
 
 
 def _guarded_connect(sock: socket.socket, destination: object):
@@ -137,6 +161,7 @@ def pytest_sessionstart(session):
     global _PATCHER
     _PATCHER = MonkeyPatch()
     _PATCHER.setattr(socket.socket, "bind", _guarded_bind)
+    _PATCHER.setattr(socket.socket, "listen", _guarded_listen)
     _PATCHER.setattr(socket.socket, "connect", _guarded_connect)
     _PATCHER.setattr(socket.socket, "connect_ex", _guarded_connect_ex)
     _PATCHER.setattr(socket.socket, "sendto", _guarded_sendto)

@@ -117,3 +117,23 @@ def test_unix_domain_listener_bind_remains_available(tmp_path):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
         listener.bind(str(tmp_path / "offline-listener.sock"))
         listener.listen(1)
+
+
+@pytest.mark.parametrize(
+    ("family", "backlog"),
+    [(socket.AF_INET, 1), (socket.AF_INET6, None)],
+)
+def test_listen_without_bind_cannot_implicitly_expose_public_listener(family, backlog):
+    # Some kernels implicitly bind listen() to 0.0.0.0 / :: even if bind()
+    # was never called. This must be blocked *before* the OS can listen.
+    if family == socket.AF_INET6 and not socket.has_ipv6:
+        pytest.skip("IPv6 sockets are not supported here")
+    with socket.socket(family, socket.SOCK_STREAM) as listener:
+        with pytest.raises(
+            RuntimeError, match="offline tests prohibit non-loopback network listeners"
+        ):
+            if backlog is None:
+                listener.listen()
+            else:
+                listener.listen(backlog)
+        assert listener.getsockname()[1] == 0
