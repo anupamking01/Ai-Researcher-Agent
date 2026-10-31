@@ -15,7 +15,6 @@ jobs:
       actions: read
       contents: read
     env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       SMART_LLM_MODEL: gpt-5.6-terra
       FAST_LLM_MODEL: gpt-5.6-luna
       TEMPERATURE: "1"
@@ -33,6 +32,8 @@ jobs:
           cache: pip
 
       - name: Validate API secret
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           if [ -z "$OPENAI_API_KEY" ]; then
             echo "OPENAI_API_KEY repository secret is not configured."
@@ -92,6 +93,8 @@ jobs:
           PY
 
       - name: Resume common post-hoc evaluator only
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         timeout-minutes: 35
         run: python scripts/evaluate_posthoc_support.py --max-evaluator-cost-usd 1.25
 

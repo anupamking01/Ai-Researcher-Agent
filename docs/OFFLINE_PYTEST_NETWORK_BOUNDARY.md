@@ -75,3 +75,21 @@ all credential access by arbitrary subprocesses, or prove anything about
 historical experiment archives or human annotators. They do not alter,
 rerun, or reinterpret pilot, frozen confirmatory, exploratory, or
 pending human-validation measurements.
+
+
+## Live research API secret isolation
+
+The opt-in budget-main-study and evaluator-recovery workflows now scope
+OPENAI_API_KEY to only their explicit secret-check and authorized live
+search, treatment, or evaluator steps. Offline tests, compilation, dependency
+installation, download, validation, summaries and uploads do not inherit the
+provider credential. This reduces unintended API spending and secret access
+from offline validation. It does not alter or rerun historical treatments,
+the frozen common evaluator, or any scientific measurement.
+
+The regression suite tests/test_research_workflow_provider_secret_scoping.py
+checks both actual workflows and synthetic job-wide, offline-step, alias,
+inline-interpolation, and missing-secret regressions. Environment scoping is
+not an operating-system sandbox or a guarantee against malicious changes to
+repository workflows. Historical source custody and real blinded human
+ratings are still outstanding.
