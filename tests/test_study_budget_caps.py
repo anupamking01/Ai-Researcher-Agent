@@ -32,7 +32,10 @@ def test_evaluator_runner_rejects_nonfinite_budget_before_environment(
     monkeypatch.setattr(
         evaluate_posthoc_support.sys,
         "argv",
-        ["evaluate_posthoc_support.py", f"--max-evaluator-cost-usd={raw_cap}"],
+        ["evaluate_posthoc_support.py",
+         "--noncanonical-evaluator-replay-ack",
+         evaluate_posthoc_support.NONCANONICAL_EVALUATOR_REPLAY_ACK,
+         f"--max-evaluator-cost-usd={raw_cap}"],
     )
     for name in ("OPENAI_API_KEY", "SMART_LLM_MODEL", "TEMPERATURE"):
         monkeypatch.delenv(name, raising=False)
