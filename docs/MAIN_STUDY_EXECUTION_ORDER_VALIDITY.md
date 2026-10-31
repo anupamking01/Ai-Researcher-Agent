@@ -148,3 +148,33 @@ signed custody record. Matching this window cannot authenticate missing
 historical trace/report bytes, prove wall-clock accuracy or web stability,
 resolve fixed-order confounding, or authorize distributing blinded packets.
 No recovered original progress log has yet passed this check.
+
+
+## Exact completed-progress writer schema (31 October 2026)
+
+The original treatment runner at commit
+`c3c15e46a8eec3a8bbc24c968eedc0548172a897` wrote a completed
+`main_study_progress.json` containing exactly 13 top-level fields, including
+its final `finished_at_utc` timestamp. Each successful treatment produced
+exactly five event fields: `variant`, `task_id`, `status`,
+`started_at_utc`, and `finished_at_utc`; the optional `error` field
+was emitted only for failed or timed-out treatments, neither of which occurred
+in the frozen 40-cell study.
+
+The offline chronology auditor now rejects candidate logs with missing or
+unexpected top-level or completed-event keys *before* producing a positive
+recorded-order receipt. For example, a plausible event with added evaluator
+scores, a purported source digest, or an invented human judgment is not a
+faithful original writer record, even when its order, timestamps, total cost,
+and Actions time window appear consistent. The receipt reports
+`original_completed_writer_field_schema` with its verified field counts and
+explicit `independently_authenticated: false`. Synthetic offline tests cover
+schema-preserving records, extra fields and missing fields. The frozen
+treatment and evaluator measurements are untouched.
+
+This is **structural correspondence to the historical writer**, not proof
+of original bytes or of a trustworthy archive. A fabricated log conforming
+to the exact writer schema could still pass. Independent recovery, custody,
+and source-to-evaluation verification remain mandatory before blinded
+human-evaluation packet distribution. Pilot, automated confirmatory,
+exploratory, and pending human-validation evidence remain separate.

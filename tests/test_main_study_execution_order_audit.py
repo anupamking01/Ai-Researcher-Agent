@@ -269,3 +269,59 @@ def test_cli_does_not_report_success_for_synthetic_wrong_total(tmp_path, capsys)
         order.main(["--progress-json", str(path)])
     assert failure.value.code == 1
     assert "differs from frozen published" in capsys.readouterr().err
+
+
+def test_progress_writer_schema_receipt_discloses_structural_scope():
+    receipt = order.audit_progress(_fixture(), sha256="a" * 64, byte_size=100)
+    fields = receipt["original_completed_writer_field_schema"]
+    assert fields == {
+        "checked": True,
+        "progress_fields_checked": 13,
+        "completed_event_fields_per_run_checked": 5,
+        "unexpected_fields_allowed": False,
+        "independently_authenticated": False,
+    }
+
+
+@pytest.mark.parametrize("extra,value", [
+    ("canonical_archive_authenticated", True),
+    ("human_rater_scores", [5, 5]),
+    ("extra_execution_events", []),
+])
+def test_rejects_nonhistorical_top_level_progress_fields(extra, value):
+    progress = _fixture()
+    progress[extra] = value
+    with pytest.raises(order.ChronologyError, match="progress fields differ"):
+        order.audit_progress(progress, sha256="a" * 64, byte_size=100)
+
+
+@pytest.mark.parametrize("missing", [
+    "study_id", "estimated_treatment_cost_usd", "finished_at_utc",
+])
+def test_rejects_missing_completed_progress_writer_fields(missing):
+    progress = _fixture()
+    del progress[missing]
+    with pytest.raises(order.ChronologyError, match="progress fields differ"):
+        order.audit_progress(progress, sha256="a" * 64, byte_size=100)
+
+
+@pytest.mark.parametrize("extra,value", [
+    ("posthoc_strict_support_rate", 1.0),
+    ("recovered_source_digest", "a" * 64),
+    ("human_annotation", {"correctness": 5}),
+])
+def test_rejects_invented_completed_event_metadata(extra, value):
+    progress = _fixture()
+    progress["events"][0][extra] = value
+    with pytest.raises(order.ChronologyError, match="event 1 fields differ"):
+        order.audit_progress(progress, sha256="a" * 64, byte_size=100)
+
+
+@pytest.mark.parametrize("missing", [
+    "variant", "task_id", "status", "started_at_utc", "finished_at_utc",
+])
+def test_rejects_incomplete_original_writer_event_fields(missing):
+    progress = _fixture()
+    del progress["events"][0][missing]
+    with pytest.raises(order.ChronologyError, match="event 1 fields differ"):
+        order.audit_progress(progress, sha256="a" * 64, byte_size=100)

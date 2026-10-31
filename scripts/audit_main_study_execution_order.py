@@ -30,6 +30,19 @@ PRIMARY_CONTRAST_START_PAIRS = (
     ("D6", "P6", "P6_minus_D6_planning"),
     ("P6", "P6V", "P6V_minus_P6_verification"),
 )
+# Exact completed-file keys emitted by the original frozen runner at
+# c3c15e46a8eec3a8bbc24c968eedc0548172a897. This schema is a
+# structural correspondence check, not independent archive authentication.
+ORIGINAL_COMPLETED_PROGRESS_FIELDS = frozenset({
+    "schema_version", "study_id", "task_set_id", "total_expected_runs",
+    "attempted_runs", "completed_runs", "failed_runs", "timeout_runs",
+    "estimated_treatment_cost_usd", "events", "current",
+    "started_at_utc", "finished_at_utc",
+})
+ORIGINAL_COMPLETED_EVENT_FIELDS = frozenset({
+    "variant", "task_id", "status", "started_at_utc", "finished_at_utc",
+})
+
 MAX_PROGRESS_BYTES = 1024 * 1024
 # The historical writer serializes ordinary bounded Python ints/floats. Bounds
 # apply even to uninspected JSON fields in a recovered, untrusted progress log.
@@ -235,6 +248,10 @@ def audit_progress(payload: dict, *, sha256: str, byte_size: int,
                    published_treatment_csv: Path | None = None,
                     require_historical_actions_step_window: bool = False) -> dict:
     """Validate a *recorded* task-major, fixed-arm schedule without outcomes."""
+    if type(payload) is not dict or set(payload) != ORIGINAL_COMPLETED_PROGRESS_FIELDS:
+        raise ChronologyError(
+            "progress fields differ from original completed-run writer schema"
+        )
     if expected_sha256 is not None:
         if re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
             raise ChronologyError("supplied progress SHA-256 has invalid format")
@@ -291,6 +308,10 @@ def audit_progress(payload: dict, *, sha256: str, byte_size: int,
     for index, ((task, variant), event) in enumerate(zip(EXPECTED_ORDER, events, strict=True)):
         if type(event) is not dict:
             raise ChronologyError(f"progress event {index + 1} must be an object")
+        if set(event) != ORIGINAL_COMPLETED_EVENT_FIELDS:
+            raise ChronologyError(
+                f"progress event {index + 1} fields differ from original completed-run writer schema"
+            )
         if (event.get("task_id") != task or event.get("variant") != variant
                 or event.get("status") != "completed" or "error" in event):
             raise ChronologyError(
@@ -359,6 +380,13 @@ def audit_progress(payload: dict, *, sha256: str, byte_size: int,
         "supplied_digest_matched": expected_sha256 is not None,
         "independent_archive_custody_authenticated": False,
         "recorded_events_checked": len(EXPECTED_ORDER),
+        "original_completed_writer_field_schema": {
+            "checked": True,
+            "progress_fields_checked": len(ORIGINAL_COMPLETED_PROGRESS_FIELDS),
+            "completed_event_fields_per_run_checked": len(ORIGINAL_COMPLETED_EVENT_FIELDS),
+            "unexpected_fields_allowed": False,
+            "independently_authenticated": False,
+        },
         "frozen_treatment_cost_concordance": cost_concordance,
         "historical_actions_step_window_concordance": actions_window,
         "recorded_task_major_schedule": True,
