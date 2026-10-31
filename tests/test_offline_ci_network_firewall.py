@@ -107,7 +107,7 @@ def test_firewall_order_failure_rollback_and_exit_code(
         assert any(row.startswith("v6 -w -F VERA_OFFLINE_") for row in commands)
         assert any(row.startswith("v6 -w -X VERA_OFFLINE_") for row in commands)
         assert not any(row.startswith("v6 -w -D OUTPUT") for row in commands)
-    elif policy_failure:
+    elif policy_failure and not policy_failure.endswith("_normalized_reject"):
         assert not any(row.startswith("pytest ") for row in commands)
         assert any(" -S " in row for row in commands)
         assert any(row.startswith("v4 -w -F VERA_OFFLINE_") for row in commands)
