@@ -64,6 +64,9 @@ def problems(source):
             and "scripts/evaluate_posthoc_support.py" in str(s.get("run", ""))]
     if len(live) != 1 or live[0].get("name") != "Resume common post-hoc evaluator only":
         faults.append("expected exactly one evaluator step")
+    elif ("--noncanonical-evaluator-replay-ack " + ACK
+          not in str(live[0].get("run", ""))):
+        faults.append("live evaluator bypasses direct replay acknowledgement")
     uploads = [s for s in steps if isinstance(s, dict)
                and str(s.get("uses", "")).startswith("actions/upload-artifact@")]
     if len(uploads) != 1 or not isinstance(uploads[0].get("with"), dict) or (
@@ -87,6 +90,9 @@ def test_real_workflow_is_protected():
     (NAME, "budget-main-study-recovered-${{ github.run_id }}", "noncanonical"),
     (CONDITION, "always()", "guard-gated"),
     ("run-id: 34620917346", "run-id: 34783525480", "input identity"),
+    (" --noncanonical-evaluator-replay-ack " + ACK,
+     " --noncanonical-evaluator-replay-ack NONCANONICAL_REPLICATION",
+     "direct replay acknowledgement"),
     ("- name: " + GUARD, "- name: Other guard", "unconditional first"),
 ])
 def test_rejects_unsafe_workflow_mutation(old, new, fault):

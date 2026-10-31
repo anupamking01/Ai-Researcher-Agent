@@ -890,8 +890,24 @@ and only publish under `noncanonical-evaluator-recovery-<run-id>` after the
 acknowledgment succeeds. Static offline regression tests guard the requirement,
 original treatment-artifact pin, first-step placement and output label.
 
-This only prevents accidental substitution through the updated workflow.
-Old-revision GitHub reruns and direct script calls are outside the boundary;
-a new replay is not preregistered or evidence of historical authenticity.
-The original recovery artifact is still missing from GitHub Actions. No
-treatment, evaluator, scientific output or human rating was rerun or changed.
+An independent direct-CLI safeguard now also requires the exact
+NONCANONICAL_EVALUATOR_RECOVERY token through the
+--noncanonical-evaluator-replay-ack argument. The evaluator script checks the
+token before inspecting API credentials, treatment inputs, evaluator caches,
+or invoking the model. The approved workflow forwards that argument. Offline
+tests check both entry points and the ordering of the direct guard.
+
+Newly generated evaluator cache JSON records carry an explicit
+replay_provenance classification of noncanonical_evaluator_replay, with
+historical origin IDs and a declaration that replay measurements cannot replace
+the frozen evidence. The aggregate post-hoc summary carries this label and
+reports separate counts for reused cached measurements versus newly generated
+noncanonical measurements. Those counts do not authenticate historical caches.
+No historical scientific measurements, frozen CSV columns, or human ratings
+are changed by the safeguard.
+
+This boundary does not protect older workflow/script revisions or prevent
+deliberate copying/mislabeling. An explicit replay is not preregistration, does
+not authenticate missing original archives, and cannot establish human-evaluation
+readiness. The original recovery artifact is still absent from GitHub Actions.
+No treatment, evaluator, or human annotation was rerun for this change.

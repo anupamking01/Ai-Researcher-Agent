@@ -37,12 +37,37 @@ TASK_FILE = REPO_ROOT / "experiments" / "main_budget_tasks.json"
 VARIANTS = ("D3", "D6", "P6", "P6V")
 MAX_CLAIMS = 12
 STUDY_ID = "budget-main-v1"
+NONCANONICAL_EVALUATOR_REPLAY_ACK = "NONCANONICAL_EVALUATOR_RECOVERY"
+ORIGINAL_EVALUATOR_RECOVERY_ACTIONS_RUN_ID = 34783525480
+ORIGINAL_TREATMENT_ACTIONS_RUN_ID = 34620917346
 FROZEN_EVALUATOR_MODEL = "gpt-5.6-terra"
 FROZEN_EVALUATOR_TEMPERATURE = 1.0
 NO_EVIDENCE_SENTINEL = (
     "[NO RETRIEVED EVIDENCE WAS AVAILABLE FOR THIS TREATMENT RUN. "
     "The run recorded zero successful retrieved sources. Do not use outside knowledge.]"
 )
+
+
+def _require_noncanonical_evaluator_replay_ack(value: str | None) -> None:
+    """Refuse historical-looking remeasurement before credential or source access."""
+    if value != NONCANONICAL_EVALUATOR_REPLAY_ACK:
+        raise SystemExit(
+            "Refusing evaluator replay without explicit noncanonical acknowledgement: "
+            "--noncanonical-evaluator-replay-ack NONCANONICAL_EVALUATOR_RECOVERY. "
+            "New measurements cannot replace the frozen historical evaluator results."
+        )
+
+
+def _noncanonical_evaluator_replay_provenance() -> dict:
+    """Label newly produced measurements without authenticating reused caches."""
+    return {
+        "classification": "noncanonical_evaluator_replay",
+        "original_frozen_study_id": STUDY_ID,
+        "original_actions_evaluator_recovery_run_id": ORIGINAL_EVALUATOR_RECOVERY_ACTIONS_RUN_ID,
+        "original_actions_treatment_run_id": ORIGINAL_TREATMENT_ACTIONS_RUN_ID,
+        "can_replace_original_evaluator_evidence": False,
+        "historical_archive_custody_authenticated": False,
+    }
 
 
 def _validate_frozen_evaluator_config(model: str, temperature: float) -> None:
@@ -812,7 +837,14 @@ def _preflight_evaluator_resume(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-evaluator-cost-usd", type=float, default=1.25)
+    parser.add_argument("--noncanonical-evaluator-replay-ack", default=None)
     args = parser.parse_args()
+    _require_noncanonical_evaluator_replay_ack(args.noncanonical_evaluator_replay_ack)
+    print(
+        "NONCANONICAL EVALUATOR REPLAY: new measurements cannot replace frozen "
+        "historical recovery or authenticate missing treatment evidence.",
+        flush=True,
+    )
     if (
         not math.isfinite(args.max_evaluator_cost_usd)
         or args.max_evaluator_cost_usd <= 0
@@ -940,6 +972,7 @@ def main() -> int:
             "estimated_cost_usd": cost,
             "cost_method": "frozen uncached rates",
         }
+        record["replay_provenance"] = _noncanonical_evaluator_replay_provenance()
         try:
             _publish_evaluation_cache(out_path, record)
         except FileExistsError as exc:
@@ -968,6 +1001,11 @@ def main() -> int:
             1 for r in rows if r.get("evidence_status") == "zero_successful_sources"
         ),
         "variant_summary": {},
+        "replay_provenance": {
+            **_noncanonical_evaluator_replay_provenance(),
+            "reused_cached_measurements": len(rows) - len(pending),
+            "new_noncanonical_measurements": len(pending),
+        },
     }
     for variant in VARIANTS:
         items = [r for r in rows if r["variant_id"] == variant]

@@ -513,7 +513,9 @@ def _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01", "main-02"
     monkeypatch.setattr(
         evaluate_posthoc_support.sys,
         "argv",
-        ["evaluate_posthoc_support.py", "--max-evaluator-cost-usd", "1.25"],
+        ["evaluate_posthoc_support.py", "--max-evaluator-cost-usd", "1.25",
+         "--noncanonical-evaluator-replay-ack",
+         evaluate_posthoc_support.NONCANONICAL_EVALUATOR_REPLAY_ACK],
     )
     return eval_root
 
@@ -892,6 +894,7 @@ def test_new_cache_binds_exact_evaluator_prompt_inputs(tmp_path, monkeypatch):
     evidence = evaluate_posthoc_support.NO_EVIDENCE_SENTINEL
     assert captured[0]["temperature"] == 1.0
     assert cache["schema_version"] == 2
+    assert cache["replay_provenance"] == evaluate_posthoc_support._noncanonical_evaluator_replay_provenance()
     assert cache["input_fingerprints"] == _input_fingerprints(
         question=question,
         report=report,
@@ -1033,7 +1036,9 @@ def test_overspend_preserves_cell_cache_without_publishing_aggregate_outputs(
     monkeypatch.setattr(
         evaluate_posthoc_support.sys,
         "argv",
-        ["evaluate_posthoc_support.py", "--max-evaluator-cost-usd", "0.0001"],
+        ["evaluate_posthoc_support.py", "--max-evaluator-cost-usd", "0.0001",
+         "--noncanonical-evaluator-replay-ack",
+         evaluate_posthoc_support.NONCANONICAL_EVALUATOR_REPLAY_ACK],
     )
 
     def complete_evaluation(**kwargs):
@@ -1085,6 +1090,11 @@ def test_aggregate_summary_binds_exact_published_csv_bytes(tmp_path, monkeypatch
     assert summary["posthoc_support_runs_sha256"] == hashlib.sha256(
         csv_bytes
     ).hexdigest()
+    assert summary["replay_provenance"] == {
+        **evaluate_posthoc_support._noncanonical_evaluator_replay_provenance(),
+        "reused_cached_measurements": 1,
+        "new_noncanonical_measurements": 0,
+    }
 
 
 def test_aggregate_publication_stages_every_file_before_replacing_existing_outputs(

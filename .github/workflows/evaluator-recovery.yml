@@ -113,7 +113,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         timeout-minutes: 35
-        run: python scripts/evaluate_posthoc_support.py --max-evaluator-cost-usd 1.25
+        run: python scripts/evaluate_posthoc_support.py --max-evaluator-cost-usd 1.25 --noncanonical-evaluator-replay-ack NONCANONICAL_EVALUATOR_RECOVERY
 
       - name: Summarize recovered main study
         run: python scripts/summarize_budget_main_study.py
