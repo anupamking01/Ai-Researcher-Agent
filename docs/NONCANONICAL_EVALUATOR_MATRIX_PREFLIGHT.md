@@ -63,3 +63,29 @@ fails before importing the model client or generating additional measurements.
 This safeguard does not authenticate the lost historical sources or authorize
 a treatment/evaluator rerun. It does not change the frozen pilot, confirmatory
 or exploratory analyses, and real blinded human evaluation remains pending.
+
+## Closed-world cached-measurement inventory
+
+The direct noncanonical evaluator previously used `*/*.json` globbing for
+cache preflight and existing-spend accounting. That selected only JSON files
+under immediate directories and silently omitted differently named backups,
+nested folders, alternate variant directories, and non-JSON leftovers. A
+seemingly complete set of selected cached scores could therefore mask other
+local evaluation records, while the spend helper did not account for them.
+
+Both the resume preflight and historical-cache spend helper now use the same
+bounded, closed-world cache inventory. The absent cache root is permitted
+(no measurements yet). An existing root must be a regular, non-symlink
+directory; its immediate children must be D3, D6, P6, or P6V directories,
+and each arm may contain at most ten regular, non-symlink `.json` files
+with no nested directories or extra backup files. Unexpected JSON cache
+cells still fail the separate expected-path check. All checks happen before
+a new model call, without deleting, selecting, or recomputing any results.
+
+The guard is **not** an independent authentication of any cached
+measurement, a provider-billing audit, an atomic filesystem snapshot, or
+a means to recover expired historical evaluator artifacts. Pilot, frozen
+confirmatory, exploratory, and pending human-evaluation evidence retain
+their separate classifications. These checks use synthetic offline tests;
+the historical 40 treatments, common evaluator, and human raters were
+not rerun.

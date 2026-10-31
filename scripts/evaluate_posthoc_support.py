@@ -324,6 +324,72 @@ def _inventory_evaluator_treatment_trace_tree(
     return {variant: sorted(paths) for variant, paths in found.items()}
 
 
+def _inventory_evaluator_cache_tree(
+    root: Path, *, variants: tuple[str, ...] = VARIANTS
+) -> set[Path]:
+    """Inventory all local evaluator caches before reuse or spend accounting.
+
+    A glob of known arms/*.json silently excluded backup files, alternate
+    arms, symlinks and nested caches while using the remaining cached scores.
+    A missing root means no measurements yet; a nonregular root is invalid.
+    This is local selection integrity, not authentication of historical caches.
+    """
+    root = Path(root)
+    if root.is_symlink():
+        raise SystemExit(
+            "Refusing evaluator replay: evaluator cache root is a symlink: "
+            f"{root}"
+        )
+    if not root.exists():
+        return set()
+    if not root.is_dir():
+        raise SystemExit(
+            "Refusing evaluator replay: evaluator cache root must be a directory: "
+            f"{root}"
+        )
+
+    found: set[Path] = set()
+    try:
+        with os.scandir(root) as root_entries:
+            for root_count, variant_entry in enumerate(root_entries, 1):
+                if root_count > len(variants):
+                    raise SystemExit(
+                        "Refusing evaluator replay: unselected evaluator cache "
+                        "entries exceed frozen variant count"
+                    )
+                if (
+                    variant_entry.name not in variants
+                    or variant_entry.is_symlink()
+                    or not variant_entry.is_dir(follow_symlinks=False)
+                ):
+                    raise SystemExit(
+                        "Refusing evaluator replay: unselected evaluator cache "
+                        f"entry or nonregular variant directory: {variant_entry.path}"
+                    )
+                with os.scandir(variant_entry.path) as cache_entries:
+                    for cache_count, cache_entry in enumerate(cache_entries, 1):
+                        if cache_count > 10:
+                            raise SystemExit(
+                                "Refusing evaluator replay: more than ten evaluator "
+                                f"cache entries in {variant_entry.path}"
+                            )
+                        if (
+                            cache_entry.is_symlink()
+                            or not cache_entry.is_file(follow_symlinks=False)
+                            or not cache_entry.name.endswith(".json")
+                        ):
+                            raise SystemExit(
+                                "Refusing evaluator replay: unselected evaluator "
+                                f"cache file or nonregular cache: {cache_entry.path}"
+                            )
+                        found.add(Path(cache_entry.path))
+    except OSError as exc:
+        raise SystemExit(
+            f"Refusing evaluator replay: cannot inventory evaluator caches: {exc}"
+        ) from exc
+    return found
+
+
 def _publish_evaluation_cache(path: Path, record: dict) -> None:
     """Durably publish one evaluator result without exposing partial bytes."""
     path = Path(path)
@@ -828,7 +894,7 @@ def _existing_evaluator_cost(
     total = 0.0
     if not EVAL_ROOT.exists():
         return total
-    for path in EVAL_ROOT.glob("*/*.json"):
+    for path in sorted(_inventory_evaluator_cache_tree(EVAL_ROOT)):
         payload = _load_json(path)
         total += _validated_cache_accounting(
             payload,
@@ -913,7 +979,7 @@ def _preflight_evaluator_resume(
                 f"{out_path}: {variant}/{task_id}/{run_id} ({trace_path})"
             )
         expected_paths.add(out_path)
-    existing_paths = set(EVAL_ROOT.glob("*/*.json")) if EVAL_ROOT.exists() else set()
+    existing_paths = _inventory_evaluator_cache_tree(EVAL_ROOT)
     unexpected_paths = sorted(existing_paths - expected_paths)
     if unexpected_paths:
         raise SystemExit(
