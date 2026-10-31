@@ -33,7 +33,7 @@ def _fake_iptables(family: str) -> str:
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux-only firewall wrapper")
 @pytest.mark.parametrize(
     ("v6_failure", "pytest_exit", "expected_exit"),
-    [(False, 0, 0), (False, 7, 7), (True, 0, 1)],
+    [(False, 0, 0), (False, 7, 7), (True, 0, 42)],
 )
 def test_firewall_order_failure_rollback_and_exit_code(
     tmp_path: Path, v6_failure: bool, pytest_exit: int, expected_exit: int
