@@ -2,6 +2,11 @@ name: evaluator-recovery
 
 on:
   workflow_dispatch:
+    inputs:
+      recovery_ack:
+        description: "Confirm NONCANONICAL evaluator replay; never replace the frozen recovery"
+        required: true
+        type: string
 
 concurrency:
   group: evaluator-recovery-${{ github.ref }}
@@ -21,6 +26,18 @@ jobs:
       PYTHONUNBUFFERED: "1"
 
     steps:
+      - name: Require explicit noncanonical evaluator-recovery acknowledgement
+        id: recovery_guard
+        env:
+          VERA_RECOVERY_ACK: ${{ inputs.recovery_ack }}
+        run: |
+          if [ "$VERA_RECOVERY_ACK" != "NONCANONICAL_EVALUATOR_RECOVERY" ]; then
+            echo "Refusing evaluator replay without explicit noncanonical acknowledgement." >&2
+            exit 1
+          fi
+          echo "## NONCANONICAL EVALUATOR RECOVERY" >> "$GITHUB_STEP_SUMMARY"
+          echo "This is not original recovery run 34783525480 and cannot replace frozen measurement or original report/trace custody." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout research branch
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
@@ -148,11 +165,11 @@ jobs:
           print(f"Total estimated cost: ${summary['estimated_total_cost_usd']:.6f}")
           PY
 
-      - name: Upload recovered canonical study artifacts
-        if: always()
+      - name: Upload noncanonical evaluator-recovery artifacts
+        if: ${{ always() && steps.recovery_guard.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: budget-main-study-recovered-${{ github.run_id }}
+          name: noncanonical-evaluator-recovery-${{ github.run_id }}
           path: |
             outputs/main_study_manifest.json
             outputs/main_study_progress.json

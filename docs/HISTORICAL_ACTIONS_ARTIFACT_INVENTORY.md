@@ -870,3 +870,28 @@ cache roles plus treatment trace identities. This is bounded input handling,
 not stronger proof of historical authenticity, report correctness, external
 archive custody, or human-evaluation readiness. No treatment, evaluator, or
 human study was rerun.
+
+
+## Frozen evaluator recovery: prevent mislabeled remeasurement
+
+The evaluator-recovery workflow completed in historical run **34783525480**;
+its output belongs to the frozen automated-analysis input. Repeating live
+evaluation later could produce different measurements even when treatment
+reports stay fixed. New measurements must never be presented as the first
+historical evaluator recovery or used to replace missing original trace/report
+archives.
+
+The current `.github/workflows/evaluator-recovery.yml` therefore requires an
+explicit mandatory, no-default `NONCANONICAL_EVALUATOR_RECOVERY` dispatch
+acknowledgment as its first step, before checkout, credentials, artifact
+download, or paid provider calls. A failed acknowledgment exits immediately.
+Approved replay attempts print a **NONCANONICAL EVALUATOR RECOVERY** warning
+and only publish under `noncanonical-evaluator-recovery-<run-id>` after the
+acknowledgment succeeds. Static offline regression tests guard the requirement,
+original treatment-artifact pin, first-step placement and output label.
+
+This only prevents accidental substitution through the updated workflow.
+Old-revision GitHub reruns and direct script calls are outside the boundary;
+a new replay is not preregistered or evidence of historical authenticity.
+The original recovery artifact is still missing from GitHub Actions. No
+treatment, evaluator, scientific output or human rating was rerun or changed.
