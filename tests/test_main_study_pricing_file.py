@@ -148,7 +148,9 @@ def test_main_study_manifest_records_pricing_snapshot_before_execution(
     monkeypatch.setattr(
         run_budget_main_study.sys,
         "argv",
-        ["run_budget_main_study.py", f"--task-file={task_file}"],
+        ["run_budget_main_study.py", "--noncanonical-replication-ack",
+          run_budget_main_study.NONCANONICAL_REPLICATION_ACK,
+          f"--task-file={task_file}"],
     )
     for name, value in {
         "OPENAI_API_KEY": "test-key",
@@ -224,7 +226,9 @@ def test_invalid_pricing_fails_before_outputs_and_model_imports(
     monkeypatch.setattr(
         run_budget_main_study.sys,
         "argv",
-        ["run_budget_main_study.py", f"--task-file={task_file}"],
+        ["run_budget_main_study.py", "--noncanonical-replication-ack",
+          run_budget_main_study.NONCANONICAL_REPLICATION_ACK,
+          f"--task-file={task_file}"],
     )
     for name, value in {
         "OPENAI_API_KEY": "test-key",

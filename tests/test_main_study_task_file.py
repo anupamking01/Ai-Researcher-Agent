@@ -839,7 +839,9 @@ def test_main_study_rejects_unpinned_python_before_treatment_imports(
         lambda: {"commit": "1" * 40, "tree": "2" * 40},
     )
     monkeypatch.setattr(
-        run_budget_main_study.sys, "argv", ["run_budget_main_study.py"]
+        run_budget_main_study.sys, "argv",
+        ["run_budget_main_study.py", "--noncanonical-replication-ack",
+         run_budget_main_study.NONCANONICAL_REPLICATION_ACK]
     )
     monkeypatch.setenv("SMART_LLM_MODEL", "test-smart")
     monkeypatch.setenv("FAST_LLM_MODEL", "test-fast")
@@ -987,7 +989,9 @@ def test_main_study_manifest_records_task_snapshot_before_execution(tmp_path, mo
     monkeypatch.setattr(
         run_budget_main_study.sys,
         "argv",
-        ["run_budget_main_study.py", f"--task-file={task_file}"],
+        ["run_budget_main_study.py", "--noncanonical-replication-ack",
+          run_budget_main_study.NONCANONICAL_REPLICATION_ACK,
+          f"--task-file={task_file}"],
     )
     for name, value in {
         "OPENAI_API_KEY": "test-key",
@@ -1090,7 +1094,9 @@ def test_main_study_rejects_source_drift_while_loading_treatment_code(
     monkeypatch.setattr(
         run_budget_main_study.sys,
         "argv",
-        ["run_budget_main_study.py", f"--task-file={task_file}"],
+        ["run_budget_main_study.py", "--noncanonical-replication-ack",
+          run_budget_main_study.NONCANONICAL_REPLICATION_ACK,
+          f"--task-file={task_file}"],
     )
     for name, value in {
         "OPENAI_API_KEY": "test-key",
