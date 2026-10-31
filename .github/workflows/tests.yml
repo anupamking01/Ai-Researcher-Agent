@@ -38,4 +38,4 @@ jobs:
         run: python -m compileall -q agent logic scripts tests settings scrape text_preprocess
 
       - name: Run offline unit tests
-        run: python -m pytest -q
+        run: bash scripts/run_offline_pytest_firewalled.sh

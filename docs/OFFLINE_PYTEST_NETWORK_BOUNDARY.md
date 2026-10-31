@@ -93,3 +93,30 @@ inline-interpolation, and missing-secret regressions. Environment scoping is
 not an operating-system sandbox or a guarantee against malicious changes to
 repository workflows. Historical source custody and real blinded human
 ratings are still outstanding.
+
+
+## Host-level outbound isolation during ordinary pytest
+
+Ordinary offline CI runs 'bash scripts/run_offline_pytest_firewalled.sh'
+**after** dependency installation and compilation. On the Linux runner this
+wrapper creates short-lived private IPv4 and IPv6 iptables chains, both
+inserted at the head of OUTPUT. They reject non-loopback outbound traffic
+for the entire pytest process, including subprocesses/native libraries that
+bypass the earlier process-local Python socket guard. Loopback and Unix
+sockets remain available for local application tests.
+
+The test fails closed if either firewall executable is unavailable, privilege
+is insufficient, or either family's rules fail to install or verify. Cleanup
+traps remove only this invocation's jumps and chains, preserve a failing pytest
+exit status, and flag cleanup failure. Rules are removed before subsequent
+GitHub Actions cache/post-processing steps. Synthetic regression tests in
+'tests/test_offline_ci_network_firewall.py' verify dispatch, ordering, failed
+IPv6-install rollback, and cleanup on passing/failing pytest without invoking
+host firewalls. The live Linux GitHub Actions run is the enforcement check.
+
+This egress protection covers only the ordinary pytest step. It is **not**
+a complete OS sandbox or an installation-time network restriction and cannot
+stop malicious processes with root access from deliberately changing firewall
+rules. It does not independently authenticate historical treatment archives,
+rerun treatment/evaluator calls, change frozen automated analysis, or establish
+pending human-validation results.
