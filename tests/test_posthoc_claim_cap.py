@@ -15,6 +15,22 @@ PRICING = {
 EXPECTED_COST = (100 / 1_000_000) * 2.0 + (20 / 1_000_000) * 12.0
 
 
+@pytest.fixture(autouse=True)
+def _isolate_legacy_small_fixture_from_full_matrix_gate(monkeypatch):
+    """Existing cache tests intentionally use only 1–2 synthetic trace cells.
+
+    Full-matrix completeness is independently exercised by
+    test_posthoc_replay_complete_matrix.py; this scoped stub keeps cache,
+    source-fingerprint and publication tests focused on their original gates.
+    The production evaluator preflight remains enforced.
+    """
+    monkeypatch.setattr(
+        evaluate_posthoc_support,
+        "_require_complete_frozen_treatment_matrix",
+        lambda *_args, **_kwargs: None,
+    )
+
+
 def _cached_evaluation(**overrides):
     payload = {
         "schema_version": 1,
