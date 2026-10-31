@@ -22,7 +22,8 @@ def _fixture():
         "schema_version": 1, "study_id": order.STUDY_ID,
         "task_set_id": order.TASK_SET_ID, "total_expected_runs": 40,
         "attempted_runs": 40, "completed_runs": 40,
-        "failed_runs": 0, "timeout_runs": 0, "current": None,
+        "failed_runs": 0, "timeout_runs": 0,
+        "estimated_treatment_cost_usd": 0.625, "current": None,
         "started_at_utc": start.isoformat(),
         "finished_at_utc": (start + timedelta(minutes=121)).isoformat(),
         "events": events,
@@ -140,4 +141,33 @@ def test_capture_rejects_unsafe_or_ambiguous_source(tmp_path: Path, kind):
     else:
         path.write_text('{"events":NaN}', encoding="utf-8")
     with pytest.raises(order.ChronologyError):
+        order._capture_progress(path)
+
+
+@pytest.mark.parametrize("field_value", [-1, -0.01, float("inf"), float("nan"),
+                                         True, "0.625", None])
+def test_rejects_invalid_recorded_cost_before_clock_analysis(field_value):
+    progress = _fixture()
+    progress["estimated_treatment_cost_usd"] = field_value
+    with pytest.raises(order.ChronologyError, match="estimated_treatment_cost_usd"):
+        order.audit_progress(progress, sha256="a" * 64, byte_size=10)
+
+
+def test_rejects_missing_recorded_cost():
+    progress = _fixture()
+    del progress["estimated_treatment_cost_usd"]
+    with pytest.raises(order.ChronologyError, match="estimated_treatment_cost_usd"):
+        order.audit_progress(progress, sha256="a" * 64, byte_size=10)
+
+
+@pytest.mark.parametrize("raw", [
+    b'{"uninspected_metadata":1e400}',
+    b'{"uninspected_metadata":' + b"9" * 5000 + b"}",
+    b'{"uninspected_metadata":' + b"9" * 150 + b"}",
+    b'{"uninspected_metadata":0.' + b"1" * 150 + b"}",
+])
+def test_capture_rejects_overflow_and_unbounded_numbers_even_if_not_used(tmp_path, raw):
+    path = tmp_path / "untrusted.json"
+    path.write_bytes(raw)
+    with pytest.raises(order.ChronologyError, match="numeric bound|finite range"):
         order._capture_progress(path)

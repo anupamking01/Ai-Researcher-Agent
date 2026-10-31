@@ -10,6 +10,7 @@ import argparse
 from datetime import datetime, timedelta
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -28,6 +29,9 @@ PRIMARY_CONTRAST_START_PAIRS = (
     ("P6", "P6V", "P6V_minus_P6_verification"),
 )
 MAX_PROGRESS_BYTES = 1024 * 1024
+# The historical writer serializes ordinary bounded Python ints/floats. Bounds
+# apply even to uninspected JSON fields in a recovered, untrusted progress log.
+MAX_JSON_NUMBER_TOKEN_CHARS = 128
 
 
 class ChronologyError(ValueError):
@@ -45,6 +49,21 @@ def _unique_pairs(pairs):
 
 def _reject_constant(token):
     raise ChronologyError(f"nonstandard JSON constant in progress log: {token}")
+
+
+def _bounded_json_int(token: str) -> int:
+    if len(token) > MAX_JSON_NUMBER_TOKEN_CHARS:
+        raise ChronologyError("progress JSON integer token exceeds numeric bound")
+    return int(token)
+
+
+def _finite_json_float(token: str) -> float:
+    if len(token) > MAX_JSON_NUMBER_TOKEN_CHARS:
+        raise ChronologyError("progress JSON float token exceeds numeric bound")
+    number = float(token)
+    if not math.isfinite(number):
+        raise ChronologyError("progress JSON float overflows finite range")
+    return number
 
 
 def _capture_progress(path: Path) -> tuple[dict, str, int]:
@@ -89,6 +108,7 @@ def _capture_progress(path: Path) -> tuple[dict, str, int]:
         payload = json.loads(
             raw.decode("utf-8"), object_pairs_hook=_unique_pairs,
             parse_constant=_reject_constant,
+            parse_int=_bounded_json_int, parse_float=_finite_json_float,
         )
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ChronologyError("progress input is not unambiguous UTF-8 JSON") from exc
@@ -132,6 +152,15 @@ def audit_progress(payload: dict, *, sha256: str, byte_size: int,
         observed = payload.get(field)
         if type(observed) is not type(expected) or observed != expected:
             raise ChronologyError(f"progress {field} differs from completed frozen run")
+    # The original completed runner always persists a finite cumulative
+    # treatment-cost estimate. Validate its shape without recalculating prices
+    # or treating this retrospective log as authenticated financial evidence.
+    cost = payload.get("estimated_treatment_cost_usd")
+    if (type(cost) not in (int, float) or cost < 0
+            or (type(cost) is float and not math.isfinite(cost))):
+        raise ChronologyError(
+            "progress estimated_treatment_cost_usd must be finite and nonnegative"
+        )
     if payload.get("current", "missing") is not None:
         raise ChronologyError("progress has an unfinished current run")
     events = payload.get("events")

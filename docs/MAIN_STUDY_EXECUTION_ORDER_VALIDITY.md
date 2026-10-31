@@ -41,6 +41,22 @@ unavailable. If an authentic log is recovered, cite the provenance and timestamp
 receipt together and disclose the timing ranges as post-hoc descriptive context,
 never as a correction for the design confounder.
 
+## Strict parsing of recovered numeric fields
+
+A recovered progress log is untrusted data even if its recorded task/arm
+sequence looks consistent. The chronology auditor rejects JSON integer or
+floating-point tokens longer than 128 characters **before conversion**, and
+rejects decimal-exponent float values that overflow Python's finite range.
+These rules apply to ignored metadata as well as the audited fields. This
+prevents a long integer from aborting JSON decoding through Python's
+interpreter-specific digit limit and prevents syntactically valid `1e400`
+from silently becoming infinity. The observed final
+`estimated_treatment_cost_usd` must also be a nonnegative finite JSON
+number. These parser checks do not re-estimate costs, attest the historical
+file or relax the need for independently preserved archive fingerprints.
+They are covered only with synthetic, offline regression cases while the
+original progress log is unavailable.
+
 ## Scientific reporting and unresolved gates
 
 Disclose fixed-order temporal confounding explicitly in the eventual manuscript's threats to validity even if it complicates an appealing interpretation. Preserve the exact first complete 40-cell treatment dataset, recorded zero-evidence outcomes, the existing post-hoc evaluator, all preregistered paired estimates and Holm-adjusted p-values. Do not select reruns, reorder observed cases, or claim that retrospective timestamp checks repair the allocation design.
