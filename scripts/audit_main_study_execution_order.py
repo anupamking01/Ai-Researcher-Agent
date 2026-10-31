@@ -21,6 +21,12 @@ HISTORICAL_RUNNER_COMMIT = "c3c15e46a8eec3a8bbc24c968eedc0548172a897"
 VARIANTS = ("D3", "D6", "P6", "P6V")
 TASK_IDS = tuple(f"main-{index:02d}" for index in range(1, 11))
 EXPECTED_ORDER = tuple((task, variant) for task in TASK_IDS for variant in VARIANTS)
+# Descriptive timing diagnostics only: do not change the frozen inference family.
+PRIMARY_CONTRAST_START_PAIRS = (
+    ("D3", "D6", "D6_minus_D3_retrieval_depth"),
+    ("D6", "P6", "P6_minus_D6_planning"),
+    ("P6", "P6V", "P6V_minus_P6_verification"),
+)
 MAX_PROGRESS_BYTES = 1024 * 1024
 
 
@@ -103,6 +109,12 @@ def _utc(value, label: str) -> datetime:
     return parsed
 
 
+def _elapsed_microseconds(later: datetime, earlier: datetime) -> int:
+    """Exact wall-clock separation of two recorded UTC timestamps."""
+    delta = later - earlier
+    return (delta.days * 86400 + delta.seconds) * 1_000_000 + delta.microseconds
+
+
 def audit_progress(payload: dict, *, sha256: str, byte_size: int,
                    expected_sha256: str | None = None) -> dict:
     """Validate a *recorded* task-major, fixed-arm schedule without outcomes."""
@@ -128,6 +140,7 @@ def audit_progress(payload: dict, *, sha256: str, byte_size: int,
     study_start = _utc(payload.get("started_at_utc"), "study start")
     study_end = _utc(payload.get("finished_at_utc"), "study finish")
     previous_finish = study_start
+    recorded_starts = {}
     for index, ((task, variant), event) in enumerate(zip(EXPECTED_ORDER, events, strict=True)):
         if type(event) is not dict:
             raise ChronologyError(f"progress event {index + 1} must be an object")
@@ -141,8 +154,28 @@ def audit_progress(payload: dict, *, sha256: str, byte_size: int,
         if started < previous_finish or finished < started:
             raise ChronologyError(f"progress event {index + 1} timestamps overlap or reverse")
         previous_finish = finished
+        recorded_starts[(task, variant)] = started
     if study_end < previous_finish:
         raise ChronologyError("study finish predates final event")
+
+    # Observed timing, not proof of time-varying evidence or a causal correction.
+    contrast_lags = {}
+    for left, right, label in PRIMARY_CONTRAST_START_PAIRS:
+        by_task = {
+            task: _elapsed_microseconds(
+                recorded_starts[(task, right)], recorded_starts[(task, left)]
+            )
+            for task in TASK_IDS
+        }
+        if any(lag < 0 for lag in by_task.values()):
+            raise ChronologyError("recorded paired treatment starts are reversed")
+        contrast_lags[label] = {
+            "left_variant": left,
+            "right_variant": right,
+            "start_lag_microseconds_by_task": by_task,
+            "minimum_start_lag_microseconds": min(by_task.values()),
+            "maximum_start_lag_microseconds": max(by_task.values()),
+        }
     return {
         "schema_version": 1,
         "study_id": STUDY_ID,
@@ -154,6 +187,12 @@ def audit_progress(payload: dict, *, sha256: str, byte_size: int,
         "independent_archive_custody_authenticated": False,
         "recorded_events_checked": len(EXPECTED_ORDER),
         "recorded_task_major_schedule": True,
+        "recorded_clock_exposure": {
+            "interpretation": "recorded_start_time_separation_only_not_web_drift",
+            "unit": "microseconds",
+            "study_window_microseconds": _elapsed_microseconds(study_end, study_start),
+            "primary_contrast_start_lags": contrast_lags,
+        },
         "fixed_variant_order_within_each_task": list(VARIANTS),
         "variant_order_randomized": False,
         "temporal_confounding_resolved": False,

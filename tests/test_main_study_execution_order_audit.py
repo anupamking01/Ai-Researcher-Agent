@@ -39,6 +39,41 @@ def test_accepts_complete_synthetic_recorded_schedule():
     assert receipt["fixed_variant_order_within_each_task"] == list(order.VARIANTS)
 
 
+def test_reports_exact_descriptive_start_lags_without_outcome_inference():
+    receipt = order.audit_progress(_fixture(), sha256="a" * 64, byte_size=10)
+    exposure = receipt["recorded_clock_exposure"]
+    assert exposure["interpretation"] == "recorded_start_time_separation_only_not_web_drift"
+    assert exposure["unit"] == "microseconds"
+    assert exposure["study_window_microseconds"] == 121 * 60 * 1_000_000
+    assert list(exposure["primary_contrast_start_lags"]) == [
+        label for _, _, label in order.PRIMARY_CONTRAST_START_PAIRS
+    ]
+    for left, right, label in order.PRIMARY_CONTRAST_START_PAIRS:
+        lag = exposure["primary_contrast_start_lags"][label]
+        assert lag["left_variant"] == left
+        assert lag["right_variant"] == right
+        assert lag["start_lag_microseconds_by_task"] == {
+            task: 3 * 60 * 1_000_000 for task in order.TASK_IDS
+        }
+        assert lag["minimum_start_lag_microseconds"] == 180_000_000
+        assert lag["maximum_start_lag_microseconds"] == 180_000_000
+    assert receipt["temporal_confounding_resolved"] is False
+
+
+def test_reported_lag_reflects_nonuniform_recorded_clock_not_fixed_arm_spacing():
+    progress = _fixture()
+    # Synthetic clock gap increases between D3 start and D6 start on task 1.
+    progress["events"][0]["started_at_utc"] = "2026-09-12T00:00:30+00:00"
+    receipt = order.audit_progress(progress, sha256="a" * 64, byte_size=10)
+    lags = receipt["recorded_clock_exposure"]["primary_contrast_start_lags"]
+    depth = lags["D6_minus_D3_retrieval_depth"]
+    assert depth["start_lag_microseconds_by_task"]["main-01"] == 210_000_000
+    assert depth["start_lag_microseconds_by_task"]["main-02"] == 180_000_000
+    assert depth["minimum_start_lag_microseconds"] == 180_000_000
+    assert depth["maximum_start_lag_microseconds"] == 210_000_000
+    assert lags["P6_minus_D6_planning"]["maximum_start_lag_microseconds"] == 180_000_000
+
+
 @pytest.mark.parametrize("mutation, message", [
     ("swapped_arms", "fixed-arm order"),
     ("missing_event", "40 recorded events"),

@@ -22,6 +22,25 @@ Never derive a new hash from a suspect candidate and represent it as a historica
 
 This structural test **cannot** independently authenticate the historical log, its timekeeping, external archive custody, or stable live-web conditions. Matching a supplied SHA-256 alone establishes file-byte consistency, not trustworthiness of the source of that pin. Original treatment Actions run 34620917346 and evaluator-recovery Actions run 34783525480 exposed no downloadable artifacts when checked October 31, 2026. **No authentic recovered log has passed this audit**. The published frozen treatment and evaluator CSVs omit event timestamps, and their row order must not be treated as chronological evidence.
 
+## Retrospective clock-exposure diagnostic (not observed web drift)
+
+The read-only receipt now also includes `recorded_clock_exposure`: the recorded
+study start-to-finish window and, for **each of the ten tasks**, the difference
+between treatment **start timestamps** for the three frozen primary contrasts
+(D6 minus D3, P6 minus D6, P6V minus P6). It reports exact integer
+**microseconds** to avoid rounding away short intervals, plus minimum and
+maximum separations across tasks. These offsets describe how far apart the
+compared arms began in the recorded task-major sequence; they do **not**
+measure drift in web pages, model behavior, task difficulty, or outcome quality.
+No additional hypothesis test, regression on outcomes, or replacement effect
+estimate is computed. The fixed treatment order remains nonrandomized, the
+sign-flip assumptions remain limited, and the output remains unauthenticated
+until independent historical custody is established. Synthetic tests exercise
+the receipt; no historical offsets are asserted while the original log is
+unavailable. If an authentic log is recovered, cite the provenance and timestamp
+receipt together and disclose the timing ranges as post-hoc descriptive context,
+never as a correction for the design confounder.
+
 ## Scientific reporting and unresolved gates
 
 Disclose fixed-order temporal confounding explicitly in the eventual manuscript's threats to validity even if it complicates an appealing interpretation. Preserve the exact first complete 40-cell treatment dataset, recorded zero-evidence outcomes, the existing post-hoc evaluator, all preregistered paired estimates and Holm-adjusted p-values. Do not select reruns, reorder observed cases, or claim that retrospective timestamp checks repair the allocation design.

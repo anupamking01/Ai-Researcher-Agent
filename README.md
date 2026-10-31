@@ -236,6 +236,7 @@ This project follows several explicit guardrails:
 ## Limitations and threats to validity
 
 - Live-web retrieval can change as pages, rankings, and source availability change.
+- The historical ten-task main study ran each task in fixed D3 → D6 → P6 → P6V order, not randomized/counterbalanced order; treatment identity is confounded with within-task execution time. The [read-only chronology and clock-exposure diagnostic](docs/MAIN_STUDY_EXECUTION_ORDER_VALIDITY.md) cannot correct that limitation or establish historical archive authenticity.
 - Search-provider behavior can introduce systematic retrieval bias.
 - LLM/provider versions may change over time.
 - Automated claim-support evaluation is itself model-dependent.
