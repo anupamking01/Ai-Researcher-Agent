@@ -1,0 +1,470 @@
+"""Read-only, bounded preflight of a candidate recovered VERA artifact ZIP.
+
+This verifies structural safety and computes *present-day* file-byte digests.
+It neither extracts nor authenticates historical evidence. In particular, a
+digest computed here is NOT a previously retained independent archive pin.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import struct
+import unicodedata
+import zipfile
+import zlib
+
+from scripts.audit_historical_artifact_job_logs import ORIGINAL, RECOVERED
+
+MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
+MAX_MEMBERS = 2000
+MAX_MEMBER_BYTES = 64 * 1024 * 1024
+MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
+MAX_COMPRESSION_RATIO = 1000
+# zipfile eagerly materializes *all* central-directory entries at construction.
+# Restrict their raw table size and actual record count before opening ZipFile.
+MAX_CENTRAL_DIRECTORY_BYTES = 8 * 1024 * 1024
+EOCD_HEADER = struct.Struct("<4s4H2IH")
+CENTRAL_HEADER = struct.Struct("<4s6H3I5H2I")
+LOCAL_HEADER = struct.Struct("<4s2B4HL2L2H")
+CHUNK_BYTES = 1024 * 1024
+HEX_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+
+# Fixed, same-provider ZIP fingerprints recovered from original GitHub job logs.
+# These are NOT independently retained research/trace/report archive pins.
+GITHUB_JOB_LOG_ARCHIVES = {
+    "original_treatment": ORIGINAL,
+    "evaluator_recovery": RECOVERED,
+}
+
+WINDOWS_FORBIDDEN_CHARS = frozenset('<>:"|?*')
+WINDOWS_DEVICE_NAMES = frozenset(
+    {"con", "prn", "aux", "nul", "conin$", "conout$"}
+    | {f"com{number}" for number in range(1, 10)}
+    | {f"lpt{number}" for number in range(1, 10)}
+)
+
+
+class RecoveredArchiveError(ValueError):
+    """An archive cannot be trusted even for safe offline inspection."""
+
+
+def _fingerprint(handle) -> str:
+    handle.seek(0)
+    digest = hashlib.sha256()
+    while True:
+        part = handle.read(CHUNK_BYTES)
+        if not part:
+            break
+        digest.update(part)
+    return digest.hexdigest()
+
+
+def _path_key(name: str) -> str:
+    """Use one conservative portable path identity, without rewriting entries."""
+    if (
+        not name or len(name) > 1024
+        or name.startswith("/")
+        or "\\" in name
+        or "\x00" in name
+        or unicodedata.normalize("NFC", name) != name
+    ):
+        raise RecoveredArchiveError(f"unsafe ZIP member name: {name!r}")
+    raw = name.rstrip("/")
+    parts = raw.split("/")
+    if (
+        not raw or len(parts) > 32
+        or any(part in ("", ".", "..") for part in parts)
+        or ":" in parts[0]
+        or any(unicodedata.category(c) in ("Cc", "Cf", "Cs") for c in name)
+    ):
+        raise RecoveredArchiveError(f"unsafe ZIP member name: {name!r}")
+    # Compatibility normalization must not *create* dangerous path syntax.
+    # Checking only the original ZIP name would allow e.g. FULLWIDTH FULL STOP
+    # segments to become "..", or FULLWIDTH SOLIDUS to become "/" downstream.
+    normalized = unicodedata.normalize("NFKC", raw).casefold()
+    normalized_parts = normalized.split("/")
+    if (
+        len(normalized_parts) != len(parts)
+        or any(part in ("", ".", "..") for part in normalized_parts)
+        or "\\" in normalized
+        or ":" in normalized_parts[0]
+        or any(unicodedata.category(c) in ("Cc", "Cf", "Cs") for c in normalized)
+        or any(
+            # Windows aliases, devices, and NTFS alternate data streams must
+            # not turn a structurally safe member into an unsafe extraction.
+            part.endswith((" ", "."))
+            or any(char in WINDOWS_FORBIDDEN_CHARS for char in part)
+            or part.split(".", 1)[0].rstrip(" ") in WINDOWS_DEVICE_NAMES
+            for part in normalized_parts
+        )
+    ):
+        raise RecoveredArchiveError(f"unsafe normalized ZIP member name: {name!r}")
+    return normalized
+
+
+def _inspect_member(info: zipfile.ZipInfo) -> tuple[str, bool]:
+    key = _path_key(info.filename)
+    is_directory = info.is_dir()
+    mode = stat.S_IFMT(info.external_attr >> 16)
+    if mode not in (0, stat.S_IFDIR if is_directory else stat.S_IFREG):
+        raise RecoveredArchiveError(f"ZIP contains a link or special entry: {info.filename!r}")
+    if info.flag_bits & 1:
+        raise RecoveredArchiveError(f"encrypted ZIP entry: {info.filename!r}")
+    if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+        raise RecoveredArchiveError(f"unsupported ZIP compression: {info.filename!r}")
+    if info.file_size < 0 or info.compress_size < 0:
+        raise RecoveredArchiveError("negative ZIP member size")
+    if is_directory and info.file_size:
+        raise RecoveredArchiveError(f"nonempty directory entry: {info.filename!r}")
+    if info.file_size > MAX_MEMBER_BYTES:
+        raise RecoveredArchiveError(f"ZIP member exceeds size limit: {info.filename!r}")
+    if info.file_size and (
+        info.compress_size == 0
+        or info.file_size > MAX_COMPRESSION_RATIO * info.compress_size
+    ):
+        raise RecoveredArchiveError(f"ZIP member exceeds expansion limit: {info.filename!r}")
+    return key, is_directory
+
+
+def _preflight_central_directory(handle, archive_bytes: int) -> int:
+    """Bound the central directory before zipfile eagerly creates ZipInfo objects.
+
+    Deliberately accept the ordinary single-disk, non-ZIP64 GitHub artifact
+    layout. A ZIP with extensions, an embedded executable prefix, or ambiguous
+    trailer is not an acceptable unauthenticated recovery candidate.
+    """
+    tail_bytes = min(archive_bytes, EOCD_HEADER.size + 65535)
+    handle.seek(archive_bytes - tail_bytes)
+    tail = handle.read(tail_bytes)
+    search_end = len(tail)
+    record = None
+    while True:
+        index = tail.rfind(b"PK\x05\x06", 0, search_end)
+        if index < 0:
+            break
+        if index + EOCD_HEADER.size <= len(tail):
+            candidate = EOCD_HEADER.unpack_from(tail, index)
+            if index + EOCD_HEADER.size + candidate[-1] == len(tail):
+                record = candidate
+                eocd_offset = archive_bytes - tail_bytes + index
+                break
+        search_end = index
+    if record is None:
+        raise RecoveredArchiveError(
+            "cannot safely inspect ZIP: no unambiguous terminal end-of-central-directory record"
+        )
+    _, disk, cd_disk, on_disk, count, size_cd, cd_offset, _ = record
+    if disk or cd_disk or on_disk != count:
+        raise RecoveredArchiveError(
+            "ZIP requires one consistent central directory on one disk"
+        )
+    if not 0 < count <= MAX_MEMBERS:
+        raise RecoveredArchiveError(
+            "ZIP central-directory member count outside permitted bounds"
+        )
+    if not 0 < size_cd <= MAX_CENTRAL_DIRECTORY_BYTES:
+        raise RecoveredArchiveError("ZIP central directory exceeds bounded size range")
+    if cd_offset + size_cd != eocd_offset:
+        raise RecoveredArchiveError(
+            "ZIP central-directory offsets are inconsistent or noncanonical"
+        )
+    offset = cd_offset
+    for _ in range(count):
+        if offset + CENTRAL_HEADER.size > eocd_offset:
+            raise RecoveredArchiveError("ZIP central-directory entries exceed declared size")
+        handle.seek(offset)
+        header = handle.read(CENTRAL_HEADER.size)
+        if len(header) != CENTRAL_HEADER.size:
+            raise RecoveredArchiveError("truncated ZIP central-directory entry")
+        fields = CENTRAL_HEADER.unpack(header)
+        # Name length, disk start, ZIP64 size/offset sentinels are fixed fields.
+        if fields[0] != b"PK\x01\x02" or fields[10] == 0 or fields[13] != 0:
+            raise RecoveredArchiveError("invalid ZIP central-directory entry")
+        if (
+            fields[8] == 0xFFFFFFFF
+            or fields[9] == 0xFFFFFFFF
+            or fields[16] == 0xFFFFFFFF
+        ):
+            raise RecoveredArchiveError("ZIP64 central-directory entry is unsupported")
+        offset += CENTRAL_HEADER.size + fields[10] + fields[11] + fields[12]
+        if offset > eocd_offset:
+            raise RecoveredArchiveError("ZIP central-directory entry exceeds declared size")
+    if offset != eocd_offset:
+        raise RecoveredArchiveError(
+            "ZIP central-directory member count does not match its records"
+        )
+    return cd_offset
+
+
+def _verify_local_header_metadata(handle, info: zipfile.ZipInfo, *, cd_offset: int) -> tuple[int, int]:
+    """Require the local and central ZIP records to describe the same member.
+
+    Python's zipfile verifies the local filename and decodes using the central
+    method/CRC, but does not require the local method, flags or CRC/size fields
+    to agree. These contradictions create ambiguous recovery evidence.
+    """
+    start = info.header_offset
+    if start < 0 or start + LOCAL_HEADER.size > cd_offset:
+        raise RecoveredArchiveError("local ZIP header is outside the member-data region")
+    handle.seek(start)
+    raw = handle.read(LOCAL_HEADER.size)
+    if len(raw) != LOCAL_HEADER.size:
+        raise RecoveredArchiveError("truncated local ZIP header")
+    (
+        signature, _version_lo, _version_hi, flags, method,
+        _modified_time, _modified_date, crc, compressed, uncompressed,
+        name_length, extra_length,
+    ) = LOCAL_HEADER.unpack(raw)
+    if signature != b"PK\x03\x04":
+        raise RecoveredArchiveError("invalid local ZIP header signature")
+    if flags != info.flag_bits or method != info.compress_type:
+        raise RecoveredArchiveError("local ZIP header flags/compression disagree with central directory")
+    if flags & 0x08:
+        # A streaming writer may put zero placeholders here and append a data
+        # descriptor. Nonzero fields must still agree with the central record.
+        sizes_agree = all(
+            local in (0, central)
+            for local, central in (
+                (crc, info.CRC),
+                (compressed, info.compress_size),
+                (uncompressed, info.file_size),
+            )
+        )
+    else:
+        sizes_agree = (
+            crc, compressed, uncompressed
+        ) == (info.CRC, info.compress_size, info.file_size)
+    if not sizes_agree:
+        raise RecoveredArchiveError("cannot safely inspect ZIP: local ZIP header CRC/size metadata disagrees with central directory")
+    payload_end = start + LOCAL_HEADER.size + name_length + extra_length + info.compress_size
+    if payload_end > cd_offset:
+        raise RecoveredArchiveError("local ZIP header/data extends into central directory")
+    if flags & 0x08:
+        # The ZIP reader trusts central metadata and does not verify the
+        # following streaming data descriptor. Require the actual on-disk
+        # CRC/sizes, with or without the optional descriptor signature.
+        unsigned = struct.pack("<III", info.CRC, info.compress_size, info.file_size)
+        handle.seek(payload_end)
+        descriptor = handle.read(min(16, cd_offset - payload_end))
+        if descriptor.startswith(b"PK\x07\x08" + unsigned):
+            member_end = payload_end + 16
+        elif descriptor.startswith(unsigned):
+            member_end = payload_end + 12
+        else:
+            raise RecoveredArchiveError(
+                "streaming ZIP data descriptor disagrees with central directory"
+            )
+    else:
+        member_end = payload_end
+    return start, member_end
+
+def _unchanged(original: os.stat_result, current: os.stat_result) -> bool:
+    return (
+        original.st_dev, original.st_ino, original.st_mode,
+        original.st_size, original.st_mtime_ns, original.st_ctime_ns,
+    ) == (
+        current.st_dev, current.st_ino, current.st_mode,
+        current.st_size, current.st_mtime_ns, current.st_ctime_ns,
+    )
+
+
+def audit_recovered_zip(
+    path: Path, *, expected_archive_sha256: str | None = None,
+    github_job_log_artifact: str | None = None,
+) -> dict:
+    """Inspect one ZIP without extraction, model calls, or archive modifications.
+
+    An optional expected_archive_sha256 must have been independently retained
+    before inspection. The separate GitHub job-log selector compares against
+    *same-provider* historical metadata and never establishes independent
+    custody, even if both bytes and digest match.
+    """
+    path = Path(path)
+    if expected_archive_sha256 is not None and not HEX_SHA256.fullmatch(expected_archive_sha256):
+        raise RecoveredArchiveError("expected archive SHA-256 must be lowercase 64-hex")
+    if github_job_log_artifact is not None and (
+        type(github_job_log_artifact) is not str
+        or github_job_log_artifact not in GITHUB_JOB_LOG_ARCHIVES
+    ):
+        raise RecoveredArchiveError("unknown historical GitHub job-log artifact role")
+    github_log_anchor = (
+        GITHUB_JOB_LOG_ARCHIVES[github_job_log_artifact]
+        if github_job_log_artifact is not None else None
+    )
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        with os.fdopen(os.open(path, flags), "rb") as handle:
+            before = os.fstat(handle.fileno())
+            path_before = os.stat(path, follow_symlinks=False)
+            if not stat.S_ISREG(before.st_mode) or not _unchanged(before, path_before):
+                raise RecoveredArchiveError("archive must be a stable regular file, not a link")
+            if not 0 < before.st_size <= MAX_ARCHIVE_BYTES:
+                raise RecoveredArchiveError("archive file exceeds the bounded ZIP size range")
+            if github_log_anchor is not None and before.st_size != github_log_anchor["size_bytes"]:
+                raise RecoveredArchiveError("archive byte size differs from historical GitHub job-log ZIP")
+            archive_sha256 = _fingerprint(handle)
+            if expected_archive_sha256 and archive_sha256 != expected_archive_sha256:
+                raise RecoveredArchiveError("archive SHA-256 differs from supplied independent pin")
+            if github_log_anchor is not None and archive_sha256 != github_log_anchor["zip_sha256"]:
+                raise RecoveredArchiveError("archive SHA-256 differs from historical GitHub job-log ZIP")
+
+            # The ZipFile constructor otherwise parses every advertised record
+            # before our MAX_MEMBERS check can run (a memory exhaustion risk).
+            cd_offset = _preflight_central_directory(handle, before.st_size)
+            files = []
+            total = 0
+            seen: set[str] = set()
+            file_keys: set[str] = set()
+            with zipfile.ZipFile(handle, mode="r") as archive:
+                entries = archive.infolist()
+                if not entries or len(entries) > MAX_MEMBERS:
+                    raise RecoveredArchiveError("ZIP member count outside permitted bounds")
+                # Validate all local/central metadata BEFORE decompressing bytes.
+                local_ranges = []
+                for info in entries:
+                    local_ranges.append(
+                        _verify_local_header_metadata(handle, info, cd_offset=cd_offset)
+                    )
+                    key, is_directory = _inspect_member(info)
+                    if key in seen:
+                        raise RecoveredArchiveError(f"duplicate or nonportable ZIP path: {info.filename!r}")
+                    seen.add(key)
+                    if not is_directory:
+                        file_keys.add(key)
+                        total += info.file_size
+                        if total > MAX_UNCOMPRESSED_BYTES:
+                            raise RecoveredArchiveError("ZIP total uncompressed size exceeds limit")
+                # A member's compressed payload or streaming descriptor must
+                # not overlap any other member's local header or payload.
+                by_offset = sorted(local_ranges)
+                if any(
+                    next_start < previous_end
+                    for (_, previous_end), (next_start, _) in zip(
+                        by_offset, by_offset[1:]
+                    )
+                ):
+                    raise RecoveredArchiveError("overlapping ZIP local member regions")
+                # The central directory must account for every byte preceding
+                # it through non-overlapping local member regions. Otherwise a
+                # readable archive can conceal unindexed payloads/prefixes that
+                # never appear in the receipt or member SHA-256 inventory.
+                if (
+                    by_offset[0][0] != 0
+                    or by_offset[-1][1] != cd_offset
+                    or any(
+                        next_start > previous_end
+                        for (_, previous_end), (next_start, _) in zip(
+                            by_offset, by_offset[1:]
+                        )
+                    )
+                ):
+                    raise RecoveredArchiveError(
+                        "unaccounted ZIP bytes outside local member regions"
+                    )
+                if not file_keys:
+                    raise RecoveredArchiveError("ZIP contains no regular files")
+                for key in seen:
+                    ancestors = key.split("/")
+                    if any("/".join(ancestors[:n]) in file_keys for n in range(1, len(ancestors))):
+                        raise RecoveredArchiveError("ZIP file conflicts with a nested member path")
+                for info in entries:
+                    if info.is_dir():
+                        # ZIP directory members are real entries with local headers,
+                        # compressed streams, and CRCs. Skipping archive.open() would
+                        # accept corrupt directory metadata or unreadable DEFLATE data.
+                        # A one-byte read reaches EOF for a valid empty directory and
+                        # makes ZipExtFile validate its stream and CRC.
+                        with archive.open(info, mode="r") as directory:
+                            if directory.read(1):
+                                raise RecoveredArchiveError(
+                                    f"ZIP directory contains data: {info.filename!r}"
+                                )
+                        continue
+                    digest = hashlib.sha256()
+                    size = 0
+                    # ZipFile verifies CRC on reaching EOF; our bounds also
+                    # protect against understated central-directory sizes.
+                    with archive.open(info, mode="r") as member:
+                        while True:
+                            part = member.read(CHUNK_BYTES)
+                            if not part:
+                                break
+                            size += len(part)
+                            if size > info.file_size or size > MAX_MEMBER_BYTES:
+                                raise RecoveredArchiveError("ZIP member expanded beyond declared size")
+                            digest.update(part)
+                    if size != info.file_size:
+                        raise RecoveredArchiveError("ZIP member did not match declared uncompressed size")
+                    files.append({
+                        "path": info.filename,
+                        "uncompressed_bytes": size,
+                        "sha256": digest.hexdigest(),
+                    })
+            # Re-read the same descriptor, and recheck its on-disk pathname:
+            # an in-place edit or a path swap must not yield a PASS.
+            if (
+                not _unchanged(before, os.fstat(handle.fileno()))
+                or not _unchanged(before, os.stat(path, follow_symlinks=False))
+                or _fingerprint(handle) != archive_sha256
+            ):
+                raise RecoveredArchiveError("archive changed during inspection")
+    except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile, EOFError, RuntimeError,
+            NotImplementedError, zlib.error) as exc:
+        raise RecoveredArchiveError(f"cannot safely inspect ZIP: {exc}") from exc
+    return {
+        "schema_version": 1,
+        "status": "zip_structurally_verified_not_historically_authenticated",
+        "archive_sha256_observed_now": archive_sha256,
+        "expected_archive_sha256_matched": expected_archive_sha256 is not None,
+        "github_job_log_zip_correspondence": (
+            {
+                "source": "github_actions_same_provider_job_log",
+                "artifact_role": github_job_log_artifact,
+                "source_run_id": github_log_anchor["run_id"],
+                "source_job_id": github_log_anchor["job_id"],
+                "source_artifact_id": github_log_anchor["artifact_id"],
+                "expected_archive_sha256": github_log_anchor["zip_sha256"],
+                "expected_archive_bytes": github_log_anchor["size_bytes"],
+                "sha256_and_byte_size_matched": True,
+                "independent_archive_pin": False,
+            } if github_log_anchor is not None else None
+        ),
+        "archive_bytes": before.st_size,
+        "file_count": len(files),
+        "total_uncompressed_bytes": total,
+        "files": files,
+        "historical_evidence_authenticated": False,
+        "human_evaluation_ready": False,
+        "experimental_treatments_rerun": False,
+        "human_ratings_generated": False,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("archive", type=Path, help="offline ZIP file; never extracted")
+    parser.add_argument("--expected-archive-sha256", help="independently retained prior ZIP-byte pin")
+    parser.add_argument(
+        "--github-job-log-artifact", choices=tuple(GITHUB_JOB_LOG_ARCHIVES),
+        help="compare ZIP bytes/size with historically logged GitHub digest (NOT independent custody)",
+    )
+    args = parser.parse_args()
+    try:
+        receipt = audit_recovered_zip(
+            args.archive, expected_archive_sha256=args.expected_archive_sha256,
+            github_job_log_artifact=args.github_job_log_artifact,
+        )
+    except (RecoveredArchiveError, ValueError) as exc:
+        parser.exit(1, f"VERA RECOVERED ZIP PREFLIGHT: FAIL: {exc}\n")
+    print(json.dumps(receipt, sort_keys=True, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

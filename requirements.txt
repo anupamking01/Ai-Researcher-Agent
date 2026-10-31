@@ -11,14 +11,13 @@ Brotli==1.1.0
 certifi==2024.6.2
 cffi==1.16.0
 charset-normalizer==3.3.2
-chromedriver-py==119.0.6045.105
-click==8.1.7
+click==8.1.8
 colorama==0.4.6
 cssselect2==0.7.0
 dataclasses-json==0.5.14
+ddgs==9.16.0
 dnspython==2.6.1
 docopt==0.6.2
-duckduckgo_search==6.1.5
 email_validator==2.1.1
 exceptiongroup==1.2.1
 fastapi==0.111.0

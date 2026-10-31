@@ -1,0 +1,172 @@
+name: exploratory-pareto-stability
+
+# Offline, read-only execution of the existing exploratory analysis against
+# committed canonical evidence; never runs treatment or evaluator models.
+on:
+  push:
+    branches:
+      - research-paper-eval-2027
+    paths:
+      - ".github/workflows/exploratory-pareto-stability.yml"
+      - "scripts/analyze_main_study_pareto_influence.py"
+      - "scripts/analyze_main_study_task_influence.py"
+      - "scripts/analyze_main_study.py"
+      - "scripts/verify_analysis_provenance.py"
+      - "scripts/verify_main_study_execution.py"
+      - "scripts/verify_main_study_outputs.py"
+      - "outputs/main_study_runs.csv"
+      - "outputs/posthoc_support_runs.csv"
+      - "outputs/main_study_analysis_provenance.json"
+      - "outputs/main_study_inference.json"
+      - "paper/MAIN_STUDY_INFERENCE.md"
+      - "docs/MAIN_STUDY_PARETO_INFLUENCE.md"
+      - "docs/MAIN_STUDY_TASK_INFLUENCE.md"
+      - "scripts/verify_main_study_task_influence_artifact.py"
+      - "scripts/verify_main_study_pareto_artifact.py"
+      - "tests/test_main_study_pareto_artifact_verification.py"
+      - "tests/test_main_study_task_influence_artifact_verification.py"
+      - "tests/test_exploratory_task_influence_workflow.py"
+  pull_request:
+    paths:
+      - ".github/workflows/exploratory-pareto-stability.yml"
+      - "scripts/analyze_main_study_pareto_influence.py"
+      - "scripts/analyze_main_study_task_influence.py"
+      - "scripts/analyze_main_study.py"
+      - "scripts/verify_analysis_provenance.py"
+      - "scripts/verify_main_study_execution.py"
+      - "scripts/verify_main_study_outputs.py"
+      - "outputs/main_study_runs.csv"
+      - "outputs/posthoc_support_runs.csv"
+      - "outputs/main_study_analysis_provenance.json"
+      - "outputs/main_study_inference.json"
+      - "paper/MAIN_STUDY_INFERENCE.md"
+      - "docs/MAIN_STUDY_PARETO_INFLUENCE.md"
+      - "docs/MAIN_STUDY_TASK_INFLUENCE.md"
+      - "scripts/verify_main_study_task_influence_artifact.py"
+      - "scripts/verify_main_study_pareto_artifact.py"
+      - "tests/test_main_study_pareto_artifact_verification.py"
+      - "tests/test_main_study_task_influence_artifact_verification.py"
+      - "tests/test_exploratory_task_influence_workflow.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-exploratory-pareto:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout unchanged canonical source snapshot
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up frozen Python interpreter
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+
+      - name: Restore frozen analysis implementation without altering retained evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          FROZEN_SOURCE_COMMIT="$(python - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+          source = json.loads(Path("outputs/canonical_analysis_source.json").read_text())
+          commit = source.get("analysis_commit")
+          if (
+              source.get("schema_version") != 1
+              or source.get("repository") != "anupamking01/Ai-Researcher-Agent"
+              or not isinstance(commit, str)
+              or re.fullmatch(r"[a-f0-9]{40}", commit) is None
+          ):
+              raise SystemExit("Canonical source selection is missing or invalid")
+          print(commit)
+          PY
+          )"
+          echo "FROZEN_SOURCE_COMMIT=$FROZEN_SOURCE_COMMIT" >> "$GITHUB_ENV"
+          FROZEN_WORKTREE="$RUNNER_TEMP/vera-frozen-analysis"
+          echo "FROZEN_WORKTREE=$FROZEN_WORKTREE" >> "$GITHUB_ENV"
+          # The source-selection commit predates the later execution-bound
+          # receipt: use the exact code snapshot that published that receipt.
+          RECEIPT_IMPLEMENTATION_COMMIT="f333623380526fa05dcb14110e7ec1fb72d2d0e2"
+          echo "RECEIPT_IMPLEMENTATION_COMMIT=$RECEIPT_IMPLEMENTATION_COMMIT" >> "$GITHUB_ENV"
+          git fetch --no-tags --depth=1 origin "$RECEIPT_IMPLEMENTATION_COMMIT"
+          git worktree add --detach "$FROZEN_WORKTREE" "$RECEIPT_IMPLEMENTATION_COMMIT"
+          # Preserve receipt-pinned runner/verifiers. Overlay only retained
+          # input/output bytes and the newer unpinned exploratory modules.
+          for path in \
+            outputs/main_study_runs.csv \
+            outputs/posthoc_support_runs.csv \
+            outputs/main_study_analysis_inputs_manifest.json \
+            outputs/main_study_analysis_provenance.json \
+            outputs/main_study_inference.json \
+            paper/MAIN_STUDY_INFERENCE.md \
+            scripts/analyze_main_study_task_influence.py \
+            scripts/analyze_main_study_pareto_influence.py \
+            scripts/verify_main_study_task_influence_artifact.py \
+            scripts/verify_main_study_pareto_artifact.py
+          do
+            mkdir -p "$FROZEN_WORKTREE/$(dirname "$path")"
+            cp -- "$path" "$FROZEN_WORKTREE/$path"
+          done
+          echo "Canonical receipt will be checked with receipt-era code $RECEIPT_IMPLEMENTATION_COMMIT; original source selection $FROZEN_SOURCE_COMMIT"
+
+      - name: Independently verify canonical inputs and enumerate every omission
+        env:
+          AUDIT_PATH: ${{ runner.temp }}/vera-pareto-stability.json
+          RECEIPT_PATH: ${{ runner.temp }}/vera-pareto-stability-receipt.json
+        run: |
+          set -euo pipefail
+          (cd "$FROZEN_WORKTREE" &&
+            python -m scripts.analyze_main_study_pareto_influence --root "$FROZEN_WORKTREE") > "$AUDIT_PATH"
+          (cd "$FROZEN_WORKTREE" &&
+            python -m scripts.verify_main_study_pareto_artifact \
+              --root "$FROZEN_WORKTREE" \
+              --diagnostic "$AUDIT_PATH" \
+              --checkout-sha "$GITHUB_SHA" \
+              --receipt-implementation-commit "$RECEIPT_IMPLEMENTATION_COMMIT" \
+              --source-selection-commit "$FROZEN_SOURCE_COMMIT" \
+              --run-id "$GITHUB_RUN_ID") > "$RECEIPT_PATH"
+          python -m json.tool "$RECEIPT_PATH" >/dev/null
+          echo "Exploratory Pareto audit: all 10 omitted-task frontiers independently recomputed."
+
+      - name: Verify and retain every exploratory paired-mean task omission
+        env:
+          TASK_AUDIT_PATH: ${{ runner.temp }}/vera-task-influence.json
+          TASK_RECEIPT_PATH: ${{ runner.temp }}/vera-task-influence-receipt.json
+        run: |
+          set -euo pipefail
+          (cd "$FROZEN_WORKTREE" &&
+            python -m scripts.analyze_main_study_task_influence --root "$FROZEN_WORKTREE") > "$TASK_AUDIT_PATH"
+          (cd "$FROZEN_WORKTREE" &&
+            python -m scripts.verify_main_study_task_influence_artifact \
+              --root "$FROZEN_WORKTREE" \
+              --diagnostic "$TASK_AUDIT_PATH" \
+              --checkout-sha "$GITHUB_SHA" \
+              --receipt-implementation-commit "$RECEIPT_IMPLEMENTATION_COMMIT" \
+              --source-selection-commit "$FROZEN_SOURCE_COMMIT" \
+              --run-id "$GITHUB_RUN_ID") > "$TASK_RECEIPT_PATH"
+          python -m json.tool "$TASK_RECEIPT_PATH" >/dev/null
+          echo "Exploratory task-influence: all 30 paired omissions independently checked."
+
+      - name: Retain standalone exploratory audit and byte-identity receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-pareto-stability-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/vera-pareto-stability.json
+            ${{ runner.temp }}/vera-pareto-stability-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Retain independent task-influence diagnostic and verification receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-task-influence-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/vera-task-influence.json
+            ${{ runner.temp }}/vera-task-influence-receipt.json
+          if-no-files-found: error
+          retention-days: 90

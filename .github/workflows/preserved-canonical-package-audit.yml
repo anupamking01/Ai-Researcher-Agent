@@ -1,0 +1,106 @@
+name: preserved-canonical-package-audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research-paper-eval-2027
+    paths:
+      - .github/workflows/preserved-canonical-package-audit.yml
+      - experiments/main_budget_tasks.json
+      - experiments/openai_pricing_2026-09-08.json
+      - paper/ANALYSIS_PLAN.md
+      - outputs/canonical_analysis_source.json
+      - outputs/main_study_analysis_inputs_manifest.json
+      - outputs/main_study_inference.json
+      - outputs/main_study_runs.csv
+      - outputs/posthoc_support_runs.csv
+      - paper/MAIN_STUDY_INFERENCE.md
+      - scripts/audit_historical_artifact_job_logs.py
+      - scripts/analyze_main_study.py
+      - scripts/analyze_main_study_task_influence.py
+      - scripts/build_analysis_provenance.py
+      - scripts/fingerprint_research_artifacts.py
+      - scripts/preflight_recovered_artifact_zip.py
+      - scripts/verify_analysis_provenance.py
+      - scripts/verify_canonical_archive_checkout.py
+      - scripts/verify_main_study_execution.py
+      - scripts/verify_main_study_outputs.py
+      - scripts/verify_preserved_canonical_bundle.py
+      - scripts/verify_preserved_canonical_package.py
+      - scripts/verify_research_artifact_manifest.py
+      - scripts/verify_retained_canonical_download.py
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: preserved-canonical-package-audit-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-outer-package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout research verifier
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Checkout provenance-compatible frozen analysis
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: f333623380526fa05dcb14110e7ec1fb72d2d0e2
+          path: frozen-analysis-checkout
+          persist-credentials: false
+
+      - name: Bind six frozen scientific files to immutable analysis revision
+        run: |
+          set -euo pipefail
+          frozen="${GITHUB_WORKSPACE}/frozen-analysis-checkout"
+          test "$(git -C "$frozen" rev-parse HEAD)" = "f333623380526fa05dcb14110e7ec1fb72d2d0e2"
+          for relative in \
+            outputs/canonical_analysis_source.json \
+            outputs/main_study_analysis_inputs_manifest.json \
+            outputs/main_study_inference.json \
+            outputs/main_study_runs.csv \
+            outputs/posthoc_support_runs.csv \
+            experiments/main_budget_tasks.json \
+            experiments/openai_pricing_2026-09-08.json \
+            paper/ANALYSIS_PLAN.md \
+            paper/MAIN_STUDY_INFERENCE.md; do
+            cmp -- "${GITHUB_WORKSPACE}/${relative}" "$frozen/$relative"
+          done
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+
+      - name: Download intact retained outer Actions ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl --fail --location --silent --show-error --retry 3 --max-time 90 \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/12865837714/zip" \
+            --output "${RUNNER_TEMP}/preserved-canonical-outer.zip"
+
+      - name: Replay complete preserved package before publishing receipt
+        run: |
+          python -m scripts.verify_preserved_canonical_package \
+            "${RUNNER_TEMP}/preserved-canonical-outer.zip" \
+            --root "${GITHUB_WORKSPACE}/frozen-analysis-checkout" \
+            --expected-package-sha256 ea4930f9b897de86785ab12ccf0cab9d3781feb5e1d735f7aafa232c405b65f1 \
+            --receipt-out "${RUNNER_TEMP}/outer-package-reverification.json"
+          cat "${RUNNER_TEMP}/outer-package-reverification.json"
+
+      - name: Preserve replay receipt only (not new historical evidence)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-outer-package-replay-${{ github.run_id }}
+          path: ${{ runner.temp }}/outer-package-reverification.json
+          if-no-files-found: error
+          retention-days: 90
