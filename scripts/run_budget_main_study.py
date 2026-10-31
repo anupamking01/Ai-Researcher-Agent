@@ -6,7 +6,10 @@ run if provider-reported spend from completed treatment runs has already reached
 ``--max-agent-cost-usd``. The default $3.00 treatment cap leaves a separate
 reserve for common post-hoc evaluation under the user's fixed API-credit limit.
 
-Treatment execution is deliberately start-only. If a prior main-study manifest,
+All execution from this updated runner is noncanonical replication, requiring
+an explicit command-line acknowledgment before credentials or agent modules
+are accessed. The output manifest identifies new runs as noncanonical, while
+retaining the legacy study ID for compatibility. If a prior main-study manifest,
 progress record, or treatment trace exists, the runner stops before importing
 model code or replacing artifacts. Recovery of measurement may use the separate
 evaluator-recovery workflow; treatment outputs require explicit adjudication and
@@ -48,10 +51,35 @@ CI_REQUIREMENTS_FILE = REPO_ROOT / "requirements-ci.lock"
 TRACE_ROOT = REPO_ROOT / "outputs" / "experiment_traces"
 VARIANTS = ("D3", "D6", "P6", "P6V")
 VARIANT_SOURCE_BUDGETS = {"D3": 3, "D6": 6, "P6": 6, "P6V": 6}
+NONCANONICAL_REPLICATION_ACK = "NONCANONICAL_REPLICATION"
+ORIGINAL_MAIN_STUDY_ACTIONS_RUN_ID = 34620917346
+ORIGINAL_MAIN_STUDY_RUNNER_COMMIT = "c3c15e46a8eec3a8bbc24c968eedc0548172a897"
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _require_noncanonical_replication_ack(value: str | None) -> None:
+    """Block unacknowledged direct reruns of the already-frozen study."""
+    if value != NONCANONICAL_REPLICATION_ACK:
+        raise SystemExit(
+            "The original budget-main-v1 treatments are frozen. Any new "
+            "execution is a noncanonical replication, never replacement "
+            "evidence. Explicitly pass --noncanonical-replication-ack "
+            "NONCANONICAL_REPLICATION before running the treatment agent."
+        )
+
+
+def _noncanonical_replication_provenance() -> dict:
+    """Label new manifest bytes without changing the legacy study ID."""
+    return {
+        "classification": "noncanonical_replication",
+        "original_frozen_study_id": "budget-main-v1",
+        "original_actions_treatment_run_id": ORIGINAL_MAIN_STUDY_ACTIONS_RUN_ID,
+        "original_runner_commit": ORIGINAL_MAIN_STUDY_RUNNER_COMMIT,
+        "can_replace_original_treatment_evidence": False,
+    }
 
 
 def _check_environment() -> None:
@@ -1031,7 +1059,9 @@ async def _run_main_study() -> None:
     parser.add_argument("--task-file", type=Path, default=DEFAULT_TASK_FILE)
     parser.add_argument("--max-agent-cost-usd", type=float, default=3.00)
     parser.add_argument("--task-id", action="append")
+    parser.add_argument("--noncanonical-replication-ack", default=None)
     args = parser.parse_args()
+    _require_noncanonical_replication_ack(args.noncanonical_replication_ack)
     if not math.isfinite(args.max_agent_cost_usd) or args.max_agent_cost_usd <= 0:
         raise SystemExit("--max-agent-cost-usd must be finite and positive")
 
@@ -1072,6 +1102,7 @@ async def _run_main_study() -> None:
     manifest = {
         "schema_version": 1,
         "study_id": "budget-main-v1",
+        "replication_provenance": _noncanonical_replication_provenance(),
         "task_set_id": task_set_id,
         "task_ids": [task["id"] for task in tasks],
         "task_file": task_snapshot["path"],

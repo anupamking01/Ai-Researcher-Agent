@@ -209,3 +209,31 @@ trace authenticity, third-party clocks, billing, historical custody, or resolve
 fixed-order temporal confounding. Tests use synthetic timing fixtures and
 the existing frozen CSV; **the original historical progress file is still
 unavailable**, and no historical event-latency concordance is claimed.
+
+## Direct-run anti-substitution gate (31 October 2026)
+
+The Actions dispatch acknowledgment alone did not cover someone invoking
+`python scripts/run_budget_main_study.py` directly in a clean checkout.
+The **current** runner now requires
+`--noncanonical-replication-ack NONCANONICAL_REPLICATION` before its API-key
+environment check, task/price loading, state creation, or agent import.
+The updated GitHub Actions workflow passes this argument only after its
+separate unconditional dispatch acknowledgment step has succeeded.
+
+Every new run from this updated entrypoint also writes
+`replication_provenance` into `main_study_manifest.json`, explicitly
+identifying it as `noncanonical_replication`, recording the frozen
+original treatment Actions run ID `34620917346` and original runner commit
+`c3c15e46a8eec3a8bbc24c968eedc0548172a897`, and stating
+`can_replace_original_treatment_evidence: false`. The internal
+`study_id` remains `budget-main-v1` for legacy downstream
+compatibility; **matching IDs do not make a new execution canonical**.
+The distinct artifact prefix and retained manifest must travel with any
+future authorized run to avoid mixing it with the frozen 2026 analysis.
+
+This is a prospective defense-in-depth acknowledgment and labeling
+safeguard, not historical archive authentication, a replication protocol,
+or a mechanism to forbid executions from older commits, hand-written
+scripts, or deliberately modified code. It did not rerun treatments,
+recompute automated metrics, or generate human annotations. The original
+trace/report recovery and independent human validation gates remain open.

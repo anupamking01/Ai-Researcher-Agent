@@ -78,7 +78,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         timeout-minutes: 190
-        run: python scripts/run_budget_main_study.py --max-agent-cost-usd 3.00
+        run: python scripts/run_budget_main_study.py --max-agent-cost-usd 3.00 --noncanonical-replication-ack NONCANONICAL_REPLICATION
 
       - name: Apply common post-hoc support evaluator
         env:

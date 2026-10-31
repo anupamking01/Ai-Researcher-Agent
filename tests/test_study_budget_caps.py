@@ -12,7 +12,9 @@ def test_treatment_runner_rejects_nonfinite_budget_before_environment(
     monkeypatch.setattr(
         run_budget_main_study.sys,
         "argv",
-        ["run_budget_main_study.py", f"--max-agent-cost-usd={raw_cap}"],
+        ["run_budget_main_study.py", "--noncanonical-replication-ack",
+         run_budget_main_study.NONCANONICAL_REPLICATION_ACK,
+         f"--max-agent-cost-usd={raw_cap}"],
     )
     for name in run_budget_main_study.REQUIRED_ENV:
         monkeypatch.delenv(name, raising=False)
