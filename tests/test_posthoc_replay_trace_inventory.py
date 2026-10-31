@@ -109,11 +109,14 @@ def test_overfull_variant_tree_is_bounded_before_sorting(tmp_path):
         )
 
 
-def test_overfull_root_tree_is_bounded_before_sorting(tmp_path):
+def test_overfull_or_unknown_root_entries_fail_closed_before_sorting(tmp_path):
     root = _seed(tmp_path / "traces", variants=("D3",), cells=1)
     (root / "P6").mkdir()
     (root / "extra").mkdir()
-    with pytest.raises(SystemExit, match="more root entries than frozen variants"):
+    # scandir order is filesystem-dependent: an unknown third directory may
+    # fail on its name before the root-count bound is reached. Either outcome
+    # must block a selective replay without sorting the full directory tree.
+    with pytest.raises(SystemExit, match="unselected treatment trace files"):
         evaluator._inventory_evaluator_treatment_trace_tree(
             root, variants=("D3", "P6")
         )
