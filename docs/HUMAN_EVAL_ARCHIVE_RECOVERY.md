@@ -381,3 +381,22 @@ a version-controlled checkout identity, **not** an independently retained
 hash of the recovered 40 traces/reports, proof of archive custody, approval
 to distribute any packet, or evidence of human validation. The separate
 independent automated-handoff and original-evidence gates still apply.
+
+## Fail-closed numeric parsing in packet source evidence
+
+The offline blinded packet builder reads the frozen task manifest and every
+candidate treatment trace through one duplicate-key-rejecting JSON parser.
+This source boundary now also rejects the nonstandard `NaN`/`Infinity`
+constants, ordinary JSON exponents that overflow finite floating-point values
+(e.g. `1e400`), overlong integer/floating-point tokens, and unparseably deep
+JSON objects. The policy applies recursively, including metadata not used for
+blinded report selection. A malformed source must not pass merely because a
+particular field is ignored by the packet builder. Ordinary finite JSON
+numbers and `null` remain valid; duplicate-key checks remain in force.
+
+These checks are **prospective source-input integrity safeguards**. They do not
+establish that the original 40 treatment traces or Markdown reports have been
+recovered, authenticate historical custody, establish source-to-evaluator
+continuity, or authorize human-evaluation distribution. The tests are entirely
+synthetic and do not change the frozen automated confirmatory results, the
+exploratory analyses, the human rubric, or the pending human-validation status.

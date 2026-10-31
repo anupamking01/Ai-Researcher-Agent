@@ -14,6 +14,7 @@ import csv
 import hashlib
 import importlib.metadata
 import json
+import math
 import os
 import platform
 import random
@@ -94,6 +95,8 @@ MARKDOWN_RENDERER_OPTIONS = {"html": True}
 MAX_METADATA_DECODE_LAYERS = 64
 # Bound research evidence capture, including the verifier's packet rereads.
 MAX_PACKET_CAPTURE_BYTES = 64 * 1024 * 1024
+# Reject pathological or nonfinite JSON numbers even in ignored trace metadata.
+MAX_SOURCE_JSON_NUMBER_TOKEN_CHARS = 128
 
 
 def _require_packet_byte_limit(size: int, *, label: str) -> None:
@@ -377,7 +380,7 @@ def validate_annotator_facing_content(rows: list[dict], *, label: str) -> None:
 
 
 def _load_json_object(content: bytes, *, label: str) -> dict:
-    """Decode one UTF-8 JSON object while rejecting ambiguous duplicate keys."""
+    """Decode unambiguous, finite, bounded UTF-8 source JSON at every depth."""
     def unique_object_pairs(pairs):
         value = {}
         for key, child in pairs:
@@ -386,12 +389,32 @@ def _load_json_object(content: bytes, *, label: str) -> dict:
             value[key] = child
         return value
 
+    def reject_constant(token: str):
+        raise ValueError(f"{label} contains nonstandard JSON constant {token!r}")
+
+    def bounded_integer(token: str) -> int:
+        if len(token) > MAX_SOURCE_JSON_NUMBER_TOKEN_CHARS:
+            raise ValueError(f"{label} contains oversized JSON numeric token")
+        return int(token)
+
+    def finite_float(token: str) -> float:
+        if len(token) > MAX_SOURCE_JSON_NUMBER_TOKEN_CHARS:
+            raise ValueError(f"{label} contains oversized JSON numeric token")
+        value = float(token)
+        if not math.isfinite(value):
+            raise ValueError(f"{label} contains nonfinite JSON numeric value")
+        return value
+
     try:
         payload = json.loads(
-            content.decode("utf-8"), object_pairs_hook=unique_object_pairs
+            content.decode("utf-8"),
+            object_pairs_hook=unique_object_pairs,
+            parse_constant=reject_constant,
+            parse_int=bounded_integer,
+            parse_float=finite_float,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"{label} is not valid UTF-8 JSON") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise ValueError(f"{label} is not valid bounded UTF-8 JSON") from exc
     if not isinstance(payload, dict):
         raise ValueError(f"{label} must contain a JSON object")
     return payload
