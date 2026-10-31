@@ -24,19 +24,38 @@ def _fake_iptables(family: str) -> str:
     return (
         "#!/usr/bin/env bash\n"
         + 'printf "' + family + ' %s\\n" "$*" >> "$VERA_FAKE_FIREWALL_LOG"\n'
-        + 'if [[ "$VERA_FAIL_V6_LINK" == "1" && "'
-        + family + '" == "v6" && "$*" == *" -I OUTPUT "* ]]; then exit 42; fi\n'
+        + 'if [[ "$1" == "-w" && "$2" == "-N" ]]; then printf "%s" "$3" > "$VERA_FAKE_CHAIN_FILE"; fi\n'
+        + 'if [[ "$VERA_FAIL_V6_LINK" == "1" && "' + family + '" == "v6" && "$*" == *" -I OUTPUT "* ]]; then exit 42; fi\n'
+        + 'chain=$(cat "$VERA_FAKE_CHAIN_FILE" 2>/dev/null || true)\n'
+        + 'if [[ "$*" == "-w -S $chain" && -n "$chain" ]]; then\n'
+        + '  if [[ "$VERA_FAKE_POLICY" == "' + family + '_query_failure" ]]; then exit 44; fi\n'
+        + '  printf -- "-N %s\\n-A %s -o lo -j RETURN\\n" "$chain" "$chain"\n'
+        + '  if [[ "$VERA_FAKE_POLICY" != "' + family + '_missing_reject" ]]; then printf -- "-A %s -j REJECT\\n" "$chain"; fi\n'
+        + 'elif [[ "$*" == "-w -S OUTPUT" ]]; then\n'
+        + '  printf -- "-P OUTPUT ACCEPT\\n"\n'
+        + '  if [[ "$VERA_FAKE_POLICY" == "' + family + '_shadowed_output" ]]; then printf -- "-A OUTPUT -j ACCEPT\\n"; fi\n'
+        + '  printf -- "-A OUTPUT -j %s\\n" "$chain"\n'
+        + 'fi\n'
         + "exit 0\n"
     )
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux-only firewall wrapper")
 @pytest.mark.parametrize(
-    ("v6_failure", "pytest_exit", "expected_exit"),
-    [(False, 0, 0), (False, 7, 7), (True, 0, 42)],
+    ("v6_failure", "pytest_exit", "policy_failure", "expected_exit"),
+    [
+        (False, 0, "", 0), (False, 7, "", 7), (True, 0, "", 42),
+        (False, 0, "v4_missing_reject", 1),
+        (False, 0, "v6_missing_reject", 1),
+        (False, 0, "v4_shadowed_output", 1),
+        (False, 0, "v6_shadowed_output", 1),
+        (False, 0, "v4_query_failure", 1),
+        (False, 0, "v6_query_failure", 1),
+    ],
 )
 def test_firewall_order_failure_rollback_and_exit_code(
-    tmp_path: Path, v6_failure: bool, pytest_exit: int, expected_exit: int
+    tmp_path: Path, v6_failure: bool, pytest_exit: int,
+    policy_failure: str, expected_exit: int
 ):
     # Fake sudo, iptables and Python prove ordering without root or network.
     fake = tmp_path / "fake-bin"
@@ -61,6 +80,8 @@ def test_firewall_order_failure_rollback_and_exit_code(
         "VERA_FAKE_FIREWALL_LOG": str(log),
         "VERA_FAKE_PYTEST_EXIT": str(pytest_exit),
         "VERA_FAIL_V6_LINK": "1" if v6_failure else "0",
+        "VERA_FAKE_POLICY": policy_failure,
+        "VERA_FAKE_CHAIN_FILE": str(tmp_path / "chain"),
     })
     result = subprocess.run(
         ["bash", str(WRAPPER)], cwd=ROOT, env=env,
@@ -79,10 +100,18 @@ def test_firewall_order_failure_rollback_and_exit_code(
         assert any(row.startswith("v6 -w -F VERA_OFFLINE_") for row in commands)
         assert any(row.startswith("v6 -w -X VERA_OFFLINE_") for row in commands)
         assert not any(row.startswith("v6 -w -D OUTPUT") for row in commands)
+    elif policy_failure:
+        assert not any(row.startswith("pytest ") for row in commands)
+        assert any(" -S " in row for row in commands)
+        assert any(row.startswith("v4 -w -F VERA_OFFLINE_") for row in commands)
+        assert any(row.startswith("v6 -w -X VERA_OFFLINE_") for row in commands)
     else:
         v4_check = index("v4 -w -C OUTPUT -j ")
         v6_check = index("v6 -w -C OUTPUT -j ")
+        v4_policy = index("v4 -w -S VERA_OFFLINE_")
+        v6_policy = index("v6 -w -S VERA_OFFLINE_")
         pytest_index = index("pytest -m pytest -q")
+        assert v4_check < v4_policy < v6_policy < pytest_index
         v6_remove = index("v6 -w -D OUTPUT -j ")
         assert v4_link < v6_link < v4_check < v6_check < pytest_index < v6_remove
         assert pytest_index < v4_remove

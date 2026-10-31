@@ -120,3 +120,17 @@ stop malicious processes with root access from deliberately changing firewall
 rules. It does not independently authenticate historical treatment archives,
 rerun treatment/evaluator calls, change frozen automated analysis, or establish
 pending human-validation results.
+
+
+## Verify firewall rules before offline tests
+
+A successful `iptables -C OUTPUT -j CHAIN` shows only that a jump exists. It
+cannot establish that the chain rejects external traffic or has precedence
+over an earlier OUTPUT ACCEPT. Before pytest starts, the wrapper now inspects
+the ordered IPv4 and IPv6 rules with `iptables -S` and `ip6tables -S`. Each
+chain must consist of the loopback RETURN followed by a blanket REJECT, and its
+jump must be the first OUTPUT rule. Missing REJECT rules, shadowing ACCEPT
+rules, and failed inspection abort before pytest and trigger cleanup. Synthetic
+regressions cover these cases without actual outbound connections or host
+firewall modification. This protects against accidental misconfiguration,
+not malicious privileged rule changes or missing historical source evidence.

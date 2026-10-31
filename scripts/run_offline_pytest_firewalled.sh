@@ -68,5 +68,41 @@ v6_linked=1
 
 sudo -n iptables -w -C OUTPUT -j "$chain"
 sudo -n ip6tables -w -C OUTPUT -j "$chain"
-echo "Offline pytest egress isolation active (IPv4 + IPv6; loopback allowed)."
+
+# Validate the effective ordered firewall policy, not only jump membership.
+# A chain missing its REJECT or an earlier OUTPUT ACCEPT bypasses isolation.
+verify_family_policy() {
+  local executable="$1"
+  local actual_chain expected_chain output_rules first_output_rule=""
+  if ! actual_chain="$(sudo -n "$executable" -w -S "$chain")"; then
+    echo "Cannot inspect $executable offline chain" >&2
+    return 1
+  fi
+  # Some iptables versions include the chain declaration in -S CHAIN.
+  if [[ "$actual_chain" == "-N $chain"* ]]; then
+    actual_chain="$(printf '%s\n' "$actual_chain" | tail -n +2)"
+  fi
+  expected_chain="$(printf -- '-A %s -o lo -j RETURN\n-A %s -j REJECT' "$chain" "$chain")"
+  if [[ "$actual_chain" != "$expected_chain" ]]; then
+    echo "Unsafe $executable offline chain policy" >&2
+    return 1
+  fi
+  if ! output_rules="$(sudo -n "$executable" -w -S OUTPUT)"; then
+    echo "Cannot inspect $executable OUTPUT precedence" >&2
+    return 1
+  fi
+  while IFS= read -r rule; do
+    if [[ "$rule" == "-A OUTPUT "* ]]; then
+      first_output_rule="$rule"
+      break
+    fi
+  done <<< "$output_rules"
+  if [[ "$first_output_rule" != "-A OUTPUT -j $chain" ]]; then
+    echo "Unsafe $executable OUTPUT rule precedence" >&2
+    return 1
+  fi
+}
+verify_family_policy iptables
+verify_family_policy ip6tables
+echo "Offline pytest egress isolation active (IPv4 + IPv6; loopback allowed; policy inspected)."
 python -m pytest -q "$@"
