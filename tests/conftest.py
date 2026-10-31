@@ -18,6 +18,10 @@ _ORIGINAL_CONNECT_EX = socket.socket.connect_ex
 _ORIGINAL_SENDTO = socket.socket.sendto
 _ORIGINAL_SENDMSG = getattr(socket.socket, "sendmsg", None)
 _ORIGINAL_GETADDRINFO = socket.getaddrinfo
+_ORIGINAL_GETHOSTBYNAME = socket.gethostbyname
+_ORIGINAL_GETHOSTBYNAME_EX = socket.gethostbyname_ex
+_ORIGINAL_GETHOSTBYADDR = socket.gethostbyaddr
+_ORIGINAL_GETNAMEINFO = socket.getnameinfo
 _PATCHER: MonkeyPatch | None = None
 
 
@@ -72,14 +76,42 @@ def _guarded_sendmsg(sock: socket.socket, *args, **kwargs):
     return _ORIGINAL_SENDMSG(sock, *args, **kwargs)
 
 
-def _guarded_getaddrinfo(host, *args, **kwargs):
-    # None is the standard local/wildcard name used when creating listeners.
-    if host is not None and not _is_loopback_host(host):
+def _require_offline_resolution_host(host: object) -> None:
+    if not _is_loopback_host(host):
         raise RuntimeError(
             "offline tests prohibit external DNS/network resolution: "
             f"{host!r}"
         )
+
+
+def _guarded_getaddrinfo(host, *args, **kwargs):
+    # None is the standard local/wildcard name used when creating listeners.
+    if host is not None:
+        _require_offline_resolution_host(host)
     return _ORIGINAL_GETADDRINFO(host, *args, **kwargs)
+
+
+def _guarded_gethostbyname(host):
+    _require_offline_resolution_host(host)
+    return _ORIGINAL_GETHOSTBYNAME(host)
+
+
+def _guarded_gethostbyname_ex(host):
+    _require_offline_resolution_host(host)
+    return _ORIGINAL_GETHOSTBYNAME_EX(host)
+
+
+def _guarded_gethostbyaddr(host):
+    _require_offline_resolution_host(host)
+    return _ORIGINAL_GETHOSTBYADDR(host)
+
+
+def _guarded_getnameinfo(sockaddr, flags):
+    # Even numeric-only lookups of external addresses are rejected, so callers
+    # cannot silently switch to reverse DNS by changing getnameinfo flags.
+    host = sockaddr[0] if isinstance(sockaddr, tuple) and sockaddr else sockaddr
+    _require_offline_resolution_host(host)
+    return _ORIGINAL_GETNAMEINFO(sockaddr, flags)
 
 
 def pytest_sessionstart(session):
@@ -92,6 +124,10 @@ def pytest_sessionstart(session):
     if _ORIGINAL_SENDMSG is not None:
         _PATCHER.setattr(socket.socket, "sendmsg", _guarded_sendmsg)
     _PATCHER.setattr(socket, "getaddrinfo", _guarded_getaddrinfo)
+    _PATCHER.setattr(socket, "gethostbyname", _guarded_gethostbyname)
+    _PATCHER.setattr(socket, "gethostbyname_ex", _guarded_gethostbyname_ex)
+    _PATCHER.setattr(socket, "gethostbyaddr", _guarded_gethostbyaddr)
+    _PATCHER.setattr(socket, "getnameinfo", _guarded_getnameinfo)
 
 
 def pytest_sessionfinish(session, exitstatus):

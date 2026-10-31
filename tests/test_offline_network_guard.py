@@ -52,3 +52,26 @@ def test_unix_domain_socketpair_remains_available():
     with left, right:
         left.sendall(b"local")
         assert right.recv(5) == b"local"
+
+
+@pytest.mark.parametrize(
+    "resolver_name",
+    ["gethostbyname", "gethostbyname_ex", "gethostbyaddr", "getfqdn"],
+)
+def test_other_standard_dns_paths_reject_external_host_before_lookup(resolver_name):
+    with pytest.raises(RuntimeError, match="offline tests prohibit external DNS"):
+        getattr(socket, resolver_name)("example.invalid")
+
+
+@pytest.mark.parametrize("host", ["203.0.113.24", "example.invalid"])
+def test_reverse_nameinfo_rejects_external_address_even_if_numeric(host):
+    flags = socket.NI_NUMERICHOST | socket.NI_NUMERICSERV
+    with pytest.raises(RuntimeError, match="offline tests prohibit external DNS"):
+        socket.getnameinfo((host, 443), flags)
+
+
+def test_standard_local_numeric_name_lookups_remain_available():
+    assert socket.gethostbyname("127.0.0.1") == "127.0.0.1"
+    assert "127.0.0.1" in socket.gethostbyname_ex("127.0.0.1")[2]
+    flags = socket.NI_NUMERICHOST | socket.NI_NUMERICSERV
+    assert socket.getnameinfo(("127.0.0.1", 443), flags) == ("127.0.0.1", "443")
