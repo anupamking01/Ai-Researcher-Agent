@@ -248,9 +248,15 @@ def audit_progress(payload: dict, *, sha256: str, byte_size: int,
                    published_treatment_csv: Path | None = None,
                     require_historical_actions_step_window: bool = False) -> dict:
     """Validate a *recorded* task-major, fixed-arm schedule without outcomes."""
-    if type(payload) is not dict or set(payload) != ORIGINAL_COMPLETED_PROGRESS_FIELDS:
+    if type(payload) is not dict:
+        raise ChronologyError("progress must be an original completed-run JSON object")
+    observed_fields = set(payload)
+    if observed_fields != ORIGINAL_COMPLETED_PROGRESS_FIELDS:
+        missing = sorted(ORIGINAL_COMPLETED_PROGRESS_FIELDS - observed_fields)
+        unexpected = sorted(map(str, observed_fields - ORIGINAL_COMPLETED_PROGRESS_FIELDS))
         raise ChronologyError(
-            "progress fields differ from original completed-run writer schema"
+            "progress fields differ from original completed-run writer schema: "
+            f"missing={missing}, unexpected={unexpected}"
         )
     if expected_sha256 is not None:
         if re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
