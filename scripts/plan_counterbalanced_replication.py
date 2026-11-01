@@ -146,7 +146,9 @@ def build_plan(source: bytes) -> dict:
         raise DesignError("prospective design requires exactly 10 new tasks")
 
     task_ids = []
-    questions = set()
+    # Each row must be an independent question, not just a distinct task ID.
+    # Reuse the historical-leakage normalization for within-set uniqueness.
+    question_fingerprints = set()
     for index, task in enumerate(tasks, start=1):
         if type(task) is not dict or set(task) != {"id", "category", "question"}:
             raise DesignError(f"task {index} must contain only id/category/question")
@@ -162,14 +164,17 @@ def build_plan(source: bytes) -> dict:
             raise DesignError(f"task {index} has no category")
         if type(question) is not str or not question.strip():
             raise DesignError(f"task {index} has no question")
-        if _normalized_question_sha256(question) in ORIGINAL_2026_QUESTION_SHA256:
+        question_fingerprint = _normalized_question_sha256(question)
+        if question_fingerprint in ORIGINAL_2026_QUESTION_SHA256:
             raise DesignError(
                 "prospective task repeats a frozen 2026 main-study question"
             )
-        if identifier in task_ids or question.strip() in questions:
-            raise DesignError("tasks have duplicate identifiers or questions")
+        if identifier in task_ids or question_fingerprint in question_fingerprints:
+            raise DesignError(
+                "tasks have duplicate identifiers or normalized-equivalent questions"
+            )
         task_ids.append(identifier)
-        questions.add(question.strip())
+        question_fingerprints.add(question_fingerprint)
 
     source_sha256 = hashlib.sha256(source).hexdigest()
     # Assignment must not be tunable by reformatting semantically identical

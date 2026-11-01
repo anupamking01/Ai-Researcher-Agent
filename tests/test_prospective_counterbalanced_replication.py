@@ -77,6 +77,27 @@ def test_whitespace_case_and_nfkc_variants_of_original_question_are_blocked(rewr
         plan.build_plan(_raw(candidate))
 
 
+@pytest.mark.parametrize("rewrite", [
+    # Distinct IDs and byte strings must not masquerade as ten independent tasks.
+    lambda text: " \t\n ".join(text.upper().split()),
+    lambda text: text.replace("New", "Ｎｅｗ", 1),
+])
+def test_within_new_manifest_normalized_duplicate_question_is_rejected(rewrite):
+    candidate = _payload()
+    candidate["tasks"][1]["question"] = rewrite(candidate["tasks"][0]["question"])
+    assert candidate["tasks"][1]["question"] != candidate["tasks"][0]["question"]
+    with pytest.raises(plan.DesignError, match="normalized-equivalent questions"):
+        plan.build_plan(_raw(candidate))
+
+
+def test_within_new_manifest_unicode_casefold_equivalence_is_rejected():
+    candidate = _payload()
+    candidate["tasks"][0]["question"] = "Is the Straße closed?"
+    candidate["tasks"][1]["question"] = "IS THE STRASSE CLOSED?"
+    with pytest.raises(plan.DesignError, match="normalized-equivalent questions"):
+        plan.build_plan(_raw(candidate))
+
+
 def test_reusing_original_task_id_with_new_question_is_rejected():
     candidate = _payload()
     candidate["tasks"][0]["id"] = "main-01"

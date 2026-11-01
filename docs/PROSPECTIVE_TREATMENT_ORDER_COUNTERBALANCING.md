@@ -55,6 +55,30 @@ This balances *position* and *pairwise ordering*, **not** total tokens, latency,
 
 The prospectively selected task manifest must not quietly recycle previously evaluated questions under fresh IDs: this would invalidate an assertion that the new ten-task replication is independent of the historical main study. The planner now compares SHA-256 of each question after Unicode NFKC normalization, casefolding, and collapsing whitespace against ten source-anchored frozen original-question fingerprints. It also reserves the ten original task IDs. This rejects **normalized exact reuse** only; it is not a semantic similarity filter and does not establish novelty or task-selection blinding. A test checks that the ten stored fingerprints correspond to the full, byte-pinned historical task source; unexpected changes fail closed in CI. The guard performs no treatment, evaluator, or human-annotation execution.
 
+## Within-manifest task uniqueness (prospective only)
+
+A ten-row schedule does not yield ten independent research questions if two task
+IDs contain the same question written with different capitalization, spacing,
+or Unicode compatibility characters. The initial planner rejected only
+`question.strip()`-identical strings, so the same question could enter twice
+under distinct task IDs and inflate the apparent number of independent task
+units in a future paired analysis.
+
+The planner now checks **within the new manifest** for collisions of
+NFKC/whitespace/casefold-normalized question fingerprints, using the same
+normalization as the historical-task leakage guard. It fails closed before
+assigning any treatments; the independent verifier also rejects an invalid
+manifest rather than accepting a self-consistent schedule. Offline synthetic
+tests cover case, whitespace, Unicode-width, and casefold-equivalent duplicates.
+Task IDs must separately remain unique.
+
+This is a **normalized-exact duplication check**, not a semantic-overlap test:
+paraphrases, closely related tasks, and shared source dependencies can still
+reduce effective task independence. An independent coordinator must review and
+document those risks *before* freezing any future manifest. No historical
+tasks, automated measurements, confirmatory results, exploratory findings, or
+human-evaluation outcomes are changed by this prospective-only guard.
+
 ## Research claim separation
 
 - **Original pilot:** diagnostic operational evidence only.

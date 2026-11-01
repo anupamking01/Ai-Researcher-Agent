@@ -89,6 +89,14 @@ def test_balanced_schedule_swap_with_recomputed_internal_hash_is_rejected():
         verify.verify_plan(source, json.dumps(forged).encode())
 
 
+def test_verifier_rejects_prospective_pseudoreplication_before_handoff():
+    original = manifest_bytes()
+    changed = json.loads(original)
+    changed["tasks"][1]["question"] = changed["tasks"][0]["question"].upper()
+    with pytest.raises(design.DesignError, match="normalized-equivalent questions"):
+        verify.verify_plan(json.dumps(changed).encode(), plan_bytes(original))
+
+
 def test_new_manifest_revision_does_not_verify_against_old_receipt():
     original = manifest_bytes()
     revised = json.loads(original)
