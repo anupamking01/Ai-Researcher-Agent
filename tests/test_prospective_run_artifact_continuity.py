@@ -36,6 +36,10 @@ def _fixture(tmp_path):
             for i in range(10)
         ],
     })
+    question_hashes = {
+        task["id"]: _digest(task["question"].encode("utf-8"))
+        for task in json.loads(source)["tasks"]
+    }
     plan = (json.dumps(design.build_plan(source), sort_keys=True, indent=2)
             + "\n").encode()
     start = datetime(2027, 4, 1, 10, 0, tzinfo=timezone.utc)
@@ -76,6 +80,7 @@ def _fixture(tmp_path):
             "started_at_utc": event["started_at_utc"],
             "finished_at_utc": event["finished_at_utc"],
             "report_sha256": _digest(report),
+            "task_question_sha256": question_hashes[event["task_id"]],
             "synthetic_marker": "not a real experiment",
         })
         trace_path = f"traces/{run_id}.json"
@@ -121,6 +126,7 @@ def test_complete_synthetic_matrix_binds_all_traces_reports_and_events(tmp_path)
     assert result["verified_reports"] == 40
     assert result["all_planned_cells_completed"] is True
     assert result["artifact_bytes_equal_supplied_fingerprints"] is True
+    assert result["trace_question_fingerprints_match_frozen_manifest"] is True
     assert result["evidence_index_external_pin_matched"] is True
     assert result["recorded_execution_independently_authenticated"] is False
     assert result["scientific_outcomes_validated"] is False
@@ -374,3 +380,34 @@ def test_cli_is_read_only_and_prints_no_artifact_content(tmp_path, monkeypatch, 
     assert receipt["verified_attempted_traces"] == 40
     assert "cells" not in receipt and "synthetic_marker" not in str(receipt)
     assert all(path.exists() for path in paths)
+
+
+@pytest.mark.parametrize("corruption", [
+    "missing", "null", "boolean", "other_task", "wrong_hash",
+])
+def test_trace_question_binding_rejects_rehashed_wrong_source_claim(
+    tmp_path, corruption
+):
+    # The inventory can be rehashed around a changed trace, yet it must not
+    # silently certify a trace claiming a different question for the same ID.
+    fixture = _fixture(tmp_path)
+    source, _, _, index, root = fixture
+    claim = index["cells"][0]["trace"]
+    path = root / claim["path"]
+    trace = json.loads(path.read_bytes())
+    if corruption == "missing":
+        trace.pop("task_question_sha256")
+    elif corruption == "null":
+        trace["task_question_sha256"] = None
+    elif corruption == "boolean":
+        trace["task_question_sha256"] = True
+    elif corruption == "other_task":
+        other_question = json.loads(source)["tasks"][1]["question"]
+        trace["task_question_sha256"] = _digest(other_question.encode("utf-8"))
+    else:
+        trace["task_question_sha256"] = "0" * 64
+    changed = _bytes(trace)
+    path.write_bytes(changed)
+    index["cells"][0]["trace"] = _file_claim(claim["path"], changed)
+    with pytest.raises(design.DesignError, match="question fingerprint differs"):
+        _audit(fixture)

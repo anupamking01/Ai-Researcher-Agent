@@ -140,6 +140,13 @@ def audit_run_artifacts(
     if (type(evidence_index) is not bytes
             or not 0 < len(evidence_index) <= MAX_INDEX_BYTES):
         raise design.DesignError("evidence index bytes outside supported range")
+    # Reconstruct task-question fingerprints only after the strict prospective
+    # manifest/plan/chronology gate has accepted the frozen input.
+    # This checks trace-to-task metadata agreement, not actual prompt delivery.
+    frozen_questions = {
+        task["id"]: hashlib.sha256(task["question"].encode("utf-8")).hexdigest()
+        for task in _json_bytes(task_manifest, "verified task manifest")["tasks"]
+    }
     index_sha = hashlib.sha256(evidence_index).hexdigest()
     index_pin_matched = chronology._check_pin(
         expected_evidence_index_sha256,
@@ -202,6 +209,14 @@ def audit_run_artifacts(
                 raise design.DesignError(
                     f"trace {number} {field} does not bind to recorded event"
                 )
+        # A run with the right ID can still claim the wrong question.
+        # The exact UTF-8 question bytes (not normalized text) must agree
+        # with the frozen manifest. This is self-reported provenance only.
+        if (type(trace.get("task_question_sha256")) is not str
+                or trace["task_question_sha256"] != frozen_questions[event["task_id"]]):
+            raise design.DesignError(
+                f"trace {number} question fingerprint differs from frozen task manifest"
+            )
         # Require each retained trace to corroborate the logged UTC interval.
         # Identical self-reported timestamps are not external clock evidence.
         for field in ("started_at_utc", "finished_at_utc"):
@@ -253,6 +268,7 @@ def audit_run_artifacts(
         "recorded_status_counts": recorded["recorded_status_counts"],
         "all_planned_cells_completed": recorded["all_recorded_cells_completed"],
         "artifact_bytes_equal_supplied_fingerprints": True,
+        "trace_question_fingerprints_match_frozen_manifest": True,
         "recorded_execution_independently_authenticated": False,
         "model_or_retrieval_calls_verified": False,
         "scientific_outcomes_validated": False,
