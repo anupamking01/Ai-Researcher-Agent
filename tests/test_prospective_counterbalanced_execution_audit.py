@@ -102,7 +102,7 @@ def test_failed_and_incomplete_attempts_retained_without_positive_outcome_claim(
 
 
 @pytest.mark.parametrize("mutate,pattern", [
-    (lambda l: l["events"][0].update(variant="P6V"), "frozen task-major"),
+    (lambda l: l["events"][0].update(variant="NOT_A_PLANNED_ARM"), "frozen task-major"),
     (lambda l: l["events"][0].update(task_id="unseen-08"), "frozen task-major"),
     (lambda l: l["events"].__setitem__(slice(0, 2), list(reversed(l["events"][:2]))), "frozen task-major"),
     (lambda l: l["events"].pop(), "all 40 planned"),
