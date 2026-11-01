@@ -6,7 +6,6 @@ This is a prospective design aid, not evidence of random historical assignment.
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 import hashlib
 import json
 import math
@@ -141,6 +140,12 @@ def build_plan(source: bytes) -> dict:
         questions.add(question.strip())
 
     source_sha256 = hashlib.sha256(source).hexdigest()
+    # Assignment must not be tunable by reformatting semantically identical
+    # JSON: distinguish exact raw custody from canonical design input.
+    semantic_manifest_sha256 = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"),
+                   ensure_ascii=True, allow_nan=False).encode("utf-8")
+    ).hexdigest()
     # Even-order Williams Latin square. Each treatment occurs once at each
     # position across four rows, and each ordered pair is balanced 2:2.
     base = (0, 1, 3, 2)
@@ -156,7 +161,7 @@ def build_plan(source: bytes) -> dict:
     slot_order = sorted(
         range(TASK_COUNT),
         key=lambda index: hashlib.sha256(
-            f"{DESIGN_VERSION}\n{source_sha256}\nslot:{index}".encode("ascii")
+            f"{DESIGN_VERSION}\n{semantic_manifest_sha256}\nslot:{index}".encode("ascii")
         ).digest(),
     )
     schedule = [
@@ -188,6 +193,7 @@ def build_plan(source: bytes) -> dict:
         "classification": "prospective_design_only_no_executions",
         "design_version": DESIGN_VERSION,
         "source_manifest_sha256": source_sha256,
+        "semantic_task_manifest_sha256": semantic_manifest_sha256,
         "task_set_id": task_set_id,
         "historical_2026_study_replaced": False,
         "task_count": TASK_COUNT,
