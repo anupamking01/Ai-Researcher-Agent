@@ -330,3 +330,38 @@ No score is regenerated or changed to pass the guard. All regression tests
 are synthetic/offline; frozen automated confirmatory conclusions, diagnostic
 pilot, exploratory analyses, and pending genuine human validation remain
 separate.
+
+## Noncanonical replay cannot overwrite unclassified aggregate evidence
+
+The direct replay writes `outputs/posthoc_support_summary.json` and
+`outputs/posthoc_support_runs.csv`, names also used by the historical common
+evaluator. Previously, a successful noncanonical replay could replace an
+existing frozen historical summary and run-level CSV even though the replay
+acknowledgment explicitly forbids replacing canonical research evidence.
+
+Before preparing the treatment matrix or making any model call, direct replay
+now inventories these two destinations. An absent pair is allowed. If either
+file exists, **both** must exist as regular non-symlink files; the existing
+summary must identify the frozen study and carry the explicit noncanonical
+replay provenance contract (including `can_replace_original_evaluator_evidence:
+false`), and its recorded SHA-256 must bind the exact retained CSV bytes.
+Frozen or legacy/unclassifiable results, mixed generations, and partial
+output pairs are **preserved and rejected**, not silently rewritten. The
+preflight captures byte-exact summary and CSV hashes and checks the pair
+again immediately before aggregate publication. This also prevents a new
+aggregate introduced while other cells are evaluated from being replaced.
+
+An internally consistent previously generated **noncanonical** pair may be
+refreshed when replay completes. Interrupted two-file publication is not an
+atomic directory transaction; a partial replacement remains detectable and
+must be adjudicated manually before retry. File modifications in the narrow
+interval after the final check are not ruled out; these controls are not an
+independent archive provenance attestation or a mechanism for reconstructing
+the unavailable historical treatment artifacts.
+
+Synthetic offline regressions exercise prior canonical-style outputs,
+orphaned files, mismatched CSV digests, false provenance flags, symlinks,
+mid-replay substitutions, and permitted noncanonical refresh. No historical
+treatment or evaluator calls, human annotations, or frozen confirmatory
+outcomes are regenerated or altered. Pilot, confirmatory, exploratory, and
+pending blinded human-validation claims remain separate.
