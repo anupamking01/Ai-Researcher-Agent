@@ -62,6 +62,16 @@ HISTORICAL_UPLOAD_PINS = {
     "evaluator_recovery": historical_logs.RECOVERED,
 }
 
+# Published provider-observed metadata retained in research-evidence/
+# canonical-analysis-36070798723.metadata.json, distinct from the upload-log
+# pins for original treatments. This is not an independently supplied custody
+# fingerprint and cannot authenticate original treatment/report evidence.
+CANONICAL_ARCHIVE_PIN = {
+    "artifact_id": 10837878458,
+    "size_bytes": 10270,
+    "zip_sha256": "226f009ba6b158b77fc98f4e56ec96e1943d1749bc818b0876e90f76077de4b5",
+}
+
 
 class ArtifactInventoryError(ValueError):
     """A source or listing could not support an affirmative inventory claim."""
@@ -336,6 +346,23 @@ def audit_historical_artifact_inventory(
                 raise ArtifactInventoryError(
                     f"{role} named ZIP differs from contemporaneous GitHub upload log"
                 )
+        if matching and role == "canonical_analysis":
+            item = matching[0]
+            # Same-name, same-run metadata is not sufficient for the retained
+            # canonical ZIP: reconcile with the earlier published provider-
+            # observed artifact identity, byte count, and available digest.
+            if (
+                item["id"] != CANONICAL_ARCHIVE_PIN["artifact_id"]
+                or item["size_in_bytes"] != CANONICAL_ARCHIVE_PIN["size_bytes"]
+                or (
+                    item["digest"] is not None
+                    and item["digest"] != f"sha256:{CANONICAL_ARCHIVE_PIN['zip_sha256']}"
+                )
+            ):
+                raise ArtifactInventoryError(
+                    "canonical_analysis named ZIP differs from retained provider-observed "
+                    "canonical archive metadata"
+                )
         eligible = [
             item for item in matching
             if item["expired"] is False
@@ -364,6 +391,14 @@ def audit_historical_artifact_inventory(
                 if upload_pin is not None and matching
                 else "named_zip_not_listed" if upload_pin is not None
                 else "not_applicable_to_canonical_analysis"
+            ),
+            "retained_canonical_archive_metadata_concordance": (
+                "id_size_and_api_digest_match_retained_provider_metadata"
+                if role == "canonical_analysis" and matching and matching[0]["digest"] is not None
+                else "id_size_match_retained_provider_metadata_api_digest_unavailable"
+                if role == "canonical_analysis" and matching
+                else "named_zip_not_listed" if role == "canonical_analysis"
+                else "not_applicable"
             ),
             "workflow_reconciliation": "two_matching_execution_snapshots",
             "expected_artifact": (
@@ -419,8 +454,10 @@ def audit_historical_artifact_inventory(
             "present) is metadata, not an independent archive pin. No listing "
             "proves a successful ZIP download or historical custody. When listed, "
             "the named treatment/recovery ZIP must match GitHub upload-log ID, "
-            "size and any present GitHub API digest; that service metadata is "
-            "not independent historical custody. The original "
+            "size and any present GitHub API digest; the named canonical ZIP "
+            "must match its retained provider-observed ID, size, and any "
+            "present API digest. Neither metadata source establishes "
+            "independent historical custody. The original "
             "trace/report and blinded human-evaluation gates remain mandatory."
         ),
     }

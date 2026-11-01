@@ -38,6 +38,12 @@ def _artifact(run_id, name, *, expired=False, ident=None):
          if item["run_id"] == run_id and item["artifact_name"] == name),
         None,
     )
+    if (
+        pin is None
+        and run_id == audit.HISTORICAL_RUNS[2][1]
+        and name == audit.HISTORICAL_RUNS[2][5]
+    ):
+        pin = audit.CANONICAL_ARCHIVE_PIN
     if ident is None:
         ident = pin["artifact_id"] if pin else 1001
     head_sha = next(
@@ -492,7 +498,7 @@ def test_reconciliation_rejects_same_id_with_changed_source_metadata(field, new_
 
 def test_reconciliation_ignores_only_volatile_download_count_changes():
     _, run_id, _, _, _, expected = audit.HISTORICAL_RUNS[2]
-    first = _artifact(run_id, expected, ident=8125)
+    first = _artifact(run_id, expected)
     first["download_count"] = 1
     second = copy.deepcopy(first)
     second["download_count"] = 99
@@ -500,7 +506,7 @@ def test_reconciliation_ignores_only_volatile_download_count_changes():
     result = audit.audit_historical_artifact_inventory(fetch_json=fetch)
     receipt = result["historical_runs"]["canonical_analysis"]
     assert receipt["listing_reconciliation"] == "two_matching_full_passes"
-    assert receipt["expected_artifact"]["id"] == 8125
+    assert receipt["expected_artifact"]["id"] == audit.CANONICAL_ARCHIVE_PIN["artifact_id"]
     assert len(calls) == 2
 
 
@@ -510,7 +516,7 @@ def test_reconciliation_accepts_same_ids_reordered_across_pages():
         _artifact(run_id, f"other-{i}", ident=9000 + i)
         for i in range(100)
     ]
-    tail = _artifact(run_id, expected, ident=9999)
+    tail = _artifact(run_id, expected)
     page_prefix = (
         f"/repos/{audit.REPOSITORY}/actions/runs/{run_id}"
         "/artifacts?per_page=100&page="
@@ -532,7 +538,7 @@ def test_reconciliation_accepts_same_ids_reordered_across_pages():
     receipt = audit.audit_historical_artifact_inventory(fetch_json=fetch)[
         "historical_runs"
     ]["canonical_analysis"]
-    assert receipt["expected_artifact"]["id"] == 9999
+    assert receipt["expected_artifact"]["id"] == audit.CANONICAL_ARCHIVE_PIN["artifact_id"]
     assert receipt["listing_reconciliation"] == "two_matching_full_passes"
     assert page_calls == {1: 2, 2: 2}
 
@@ -636,3 +642,59 @@ def test_missing_legacy_api_digest_retains_explicit_partial_concordance():
     assert receipt["historical_github_upload_log_concordance"] == (
         "id_size_match_logged_upload_api_digest_unavailable"
     )
+
+
+@pytest.mark.parametrize("mutation", ("artifact_id", "size_in_bytes", "digest"))
+def test_canonical_candidate_must_match_retained_provider_metadata(mutation):
+    """A named canonical ZIP cannot be substituted within its historical run."""
+    _, run_id, _, _, _, expected = audit.HISTORICAL_RUNS[2]
+    candidate = _artifact(run_id, expected)
+    if mutation == "artifact_id":
+        candidate["id"] += 1
+        candidate["archive_download_url"] = (
+            f"https://api.github.com/repos/{audit.REPOSITORY}"
+            f"/actions/artifacts/{candidate['id']}/zip"
+        )
+    elif mutation == "size_in_bytes":
+        candidate["size_in_bytes"] += 1
+    else:
+        candidate["digest"] = "sha256:" + "f" * 64
+    with pytest.raises(audit.ArtifactInventoryError, match="retained provider-observed"):
+        audit.audit_historical_artifact_inventory(
+            fetch_json=_client(_responses({run_id: [candidate]}))
+        )
+
+
+def test_canonical_candidate_reports_provider_metadata_concordance_only():
+    _, run_id, _, _, _, expected = audit.HISTORICAL_RUNS[2]
+    result = audit.audit_historical_artifact_inventory(
+        fetch_json=_client(_responses({run_id: [_artifact(run_id, expected)]}))
+    )
+    canonical = result["historical_runs"]["canonical_analysis"]
+    assert canonical["retained_canonical_archive_metadata_concordance"] == (
+        "id_size_and_api_digest_match_retained_provider_metadata"
+    )
+    assert result["historical_evidence_authenticated"] is False
+    assert result["human_evaluation_ready"] is False
+
+
+def test_canonical_missing_api_digest_is_explicitly_partial_concordance():
+    _, run_id, _, _, _, expected = audit.HISTORICAL_RUNS[2]
+    candidate = _artifact(run_id, expected)
+    candidate["digest"] = None
+    result = audit.audit_historical_artifact_inventory(
+        fetch_json=_client(_responses({run_id: [candidate]}))
+    )
+    assert result["historical_runs"]["canonical_analysis"][
+        "retained_canonical_archive_metadata_concordance"
+    ] == "id_size_match_retained_provider_metadata_api_digest_unavailable"
+
+
+def test_expired_canonical_substitution_is_rejected_too():
+    _, run_id, _, _, _, expected = audit.HISTORICAL_RUNS[2]
+    candidate = _artifact(run_id, expected, expired=True)
+    candidate["size_in_bytes"] += 1
+    with pytest.raises(audit.ArtifactInventoryError, match="retained provider-observed"):
+        audit.audit_historical_artifact_inventory(
+            fetch_json=_client(_responses({run_id: [candidate]}))
+        )

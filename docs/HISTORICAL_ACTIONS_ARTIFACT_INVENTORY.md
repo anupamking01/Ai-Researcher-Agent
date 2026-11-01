@@ -934,3 +934,30 @@ deliberate copying/mislabeling. An explicit replay is not preregistration, does
 not authenticate missing original archives, and cannot establish human-evaluation
 readiness. The original recovery artifact is still absent from GitHub Actions.
 No treatment, evaluator, or human annotation was rerun for this change.
+
+
+## Canonical retained-provider metadata concordance
+
+In addition to the contemporaneous treatment/recovery upload-log checks, the
+**canonical-analysis** named artifact must now agree with the previously
+published GitHub-provider metadata preserved in
+`research-evidence/canonical-analysis-36070798723.metadata.json`. The
+pinned canonical candidate is artifact ID `10837878458`, ZIP size `10270`
+bytes, and provider-observed ZIP SHA-256
+`226f009ba6b158b77fc98f4e56ec96e1943d1749bc818b0876e90f76077de4b5`.
+A mismatched ID, size, or supplied GitHub API digest fails the read-only
+inventory even when the artifact's name, workflow, and expiration look valid.
+The check applies to listed expired artifacts too.
+
+When the live API omits its digest, the receipt reports only ID/size
+concordance and explicitly marks API digest unavailable; it never invents a
+digest match. A missing named artifact is recorded as not listed. The new
+`retained_canonical_archive_metadata_concordance` receipt field distinguishes
+these states and says `not_applicable` for the original treatment/recovery
+runs, whose distinct upload-log checks remain in force.
+
+This is cross-consistency with a *previously retained provider-observed*
+metadata record, not an independently signed archive pin and **not**
+authentication of any of the missing original treatment traces, reports, or
+retrieval evidence. It does not download or re-evaluate data, change frozen
+automated results, or establish blinded-human-evaluation readiness.
