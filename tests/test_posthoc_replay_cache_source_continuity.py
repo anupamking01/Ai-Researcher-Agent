@@ -3,6 +3,7 @@
 The preserved historical evaluator measurements are never opened or rerun.
 """
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,7 @@ import pytest
 from scripts import evaluate_posthoc_support as evaluator
 
 
-def _cache(tmp_path, name="main-01.json", content=b'{"synthetic": true}\\n'):
+def _cache(tmp_path, name="main-01.json", content=b'{"synthetic": true}\n'):
     root = tmp_path / "posthoc_evaluations"
     path = root / "D3" / name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -25,7 +26,8 @@ def _guard(root, sources):
 
 
 def test_unmodified_cached_measurement_has_exact_custody(tmp_path):
-    root, _path, snapshot = _cache(tmp_path)
+    root, path, snapshot = _cache(tmp_path)
+    assert json.loads(path.read_text(encoding="utf-8")) == {"synthetic": True}
     assert _guard(root, snapshot) is None
 
 
@@ -35,7 +37,7 @@ def test_missing_empty_cache_root_matches_no_cached_measurements(tmp_path):
 
 def test_same_length_measurement_change_is_rejected(tmp_path):
     root, path, snapshot = _cache(tmp_path)
-    path.write_bytes(b'{"synthetic": fals}')
+    path.write_bytes(b'{"synthetic": null}\n')
     with pytest.raises(SystemExit, match="Evaluator cache changed during replay"):
         _guard(root, snapshot)
 
@@ -86,6 +88,17 @@ def test_newly_published_cache_has_exact_serialization_fingerprint(tmp_path):
     evaluator._publish_evaluation_cache(path, record)
     assert path.read_bytes() == raw
     assert _guard(path.parent.parent, snapshot) is None
+
+
+def test_newly_published_cache_rewrite_is_rejected(tmp_path):
+    path = tmp_path / "posthoc_evaluations" / "D3" / "main-01.json"
+    record = {"synthetic": True}
+    raw = evaluator._serialized_evaluation_cache_bytes(record)
+    evaluator._publish_evaluation_cache(path, record)
+    snapshot = {path: hashlib.sha256(raw).hexdigest()}
+    path.write_bytes(path.read_bytes() + b" ")
+    with pytest.raises(SystemExit, match="Evaluator cache changed during replay"):
+        _guard(path.parent.parent, snapshot)
 
 
 def test_final_cache_check_precedes_aggregate_publication():

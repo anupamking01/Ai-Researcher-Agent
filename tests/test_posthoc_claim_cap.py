@@ -1473,7 +1473,7 @@ def test_cached_evaluator_mutation_after_preflight_blocks_aggregate(
         original_guard(*args, **kwargs)
         # Semantically identical JSON with different bytes must not be
         # attributed to the preflight-validated measurement snapshot.
-        cache_path.write_bytes(cache_path.read_bytes() + b"\\n")
+        cache_path.write_bytes(cache_path.read_bytes() + b"\n")
 
     monkeypatch.setattr(
         evaluate_posthoc_support,
