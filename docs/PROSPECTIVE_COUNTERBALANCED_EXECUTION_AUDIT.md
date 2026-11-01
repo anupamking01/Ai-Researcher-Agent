@@ -10,7 +10,7 @@ A design receipt alone does not establish that any treatments were actually exec
 
 Keep the exact original new-task manifest bytes and the exact plan receipt bytes. For a future sequential task-major replication, the coordinator preserves an **unchanged** JSON log with exactly these fields:
 
-`json
+```json
 {
   "schema_version": 1,
   "classification": "prospective_replication_recorded_chronology_only",
@@ -30,7 +30,7 @@ Keep the exact original new-task manifest bytes and the exact plan receipt bytes
     }
   ]
 }
-`
+```
 
 The one-element events array above is **schema illustration only**, not a valid full-run log. The actual audit requires all 40 planned cells in task-major order, preserving each task's four assigned treatments exactly as frozen. Every cell needs a distinct safe run ID and an explicit nonzero interval within the study's UTC window; intervals must not overlap. Accepted recorded statuses are `completed`, `failed`, `timeout` and `cancelled`. Failed and timed-out cells are **retained** in the ledger, never silently discarded or replaced by favorable reruns. A passing chronology audit does not mean all 40 cells completed successfully.
 
@@ -38,14 +38,14 @@ This is a **prospective sequential-execution convention** for a future study. It
 
 ## Offline verification
 
-`bash
+```bash
 python -m scripts.verify_counterbalanced_replication_execution \
   --task-manifest <frozen-new-task-manifest.json> \
   --plan-file <original-prospective-plan.json> \
   --execution-log <unaltered-recorded-chronology.json> \
   --expected-plan-file-sha256 <independently-preserved-prerun-sha256> \
   --expected-execution-log-sha256 <independently-preserved-postrun-sha256>
-`
+```
 
 Both `--expected-*` pins are optional, but do not describe them as independent evidence unless they were retained separately from the candidate files at the appropriate times. The verifier uses bounded, non-symlink regular-file reads for all three files; rejects duplicate JSON keys, nonfinite numbers, altered plan receipts, missing cells, reordered treatments, duplicate run IDs, non-UTC clocks and overlapping/reversed timestamps; and prints a compact digest/status receipt without rewriting or publishing any research input.
 
