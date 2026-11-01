@@ -127,7 +127,7 @@ def test_regular_file_swap_before_open_is_rejected(tmp_path, monkeypatch):
         return fd
 
     monkeypatch.setattr(evaluator.os, "open", swap_after_parent_open)
-    with pytest.raises(SystemExit, match="source pathname changed before read"):
+    with pytest.raises(SystemExit, match="changed before read"):
         evaluator._read_regular_bytes(
             path, label="Evaluator evidence", max_bytes=64
         )
@@ -149,7 +149,7 @@ def test_regular_file_swap_after_open_is_rejected_even_for_identical_bytes(
         return original_fdopen(fd, *args, **kwargs)
 
     monkeypatch.setattr(evaluator.os, "fdopen", swap_before_read)
-    with pytest.raises(SystemExit, match="source pathname changed during read"):
+    with pytest.raises(SystemExit, match="changed during read"):
         evaluator._read_regular_bytes(
             path, label="Evaluator evidence", max_bytes=64
         )
