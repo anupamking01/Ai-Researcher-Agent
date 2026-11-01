@@ -1193,8 +1193,12 @@ def test_aggregate_publication_stages_every_file_before_replacing_existing_outpu
     outputs = tmp_path / "outputs"
     summary_path = outputs / "posthoc_support_summary.json"
     csv_path = outputs / "posthoc_support_runs.csv"
-    previous_summary = b'{"generation":"previous"}'
     previous_csv = b"generation\nprevious\n"
+    previous_summary = json.dumps({
+        "study_id": evaluate_posthoc_support.STUDY_ID,
+        "replay_provenance": evaluate_posthoc_support._noncanonical_evaluator_replay_provenance(),
+        "posthoc_support_runs_sha256": hashlib.sha256(previous_csv).hexdigest(),
+    }).encode("utf-8")
     summary_path.write_bytes(previous_summary)
     csv_path.write_bytes(previous_csv)
 
@@ -1251,9 +1255,11 @@ def test_interrupted_second_replacement_leaves_detectable_mixed_generation(
     summary_path.write_text(
         json.dumps(
             {
+                "study_id": evaluate_posthoc_support.STUDY_ID,
+                "replay_provenance": evaluate_posthoc_support._noncanonical_evaluator_replay_provenance(),
                 "posthoc_support_runs_sha256": hashlib.sha256(
                     previous_csv
-                ).hexdigest()
+                ).hexdigest(),
             }
         ),
         encoding="utf-8",
