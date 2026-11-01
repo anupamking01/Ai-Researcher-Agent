@@ -65,7 +65,7 @@ def test_reusing_historical_question_with_new_task_identity_is_rejected(original
 
 
 @pytest.mark.parametrize("rewriter", [
-    lambda text: "  \\n\\t".join(text.upper().split()),
+    lambda text: (" " + chr(10) + chr(9)).join(text.upper().split()),
     lambda text: text.replace("For", "Ｆｏｒ", 1),
 ])
 def test_whitespace_case_and_nfkc_variants_of_original_question_are_blocked(rewriter):
