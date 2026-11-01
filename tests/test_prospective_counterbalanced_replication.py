@@ -63,6 +63,18 @@ def test_design_receipt_and_order_are_byte_deterministic():
     ).encode("utf-8")).hexdigest()
 
 
+
+
+def test_semantically_identical_json_formatting_does_not_select_a_new_order():
+    compact = _raw()
+    pretty = (json.dumps(_payload(), indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    a, b = plan.build_plan(compact), plan.build_plan(pretty)
+    assert a["source_manifest_sha256"] != b["source_manifest_sha256"]
+    assert a["semantic_task_manifest_sha256"] == b["semantic_task_manifest_sha256"]
+    assert a["schedule"] == b["schedule"]
+    assert a["pairwise_precedence_counts"] == b["pairwise_precedence_counts"]
+    assert a["design_receipt_sha256"] != b["design_receipt_sha256"]
+
 def test_source_byte_change_changes_provenance_even_without_outcome_measurements():
     initial = _payload()
     edited = _payload()
