@@ -961,3 +961,28 @@ metadata record, not an independently signed archive pin and **not**
 authentication of any of the missing original treatment traces, reports, or
 retrieval evidence. It does not download or re-evaluate data, change frozen
 automated results, or establish blinded-human-evaluation readiness.
+
+
+## Byte-anchored custody of the retained canonical provider metadata
+
+The canonical-artifact identity constants alone cannot detect a stale or
+silently replaced **checked-in** provider-observed metadata file. In particular,
+when GitHub lists no candidate ZIP, the earlier conditional ID/size/digest
+comparison would not inspect that local record at all. The read-only inventory
+now requires the exact SHA-256 of
+`research-evidence/canonical-analysis-36070798723.metadata.json` to match
+`a980102216260faf66e4925bf09b5bcf2433d9dda43a74409480df4856e6a4c2`
+**before the first live Actions API call**, regardless of artifact availability.
+It reads at most 16 KiB from a descriptor opened without following the final
+symlink; missing files, nonregular files, unexpected modifications and
+oversized files fail closed. Unsupported no-follow platforms also fail closed.
+The provider-observed record is only 750 bytes; no file is rewritten.
+
+This additional check binds the current checkout's provider metadata to the
+previously preserved **byte-exact** Git record. It neither signs that record
+nor independently authenticates the original 40 treatments, traces, reports,
+retrieval evidence or human submissions. Legitimate future revisions to the
+retained record require an explicit, reviewable re-anchoring decision; ordinary
+reformatting will not silently change historical provenance. Offline synthetic
+tests exercise modification, deletion, link substitution and resource bounds.
+No model or human-study reruns are involved.

@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
+from pathlib import Path
 import re
+import stat
 from typing import Callable
 
 from scripts import audit_historical_artifact_job_logs as historical_logs
@@ -75,6 +78,70 @@ CANONICAL_ARCHIVE_PIN = {
 
 class ArtifactInventoryError(ValueError):
     """A source or listing could not support an affirmative inventory claim."""
+
+
+# These bytes were retained as the canonical GitHub-provider metadata JSON
+# at the historical analysis checkout. The fixed SHA-256 checks local custody
+# of that version-controlled record, not authenticity of the original study.
+RETAINED_CANONICAL_METADATA_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "research-evidence/canonical-analysis-36070798723.metadata.json"
+)
+RETAINED_CANONICAL_METADATA_SHA256 = (
+    "a980102216260faf66e4925bf09b5bcf2433d9dda43a74409480df4856e6a4c2"
+)
+MAX_RETAINED_CANONICAL_METADATA_BYTES = 16 * 1024
+
+
+def _verify_retained_canonical_metadata_file() -> str:
+    """Require the retained provider record's exact pinned bytes before API I/O.
+
+    This rejects a missing, linked, oversized, or changed checkout record, even
+    if GitHub no longer lists the canonical ZIP. It is not an external archive
+    attestation and does not verify the original treatment/report provenance.
+    """
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise ArtifactInventoryError(
+            "retained canonical metadata cannot be opened without following links"
+        )
+    flags = (
+        os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    try:
+        with os.fdopen(os.open(RETAINED_CANONICAL_METADATA_PATH, flags), "rb") as stream:
+            before = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_size > MAX_RETAINED_CANONICAL_METADATA_BYTES
+            ):
+                raise ArtifactInventoryError(
+                    "retained canonical metadata is not a bounded regular file"
+                )
+            captured = stream.read(MAX_RETAINED_CANONICAL_METADATA_BYTES + 1)
+            after = os.fstat(stream.fileno())
+    except OSError as exc:
+        raise ArtifactInventoryError(
+            "retained canonical metadata could not be read safely"
+        ) from exc
+    identity = lambda value: (
+        value.st_dev, value.st_ino, value.st_size,
+        value.st_mtime_ns, value.st_ctime_ns,
+    )
+    if (
+        identity(before) != identity(after)
+        or len(captured) != after.st_size
+        or len(captured) > MAX_RETAINED_CANONICAL_METADATA_BYTES
+    ):
+        raise ArtifactInventoryError(
+            "retained canonical metadata changed during bounded capture"
+        )
+    digest = hashlib.sha256(captured).hexdigest()
+    if digest != RETAINED_CANONICAL_METADATA_SHA256:
+        raise ArtifactInventoryError(
+            "retained canonical metadata differs from pinned checkout bytes"
+        )
+    return digest
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict:
@@ -273,6 +340,10 @@ def audit_historical_artifact_inventory(
     ):
         raise ArtifactInventoryError("inventory checked_at must be timezone-aware")
     checked_at = checked_at.astimezone(timezone.utc)
+    # Check our retained provider snapshot before any live GitHub metadata read;
+    # otherwise stale or modified local evidence could escape notice when an
+    # artifact is absent and the hard-coded candidate identity is never used.
+    _verify_retained_canonical_metadata_file()
     receipts = {}
     for role, run_id, workflow_name, commit, conclusion, expected_name in HISTORICAL_RUNS:
         path = f"/repos/{REPOSITORY}/actions/runs/{run_id}"
