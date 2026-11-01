@@ -34,7 +34,7 @@ python -m scripts.plan_counterbalanced_replication --task-manifest /path/to/new_
 
 The helper itself writes **only to stdout**. It refuses the original historical task-set ID, unknown or outcome-bearing JSON fields, duplicate keys, IDs or questions, non-finite JSON, missing freeze flag, ambiguous source types, symlinks, oversized inputs (>256 KiB), and an incomplete matrix. This is a structural guard only: it cannot prove that a *different ID* hides reused original questions, or that a manifest was actually frozen before outcome inspection. A coordinator must independently document task independence, pre-execution timestamp, and integrity and ensure there is no treatment outcome feedback into task selection.
 
-The printed receipt includes an exact SHA-256 of the source manifest bytes, a deterministic design-version identifier, ordered treatment IDs by task, positional counts, pairwise precedence counts, and a SHA-256 of the canonical receipt fields. The receipt hash is **not** an external timestamp or independent pre-registration attestation. Preserve the actual manifest and the receipt in a separately reviewable pre-execution location before authorizing future work.
+The printed receipt includes both the exact SHA-256 of the source manifest bytes and a separate canonical-semantic task-manifest SHA-256 used to assign slots, plus a deterministic design-version identifier, ordered treatment IDs by task, positional counts, pairwise precedence counts, and a SHA-256 of the canonical receipt fields. Reformatting JSON or changing key order does **not** change arm assignment, but does change the source-byte custody hash and full receipt hash. The receipt hash is **not** an external timestamp or independent pre-registration attestation. Preserve the actual manifest and the receipt in a separately reviewable pre-execution location before authorizing future work.
 
 ## Design guarantees
 
@@ -45,7 +45,7 @@ The fixed even-order four-treatment Williams Latin square has rows (using the ar
 - P6, P6V, D6, D3
 - P6V, D3, P6, D6
 
-Two copies cover eight tasks; the final two schedules are D3, D6, P6, P6V and its reversal. A deterministic SHA-256-based, manifest-bound slot permutation assigns the ten rows to the ten new task IDs. No treatment measurements or adjustable outcome-tuning seed enter the schedule.
+Two copies cover eight tasks; the final two schedules are D3, D6, P6, P6V and its reversal. A deterministic SHA-256-based, canonical-task-manifest-bound slot permutation assigns the ten rows to the ten new task IDs. No treatment measurements or adjustable outcome-tuning seed enter the schedule.
 
 For **each** of the six unordered treatment pairs, each member precedes the other on exactly **5 of 10 tasks**. Each variant occurs at every within-task position either **2 or 3 times** across ten tasks—the mathematically closest possible balance because ten is not divisible by four. Every task receives all four conditions exactly once, for **40 planned cells**. Offline regression tests verify these invariants and the receipt digest.
 
