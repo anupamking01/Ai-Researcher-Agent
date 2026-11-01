@@ -209,6 +209,21 @@ def audit_run_artifacts(
                 raise design.DesignError(
                     f"trace {number} {field} does not bind to recorded event"
                 )
+        # The arm label alone cannot establish that its self-reported
+        # intervention settings agree with the original four-arm design.
+        expected_controls = design.PROSPECTIVE_TREATMENT_CONTROLS_V1[event["variant"]]
+        controls = trace.get("treatment_controls")
+        if type(controls) is not dict or set(controls) != set(expected_controls):
+            raise design.DesignError(
+                f"trace {number} requires exact frozen treatment-control fields"
+            )
+        if any(
+            type(controls[field]) is not type(expected) or controls[field] != expected
+            for field, expected in expected_controls.items()
+        ):
+            raise design.DesignError(
+                f"trace {number} treatment controls differ from frozen variant"
+            )
         # A run with the right ID can still claim the wrong question.
         # The exact UTF-8 question bytes (not normalized text) must agree
         # with the frozen manifest. This is self-reported provenance only.
@@ -269,6 +284,7 @@ def audit_run_artifacts(
         "all_planned_cells_completed": recorded["all_recorded_cells_completed"],
         "artifact_bytes_equal_supplied_fingerprints": True,
         "trace_question_fingerprints_match_frozen_manifest": True,
+        "trace_treatment_controls_match_frozen_design": True,
         "recorded_execution_independently_authenticated": False,
         "model_or_retrieval_calls_verified": False,
         "scientific_outcomes_validated": False,

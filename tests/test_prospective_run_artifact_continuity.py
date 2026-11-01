@@ -81,6 +81,9 @@ def _fixture(tmp_path):
             "finished_at_utc": event["finished_at_utc"],
             "report_sha256": _digest(report),
             "task_question_sha256": question_hashes[event["task_id"]],
+            "treatment_controls": dict(
+                design.PROSPECTIVE_TREATMENT_CONTROLS_V1[event["variant"]]
+            ),
             "synthetic_marker": "not a real experiment",
         })
         trace_path = f"traces/{run_id}.json"
@@ -127,6 +130,7 @@ def test_complete_synthetic_matrix_binds_all_traces_reports_and_events(tmp_path)
     assert result["all_planned_cells_completed"] is True
     assert result["artifact_bytes_equal_supplied_fingerprints"] is True
     assert result["trace_question_fingerprints_match_frozen_manifest"] is True
+    assert result["trace_treatment_controls_match_frozen_design"] is True
     assert result["evidence_index_external_pin_matched"] is True
     assert result["recorded_execution_independently_authenticated"] is False
     assert result["scientific_outcomes_validated"] is False
@@ -410,4 +414,53 @@ def test_trace_question_binding_rejects_rehashed_wrong_source_claim(
     path.write_bytes(changed)
     index["cells"][0]["trace"] = _file_claim(claim["path"], changed)
     with pytest.raises(design.DesignError, match="question fingerprint differs"):
+        _audit(fixture)
+
+
+def test_frozen_prospective_controls_match_existing_four_arm_definitions():
+    # Detect drift away from the actual four-arm treatment definitions.
+    from logic.experiment import ExperimentConfig
+
+    assert set(design.PROSPECTIVE_TREATMENT_CONTROLS_V1) == set(design.VARIANTS)
+    for variant, expected in design.PROSPECTIVE_TREATMENT_CONTROLS_V1.items():
+        current = ExperimentConfig.from_variant(variant)
+        assert {field: getattr(current, field) for field in expected} == expected
+
+
+@pytest.mark.parametrize("variant,alteration", [
+    ("D3", ("source_budget", 6)),
+    ("D6", ("source_budget", 3)),
+    ("P6", ("planning_mode", "direct")),
+    ("P6V", ("verification_mode", "none")),
+    ("D3", ("planning_mode", "planner")),
+    ("P6V", ("source_budget", True)),
+    ("D6", ("source_budget", 6.0)),
+    ("P6", ("missing", None)),
+    ("D3", ("null", None)),
+    ("D6", ("extra", "unexpected")),
+])
+def test_wrong_recorded_intervention_rejected_even_after_trace_rehash(
+    tmp_path, variant, alteration
+):
+    # Rehashing a candidate index must not legitimize a mislabeled
+    # planned treatment's recorded intervention configuration.
+    fixture = _fixture(tmp_path)
+    index, root = fixture[3], fixture[4]
+    cell = next(c for c in index["cells"] if c["variant"] == variant)
+    claim = cell["trace"]
+    path = root / claim["path"]
+    trace = json.loads(path.read_bytes())
+    field, value = alteration
+    if field == "missing":
+        trace.pop("treatment_controls")
+    elif field == "null":
+        trace["treatment_controls"] = None
+    elif field == "extra":
+        trace["treatment_controls"]["extra_factor"] = value
+    else:
+        trace["treatment_controls"][field] = value
+    changed = _bytes(trace)
+    path.write_bytes(changed)
+    cell["trace"] = _file_claim(claim["path"], changed)
+    with pytest.raises(design.DesignError, match="frozen treatment-control|frozen variant"):
         _audit(fixture)

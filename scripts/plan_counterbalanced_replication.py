@@ -16,6 +16,13 @@ import stat
 import unicodedata
 
 VARIANTS = ("D3", "D6", "P6", "P6V")
+# Frozen prospective intervention contract, not observed provider behavior.
+PROSPECTIVE_TREATMENT_CONTROLS_V1 = {
+    "D3": {"planning_mode": "direct", "source_budget": 3, "verification_mode": "none"},
+    "D6": {"planning_mode": "direct", "source_budget": 6, "verification_mode": "none"},
+    "P6": {"planning_mode": "planner", "source_budget": 6, "verification_mode": "none"},
+    "P6V": {"planning_mode": "planner", "source_budget": 6, "verification_mode": "verify"},
+}
 ORIGINAL_TASK_SET_ID = "main-budget-v1-2026-09-11"
 DESIGN_VERSION = "vera-prospective-williams-10-v1"
 MAX_MANIFEST_BYTES = 256 * 1024
