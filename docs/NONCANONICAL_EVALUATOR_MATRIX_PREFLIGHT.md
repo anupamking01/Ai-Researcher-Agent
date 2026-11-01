@@ -113,3 +113,26 @@ This is prospective local evidence-selection consistency, not independent
 It neither authorizes selective reruns nor changes pilot, frozen automated
 confirmatory, exploratory, or pending human-validation claims. Regression
 tests are synthetic/offline and produce no experimental measurements.
+
+## Source-count agreement for noncanonical evaluator replay
+
+Before constructing a common-evaluator prompt, the direct replay now checks
+that each completed treatment's recorded `successful_source_count` agrees
+with its saved, selected retrieval text. The count must be a nonnegative
+integer (not a boolean, string or rounded float). A **zero-source** run may
+contain missing or whitespace-only query files and continues to receive the
+predeclared no-evidence sentinel. If nonempty saved retrieval text exists
+despite a recorded zero successful sources, replay **fails closed** rather
+than silently treating that cell as evidence-backed. A positive source count
+still requires nonempty saved retrieval text.
+
+The original runner counts successful browse responses and saves their text
+to numbered query files, so this is a consistency check between existing
+recorded fields, not a new scientific outcome definition. It neither repairs
+a contradictory trace nor discards a treatment from analysis: discrepancies
+require provenance review. The source count is not an independent authenticity
+proof of the historical files, and this check cannot recover expired Actions
+artifacts or establish blinded human-evaluation readiness. All regression
+cases use synthetic local files without model calls. The frozen pilot,
+confirmatory, and exploratory findings remain unchanged, and human validation
+remains pending.

@@ -975,18 +975,30 @@ def _evidence_for_trace(
     *,
     root: Path | None = None,
 ) -> tuple[str, str]:
+    # Counts and saved retrieval bytes must describe the same treatment.
+    # Checking presence alone can turn a frozen zero-source outcome into a
+    # seemingly evidence-backed measurement during noncanonical replay.
+    successful_sources = trace.get("successful_source_count", 0)
+    if type(successful_sources) is not int or successful_sources < 0:
+        raise SystemExit(
+            f"Invalid successful_source_count for {variant}/{task_id}: "
+            "must be a nonnegative integer"
+        )
+
     evidence = _research_context(run_id, root=root)
-    if evidence.strip():
-        return evidence, "retrieved_evidence"
-
-    successful_sources = int(trace.get("successful_source_count", 0) or 0)
     if successful_sources == 0:
+        if evidence.strip():
+            raise SystemExit(
+                f"Saved evidence contradicts zero successful sources for "
+                f"{variant}/{task_id}; refusing evaluator replay"
+            )
         return NO_EVIDENCE_SENTINEL, "zero_successful_sources"
-
-    raise SystemExit(
-        f"Saved evidence missing for {variant}/{task_id} despite "
-        f"successful_source_count={successful_sources}"
-    )
+    if not evidence.strip():
+        raise SystemExit(
+            f"Saved evidence missing for {variant}/{task_id} despite "
+            f"successful_source_count={successful_sources}"
+        )
+    return evidence, "retrieved_evidence"
 
 
 def _prepare_evaluator_input(
