@@ -47,7 +47,7 @@ def test_provider_metadata_custody_fails_before_any_github_request(
     elif mutation == "directory":
         target.mkdir()
     elif mutation == "oversize":
-        target.write_bytes(original + b"\n")
+        target.write_bytes(original + b"x" * audit.MAX_RETAINED_CANONICAL_METADATA_BYTES)
     else:
         assert mutation == "missing"
 
