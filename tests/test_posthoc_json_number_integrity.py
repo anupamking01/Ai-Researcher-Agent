@@ -69,6 +69,6 @@ def test_duplicate_keys_still_rejected(tmp_path):
 def test_numeric_gate_is_before_any_model_import():
     source = open(evaluator.__file__, encoding="utf-8").read()
     assert (
-        source.index("payload = _load_json(trace_path)")
+        source.index("payload, trace_sha256 = _load_json(trace_path, include_sha256=True)")
         < source.index("from agent.llm_utils import UsageTracker")
     )

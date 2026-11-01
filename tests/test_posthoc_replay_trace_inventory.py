@@ -126,6 +126,6 @@ def test_inventory_precedes_trace_parse_and_model_import():
     source = (Path(evaluator.__file__)).read_text(encoding="utf-8")
     assert (
         source.index("trace_files = _inventory_evaluator_treatment_trace_tree(")
-        < source.index("payload = _load_json(trace_path)")
+        < source.index("payload, trace_sha256 = _load_json(trace_path, include_sha256=True)")
         < source.index("from agent.llm_utils import UsageTracker")
     )
