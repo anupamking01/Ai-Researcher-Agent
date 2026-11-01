@@ -197,7 +197,9 @@ def _evaluator_input_fingerprints(
     }
 
 
-def _load_json(path: Path) -> dict:
+def _load_json(
+    path: Path, *, include_sha256: bool = False
+) -> dict | tuple[dict, str]:
     """Reject nonfinite or pathological numbers, including unused metadata."""
     from scripts.run_budget_main_study import _reject_duplicate_json_keys
 
@@ -232,7 +234,28 @@ def _load_json(path: Path) -> dict:
         raise SystemExit(f"Invalid JSON file {path}: {exc}") from exc
     if not isinstance(payload, dict):
         raise SystemExit(f"Invalid JSON file {path}: top level must be an object")
-    return payload
+    # Bind replay source custody to the same captured bytes that were parsed.
+    # Cache reads retain the original dict-only interface.
+    return (payload, hashlib.sha256(raw).hexdigest()) if include_sha256 else payload
+
+
+def _require_preflight_treatment_trace_unchanged(
+    path: Path, expected_sha256: str
+) -> None:
+    """Reject changes to the full treatment trace after its parsed snapshot.
+
+    The report/prompt continuity check does not cover unused trace metadata,
+    cost counters, or experiment identity fields. A byte-exact fingerprint
+    binds these too, without reparsing or repairing original treatment data.
+    """
+    raw = _read_regular_bytes(
+        path, label="Treatment trace", max_bytes=MAX_EVALUATOR_JSON_BYTES
+    )
+    if hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise SystemExit(
+            f"Treatment trace changed after preflight: {path}; "
+            "refusing noncanonical replay without provenance review"
+        )
 
 
 def _load_frozen_task_contract(
@@ -1234,9 +1257,10 @@ def main() -> int:
         TRACE_ROOT, variants=VARIANTS
     )
     expected = []
+    trace_sources: dict[tuple[str, str, str], tuple[Path, str]] = {}
     for variant in VARIANTS:
         for trace_path in trace_files[variant]:
-            payload = _load_json(trace_path)
+            payload, trace_sha256 = _load_json(trace_path, include_sha256=True)
             raw_trace = payload.get("trace")
             if not isinstance(raw_trace, dict):
                 raise SystemExit(f"Trace metadata must be an object: {trace_path}")
@@ -1268,6 +1292,7 @@ def main() -> int:
                 expected_variant=variant,
             )
             expected.append((variant, trace_path, trace, task_id, run_id))
+            trace_sources[(variant, task_id, run_id)] = (trace_path, trace_sha256)
 
     _require_complete_frozen_treatment_matrix(expected, expected_questions)
 
@@ -1303,7 +1328,9 @@ def main() -> int:
 
         evidence_status = item["evidence_status"]
         original_trace = original_traces[(variant, task_id, run_id)]
-        # Recheck the already-frozen prompt inputs before spending on a model.
+        trace_path, trace_sha256 = trace_sources[(variant, task_id, run_id)]
+        # Recheck both original trace bytes and the prepared prompt inputs.
+        _require_preflight_treatment_trace_unchanged(trace_path, trace_sha256)
         _require_preflight_evaluator_input_unchanged(item, trace=original_trace)
 
         tracker = UsageTracker()
@@ -1354,6 +1381,7 @@ def main() -> int:
         record["replay_provenance"] = _noncanonical_evaluator_replay_provenance()
         # A report/evidence mutation during the provider call must not be
         # published as a measurement from stable original local sources.
+        _require_preflight_treatment_trace_unchanged(trace_path, trace_sha256)
         _require_preflight_evaluator_input_unchanged(item, trace=original_trace)
         try:
             _publish_evaluation_cache(out_path, record)
@@ -1410,6 +1438,11 @@ def main() -> int:
             f"Evaluator completed but exceeded cap: ${summary['estimated_evaluator_cost_usd']:.4f} "
             f"> ${args.max_evaluator_cost_usd:.2f}"
         )
+
+    # Even a completely cached replay must not publish aggregates against
+    # treatment traces that drifted after the full-matrix preflight.
+    for trace_path, trace_sha256 in trace_sources.values():
+        _require_preflight_treatment_trace_unchanged(trace_path, trace_sha256)
 
     summary_path = REPO_ROOT / "outputs" / "posthoc_support_summary.json"
     csv_path = REPO_ROOT / "outputs" / "posthoc_support_runs.csv"

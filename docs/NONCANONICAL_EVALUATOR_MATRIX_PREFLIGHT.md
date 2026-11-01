@@ -248,3 +248,28 @@ call-order inspection. No treatment or evaluator run, scientific measurement,
 pilot finding, frozen confirmatory result, exploratory result, or human rating
 is generated or revised. Independent source custody and two real eligible
 blinded annotators remain outstanding.
+
+## Byte-exact treatment-trace custody across noncanonical evaluator replay
+
+Preflight already checked each complete treatment trace, and source-continuity
+checks protected the report, retrieved evidence and evaluator prompt around
+provider calls. However, the frozen in-memory trace itself had no byte-level
+continuity check: a local trace could change after parsing (including unused
+metadata, cost counters or run identity) without changing the prompt. A fully
+cached replay could similarly publish an aggregate after such a mutation.
+
+Direct **noncanonical** replay now retains a SHA-256 of the **exact bounded
+JSON bytes consumed by the decoder**, rather than hashing a later pathname
+read or reconstructed JSON. It checks that each pending trace still has those
+bytes immediately before a model invocation and after its response but before
+cache publication. Before publishing even an all-cached aggregate, it rechecks
+all 40 source traces. Missing/replaced/nonregular or oversized files fail
+closed; bytes are never repaired, substituted, or selected based on results.
+
+This local continuity control does **not** independently authenticate the
+original September 2026 traces, establish an atomic multi-file snapshot, or
+observe mutations that were undone between checks. Historical treatment and
+evaluator Actions artifacts remain unavailable. Synthetic tests exercise
+metadata changes and byte-identical semantic JSON rewrites without making
+model calls. Diagnostic pilot, frozen automated confirmatory, exploratory,
+and pending blinded human-validation conclusions remain distinct and unchanged.
