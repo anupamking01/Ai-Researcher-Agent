@@ -202,6 +202,13 @@ def audit_run_artifacts(
                 raise design.DesignError(
                     f"trace {number} {field} does not bind to recorded event"
                 )
+        # Require each retained trace to corroborate the logged UTC interval.
+        # Identical self-reported timestamps are not external clock evidence.
+        for field in ("started_at_utc", "finished_at_utc"):
+            if type(trace.get(field)) is not str or trace[field] != event[field]:
+                raise design.DesignError(
+                    f"trace {number} {field} does not bind to recorded chronology"
+                )
         if "report_sha256" not in trace:
             raise design.DesignError(f"trace {number} lacks a report hash binding")
 

@@ -73,6 +73,8 @@ def _fixture(tmp_path):
         trace = _bytes({
             "run_id": run_id, "task_id": event["task_id"],
             "variant": event["variant"], "status": event["status"],
+            "started_at_utc": event["started_at_utc"],
+            "finished_at_utc": event["finished_at_utc"],
             "report_sha256": _digest(report),
             "synthetic_marker": "not a real experiment",
         })
@@ -205,6 +207,48 @@ def test_trace_identity_cannot_be_rewritten_even_with_updated_index_digest(tmp_p
     path.write_bytes(raw)
     item["trace"] = _file_claim(item["trace"]["path"], raw)
     with pytest.raises(design.DesignError, match="does not bind to recorded event"):
+        _audit(fixture)
+
+
+
+@pytest.mark.parametrize("field,revised", [
+    ("started_at_utc", "2027-04-01T10:00:01Z"),
+    ("finished_at_utc", "2027-04-01T10:00:12Z"),
+])
+def test_rewritten_ledger_timestamps_cannot_rebind_original_trace(
+    tmp_path, field, revised
+):
+    fixture = _fixture(tmp_path)
+    _, _, log, index, _ = fixture
+    log["events"][0][field] = revised
+    index["execution_log_sha256"] = _digest(_bytes(log))
+    chronology.audit_execution_log(fixture[0], fixture[1], _bytes(log))
+    with pytest.raises(design.DesignError, match=f"{field} does not bind to recorded chronology"):
+        _audit(fixture)
+
+
+@pytest.mark.parametrize("field,revised", [
+    ("started_at_utc", None),
+    ("finished_at_utc", 0),
+    ("started_at_utc", "2027-04-01T10:00:02Z"),
+    ("finished_at_utc", "2027-04-01T10:00:10Z"),
+])
+def test_trace_timestamp_missing_or_rewritten_with_rehashed_index_still_fails(
+    tmp_path, field, revised
+):
+    fixture = _fixture(tmp_path)
+    _, _, _, index, root = fixture
+    claim = index["cells"][0]["trace"]
+    path = root / claim["path"]
+    trace = json.loads(path.read_bytes())
+    if revised is None:
+        trace.pop(field)
+    else:
+        trace[field] = revised
+    altered = _bytes(trace)
+    path.write_bytes(altered)
+    index["cells"][0]["trace"] = _file_claim(claim["path"], altered)
+    with pytest.raises(design.DesignError, match=f"{field} does not bind to recorded chronology"):
         _audit(fixture)
 
 
