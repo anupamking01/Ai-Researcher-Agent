@@ -1018,7 +1018,7 @@ def test_explicit_fingerprint_binding_rejects_legacy_schema_in_direct_loader(
     path.write_text(json.dumps(_zero_source_cache()), encoding="utf-8")
     expected = evaluate_posthoc_support._evaluator_input_fingerprints(
         question="Question for main-01",
-        report="Report for main-01\\n",
+        report="Report for main-01\n",
         evidence=evaluate_posthoc_support.NO_EVIDENCE_SENTINEL,
         prompt="Synthetic current verification prompt",
     )
@@ -1368,7 +1368,7 @@ def _bound_zero_source_cache(**overrides):
     from logic.prompts import generate_verification_prompt
 
     question = "Question for main-01"
-    report = "Report for main-01\\n"
+    report = "Report for main-01\n"
     evidence = evaluate_posthoc_support.NO_EVIDENCE_SENTINEL
     prompt = generate_verification_prompt(
         question,
