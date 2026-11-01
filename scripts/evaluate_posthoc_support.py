@@ -1114,6 +1114,29 @@ def _prepare_evaluator_input(
     }
 
 
+def _require_preflight_evaluator_input_unchanged(
+    item: dict, *, trace: dict, root: Path | None = None
+) -> None:
+    """Fail closed if report/evidence change after the complete replay preflight.
+
+    A descriptor-pinned read protects one capture, not the longer interval
+    before a provider call or subsequent measurement publication.
+    """
+    current = _prepare_evaluator_input(
+        trace, item["variant"], item["task_id"], item["run_id"], root=root
+    )
+    frozen_preflight = {
+        key: item[key]
+        for key in ("evidence_status", "prompt", "input_fingerprints")
+    }
+    if current != frozen_preflight:
+        raise SystemExit(
+            "Evaluator source changed after preflight for "
+            f"{item['variant']}/{item['task_id']}/{item['run_id']}; "
+            "refusing noncanonical replay without provenance review."
+        )
+
+
 def _preflight_evaluator_resume(
     expected: list[tuple[str, Path, dict, str, str]],
     *,
@@ -1255,6 +1278,10 @@ def main() -> int:
         evaluator_temperature=evaluator_temperature,
     )
     spent = sum(float(row["estimated_cost_usd"]) for row in rows)
+    original_traces = {
+        (variant, task_id, run_id): trace
+        for variant, _trace_path, trace, task_id, run_id in expected
+    }
 
     from agent.llm_utils import UsageTracker, create_chat_completion
     for item in pending:
@@ -1275,6 +1302,9 @@ def main() -> int:
             )
 
         evidence_status = item["evidence_status"]
+        original_trace = original_traces[(variant, task_id, run_id)]
+        # Recheck the already-frozen prompt inputs before spending on a model.
+        _require_preflight_evaluator_input_unchanged(item, trace=original_trace)
 
         tracker = UsageTracker()
         prompt = item["prompt"]
@@ -1322,6 +1352,9 @@ def main() -> int:
             "cost_method": "frozen uncached rates",
         }
         record["replay_provenance"] = _noncanonical_evaluator_replay_provenance()
+        # A report/evidence mutation during the provider call must not be
+        # published as a measurement from stable original local sources.
+        _require_preflight_evaluator_input_unchanged(item, trace=original_trace)
         try:
             _publish_evaluation_cache(out_path, record)
         except FileExistsError as exc:

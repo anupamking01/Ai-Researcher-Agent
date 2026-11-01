@@ -223,3 +223,28 @@ regressions exercise swapping symlinks, a replaced parent, a FIFO, and an
 in-place file mutation without invoking models. Historical treatment, frozen
 confirmatory measurements, exploratory analyses and pending real human
 validation remain unchanged and distinct.
+
+## Prevent post-preflight evidence drift during noncanonical replay
+
+The complete-matrix preflight previously prepared and fingerprinted each
+evaluator prompt once, then could spend time making other evaluator calls
+before using that cached in-memory prompt. Descriptor-pinned file reads make
+each capture safer but do not establish continuity over this interval.
+
+Pending noncanonical measurements now regenerate their report and retrieval
+context and compare **all** preflight SHA-256 question/report/evidence/prompt
+fingerprints, the full prompt and the zero-evidence classification immediately
+before each provider call. They perform the same check **after** the call and
+before publishing its evaluator cache. Observed changes abort instead of
+silently refreshing, selectively rerunning, or publishing a result against
+altered local evidence. The original treatment trace parsed at preflight stays
+the fixed in-memory reference.
+
+These checks cannot provide atomic multi-file snapshots, authenticate missing
+original historical source archives, or detect transient modifications undone
+between checks. A detected mid-call change may incur provider cost without a
+publishable result. The new tests use only synthetic local inputs and static
+call-order inspection. No treatment or evaluator run, scientific measurement,
+pilot finding, frozen confirmatory result, exploratory result, or human rating
+is generated or revised. Independent source custody and two real eligible
+blinded annotators remain outstanding.
