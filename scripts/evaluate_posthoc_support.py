@@ -614,6 +614,72 @@ def _verify_aggregate_outputs(summary_path: Path, csv_path: Path) -> None:
         )
 
 
+
+def _snapshot_noncanonical_aggregate_destinations(
+    summary_path: Path, csv_path: Path
+) -> tuple[str, str] | None:
+    """Refuse to replace historical or unclassifiable aggregate evidence.
+
+    A previous noncanonical replay may be refreshed only if *both* existing
+    outputs agree on their CSV bytes and the summary explicitly carries the
+    current noncanonical provenance contract. Partial or legacy output pairs
+    must be preserved for provenance review, not overwritten to look valid.
+    """
+    summary_path = Path(summary_path)
+    csv_path = Path(csv_path)
+    has_summary = summary_path.exists() or summary_path.is_symlink()
+    has_csv = csv_path.exists() or csv_path.is_symlink()
+    if not has_summary and not has_csv:
+        return None
+    if not has_summary or not has_csv:
+        raise SystemExit(
+            "Refusing noncanonical aggregate replacement: existing summary/CSV "
+            "pair is incomplete; preserve it for provenance review"
+        )
+
+    prior, summary_sha256 = _load_json(summary_path, include_sha256=True)
+    provenance = prior.get("replay_provenance")
+    frozen_marker = _noncanonical_evaluator_replay_provenance()
+    if (
+        prior.get("study_id") != STUDY_ID
+        or not isinstance(provenance, dict)
+        or any(provenance.get(key) != value for key, value in frozen_marker.items())
+    ):
+        raise SystemExit(
+            "Refusing noncanonical aggregate replacement: existing summary "
+            "lacks matching explicit noncanonical replay provenance; it may "
+            "be a frozen historical output"
+        )
+
+    csv_bytes = _read_regular_bytes(
+        csv_path,
+        label="Existing post-hoc aggregate CSV",
+        max_bytes=MAX_EVALUATOR_JSON_BYTES,
+    )
+    csv_sha256 = hashlib.sha256(csv_bytes).hexdigest()
+    if prior.get("posthoc_support_runs_sha256") != csv_sha256:
+        raise SystemExit(
+            "Refusing noncanonical aggregate replacement: existing summary "
+            "does not bind the retained CSV bytes"
+        )
+    return summary_sha256, csv_sha256
+
+
+def _require_noncanonical_aggregate_destinations_unchanged(
+    summary_path: Path,
+    csv_path: Path,
+    original_snapshot: tuple[str, str] | None,
+) -> None:
+    """Do not replace a different aggregate pair introduced during replay."""
+    if _snapshot_noncanonical_aggregate_destinations(
+        summary_path, csv_path
+    ) != original_snapshot:
+        raise SystemExit(
+            "Noncanonical aggregate destinations changed after preflight; "
+            "refusing publication without provenance review"
+        )
+
+
 def _normalize_evaluator_output(raw_result: str) -> dict:
     from logic.experiment import normalize_verifier_output
 
@@ -1344,6 +1410,11 @@ def main() -> int:
     if not math.isfinite(evaluator_temperature):
         raise SystemExit("TEMPERATURE must be finite")
     _validate_frozen_evaluator_config(evaluator_model, evaluator_temperature)
+    summary_path = REPO_ROOT / "outputs" / "posthoc_support_summary.json"
+    csv_path = REPO_ROOT / "outputs" / "posthoc_support_runs.csv"
+    aggregate_destination_snapshot = _snapshot_noncanonical_aggregate_destinations(
+        summary_path, csv_path
+    )
     # Reject unselected or nonregular evidence before reading any trace body.
     trace_files = _inventory_evaluator_treatment_trace_tree(
         TRACE_ROOT, variants=VARIANTS
@@ -1545,8 +1616,9 @@ def main() -> int:
     _require_final_evaluator_source_continuity(expected, rows)
     _require_evaluator_cache_source_continuity(cache_source_hashes)
 
-    summary_path = REPO_ROOT / "outputs" / "posthoc_support_summary.json"
-    csv_path = REPO_ROOT / "outputs" / "posthoc_support_runs.csv"
+    _require_noncanonical_aggregate_destinations_unchanged(
+        summary_path, csv_path, aggregate_destination_snapshot
+    )
     _publish_aggregate_outputs(summary_path, csv_path, summary, rows)
     _verify_aggregate_outputs(summary_path, csv_path)
     print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
