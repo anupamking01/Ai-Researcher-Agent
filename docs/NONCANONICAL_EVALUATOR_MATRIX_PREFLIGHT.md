@@ -365,3 +365,28 @@ mid-replay substitutions, and permitted noncanonical refresh. No historical
 treatment or evaluator calls, human annotations, or frozen confirmatory
 outcomes are regenerated or altered. Pilot, confirmatory, exploratory, and
 pending blinded human-validation claims remain separate.
+## Descriptor-to-path identity for evaluator source captures
+
+A descriptor-pinned source read prevents symlink redirection and detects
+observable in-place writes, but an unchanged open file descriptor alone does
+not establish that the selected pathname still refers to that file. An
+unselected regular file or regular parent directory could be atomically
+renamed over the selected entry after preflight, including with identical
+content or size, leaving the descriptor's contents unchanged.
+
+Noncanonical replay now compares device/inode/size/mtime/ctime metadata for
+the selected pathname, opened descriptors, and pathname visible after the
+bounded read. It rejects regular-file replacement before opening the file,
+replacement after opening it, and parent-directory replacement while the
+original directory remains open. The same check protects treatment trace
+JSON, cached evaluator JSON, Markdown reports, retrieval evidence, and
+existing aggregate reads. Synthetic offline tests exercise the regular-file
+and directory-swap cases; they do not regenerate measurements.
+
+This establishes local *read-window* name-to-byte consistency, **not**
+independently authenticated original custody, an atomic multi-file snapshot,
+or the absence of changes that are reverted between observations.
+Missing historical treatment archives and independently selected blinded
+human raters remain separate publication blockers. Diagnostic pilot, frozen
+automated confirmatory, exploratory, and pending human-evaluation claims
+remain unchanged.

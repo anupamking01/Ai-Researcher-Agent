@@ -108,11 +108,13 @@ def _require_regular_file(path: Path, *, label: str) -> None:
 def _read_regular_bytes(
     path: Path, *, label: str, max_bytes: int | None = None
 ) -> bytes:
-    """Capture regular-file bytes without following an intervening symlink.
+    """Capture one stable regular-file source from its selected pathname.
 
-    Directory and file descriptors pin the immediate parent and selected file
-    after preflight. Bound reads to max_bytes + 1 and reject observable writes
-    during capture. This is not a filesystem-wide atomic research snapshot.
+    Pin the directory and file descriptors, but also compare the original
+    pathname identities with the opened objects and the visible paths after
+    capture. A descriptor alone cannot detect a regular-file/parent-directory
+    replacement that redirects future reads of the same research evidence.
+    This is not an atomic multi-file experiment snapshot.
     """
     path = Path(path)
     _require_regular_file(path, label=label)
@@ -124,12 +126,34 @@ def _read_regular_bytes(
             "open flags; refusing an unsafe fallback"
         )
 
+    identity_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+
+    def same_identity(left: os.stat_result, right: os.stat_result) -> bool:
+        return all(
+            getattr(left, field) == getattr(right, field)
+            for field in identity_fields
+        )
+
     directory_fd: int | None = None
     input_fd: int | None = None
     try:
+        selected_parent = os.stat(path.parent, follow_symlinks=False)
+        selected_file = os.stat(path, follow_symlinks=False)
+        if not stat.S_ISDIR(selected_parent.st_mode) or not stat.S_ISREG(
+            selected_file.st_mode
+        ):
+            raise SystemExit(
+                f"Cannot read {label} {path}: selected source must remain "
+                "a regular file in a regular non-symlink directory"
+            )
         directory_fd = os.open(
             path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         )
+        opened_parent = os.fstat(directory_fd)
+        if not same_identity(selected_parent, opened_parent):
+            raise SystemExit(
+                f"{label} directory pathname changed before read: {path}"
+            )
         input_fd = os.open(
             path.name,
             os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
@@ -140,10 +164,20 @@ def _read_regular_bytes(
             raise SystemExit(
                 f"{label} must remain a regular file during read: {path}"
             )
+        if not same_identity(selected_file, before):
+            raise SystemExit(
+                f"{label} source pathname changed before read: {path}"
+            )
         with os.fdopen(input_fd, "rb") as handle:
             input_fd = None  # fdopen now owns and closes this descriptor.
             raw = handle.read() if max_bytes is None else handle.read(max_bytes + 1)
             after = os.fstat(handle.fileno())
+        # Check the pinned directory entry and the still-visible parent path.
+        # The open file descriptor alone cannot reveal regular-file swaps.
+        visible_file = os.stat(
+            path.name, dir_fd=directory_fd, follow_symlinks=False
+        )
+        visible_parent = os.stat(path.parent, follow_symlinks=False)
     except OSError as exc:
         raise SystemExit(f"Cannot read {label} {path}: {exc}") from exc
     finally:
@@ -152,11 +186,22 @@ def _read_regular_bytes(
         if directory_fd is not None:
             os.close(directory_fd)
 
-    identity_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
-    if any(getattr(before, field) != getattr(after, field) for field in identity_fields):
+    if not same_identity(before, after):
         raise SystemExit(
             f"{label} changed during read: {path}; "
             "review source provenance rather than measuring unstable bytes"
+        )
+    if not same_identity(selected_file, visible_file):
+        raise SystemExit(
+            f"{label} source pathname changed during read: {path}; "
+            "review provenance rather than measuring an unbound source"
+        )
+    if not same_identity(selected_parent, visible_parent) or not same_identity(
+        opened_parent, visible_parent
+    ):
+        raise SystemExit(
+            f"{label} directory pathname changed during read: {path}; "
+            "review provenance rather than measuring an unbound source"
         )
     if max_bytes is not None and len(raw) > max_bytes:
         raise SystemExit(
