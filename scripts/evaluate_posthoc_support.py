@@ -22,6 +22,7 @@ import io
 import json
 import math
 import os
+import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -107,21 +108,57 @@ def _require_regular_file(path: Path, *, label: str) -> None:
 def _read_regular_bytes(
     path: Path, *, label: str, max_bytes: int | None = None
 ) -> bytes:
-    """Read a local regular file with an optional hard byte ceiling.
+    """Capture regular-file bytes without following an intervening symlink.
 
-    Read at most limit + 1 bytes before deciding if the input is too large.
-    A size-only stat check would not bound memory if the file grew after stat.
+    Directory and file descriptors pin the immediate parent and selected file
+    after preflight. Bound reads to max_bytes + 1 and reject observable writes
+    during capture. This is not a filesystem-wide atomic research snapshot.
     """
     path = Path(path)
     _require_regular_file(path, label=label)
+    if not all(
+        hasattr(os, flag) for flag in ("O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK")
+    ):
+        raise SystemExit(
+            "Secure evaluator input reads require POSIX directory/no-follow "
+            "open flags; refusing an unsafe fallback"
+        )
+
+    directory_fd: int | None = None
+    input_fd: int | None = None
     try:
-        if max_bytes is None:
-            return path.read_bytes()
-        with path.open("rb") as handle:
-            raw = handle.read(max_bytes + 1)
+        directory_fd = os.open(
+            path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        )
+        input_fd = os.open(
+            path.name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+            dir_fd=directory_fd,
+        )
+        before = os.fstat(input_fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise SystemExit(
+                f"{label} must remain a regular file during read: {path}"
+            )
+        with os.fdopen(input_fd, "rb") as handle:
+            input_fd = None  # fdopen now owns and closes this descriptor.
+            raw = handle.read() if max_bytes is None else handle.read(max_bytes + 1)
+            after = os.fstat(handle.fileno())
     except OSError as exc:
         raise SystemExit(f"Cannot read {label} {path}: {exc}") from exc
-    if len(raw) > max_bytes:
+    finally:
+        if input_fd is not None:
+            os.close(input_fd)
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+    identity_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if any(getattr(before, field) != getattr(after, field) for field in identity_fields):
+        raise SystemExit(
+            f"{label} changed during read: {path}; "
+            "review source provenance rather than measuring unstable bytes"
+        )
+    if max_bytes is not None and len(raw) > max_bytes:
         raise SystemExit(
             f"{label} exceeds maximum {max_bytes} bytes: {path}; "
             "review source provenance rather than truncating input"

@@ -194,3 +194,32 @@ failure must not alter the frozen pilot, automated confirmatory, or
 exploratory results. The tests use synthetic local files only; real blinded
 human annotations remain pending. The existing filesystem checks are not
 an atomic snapshot and cannot exclude every concurrent mutation.
+
+
+## Descriptor-pinned local evaluator source capture
+
+The pre-existing regular-file check preceded a separate pathname-based open.
+Another process could replace the checked input or its immediate parent with a
+symlink or a FIFO between those operations. A replay might then consume
+different bytes from those inventoried, or block on a nonregular file before
+evaluating the frozen 40-cell matrix.
+
+Direct **noncanonical** evaluator reads now open the immediate parent with a
+no-follow directory descriptor, then open the leaf by name relative to that
+descriptor with no-follow and nonblocking flags. The opened descriptor must be
+a regular file. Before/after descriptor metadata (device, inode, length,
+modification and change times) must agree; observable in-place modifications
+cause rejection rather than measurement or automatic repair. The existing
+16 MiB JSON and 2 MiB text limits still apply. On platforms lacking these
+POSIX safeguards, direct replay fails closed instead of silently downgrading
+the read guarantees.
+
+This narrows local time-of-check/time-of-use exposure; it **does not** prove a
+filesystem-wide atomic snapshot, protect every ancestor component from
+concurrent replacement, or defeat adversarial same-size/timestamp-preserving
+rewrites. In particular, it does not independently authenticate unavailable
+2026 original traces, reports or retrieval evidence. The synthetic offline
+regressions exercise swapping symlinks, a replaced parent, a FIFO, and an
+in-place file mutation without invoking models. Historical treatment, frozen
+confirmatory measurements, exploratory analyses and pending real human
+validation remain unchanged and distinct.
