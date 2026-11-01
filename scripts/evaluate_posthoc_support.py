@@ -1160,6 +1160,51 @@ def _require_preflight_evaluator_input_unchanged(
         )
 
 
+def _require_final_evaluator_source_continuity(
+    expected: list[tuple[str, Path, dict, str, str]],
+    rows: list[dict],
+    *,
+    root: Path | None = None,
+) -> None:
+    """Check every cached and newly measured report/evidence at publication.
+
+    Schema-2 cache fingerprints were checked against the prepared inputs at
+    preflight; new records retain those same fingerprints. A fully cached
+    replay must not publish an aggregate after any report/evidence drift.
+    """
+    records = {}
+    for row in rows:
+        key = (row["variant_id"], row["task_id"], row["run_id"])
+        if key in records:
+            raise SystemExit(
+                f"Duplicate evaluator measurement at final source check: {key}"
+            )
+        records[key] = row
+    if len(records) != len(expected):
+        raise SystemExit(
+            "Final evaluator source check requires one measurement per treatment"
+        )
+
+    for variant, _trace_path, trace, task_id, run_id in expected:
+        key = (variant, task_id, run_id)
+        record = records.get(key)
+        if record is None:
+            raise SystemExit(
+                f"Missing evaluator measurement at final source check: {key}"
+            )
+        current = _prepare_evaluator_input(
+            trace, variant, task_id, run_id, root=root
+        )
+        if (
+            record.get("evidence_status") != current["evidence_status"]
+            or record.get("input_fingerprints") != current["input_fingerprints"]
+        ):
+            raise SystemExit(
+                "Evaluator source changed after preflight for "
+                f"{variant}/{task_id}/{run_id}; refusing aggregate publication."
+            )
+
+
 def _preflight_evaluator_resume(
     expected: list[tuple[str, Path, dict, str, str]],
     *,
@@ -1443,6 +1488,8 @@ def main() -> int:
     # treatment traces that drifted after the full-matrix preflight.
     for trace_path, trace_sha256 in trace_sources.values():
         _require_preflight_treatment_trace_unchanged(trace_path, trace_sha256)
+    # This also covers cached cells that never entered the model-call loop.
+    _require_final_evaluator_source_continuity(expected, rows)
 
     summary_path = REPO_ROOT / "outputs" / "posthoc_support_summary.json"
     csv_path = REPO_ROOT / "outputs" / "posthoc_support_runs.csv"

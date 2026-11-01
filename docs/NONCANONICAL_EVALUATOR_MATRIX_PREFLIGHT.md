@@ -273,3 +273,31 @@ evaluator Actions artifacts remain unavailable. Synthetic tests exercise
 metadata changes and byte-identical semantic JSON rewrites without making
 model calls. Diagnostic pilot, frozen automated confirmatory, exploratory,
 and pending blinded human-validation conclusions remain distinct and unchanged.
+
+
+## Aggregate-publication source continuity for cached and pending cells
+
+Post-preflight report/evidence continuity originally bracketed **new model calls**
+only. A fully cached noncanonical replay (or one whose other cached cells were
+processed before a slow pending call) could publish an aggregate after a cached
+cell's source report or retrieved-evidence files changed. The previous
+aggregate-time treatment-trace SHA-256 recheck does not detect those changes.
+
+Immediately before aggregate publication, direct noncanonical replay now
+reconstructs the common evaluator inputs for **every** expected treatment
+cell, including cells whose schema-2 measurements were reused from cache. It
+requires the observed evidence classification and question/report/evidence/
+prompt SHA-256 fingerprints to match the exact in-memory measurement records
+validated against preflight inputs. A missing/duplicated measurement or a
+changed source fails closed, without refreshing, rerunning, selecting, or
+altering any scientific score. Pending model calls retain their independent
+pre- and post-call guards; all 40 treatment trace bytes retain their separate
+aggregate-time continuity check. Regression tests are synthetic and offline.
+
+This is a **prospective local replay integrity safeguard**, not recovery or
+authentication of the unavailable original historical treatment archives, an
+atomic 40-cell filesystem snapshot, or assurance that files cannot change
+after the final check. No diagnostic pilot, frozen automated confirmatory,
+exploratory, or human-validation result is changed or newly claimed. Real
+blinded human validation remains blocked on independently authenticated
+original sources and eligible annotators.
