@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from scripts import plan_counterbalanced_replication as plan
+from scripts import verify_frozen_main_study_tasks as original_tasks
 
 
 def _payload():
@@ -27,6 +28,60 @@ def _raw(payload=None):
     if payload is None:
         payload = _payload()
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+
+def _frozen_2026_questions():
+    path = original_tasks.ROOT / original_tasks.TASK_MANIFEST_REL
+    raw = path.read_bytes()
+    # A change to the supposed original manifest must fail rather than
+    # silently teach the new-study guard a revised set of historical prompts.
+    assert hashlib.sha256(raw).hexdigest() == (
+        original_tasks.ORIGINAL_TASK_MANIFEST_SHA256
+    )
+    payload = json.loads(raw)
+    assert payload["task_set_id"] == plan.ORIGINAL_TASK_SET_ID
+    assert len(payload["tasks"]) == 10
+    return payload["tasks"]
+
+
+def test_historical_prompt_fingerprints_match_byte_pinned_original_source():
+    original = _frozen_2026_questions()
+    assert {row["id"] for row in original} == plan.ORIGINAL_2026_TASK_IDS
+    assert {
+        plan._normalized_question_sha256(row["question"]) for row in original
+    } == plan.ORIGINAL_2026_QUESTION_SHA256
+    assert len(plan.ORIGINAL_2026_QUESTION_SHA256) == 10
+
+
+@pytest.mark.parametrize("original_index", range(10))
+def test_reusing_historical_question_with_new_task_identity_is_rejected(original_index):
+    candidate = _payload()
+    old_question = _frozen_2026_questions()[original_index]["question"]
+    candidate["tasks"][original_index]["question"] = old_question
+    # The prospective identifier and freeze flag are otherwise valid.
+    with pytest.raises(plan.DesignError, match="repeats a frozen 2026"):
+        plan.build_plan(_raw(candidate))
+
+
+@pytest.mark.parametrize("rewriter", [
+    lambda text: "  \\n\\t".join(text.upper().split()),
+    lambda text: text.replace("For", "Ｆｏｒ", 1),
+])
+def test_whitespace_case_and_nfkc_variants_of_original_question_are_blocked(rewriter):
+    candidate = _payload()
+    candidate["tasks"][0]["question"] = rewriter(
+        _frozen_2026_questions()[0]["question"]
+    )
+    with pytest.raises(plan.DesignError, match="repeats a frozen 2026"):
+        plan.build_plan(_raw(candidate))
+
+
+def test_reusing_original_task_id_with_new_question_is_rejected():
+    candidate = _payload()
+    candidate["tasks"][0]["id"] = "main-01"
+    with pytest.raises(plan.DesignError, match="reserved 2026"):
+        plan.build_plan(_raw(candidate))
 
 
 def test_schedule_balances_every_position_and_every_pair_without_outcomes():
