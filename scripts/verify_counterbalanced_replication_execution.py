@@ -65,6 +65,7 @@ def audit_execution_log(
     execution_log: bytes,
     *,
     expected_plan_file_sha256: str | None = None,
+    expected_task_manifest_sha256: str | None = None,
     expected_execution_log_sha256: str | None = None,
 ) -> dict:
     """Verify *recorded* chronology; never certify real execution or outcomes.
@@ -76,6 +77,7 @@ def audit_execution_log(
     plan_verified = plan_verify.verify_plan(
         task_manifest, plan_receipt,
         expected_plan_file_sha256=expected_plan_file_sha256,
+        expected_task_manifest_sha256=expected_task_manifest_sha256,
     )
     plan = design.build_plan(task_manifest)
 
@@ -188,6 +190,7 @@ def audit_execution_log(
         "plan_file_sha256": plan_verified["plan_file_sha256"],
         "execution_log_sha256": log_sha256,
         "plan_file_external_pin_matched": plan_verified["supplied_plan_file_pin_matched"],
+        "task_manifest_external_pin_matched": plan_verified["supplied_task_manifest_pin_matched"],
         "execution_log_external_pin_matched": log_pinned,
         "recorded_cells": len(events),
         "attempted_cells": len(events) - counts["not_started"],
@@ -208,6 +211,7 @@ def main() -> int:
     parser.add_argument("--plan-file", required=True, type=Path)
     parser.add_argument("--execution-log", required=True, type=Path)
     parser.add_argument("--expected-plan-file-sha256")
+    parser.add_argument("--expected-task-manifest-sha256")
     parser.add_argument("--expected-execution-log-sha256")
     args = parser.parse_args()
     try:
@@ -216,6 +220,7 @@ def main() -> int:
             design.read_manifest(args.plan_file),
             design.read_manifest(args.execution_log),
             expected_plan_file_sha256=args.expected_plan_file_sha256,
+            expected_task_manifest_sha256=args.expected_task_manifest_sha256,
             expected_execution_log_sha256=args.expected_execution_log_sha256,
         )
     except design.DesignError as exc:

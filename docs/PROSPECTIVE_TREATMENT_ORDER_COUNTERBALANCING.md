@@ -100,3 +100,27 @@ python -m scripts.verify_counterbalanced_replication_plan --task-manifest /path/
 The verifier is offline, read-only, and no-model-call. It requires a bounded regular no-follow task manifest and receipt; rejects duplicate/nonstandard JSON, unexpected fields, altered assignment even if all aggregate balance counts still match, source-manifest changes, wrong data types and mismatched SHA-256 hashes; and prints only a compact audit receipt. Whitespace in the plan receipt may differ if there is **no external byte pin**, because it compares canonical JSON fields rather than text formatting. The exact input manifest byte digest, not merely semantic task content, must match.
 
 For stronger custody, retain the **SHA-256 of the exact plan file** with an independent pre-execution timestamped record, and verify it with `--expected-plan-file-sha256 <64-lowercase-hex>`. This option checks a coordinator-*supplied* digest; it does **not** attest its independence, publication time, authorization, or the originally frozen task-selection process. A verifier pass without this pin means **internal consistency only**; with a matching pin, it means consistency with the supplied prior value, **not** independent registration proof. Coordinators should preserve the original manifest, plan file, digest, and an externally reviewable timestamp before work begins. This does not modify the original 2026 treatment data or resolve their source-custody and human-rating gates.
+
+
+## Independently retained task-source pin (prospective-only)
+
+The plan verifier recomputes every assignment from the **supplied** manifest,
+but an attacker or accidental edit can rewrite both the manifest and plan and
+still produce a self-consistent receipt. When the coordinator has separately
+preserved a SHA-256 fingerprint of the **original task-manifest bytes before
+execution**, verify those exact bytes independently:
+
+~~~bash
+python -m scripts.verify_counterbalanced_replication_plan \
+  --task-manifest /path/to/new_frozen_ten_tasks.json \
+  --plan-file /path/to/proposed_order_receipt.json \
+  --expected-task-manifest-sha256 <independently-retained-prerun-source-sha256>
+~~~
+
+The result includes `supplied_task_manifest_pin_matched`. This optional pin
+is distinct from the existing plan-file pin; both can be supplied together.
+It rejects even formatting-only source changes, although those need not alter
+the Williams assignment. A matching self-computed digest is *not* proof of
+independent retention, preregistration, task independence or execution. The
+pilot, historical automated confirmatory findings, exploratory analyses,
+future design and pending human ratings remain separate.

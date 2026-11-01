@@ -85,6 +85,7 @@ def test_exact_schedule_and_chronology_only_with_explicit_limits():
     assert result["plan_file_sha256"] == hashlib.sha256(receipt).hexdigest()
     assert result["execution_log_sha256"] == hashlib.sha256(_bytes(log)).hexdigest()
     assert result["plan_file_external_pin_matched"] is False
+    assert result["task_manifest_external_pin_matched"] is False
     assert result["execution_log_external_pin_matched"] is False
     assert result["actual_execution_independently_authenticated"] is False
     assert result["scientific_outcomes_validated"] is False
@@ -314,3 +315,44 @@ def test_completed_full_study_reports_no_unattempted_cells():
     assert result["unattempted_cells"] == 0
     assert result["all_planned_cells_attempted"] is True
     assert result["recorded_status_counts"]["not_started"] == 0
+
+
+def test_chronology_source_pin_blocks_self_consistent_task_replacement():
+    original, _, _ = _fixture()
+    changed = json.loads(original)
+    changed["tasks"][0]["question"] = "Substituted future task in chronology?"
+    substituted = _bytes(changed)
+    new_plan = _plan(substituted)
+    new_log = _bytes(_log(substituted, new_plan))
+    assert audit.audit_execution_log(
+        substituted, new_plan, new_log
+    )["status"] == "pass_recorded_chronology_only"
+    with pytest.raises(design.DesignError, match="task manifest SHA-256 differs"):
+        audit.audit_execution_log(
+            substituted, new_plan, new_log,
+            expected_task_manifest_sha256=hashlib.sha256(original).hexdigest(),
+        )
+    assert audit.audit_execution_log(
+        original, _plan(original), _bytes(_log(original, _plan(original))),
+        expected_task_manifest_sha256=hashlib.sha256(original).hexdigest(),
+    )["task_manifest_external_pin_matched"] is True
+
+
+def test_chronology_cli_checks_preexecution_task_source_pin(tmp_path, monkeypatch, capsys):
+    source, receipt, log = _fixture()
+    manifest = tmp_path / "tasks.json"
+    plan = tmp_path / "plan.json"
+    events = tmp_path / "events.json"
+    manifest.write_bytes(source)
+    plan.write_bytes(receipt)
+    events.write_bytes(_bytes(log))
+    monkeypatch.setattr(sys, "argv", [
+        "verify_counterbalanced_replication_execution.py",
+        "--task-manifest", str(manifest), "--plan-file", str(plan),
+        "--execution-log", str(events),
+        "--expected-task-manifest-sha256", hashlib.sha256(source).hexdigest(),
+    ])
+    assert audit.main() == 0
+    receipt_out = json.loads(capsys.readouterr().out)
+    assert receipt_out["task_manifest_external_pin_matched"] is True
+    assert receipt_out["actual_execution_independently_authenticated"] is False

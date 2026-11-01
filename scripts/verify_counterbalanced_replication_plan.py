@@ -29,6 +29,7 @@ def verify_plan(
     receipt: bytes,
     *,
     expected_plan_file_sha256: str | None = None,
+    expected_task_manifest_sha256: str | None = None,
 ) -> dict:
     """Reconstruct every assignment, bound input hash, and receipt field.
 
@@ -48,6 +49,16 @@ def verify_plan(
         )
 
     expected = design.build_plan(task_manifest)
+    if expected_task_manifest_sha256 is not None:
+        if (type(expected_task_manifest_sha256) is not str or
+                re.fullmatch(r"[0-9a-f]{64}", expected_task_manifest_sha256) is None):
+            raise design.DesignError(
+                "expected task-manifest SHA-256 must be exactly 64 lowercase hex digits"
+            )
+        if expected["source_manifest_sha256"] != expected_task_manifest_sha256:
+            raise design.DesignError(
+                "task manifest SHA-256 differs from supplied external pin"
+            )
     try:
         submitted = json.loads(
             receipt.decode("utf-8"),
@@ -87,6 +98,7 @@ def verify_plan(
         "design_receipt_sha256": expected["design_receipt_sha256"],
         "plan_file_sha256": file_sha256,
         "supplied_plan_file_pin_matched": expected_plan_file_sha256 is not None,
+        "supplied_task_manifest_pin_matched": expected_task_manifest_sha256 is not None,
         "historical_study_validated": False,
         "replication_or_human_validation_performed": False,
     }
@@ -103,6 +115,10 @@ def main() -> int:
         help="retained output of plan_counterbalanced_replication.py",
     )
     parser.add_argument(
+        "--expected-task-manifest-sha256",
+        help="OPTIONAL independently retained pre-execution SHA-256 of exact task-manifest bytes",
+    )
+    parser.add_argument(
         "--expected-plan-file-sha256",
         help="OPTIONAL prior independently retained SHA-256 of exact plan-file bytes",
     )
@@ -112,6 +128,7 @@ def main() -> int:
             design.read_manifest(args.task_manifest),
             design.read_manifest(args.plan_file),
             expected_plan_file_sha256=args.expected_plan_file_sha256,
+            expected_task_manifest_sha256=args.expected_task_manifest_sha256,
         )
     except design.DesignError as exc:
         parser.exit(2, f"PROSPECTIVE PLAN VERIFICATION: FAIL: {exc}\n")

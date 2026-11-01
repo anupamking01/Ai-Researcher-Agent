@@ -56,3 +56,26 @@ Both `--expected-*` pins are optional, but do not describe them as independent e
 A pass means **the supplied bytes are internally consistent with the frozen prospective design**. No independently authenticated event timestamps, model/provider interactions, retrieved sources, run traces or treatment outputs are established by this check alone. Archival custody, independent pre-execution registration, source-to-run linkage, and actual treatment execution remain separate evidence requirements. No experiment, evaluator, or human annotator was used to develop the synthetic tests for this feature.
 
 The diagnostic pilot, frozen automated confirmatory results, exploratory analyses, this prospective design, and pending genuine blinded human validation are distinct. The 2026 temporal-confounding limitation and original-report recovery blockers remain unchanged.
+
+
+## Optional independent task-source custody pin
+
+A candidate execution ledger can be internally valid after all three candidate
+files (task manifest, plan receipt and event log) have been replaced together.
+If the coordinator separately retained the **exact task-manifest SHA-256 before
+execution**, the same read-only chronology audit can compare that source pin:
+
+~~~bash
+python -m scripts.verify_counterbalanced_replication_execution \
+  --task-manifest <frozen-new-task-manifest.json> \
+  --plan-file <original-prospective-plan.json> \
+  --execution-log <unaltered-recorded-chronology.json> \
+  --expected-task-manifest-sha256 <independently-retained-prerun-source-sha256>
+~~~
+
+`task_manifest_external_pin_matched` separately records the result, alongside
+existing plan-file and post-execution log pins. All three are optional and
+verify only equality to coordinator-supplied values; the checker cannot prove
+when, by whom or where those values were first preserved, nor that any
+execution event occurred. This does not affect historical experiments or
+authorize human-rating distribution.

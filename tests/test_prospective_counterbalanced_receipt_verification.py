@@ -43,6 +43,7 @@ def test_roundtrip_recomputes_every_field_without_model_calls():
     ]
     assert result["plan_file_sha256"] == hashlib.sha256(receipt).hexdigest()
     assert result["supplied_plan_file_pin_matched"] is False
+    assert result["supplied_task_manifest_pin_matched"] is False
     assert result["historical_study_validated"] is False
     assert result["replication_or_human_validation_performed"] is False
 
@@ -190,3 +191,60 @@ def test_cli_emits_only_digests_and_rejects_bad_file_or_symlink(
         verify.main()
     assert exc.value.code == 2
     assert "recomputed manifest-bound" in capsys.readouterr().err
+
+
+def test_external_source_pin_rejects_self_consistent_manifest_and_plan_replacement():
+    original = manifest_bytes()
+    original_pin = hashlib.sha256(original).hexdigest()
+    revised = json.loads(original)
+    revised["tasks"][0]["question"] = "A newly substituted future question?"
+    altered = json.dumps(revised, sort_keys=True, separators=(",", ":")).encode()
+    # Without separately preserved source custody, both candidate inputs
+    # can be replaced together and still form a valid new schedule.
+    assert verify.verify_plan(altered, plan_bytes(altered))["status"] == "pass"
+    with pytest.raises(design.DesignError, match="task manifest SHA-256 differs"):
+        verify.verify_plan(
+            altered, plan_bytes(altered),
+            expected_task_manifest_sha256=original_pin,
+        )
+    assert verify.verify_plan(
+        original, plan_bytes(original),
+        expected_task_manifest_sha256=original_pin,
+    )["supplied_task_manifest_pin_matched"] is True
+
+
+@pytest.mark.parametrize("pin", ["", "A" * 64, "z" * 64, "0" * 63, 0, True])
+def test_invalid_external_task_source_pin_is_rejected(pin):
+    source = manifest_bytes()
+    with pytest.raises(design.DesignError, match="64 lowercase hex"):
+        verify.verify_plan(
+            source, plan_bytes(source), expected_task_manifest_sha256=pin,
+        )
+
+
+def test_source_pin_is_byte_exact_even_if_schedule_is_unchanged():
+    source = manifest_bytes()
+    formatted = (json.dumps(json.loads(source), indent=2, sort_keys=True) + "\n").encode()
+    assert design.build_plan(source)["schedule"] == design.build_plan(formatted)["schedule"]
+    with pytest.raises(design.DesignError, match="task manifest SHA-256 differs"):
+        verify.verify_plan(
+            formatted, plan_bytes(formatted),
+            expected_task_manifest_sha256=hashlib.sha256(source).hexdigest(),
+        )
+
+
+def test_plan_cli_verifies_independently_preserved_source_pin(tmp_path, monkeypatch, capsys):
+    source = manifest_bytes()
+    manifest = tmp_path / "tasks.json"
+    plan = tmp_path / "plan.json"
+    manifest.write_bytes(source)
+    plan.write_bytes(plan_bytes(source))
+    monkeypatch.setattr(sys, "argv", [
+        "verify_counterbalanced_replication_plan.py",
+        "--task-manifest", str(manifest), "--plan-file", str(plan),
+        "--expected-task-manifest-sha256", hashlib.sha256(source).hexdigest(),
+    ])
+    assert verify.main() == 0
+    verified = json.loads(capsys.readouterr().out)
+    assert verified["supplied_task_manifest_pin_matched"] is True
+    assert "schedule" not in verified
