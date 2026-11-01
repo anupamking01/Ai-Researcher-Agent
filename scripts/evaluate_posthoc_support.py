@@ -864,16 +864,68 @@ def _validated_cache_accounting(
     return recomputed_cost
 
 
-def _research_context(run_id: str, *, root: Path | None = None) -> str:
-    root = REPO_ROOT if root is None else Path(root)
-    run_dir = root / "outputs" / run_id
+def _inventory_evaluator_run_evidence(run_dir: Path) -> list[Path]:
+    """Reject unselected local report/evidence files before evaluator input use.
+
+    The frozen runner writes numbered query text files, a Markdown report,
+    optionally a PDF, and optionally a verification JSON. Wildcard evidence
+    selection could omit shadow text files. This checks all immediate entries
+    with bounded enumeration, not historical authentication or an atomic view.
+    """
+    run_dir = Path(run_dir)
     if run_dir.is_symlink() or not run_dir.is_dir():
         raise SystemExit(
             "Evaluator run directory must be a regular non-symlink directory: "
             f"{run_dir}"
         )
+    query_names = {f"research-query-{number:02d}.txt" for number in range(1, 5)}
+    allowed = query_names | {
+        "research_report.md",
+        "research_report.pdf",
+        "verification.json",
+    }
+    observed: set[str] = set()
+    try:
+        with os.scandir(run_dir) as entries:
+            for count, entry in enumerate(entries, 1):
+                if count > len(allowed):
+                    raise SystemExit(
+                        "Refusing evaluator replay: unselected report/evidence "
+                        f"entries exceed frozen writer contract: {run_dir}"
+                    )
+                if (
+                    entry.name not in allowed
+                    or entry.is_symlink()
+                    or not entry.is_file(follow_symlinks=False)
+                ):
+                    raise SystemExit(
+                        "Refusing evaluator replay: unselected or nonregular "
+                        f"report/evidence file: {entry.path}"
+                    )
+                observed.add(entry.name)
+    except OSError as exc:
+        raise SystemExit(
+            "Refusing evaluator replay: cannot inventory report/evidence "
+            f"files in {run_dir}: {exc}"
+        ) from exc
+
+    numbers = [
+        number for number in range(1, 5)
+        if f"research-query-{number:02d}.txt" in observed
+    ]
+    if numbers and numbers != list(range(1, numbers[-1] + 1)):
+        raise SystemExit(
+            "Refusing evaluator replay: noncontiguous research-query file "
+            f"sequence in {run_dir}: {numbers}"
+        )
+    return [run_dir / f"research-query-{number:02d}.txt" for number in numbers]
+
+
+def _research_context(run_id: str, *, root: Path | None = None) -> str:
+    root = REPO_ROOT if root is None else Path(root)
+    run_dir = root / "outputs" / run_id
     parts = []
-    for path in sorted(run_dir.glob("research-query-*.txt")):
+    for path in _inventory_evaluator_run_evidence(run_dir):
         text = _read_regular_text(path, label="Evaluator evidence").strip()
         if text:
             parts.append(text)

@@ -89,3 +89,27 @@ confirmatory, exploratory, and pending human-evaluation evidence retain
 their separate classifications. These checks use synthetic offline tests;
 the historical 40 treatments, common evaluator, and human raters were
 not rerun.
+
+## Closed-world report and retrieved-evidence inventory
+
+The direct noncanonical common evaluator previously selected evidence through
+a wildcard query-text glob. Other local files could enter the original
+research-agent text loader but be silently omitted from replay; alternate
+source backups, nested directories and symlinks could also go unreported.
+
+Before evaluator prompt preparation or any provider call, the new bounded
+inventory checks all immediate entries in each selected treatment run folder.
+It permits only the frozen writer's research-query-01.txt through
+research-query-04.txt, research_report.md, optional research_report.pdf and
+optional verification.json. It rejects unexpected files, nested paths,
+symlinks, alternative query-file names, and gaps in the numbered query
+sequence. Enumeration stops after eight entries (one beyond the seven
+allowed names), avoiding a full unbounded directory listing. A valid
+zero-source treatment can still have no query files; the existing
+report-integrity and zero-evidence rubric checks remain in effect.
+
+This is prospective local evidence-selection consistency, not independent
+2026 historical-archive authentication or an atomic filesystem snapshot.
+It neither authorizes selective reruns nor changes pilot, frozen automated
+confirmatory, exploratory, or pending human-validation claims. Regression
+tests are synthetic/offline and produce no experimental measurements.
