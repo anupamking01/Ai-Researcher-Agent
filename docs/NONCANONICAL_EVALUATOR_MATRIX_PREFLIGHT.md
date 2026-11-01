@@ -166,3 +166,31 @@ or human ratings have been generated or changed. This is a prospective replay
 integrity guard, not independent authentication of missing original archives.
 Diagnostic pilot, frozen automated confirmatory, exploratory, and pending
 blinded human-validation claims remain separate.
+
+
+## Bounded noncanonical replay input reads (operational safety)
+
+Direct evaluator replay previously read complete local JSON treatment traces,
+cached evaluator records, Markdown reports, and retrieved query text into
+memory without a byte ceiling. A very large input could exhaust resources
+before JSON validation or provoke an unexpectedly large model prompt. The
+closed-world directory inventory limits *file counts*, not file sizes.
+
+The evaluator now fails closed on any JSON trace or cache exceeding **16 MiB**,
+any single report/query-text input exceeding **2 MiB**, or joined selected
+retrieval evidence exceeding **4 MiB** (UTF-8 encoded bytes, including the
+joining separators). Bounded reads consume at most one byte beyond the
+per-file ceiling to detect an oversized file; no prefix is parsed, scored,
+cached, or silently substituted. A file exactly at its limit is permitted.
+All input checks run before the replay's provider import/model calls.
+Oversized or contradictory source material requires provenance review, not
+truncation or treatment/evaluator reruns to force a passing result.
+
+These are deliberately generous operational resource ceilings, **not** new
+scientific exclusion criteria, an authentication of original historical
+archives, or a claim that all original files fit those limits (the historical
+report and trace archives remain unavailable). Their noncanonical replay
+failure must not alter the frozen pilot, automated confirmatory, or
+exploratory results. The tests use synthetic local files only; real blinded
+human annotations remain pending. The existing filesystem checks are not
+an atomic snapshot and cannot exclude every concurrent mutation.

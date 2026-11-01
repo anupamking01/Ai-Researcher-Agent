@@ -38,6 +38,11 @@ VARIANTS = ("D3", "D6", "P6", "P6V")
 MAX_CLAIMS = 12
 # Bound even ignored JSON numbers in local treatment traces and evaluator caches.
 MAX_EVALUATOR_JSON_NUMBER_TOKEN_CHARS = 128
+# Untrusted replay inputs must not trigger unbounded reads or enormous prompts.
+# Bounds are operational safety limits, not replacements for frozen study data.
+MAX_EVALUATOR_JSON_BYTES = 16 * 1024 * 1024
+MAX_EVALUATOR_TEXT_FILE_BYTES = 2 * 1024 * 1024
+MAX_EVALUATOR_EVIDENCE_BYTES = 4 * 1024 * 1024
 STUDY_ID = "budget-main-v1"
 NONCANONICAL_EVALUATOR_REPLAY_ACK = "NONCANONICAL_EVALUATOR_RECOVERY"
 ORIGINAL_EVALUATOR_RECOVERY_ACTIONS_RUN_ID = 34783525480
@@ -99,17 +104,35 @@ def _require_regular_file(path: Path, *, label: str) -> None:
         )
 
 
-def _read_regular_bytes(path: Path, *, label: str) -> bytes:
+def _read_regular_bytes(
+    path: Path, *, label: str, max_bytes: int | None = None
+) -> bytes:
+    """Read a local regular file with an optional hard byte ceiling.
+
+    Read at most limit + 1 bytes before deciding if the input is too large.
+    A size-only stat check would not bound memory if the file grew after stat.
+    """
     path = Path(path)
     _require_regular_file(path, label=label)
     try:
-        return path.read_bytes()
+        if max_bytes is None:
+            return path.read_bytes()
+        with path.open("rb") as handle:
+            raw = handle.read(max_bytes + 1)
     except OSError as exc:
         raise SystemExit(f"Cannot read {label} {path}: {exc}") from exc
+    if len(raw) > max_bytes:
+        raise SystemExit(
+            f"{label} exceeds maximum {max_bytes} bytes: {path}; "
+            "review source provenance rather than truncating input"
+        )
+    return raw
 
 
 def _read_regular_text(path: Path, *, label: str) -> str:
-    raw = _read_regular_bytes(path, label=label)
+    raw = _read_regular_bytes(
+        path, label=label, max_bytes=MAX_EVALUATOR_TEXT_FILE_BYTES
+    )
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -158,7 +181,9 @@ def _load_json(path: Path) -> dict:
         return number
 
     try:
-        raw = _read_regular_bytes(path, label="JSON input")
+        raw = _read_regular_bytes(
+            path, label="JSON input", max_bytes=MAX_EVALUATOR_JSON_BYTES
+        )
         payload = json.loads(
             raw.decode("utf-8"),
             object_pairs_hook=_reject_duplicate_json_keys,
@@ -947,7 +972,14 @@ def _research_context(run_id: str, *, root: Path | None = None) -> str:
         text = _read_regular_text(path, label="Evaluator evidence").strip()
         if text:
             parts.append(text)
-    return "\n\n".join(parts)
+    context = "\n\n".join(parts)
+    if len(context.encode("utf-8")) > MAX_EVALUATOR_EVIDENCE_BYTES:
+        raise SystemExit(
+            f"Evaluator evidence for {run_id} exceeds combined "
+            f"{MAX_EVALUATOR_EVIDENCE_BYTES}-byte limit; "
+            "review source provenance rather than truncating evidence"
+        )
+    return context
 
 
 def _report_text(run_id: str, *, root: Path | None = None) -> str:
