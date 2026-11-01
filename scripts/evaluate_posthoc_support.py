@@ -720,6 +720,16 @@ def _validate_cached_evaluation(
         expected_evaluator_model=expected_evaluator_model,
         expected_temperature=expected_temperature,
     )
+    # Historical schema-1 records predate evaluator-input fingerprints. They
+    # remain inspectable on their original terms, but direct replay supplies
+    # expected fingerprints and must not silently reuse scores against
+    # potentially different report, question, retrieval or prompt bytes.
+    if schema_version == 1 and expected_input_fingerprints is not None:
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} is unbound legacy schema_version 1: "
+            "no input_fingerprints; refusing noncanonical evaluator replay. "
+            "Preserve the old record for provenance review, not silent reuse."
+        )
     return payload
 
 

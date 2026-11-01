@@ -136,3 +136,33 @@ artifacts or establish blinded human-evaluation readiness. All regression
 cases use synthetic local files without model calls. The frozen pilot,
 confirmatory, and exploratory findings remain unchanged, and human validation
 remains pending.
+
+## Fingerprintless historical caches cannot be reused in direct replay
+
+The common evaluator historically stored some valid schema-1 measurements
+without hashes of the question, report, retrieved evidence, or exact evaluator
+prompt. Identity, score, and pricing checks alone cannot show that a saved
+schema-1 score measured the same bytes now found in a local treatment folder.
+Before this guard, the direct **noncanonical** replay preflight could count
+such an unbound cache as a reusable measurement despite recomputing the
+current prompt fingerprints.
+
+When the preflight supplies expected evaluator-input fingerprints, the cache
+validator now **fails closed** on schema-1 records, even if their cell identity
+and numeric accounting are internally consistent. This happens before any
+provider/model call. Schema-2 records remain reusable only when all four
+recorded source/prompt fingerprints match the current prepared inputs. The
+read-only legacy validation path, without an expected fingerprint, remains
+available to inspect preserved historical records; this does **not** certify
+their original source bytes.
+
+A schema-1 historical cache must **not** be silently promoted to schema 2 by
+attaching hashes computed from today's local files. The discrepancy calls for
+independent provenance adjudication. Do not replace frozen historical results
+or rerun evaluator treatments merely to make a cache pass this check.
+
+These tests are entirely synthetic; no original runs, evaluator measurements,
+or human ratings have been generated or changed. This is a prospective replay
+integrity guard, not independent authentication of missing original archives.
+Diagnostic pilot, frozen automated confirmatory, exploratory, and pending
+blinded human-validation claims remain separate.

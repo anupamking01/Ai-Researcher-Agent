@@ -968,6 +968,68 @@ def test_resume_rejects_cache_bound_to_different_report_before_model_call(
     assert model_calls == []
 
 
+def test_bound_resume_rejects_fingerprintless_legacy_cache_before_model_call(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    cache_path = eval_root / "D3" / "main-01.json"
+    cache_path.parent.mkdir(parents=True)
+    historical_style_record = _zero_source_cache()
+    cache_path.write_text(json.dumps(historical_style_record), encoding="utf-8")
+
+    model_calls = []
+
+    def fail_if_called(**kwargs):
+        model_calls.append(kwargs)
+        raise AssertionError("legacy cache must fail before any model invocation")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        fail_if_called,
+    )
+
+    with pytest.raises(SystemExit, match="unbound legacy schema_version 1"):
+        evaluate_posthoc_support.main()
+
+    assert model_calls == []
+    assert json.loads(cache_path.read_text(encoding="utf-8")) == historical_style_record
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
+def test_legacy_record_can_still_be_inspected_without_claiming_source_binding(
+    tmp_path,
+):
+    path = tmp_path / "historical-cache.json"
+    original_record = _zero_source_cache()
+    path.write_text(json.dumps(original_record), encoding="utf-8")
+
+    assert _load_cached(
+        path,
+        expected_evidence_status="zero_successful_sources",
+        expected_input_fingerprints=None,
+    ) == original_record
+
+
+def test_explicit_fingerprint_binding_rejects_legacy_schema_in_direct_loader(
+    tmp_path,
+):
+    path = tmp_path / "historical-cache.json"
+    path.write_text(json.dumps(_zero_source_cache()), encoding="utf-8")
+    expected = evaluate_posthoc_support._evaluator_input_fingerprints(
+        question="Question for main-01",
+        report="Report for main-01\\n",
+        evidence=evaluate_posthoc_support.NO_EVIDENCE_SENTINEL,
+        prompt="Synthetic current verification prompt",
+    )
+    with pytest.raises(SystemExit, match="no input_fingerprints"):
+        _load_cached(
+            path,
+            expected_evidence_status="zero_successful_sources",
+            expected_input_fingerprints=expected,
+        )
+
+
 def _evaluator_result():
     # Resume-main fixtures intentionally have zero successfully retrieved
     # sources: the evidence-only rubric must not invent support or partial
@@ -1083,7 +1145,7 @@ def test_aggregate_summary_binds_exact_published_csv_bytes(tmp_path, monkeypatch
     cache_path.parent.mkdir(parents=True)
     cache_path.write_text(
         json.dumps(
-            _zero_source_cache()
+            _bound_zero_source_cache()
         ),
         encoding="utf-8",
     )
@@ -1123,7 +1185,7 @@ def test_aggregate_publication_stages_every_file_before_replacing_existing_outpu
     cache_path.parent.mkdir(parents=True)
     cache_path.write_text(
         json.dumps(
-            _zero_source_cache()
+            _bound_zero_source_cache()
         ),
         encoding="utf-8",
     )
@@ -1176,7 +1238,7 @@ def test_interrupted_second_replacement_leaves_detectable_mixed_generation(
     cache_path.parent.mkdir(parents=True)
     cache_path.write_text(
         json.dumps(
-            _zero_source_cache()
+            _bound_zero_source_cache()
         ),
         encoding="utf-8",
     )
@@ -1299,6 +1361,31 @@ def test_cache_publication_cleans_staging_after_write_sync_failure(
 
     assert not path.exists()
     assert list(path.parent.glob(".main-01.json.*.tmp")) == []
+
+
+def _bound_zero_source_cache(**overrides):
+    """Synthetic v2 cache bound to the exact synthetic main-01 prompt."""
+    from logic.prompts import generate_verification_prompt
+
+    question = "Question for main-01"
+    report = "Report for main-01\\n"
+    evidence = evaluate_posthoc_support.NO_EVIDENCE_SENTINEL
+    prompt = generate_verification_prompt(
+        question,
+        report,
+        evidence,
+        max_claims=evaluate_posthoc_support.MAX_CLAIMS,
+    )
+    return _zero_source_cache(
+        schema_version=2,
+        input_fingerprints=_input_fingerprints(
+            question=question,
+            report=report,
+            evidence=evidence,
+            prompt=prompt,
+        ),
+        **overrides,
+    )
 
 
 def _zero_source_cache(**overrides):
