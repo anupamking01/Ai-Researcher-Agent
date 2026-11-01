@@ -301,3 +301,32 @@ after the final check. No diagnostic pilot, frozen automated confirmatory,
 exploratory, or human-validation result is changed or newly claimed. Real
 blinded human validation remains blocked on independently authenticated
 original sources and eligible annotators.
+
+
+## Byte-exact evaluator-cache custody through aggregate publication
+
+Noncanonical direct replay previously validated cached schema-2 measurements and
+their input fingerprints during preflight, then retained the parsed records in
+memory. A cached evaluator JSON could subsequently be removed, replaced, or
+rewritten while other cells were evaluated. The final report/evidence and trace
+continuity checks did not detect this: an aggregate could refer to a cached
+measurement no longer present in the replay workspace.
+
+Direct replay now preserves a **SHA-256 of the exact JSON bytes used for each
+preflight-validated cached measurement**, captured from the same bounded,
+descriptor-pinned read used for parsing. For newly produced measurements, the
+digest is computed from the exact create-only cache serialization. Immediately
+before publishing aggregate outputs, the evaluator re-inventories the entire
+cache tree, requires exactly the expected set of cache files, and verifies
+their byte-exact hashes. Missing, additional, nonregular, or changed cache
+files abort aggregate publication; even semantically equivalent JSON rewrites
+are not silently accepted. Legacy schema-1 source-binding rules are unchanged.
+Ordinary direct uses of the cache validator retain their previous return type.
+
+These checks preserve local cache-to-summary provenance; they cannot
+authenticate expired historical 2026 artifacts, prevent transient changes
+undone between checks, or provide a filesystem-wide atomic snapshot.
+No score is regenerated or changed to pass the guard. All regression tests
+are synthetic/offline; frozen automated confirmatory conclusions, diagnostic
+pilot, exploratory analyses, and pending genuine human validation remain
+separate.

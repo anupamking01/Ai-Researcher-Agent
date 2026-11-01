@@ -1446,3 +1446,41 @@ def test_no_evidence_rule_does_not_relabel_evidence_backed_measurements():
         evidence_status="retrieved_evidence",
         label="control",
     )
+
+
+def test_cached_evaluator_mutation_after_preflight_blocks_aggregate(
+    tmp_path, monkeypatch
+):
+    """Even an all-cached replay cannot publish from no-longer-retained bytes."""
+    eval_root = _configure_resume_main(
+        tmp_path, monkeypatch, task_ids=("main-01",)
+    )
+    cache_path = eval_root / "D3" / "main-01.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(
+        json.dumps(_bound_zero_source_cache()), encoding="utf-8"
+    )
+
+    def fail_if_called(**_kwargs):
+        raise AssertionError("All evaluations are cached; no model calls allowed")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion", fail_if_called
+    )
+    original_guard = evaluate_posthoc_support._require_final_evaluator_source_continuity
+
+    def mutate_cache_after_source_check(*args, **kwargs):
+        original_guard(*args, **kwargs)
+        # Semantically identical JSON with different bytes must not be
+        # attributed to the preflight-validated measurement snapshot.
+        cache_path.write_bytes(cache_path.read_bytes() + b"\\n")
+
+    monkeypatch.setattr(
+        evaluate_posthoc_support,
+        "_require_final_evaluator_source_continuity",
+        mutate_cache_after_source_check,
+    )
+    with pytest.raises(SystemExit, match="Evaluator cache changed during replay"):
+        evaluate_posthoc_support.main()
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()

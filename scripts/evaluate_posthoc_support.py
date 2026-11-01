@@ -476,13 +476,16 @@ def _inventory_evaluator_cache_tree(
     return found
 
 
+def _serialized_evaluation_cache_bytes(record: dict) -> bytes:
+    """Use identical serialization for create-only cache publication and custody."""
+    return (json.dumps(record, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
 def _publish_evaluation_cache(path: Path, record: dict) -> None:
     """Durably publish one evaluator result without exposing partial bytes."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    content = (
-        json.dumps(record, indent=2, sort_keys=True) + "\n"
-    ).encode("utf-8")
+    content = _serialized_evaluation_cache_bytes(record)
     descriptor, staging_name = tempfile.mkstemp(
         prefix=f".{path.name}.",
         suffix=".tmp",
@@ -657,9 +660,14 @@ def _load_cached_evaluation(
     expected_evidence_status: str,
     pricing: dict,
     expected_input_fingerprints: dict | None = None,
-) -> dict:
-    payload = _load_json(path)
-    return _validate_cached_evaluation(
+    capture_source_sha256: bool = False,
+) -> dict | tuple[dict, str]:
+    loaded = _load_json(path, include_sha256=capture_source_sha256)
+    if capture_source_sha256:
+        payload, source_sha256 = loaded
+    else:
+        payload = loaded
+    validated = _validate_cached_evaluation(
         payload,
         path=path,
         expected_variant=expected_variant,
@@ -671,6 +679,7 @@ def _load_cached_evaluation(
         pricing=pricing,
         expected_input_fingerprints=expected_input_fingerprints,
     )
+    return (validated, source_sha256) if capture_source_sha256 else validated
 
 
 def _validate_cached_evaluation(
@@ -1205,13 +1214,43 @@ def _require_final_evaluator_source_continuity(
             )
 
 
+def _require_evaluator_cache_source_continuity(
+    expected_sha256_by_path: dict[Path, str], *, root: Path | None = None
+) -> None:
+    """Bind aggregate publication to the exact cached measurement bytes.
+
+    Input fingerprint checks bind measurements to report/evidence. They do not
+    notice a reused or newly written evaluator cache being removed, replaced,
+    or silently supplemented while another cell is being evaluated.
+    """
+    cache_root = EVAL_ROOT if root is None else Path(root)
+    actual_paths = _inventory_evaluator_cache_tree(cache_root)
+    expected_paths = set(expected_sha256_by_path)
+    if actual_paths != expected_paths:
+        raise SystemExit(
+            "Evaluator cache inventory changed during replay; refusing "
+            "aggregate publication (missing or unexpected measurements)"
+        )
+    for path, expected_sha256 in sorted(expected_sha256_by_path.items()):
+        raw = _read_regular_bytes(
+            path, label="Evaluator cache continuity",
+            max_bytes=MAX_EVALUATOR_JSON_BYTES,
+        )
+        if hashlib.sha256(raw).hexdigest() != expected_sha256:
+            raise SystemExit(
+                "Evaluator cache changed during replay: "
+                f"{path}; refusing aggregate publication"
+            )
+
+
 def _preflight_evaluator_resume(
     expected: list[tuple[str, Path, dict, str, str]],
     *,
     pricing: dict,
     evaluator_model: str,
     evaluator_temperature: float,
-) -> tuple[list[dict], list[dict]]:
+    capture_cache_source_hashes: bool = False,
+) -> tuple[list[dict], list[dict]] | tuple[list[dict], list[dict], dict[Path, str]]:
     """Snapshot and validate the entire resume state before any model call."""
     expected_paths: set[Path] = set()
     for variant, trace_path, _trace, task_id, run_id in expected:
@@ -1232,6 +1271,7 @@ def _preflight_evaluator_resume(
 
     rows: list[dict] = []
     pending: list[dict] = []
+    cache_source_hashes: dict[Path, str] = {}
     for variant, _trace_path, trace, task_id, run_id in expected:
         prepared = _prepare_evaluator_input(trace, variant, task_id, run_id)
         evidence_status = prepared["evidence_status"]
@@ -1240,19 +1280,24 @@ def _preflight_evaluator_resume(
         out_path = EVAL_ROOT / variant / f"{task_id}.json"
         if out_path.exists() or out_path.is_symlink():
             _require_regular_file(out_path, label="Evaluator cache")
-            rows.append(
-                _load_cached_evaluation(
-                    out_path,
-                    expected_variant=variant,
-                    expected_task_id=task_id,
-                    expected_run_id=run_id,
-                    expected_evaluator_model=evaluator_model,
-                    expected_temperature=evaluator_temperature,
-                    expected_evidence_status=evidence_status,
-                    pricing=pricing,
-                    expected_input_fingerprints=input_fingerprints,
-                )
+            validated = _load_cached_evaluation(
+                out_path,
+                expected_variant=variant,
+                expected_task_id=task_id,
+                expected_run_id=run_id,
+                expected_evaluator_model=evaluator_model,
+                expected_temperature=evaluator_temperature,
+                expected_evidence_status=evidence_status,
+                pricing=pricing,
+                expected_input_fingerprints=input_fingerprints,
+                capture_source_sha256=capture_cache_source_hashes,
             )
+            if capture_cache_source_hashes:
+                record, raw_sha256 = validated
+                rows.append(record)
+                cache_source_hashes[out_path] = raw_sha256
+            else:
+                rows.append(validated)
             continue
         pending.append(
             {
@@ -1265,6 +1310,8 @@ def _preflight_evaluator_resume(
                 "input_fingerprints": input_fingerprints,
             }
         )
+    if capture_cache_source_hashes:
+        return rows, pending, cache_source_hashes
     return rows, pending
 
 
@@ -1341,11 +1388,12 @@ def main() -> int:
 
     _require_complete_frozen_treatment_matrix(expected, expected_questions)
 
-    rows, pending = _preflight_evaluator_resume(
+    rows, pending, cache_source_hashes = _preflight_evaluator_resume(
         expected,
         pricing=pricing,
         evaluator_model=evaluator_model,
         evaluator_temperature=evaluator_temperature,
+        capture_cache_source_hashes=True,
     )
     spent = sum(float(row["estimated_cost_usd"]) for row in rows)
     original_traces = {
@@ -1435,6 +1483,11 @@ def main() -> int:
                 "Evaluator cache appeared during model call; refusing to overwrite "
                 f"{variant}/{task_id}: {out_path}"
             ) from exc
+        # Hash the precise bytes intended for create-only publication, not
+        # a later, potentially swapped pathname read.
+        cache_source_hashes[out_path] = hashlib.sha256(
+            _serialized_evaluation_cache_bytes(record)
+        ).hexdigest()
         rows.append(record)
         spent += cost
         print(
@@ -1490,6 +1543,7 @@ def main() -> int:
         _require_preflight_treatment_trace_unchanged(trace_path, trace_sha256)
     # This also covers cached cells that never entered the model-call loop.
     _require_final_evaluator_source_continuity(expected, rows)
+    _require_evaluator_cache_source_continuity(cache_source_hashes)
 
     summary_path = REPO_ROOT / "outputs" / "posthoc_support_summary.json"
     csv_path = REPO_ROOT / "outputs" / "posthoc_support_runs.csv"
