@@ -32,7 +32,14 @@ def _responses(artifacts=None):
     return results
 
 
-def _artifact(run_id, name, *, expired=False, ident=1001):
+def _artifact(run_id, name, *, expired=False, ident=None):
+    pin = next(
+        (item for item in audit.HISTORICAL_UPLOAD_PINS.values()
+         if item["run_id"] == run_id and item["artifact_name"] == name),
+        None,
+    )
+    if ident is None:
+        ident = pin["artifact_id"] if pin else 1001
     head_sha = next(
         (sha for _, anchored_id, _, sha, _, _ in audit.HISTORICAL_RUNS
          if anchored_id == run_id), "0" * 40
@@ -42,8 +49,8 @@ def _artifact(run_id, name, *, expired=False, ident=1001):
         "created_at": "2026-09-24T23:03:00Z",
         "updated_at": "2026-09-24T23:03:00Z",
         "expires_at": "2099-12-23T23:03:46Z",
-        "size_in_bytes": 10270,
-        "digest": "sha256:" + "a" * 64,
+        "size_in_bytes": pin["size_bytes"] if pin else 10270,
+        "digest": "sha256:" + (pin["zip_sha256"] if pin else "a" * 64),
         "archive_download_url": (
             f"https://api.github.com/repos/{audit.REPOSITORY}"
             f"/actions/artifacts/{ident}/zip"
@@ -95,7 +102,7 @@ def test_other_artifacts_cannot_impersonate_original_run_evidence():
 
 def test_expired_named_artifacts_cannot_claim_nonexpired_listing():
     matches = {
-        run_id: [_artifact(run_id, expected, expired=True, ident=run_id)]
+        run_id: [_artifact(run_id, expected, expired=True)]
         for _, run_id, _, _, _, expected in audit.HISTORICAL_RUNS
     }
     receipt = audit.audit_historical_artifact_inventory(
@@ -110,7 +117,7 @@ def test_expired_named_artifacts_cannot_claim_nonexpired_listing():
 
 def test_two_named_artifact_candidates_still_do_not_authenticate_evidence():
     matches = {
-        run_id: [_artifact(run_id, expected, ident=run_id)]
+        run_id: [_artifact(run_id, expected)]
         for _, run_id, _, _, _, expected in audit.HISTORICAL_RUNS
     }
     result = audit.audit_historical_artifact_inventory(
@@ -200,11 +207,11 @@ def test_correct_second_page_is_included():
     }
     responses[path + "2"] = {
         "total_count": 101,
-        "artifacts": [_artifact(first[1], first[5], ident=20001)],
+        "artifacts": [_artifact(first[1], first[5])],
     }
     result = audit.audit_historical_artifact_inventory(fetch_json=_client(responses))
     assert result["historical_runs"]["original_treatment"]["total_artifacts_listed"] == 101
-    assert result["historical_runs"]["original_treatment"]["expected_artifact"]["id"] == 20001
+    assert result["historical_runs"]["original_treatment"]["expected_artifact"]["id"] == audit.HISTORICAL_UPLOAD_PINS["original_treatment"]["artifact_id"]
 
 
 def test_source_unavailability_is_an_error_not_a_missing_archive_claim():
@@ -216,7 +223,7 @@ def test_source_unavailability_is_an_error_not_a_missing_archive_claim():
 
 def test_listed_original_zip_metadata_is_explicitly_unverified():
     matches = {
-        run_id: [_artifact(run_id, expected, ident=run_id)]
+        run_id: [_artifact(run_id, expected)]
         for _, run_id, _, _, _, expected in audit.HISTORICAL_RUNS
     }
     inventory = audit.audit_historical_artifact_inventory(
@@ -224,11 +231,16 @@ def test_listed_original_zip_metadata_is_explicitly_unverified():
         checked_at=datetime(2026, 10, 28, tzinfo=timezone.utc),
     )
     candidate = inventory["historical_runs"]["original_treatment"]["expected_artifact"]
-    assert candidate["zip_size_in_bytes"] == 10270
-    assert candidate["github_zip_digest"] == "sha256:" + "a" * 64
+    pin = audit.HISTORICAL_UPLOAD_PINS["original_treatment"]
+    assert candidate["id"] == pin["artifact_id"]
+    assert candidate["zip_size_in_bytes"] == pin["size_bytes"]
+    assert candidate["github_zip_digest"] == "sha256:" + pin["zip_sha256"]
     assert candidate["archive_download_url"].endswith(
-        f"/actions/artifacts/{audit.HISTORICAL_RUNS[0][1]}/zip"
+        f"/actions/artifacts/{pin['artifact_id']}/zip"
     )
+    assert inventory["historical_runs"]["original_treatment"][
+        "historical_github_upload_log_concordance"
+    ] == "id_size_and_api_digest_match_logged_upload"
     assert candidate["expiry_elapsed_at_check"] is False
     assert inventory["historical_evidence_authenticated"] is False
     assert inventory["human_evaluation_ready"] is False
@@ -236,7 +248,7 @@ def test_listed_original_zip_metadata_is_explicitly_unverified():
 
 def test_elapsed_expiry_flag_cannot_claim_downloadable_candidate():
     role, run_id, _, _, _, expected = audit.HISTORICAL_RUNS[0]
-    candidate = _artifact(run_id, expected, ident=501)
+    candidate = _artifact(run_id, expected)
     candidate["expires_at"] = "2026-10-28T12:00:00Z"
     inventory = audit.audit_historical_artifact_inventory(
         fetch_json=_client(_responses({run_id: [candidate]})),
@@ -576,3 +588,51 @@ def test_reconciliation_rechecks_each_run_after_both_artifact_scans():
         assert receipt["historical_runs"][role]["workflow_reconciliation"] == (
             "two_matching_execution_snapshots"
         )
+
+
+@pytest.mark.parametrize("role", ("original_treatment", "evaluator_recovery"))
+@pytest.mark.parametrize("mutation", ("artifact_id", "size_in_bytes", "digest"))
+def test_named_historical_zip_must_match_contemporaneous_logged_upload(role, mutation):
+    """A same-name, same-workflow replacement cannot pass as the original ZIP."""
+    pin = audit.HISTORICAL_UPLOAD_PINS[role]
+    candidate = _artifact(pin["run_id"], pin["artifact_name"])
+    if mutation == "artifact_id":
+        candidate["id"] += 1
+        candidate["archive_download_url"] = (
+            f"https://api.github.com/repos/{audit.REPOSITORY}"
+            f"/actions/artifacts/{candidate['id']}/zip"
+        )
+    elif mutation == "size_in_bytes":
+        candidate["size_in_bytes"] += 1
+    else:
+        candidate["digest"] = "sha256:" + "f" * 64
+    with pytest.raises(audit.ArtifactInventoryError, match="contemporaneous GitHub upload log"):
+        audit.audit_historical_artifact_inventory(
+            fetch_json=_client(_responses({pin["run_id"]: [candidate]}))
+        )
+
+
+def test_named_expired_zip_with_wrong_upload_id_is_not_accepted_as_original():
+    pin = audit.HISTORICAL_UPLOAD_PINS["original_treatment"]
+    candidate = _artifact(pin["run_id"], pin["artifact_name"], expired=True)
+    candidate["id"] += 1
+    candidate["archive_download_url"] = (
+        f"https://api.github.com/repos/{audit.REPOSITORY}"
+        f"/actions/artifacts/{candidate['id']}/zip"
+    )
+    with pytest.raises(audit.ArtifactInventoryError, match="contemporaneous GitHub upload log"):
+        audit.audit_historical_artifact_inventory(
+            fetch_json=_client(_responses({pin["run_id"]: [candidate]}))
+        )
+
+
+def test_missing_legacy_api_digest_retains_explicit_partial_concordance():
+    pin = audit.HISTORICAL_UPLOAD_PINS["evaluator_recovery"]
+    candidate = _artifact(pin["run_id"], pin["artifact_name"])
+    candidate["digest"] = None
+    receipt = audit.audit_historical_artifact_inventory(
+        fetch_json=_client(_responses({pin["run_id"]: [candidate]}))
+    )["historical_runs"]["evaluator_recovery"]
+    assert receipt["historical_github_upload_log_concordance"] == (
+        "id_size_match_logged_upload_api_digest_unavailable"
+    )

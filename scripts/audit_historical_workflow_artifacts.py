@@ -12,6 +12,8 @@ import json
 import os
 import re
 from typing import Callable
+
+from scripts import audit_historical_artifact_job_logs as historical_logs
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -52,6 +54,13 @@ HISTORICAL_RUNS = (
         "canonical-main-study-analysis-36070798723",
     ),
 )
+
+# Service-reported upload IDs, sizes, and ZIP digests taken from pinned
+# contemporaneous GitHub job logs. These are NOT independent custody proofs.
+HISTORICAL_UPLOAD_PINS = {
+    "original_treatment": historical_logs.ORIGINAL,
+    "evaluator_recovery": historical_logs.RECOVERED,
+}
 
 
 class ArtifactInventoryError(ValueError):
@@ -309,6 +318,24 @@ def audit_historical_artifact_inventory(
         matching = [item for item in artifacts if item["name"] == expected_name]
         if len(matching) > 1:
             raise ArtifactInventoryError(f"{role} has duplicate expected artifact names")
+        upload_pin = HISTORICAL_UPLOAD_PINS.get(role)
+        if matching and upload_pin is not None:
+            item = matching[0]
+            # A same-name ZIP created under the pinned workflow is not enough:
+            # require the exact GitHub service-reported original upload identity.
+            # Legacy API responses may omit digest; that remains explicitly
+            # unverified rather than being invented or treated as a match.
+            if (
+                item["id"] != upload_pin["artifact_id"]
+                or item["size_in_bytes"] != upload_pin["size_bytes"]
+                or (
+                    item["digest"] is not None
+                    and item["digest"] != f"sha256:{upload_pin['zip_sha256']}"
+                )
+            ):
+                raise ArtifactInventoryError(
+                    f"{role} named ZIP differs from contemporaneous GitHub upload log"
+                )
         eligible = [
             item for item in matching
             if item["expired"] is False
@@ -330,6 +357,14 @@ def audit_historical_artifact_inventory(
             "expected_artifact_name": expected_name,
             "total_artifacts_listed": len(artifacts),
             "listing_reconciliation": "two_matching_full_passes",
+            "historical_github_upload_log_concordance": (
+                "id_size_and_api_digest_match_logged_upload"
+                if upload_pin is not None and matching and matching[0]["digest"] is not None
+                else "id_size_match_logged_upload_api_digest_unavailable"
+                if upload_pin is not None and matching
+                else "named_zip_not_listed" if upload_pin is not None
+                else "not_applicable_to_canonical_analysis"
+            ),
             "workflow_reconciliation": "two_matching_execution_snapshots",
             "expected_artifact": (
                 {
@@ -382,7 +417,10 @@ def audit_historical_artifact_inventory(
             "A listed nonexpired artifact requires a positive ZIP size and an expiry "
             "deadline later than checked_at_utc; its GitHub-supplied digest (when "
             "present) is metadata, not an independent archive pin. No listing "
-            "proves a successful ZIP download or historical custody. The original "
+            "proves a successful ZIP download or historical custody. When listed, "
+            "the named treatment/recovery ZIP must match GitHub upload-log ID, "
+            "size and any present GitHub API digest; that service metadata is "
+            "not independent historical custody. The original "
             "trace/report and blinded human-evaluation gates remain mandatory."
         ),
     }

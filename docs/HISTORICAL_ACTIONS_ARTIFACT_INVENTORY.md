@@ -72,6 +72,29 @@ This SHA-256 is GitHub-generated ZIP metadata, NOT an independently retained
 file-byte fingerprint for the original 40 traces or Markdown reports.
 A missing GitHub digest is represented as null, not silently synthesized.
 
+## Concordance with contemporaneous upload-log ZIP identity
+
+For the original treatment and evaluator-recovery archives, the inventory now
+checks the **named** candidate's artifact ID and byte size against the exact
+upload-artifact@v4 values recorded in the contemporaneous GitHub Actions job
+logs (the fixed `ORIGINAL` and `RECOVERED` anchors in
+`scripts/audit_historical_artifact_job_logs.py`). When the current GitHub API
+also supplies a SHA-256 ZIP digest, it must equal the logged digest. A
+same-name artifact with a different ID, size, or supplied digest is rejected,
+even if it is expired. This prevents a replacement or unrelated archive on a
+historical run from being described as the original upload merely because its
+name and workflow source match. The test suite covers ID, size and digest
+substitution for both historical runs, including an expired replacement.
+
+Older GitHub API responses can omit the digest. In that case the candidate is
+**not** said to have digest concordance: the receipt explicitly records only
+ID/size agreement and missing API digest. This is historical GitHub-service
+metadata cross-consistency, **not independent archival authentication**;
+matching upload logs or GitHub digests cannot substitute for independent
+SHA-256 pins for the original reports and traces. The canonical analysis
+archive uses its separately preserved metadata and verification receipt.
+No new treatment/evaluator measurements or human ratings are produced.
+
 All three run listings are evaluated against one checked_at_utc timestamp.
 An artifact with expired=false but expires_at at or before that instant is
 reported as named_artifact_listed_elapsed_expiry and cannot count as a
