@@ -893,6 +893,14 @@ def _inventory_evaluator_run_evidence(run_dir: Path) -> list[Path]:
                         "Refusing evaluator replay: unselected report/evidence "
                         f"entries exceed frozen writer contract: {run_dir}"
                     )
+                if entry.name == "research_report.md" and (
+                    entry.is_symlink()
+                    or not entry.is_file(follow_symlinks=False)
+                ):
+                    raise SystemExit(
+                        "Evaluator report must be a regular non-symlink file: "
+                        f"{entry.path}"
+                    )
                 if (
                     entry.name not in allowed
                     or entry.is_symlink()

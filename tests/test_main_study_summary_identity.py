@@ -247,7 +247,7 @@ def test_summary_rejects_schema_v2_cache_for_changed_report_before_outputs(
     )
     run_dir = tmp_path / "outputs" / "run-d3-main-01"
     run_dir.mkdir(parents=True)
-    (run_dir / "research-query-1.txt").write_text(evidence, encoding="utf-8")
+    (run_dir / "research-query-01.txt").write_text(evidence, encoding="utf-8")
     (run_dir / "research_report.md").write_text(changed_report, encoding="utf-8")
 
     with pytest.raises(SystemExit, match="input_fingerprints must match"):
