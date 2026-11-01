@@ -78,6 +78,7 @@ def test_exact_schedule_and_chronology_only_with_explicit_limits():
     assert result["recorded_cells"] == 40
     assert result["recorded_status_counts"] == {
         "completed": 40, "failed": 0, "timeout": 0, "cancelled": 0,
+        "not_started": 0,
     }
     assert result["all_recorded_cells_completed"] is True
     assert result["source_manifest_sha256"] == hashlib.sha256(source).hexdigest()
@@ -233,3 +234,83 @@ def test_cli_is_read_only_and_rejects_unsafe_log_path(tmp_path, monkeypatch, cap
         audit.main()
     assert exc.value.code == 2
     assert "bounded regular non-symlink" in capsys.readouterr().err
+
+
+def _mark_unattempted_suffix(log, first_unattempted):
+    for event in log["events"][first_unattempted:]:
+        event.update({
+            "run_id": None, "status": "not_started",
+            "started_at_utc": None, "finished_at_utc": None,
+        })
+
+
+@pytest.mark.parametrize("attempted", [1, 4, 39])
+def test_interrupted_study_retains_every_planned_cell_without_fake_runs(attempted):
+    source, receipt, log = _fixture()
+    _mark_unattempted_suffix(log, attempted)
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    assert result["status"] == "pass_recorded_chronology_only"
+    assert result["recorded_cells"] == 40
+    assert result["attempted_cells"] == attempted
+    assert result["unattempted_cells"] == 40 - attempted
+    assert result["recorded_status_counts"]["completed"] == attempted
+    assert result["recorded_status_counts"]["not_started"] == 40 - attempted
+    assert result["all_planned_cells_attempted"] is False
+    assert result["all_recorded_cells_completed"] is False
+    assert result["actual_execution_independently_authenticated"] is False
+
+
+def test_interrupted_study_retains_attempted_failure_not_as_unattempted():
+    source, receipt, log = _fixture()
+    log["events"][0]["status"] = "timeout"
+    _mark_unattempted_suffix(log, 1)
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    assert result["recorded_status_counts"]["timeout"] == 1
+    assert result["recorded_status_counts"]["not_started"] == 39
+    assert result["attempted_cells"] == 1
+
+
+@pytest.mark.parametrize("field,value", [
+    ("run_id", "invented-run"),
+    ("started_at_utc", "2027-03-02T12:00:12Z"),
+    ("finished_at_utc", "2027-03-02T12:00:23Z"),
+])
+def test_not_started_cannot_claim_run_or_execution_timestamps(field, value):
+    source, receipt, log = _fixture()
+    _mark_unattempted_suffix(log, 2)
+    log["events"][2][field] = value
+    with pytest.raises(design.DesignError, match="not_started requires null"):
+        audit.audit_execution_log(source, receipt, _bytes(log))
+
+
+def test_gap_before_later_attempt_is_not_an_interrupted_suffix():
+    source, receipt, log = _fixture()
+    log["events"][1].update({
+        "run_id": None, "status": "not_started",
+        "started_at_utc": None, "finished_at_utc": None,
+    })
+    with pytest.raises(design.DesignError, match="attempt after a not_started suffix"):
+        audit.audit_execution_log(source, receipt, _bytes(log))
+
+
+def test_zero_attempts_do_not_pass_execution_audit():
+    source, receipt, log = _fixture()
+    _mark_unattempted_suffix(log, 0)
+    with pytest.raises(design.DesignError, match="no attempted cells"):
+        audit.audit_execution_log(source, receipt, _bytes(log))
+
+
+def test_attempted_cell_with_null_run_id_is_invalid():
+    source, receipt, log = _fixture()
+    log["events"][1]["run_id"] = None
+    with pytest.raises(design.DesignError, match="unsafe or duplicate run ID"):
+        audit.audit_execution_log(source, receipt, _bytes(log))
+
+
+def test_completed_full_study_reports_no_unattempted_cells():
+    source, receipt, log = _fixture()
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    assert result["attempted_cells"] == 40
+    assert result["unattempted_cells"] == 0
+    assert result["all_planned_cells_attempted"] is True
+    assert result["recorded_status_counts"]["not_started"] == 0

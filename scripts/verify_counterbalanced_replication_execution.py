@@ -27,7 +27,7 @@ EVENT_FIELDS = frozenset({
     "task_id", "variant", "run_id", "status",
     "started_at_utc", "finished_at_utc",
 })
-STATUSES = ("completed", "failed", "timeout", "cancelled")
+STATUSES = ("completed", "failed", "timeout", "cancelled", "not_started")
 _UTC_PATTERN = re.compile(
     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
     r"(?:\.\d{1,6})?(?:Z|\+00:00)"
@@ -127,6 +127,7 @@ def audit_execution_log(
     previous_finish = study_start
     run_ids: set[str] = set()
     counts = {status: 0 for status in STATUSES}
+    unstarted_suffix = False
     for index, (event, (task_id, variant)) in enumerate(
         zip(events, expected_cells, strict=True), start=1
     ):
@@ -137,16 +138,32 @@ def audit_execution_log(
             raise design.DesignError(
                 f"event {index} violates the frozen task-major treatment schedule"
             )
+        status = event["status"]
+        if type(status) is not str or status not in counts:
+            raise design.DesignError(f"event {index} has an unknown status")
+        if status == "not_started":
+            # A halted sequential study retains every unattempted planned
+            # cell without inventing a run identifier or execution interval.
+            if any(event[field] is not None for field in (
+                "run_id", "started_at_utc", "finished_at_utc"
+            )):
+                raise design.DesignError(
+                    f"event {index} not_started requires null run ID and timestamps"
+                )
+            unstarted_suffix = True
+            counts[status] += 1
+            continue
+        if unstarted_suffix:
+            raise design.DesignError(
+                f"event {index} records an attempt after a not_started suffix"
+            )
         run_id = event["run_id"]
         if (type(run_id) is not str or _SAFE_RUN_ID.fullmatch(run_id) is None or
                 run_id in run_ids):
             raise design.DesignError(f"event {index} has an unsafe or duplicate run ID")
         run_ids.add(run_id)
-        status = event["status"]
-        if type(status) is not str or status not in counts:
-            raise design.DesignError(f"event {index} has an unknown status")
-        # Failures and timeouts remain in the 40-cell ledger. Do not select
-        # or rerun arms based on favorable outcomes to make the audit pass.
+        # Attempted failures/timeouts/cancellations remain visible. Never
+        # conceal them as unattempted work or cherry-pick favorable reruns.
         counts[status] += 1
         started = _timestamp(event["started_at_utc"], f"event {index} start")
         finished = _timestamp(event["finished_at_utc"], f"event {index} finish")
@@ -158,6 +175,11 @@ def audit_execution_log(
             raise design.DesignError(f"event {index} finishes outside study window")
         previous_finish = finished
 
+    if counts["not_started"] == len(events):
+        raise design.DesignError(
+            "execution log has no attempted cells; use the design-only verifier"
+        )
+
     return {
         "status": "pass_recorded_chronology_only",
         "classification": LOG_CLASSIFICATION,
@@ -168,6 +190,9 @@ def audit_execution_log(
         "plan_file_external_pin_matched": plan_verified["supplied_plan_file_pin_matched"],
         "execution_log_external_pin_matched": log_pinned,
         "recorded_cells": len(events),
+        "attempted_cells": len(events) - counts["not_started"],
+        "unattempted_cells": counts["not_started"],
+        "all_planned_cells_attempted": counts["not_started"] == 0,
         "recorded_status_counts": counts,
         "all_recorded_cells_completed": counts["completed"] == len(events),
         "actual_execution_independently_authenticated": False,
