@@ -13,12 +13,38 @@ import os
 from pathlib import Path
 import re
 import stat
+import unicodedata
 
 VARIANTS = ("D3", "D6", "P6", "P6V")
 ORIGINAL_TASK_SET_ID = "main-budget-v1-2026-09-11"
 DESIGN_VERSION = "vera-prospective-williams-10-v1"
 MAX_MANIFEST_BYTES = 256 * 1024
 TASK_COUNT = 10
+
+
+# SHA-256 of NFKC/whitespace/casefold-normalized questions in the frozen
+# September 2026 original main-study manifest. These are source fingerprints,
+# NOT independently authenticated reports or evidence of valid replication.
+# The regression test cross-checks every digest against the byte-pinned
+# experiments/main_budget_tasks.json source at original commit c3c15e46.
+ORIGINAL_2026_QUESTION_SHA256 = frozenset({
+    "77539c749b52602df19551290eaa8f147165f96aab7b37940b60d1ac50f88156",
+    "ca2a291ef4babb16903a94f89fd8c3d2937649b77eda4ffe89dd6adf25039756",
+    "853e0b6172e7d70cc41d549dac87c28f786d940c0d6c57207b37e6a229b94a9e",
+    "f9fceb3bc84c38da3e170b49696431e9226bb2f3ce32278a9cca42348ed198ab",
+    "f3146da707bdc647a3540af5bb3840a4e6344ca2c5a9fb72215d668714b6a4fe",
+    "98eab67ff549c656707d15d451df2108bcd048d6534b955d112ab24d0af99363",
+    "04fad1acb9e48a13aca4d0c1401125032ae5002724cd30d683593b2ea7e48258",
+    "7a1fb088bb79fb52adfda5c74a3b0eb36384b46499d7e7ff69a4e05528af64cd",
+    "ec30abd696e192acb6f9d78851ee36129f7deaf0473259af2b1a21939b200597",
+    "ebd62c6716ccec7608d5f163cd3eff895c3e59c30410d40c81d193cc53d89a58",
+})
+ORIGINAL_2026_TASK_IDS = frozenset(f"main-{index:02d}" for index in range(1, 11))
+
+
+def _normalized_question_sha256(question: str) -> str:
+    normalized = " ".join(unicodedata.normalize("NFKC", question).split()).casefold()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 class DesignError(ValueError):
@@ -130,10 +156,16 @@ def build_plan(source: bytes) -> dict:
         if (type(identifier) is not str
                 or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", identifier) is None):
             raise DesignError(f"task {index} has an unsafe identifier")
+        if identifier in ORIGINAL_2026_TASK_IDS:
+            raise DesignError("prospective task reuses a reserved 2026 main-study ID")
         if type(category) is not str or not category.strip():
             raise DesignError(f"task {index} has no category")
         if type(question) is not str or not question.strip():
             raise DesignError(f"task {index} has no question")
+        if _normalized_question_sha256(question) in ORIGINAL_2026_QUESTION_SHA256:
+            raise DesignError(
+                "prospective task repeats a frozen 2026 main-study question"
+            )
         if identifier in task_ids or question.strip() in questions:
             raise DesignError("tasks have duplicate identifiers or questions")
         task_ids.append(identifier)
