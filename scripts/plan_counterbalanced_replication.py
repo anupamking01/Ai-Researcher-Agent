@@ -9,6 +9,7 @@ import argparse
 from collections import Counter
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -47,7 +48,10 @@ def _bounded_int(token: str) -> int:
 def _bounded_float(token: str) -> float:
     if len(token) > 128:
         raise DesignError("task-manifest numeric token is unbounded")
-    return float(token)
+    result = float(token)
+    if not math.isfinite(result):
+        raise DesignError("task-manifest float is not finite")
+    return result
 
 
 def _source_generation(st) -> tuple:
@@ -103,6 +107,8 @@ def build_plan(source: bytes) -> dict:
         raise DesignError("task manifest is not unambiguous UTF-8 JSON") from exc
     if type(payload) is not dict:
         raise DesignError("task manifest must be a JSON object")
+    if set(payload) != {"schema_version", "task_set_id", "frozen_before_execution", "tasks"} or type(payload.get("schema_version")) is not int or payload["schema_version"] != 1:
+        raise DesignError("new task manifest must use exact design-only schema v1")
     task_set_id = payload.get("task_set_id")
     if (type(task_set_id) is not str
             or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", task_set_id) is None
@@ -117,8 +123,8 @@ def build_plan(source: bytes) -> dict:
     task_ids = []
     questions = set()
     for index, task in enumerate(tasks, start=1):
-        if type(task) is not dict:
-            raise DesignError(f"task {index} is not a JSON object")
+        if type(task) is not dict or set(task) != {"id", "category", "question"}:
+            raise DesignError(f"task {index} must contain only id/category/question")
         identifier, category, question = (
             task.get("id"), task.get("category"), task.get("question")
         )
@@ -184,7 +190,6 @@ def build_plan(source: bytes) -> dict:
         "source_manifest_sha256": source_sha256,
         "task_set_id": task_set_id,
         "historical_2026_study_replaced": False,
-        "frozen_original_2026_task_set_reused": False,
         "task_count": TASK_COUNT,
         "treatment_cells_planned": TASK_COUNT * len(VARIANTS),
         "schedule": schedule,
