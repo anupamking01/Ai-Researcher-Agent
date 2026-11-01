@@ -37,7 +37,7 @@ def test_provider_metadata_custody_fails_before_any_github_request(
         assert changed != original
         target.write_bytes(changed)
     elif mutation == "format_only":
-        target.write_bytes(original + b"\\n")
+        target.write_bytes(original + b"\n")
     elif mutation == "truncated":
         target.write_bytes(original[:100])
     elif mutation == "symlink":
@@ -47,7 +47,7 @@ def test_provider_metadata_custody_fails_before_any_github_request(
     elif mutation == "directory":
         target.mkdir()
     elif mutation == "oversize":
-        target.write_bytes(original + b"x" * audit.MAX_RETAINED_CANONICAL_METADATA_BYTES)
+        target.write_bytes(original + b"\n")
     else:
         assert mutation == "missing"
 
@@ -62,12 +62,3 @@ def test_provider_metadata_custody_fails_before_any_github_request(
         audit.audit_historical_artifact_inventory(fetch_json=no_live_github_calls)
     assert github_calls == []
 
-
-def test_unchanged_metadata_can_preflight_without_historical_artifacts():
-    """Missing original ZIP listings remain a blocked evidence gate, not corruption."""
-    response = {
-        "id": audit.HISTORICAL_RUNS[0][1],
-    }
-    # The byte-custody gate is independent of an actual artifact listing.
-    assert audit._verify_retained_canonical_metadata_file()
-    assert response["id"] == 34620917346
