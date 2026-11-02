@@ -85,6 +85,12 @@ def _fixture(tmp_path):
             "treatment_controls": dict(
                 design.PROSPECTIVE_TREATMENT_CONTROLS_V1[event["variant"]]
             ),
+            "source_count": 0,
+            "successful_source_count": 0,
+            "failed_source_count": 0,
+            "scheduled_urls": [],
+            "successful_urls": [],
+            "failed_urls": [],
             "synthetic_marker": "not a real experiment",
         })
         trace_path = f"traces/{run_id}.json"
@@ -136,6 +142,7 @@ def test_complete_synthetic_matrix_binds_all_traces_reports_and_events(tmp_path)
     assert result["artifact_bytes_equal_supplied_fingerprints"] is True
     assert result["trace_question_fingerprints_match_frozen_manifest"] is True
     assert result["trace_treatment_controls_match_frozen_design"] is True
+    assert result["self_reported_source_ledgers_within_frozen_budgets"] is True
     assert result["evidence_index_external_pin_matched"] is True
     assert result["recorded_execution_independently_authenticated"] is False
     assert result["scientific_outcomes_validated"] is False
@@ -760,3 +767,76 @@ def test_printable_multilingual_markdown_and_normal_line_controls_remain_valid(t
     trace_path.write_bytes(trace_bytes)
     first_cell["trace"] = _file_claim(trace_claim["path"], trace_bytes)
     assert _audit(fixture)["verified_reports"] == 40
+
+
+def _rewrite_synthetic_source_ledger(fixture, *, cell_number: int, change) -> None:
+    """Rehash every synthetic inventory claim after mutating a single trace."""
+    _, _, _, index, root = fixture
+    cell = index["cells"][cell_number]
+    path = root / cell["trace"]["path"]
+    trace = json.loads(path.read_bytes())
+    change(trace)
+    raw = _bytes(trace)
+    path.write_bytes(raw)
+    cell["trace"] = _file_claim(cell["trace"]["path"], raw)
+
+
+@pytest.mark.parametrize("variant", design.VARIANTS)
+def test_recorded_source_budget_at_limit_with_one_failed_url_is_valid(
+    tmp_path, variant
+):
+    fixture = _fixture(tmp_path)
+    index = fixture[3]
+    number = next(
+        i for i, cell in enumerate(index["cells"]) if cell["variant"] == variant
+    )
+    budget = design.PROSPECTIVE_TREATMENT_CONTROLS_V1[variant]["source_budget"]
+    urls = [f"https://synthetic.invalid/{variant}/{i}" for i in range(budget)]
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=budget,
+            successful_source_count=budget - 1,
+            failed_source_count=1,
+            scheduled_urls=urls,
+            successful_urls=urls[:-1],
+            failed_urls=urls[-1:],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=number, change=set_ledger)
+    receipt = _audit(fixture)
+    assert receipt["self_reported_source_ledgers_within_frozen_budgets"] is True
+    assert receipt["model_or_retrieval_calls_verified"] is False
+
+
+@pytest.mark.parametrize("change", [
+    lambda t: t.pop("source_count"),
+    lambda t: t.update(source_count=True),
+    lambda t: t.update(source_count=1.0),
+    lambda t: t.update(source_count=-1),
+    lambda t: t.update(source_count=7),
+    lambda t: t.update(source_count=1),
+    lambda t: t.update(successful_source_count=1),
+    lambda t: t.update(failed_source_count=-1),
+    lambda t: t.pop("scheduled_urls"),
+    lambda t: t.update(scheduled_urls=["https://synthetic.invalid/one"]),
+    lambda t: t.update(source_count=1, scheduled_urls=[99]),
+    lambda t: t.update(source_count=1, scheduled_urls=[" "]),
+    lambda t: t.update(source_count=2, scheduled_urls=["u", "u"],
+                       successful_source_count=2, successful_urls=["u", "u"]),
+    lambda t: t.update(source_count=1, scheduled_urls=["u"],
+                       successful_source_count=1, successful_urls=["v"]),
+    lambda t: t.update(source_count=2, scheduled_urls=["u", "v"],
+                       successful_source_count=1, successful_urls=["u"],
+                       failed_source_count=1, failed_urls=["u"]),
+    lambda t: t.update(source_count=1, scheduled_urls=[" https://x.invalid"],
+                       successful_source_count=1, successful_urls=[" https://x.invalid"]),
+    lambda t: t.update(failed_urls="not-a-list"),
+])
+def test_inconsistent_recorded_source_ledger_rejected_despite_rehashed_trace(
+    tmp_path, change
+):
+    fixture = _fixture(tmp_path)
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=change)
+    with pytest.raises(design.DesignError, match="source ledger"):
+        _audit(fixture)

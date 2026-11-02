@@ -86,3 +86,27 @@ For stronger external trust, independently preserve the prospective manifest and
 The **diagnostic pilot** remains diagnostic, the original **frozen automated confirmatory** analysis remains tied to its historical outputs and original fixed execution order, and any **exploratory** sensitivity or cost-quality investigations remain exploratory. The new prospective plan and this artifact auditor are **methodology only**, with no future measurements generated. Authentic **human validation** is still blocked until the original treatment traces/reports are independently recovered and two eligible blinded annotators are selected.
 
 As of the audit performed for this change, the historical treatment and evaluator-recovery workflows continue to expose zero downloadable GitHub Actions artifacts, although the separately preserved canonical automated-analysis ZIP remains available. This prospective continuity check does **not** repair that source-custody break or retroactively remove the 2026 time-order confound.
+
+## Prospective source-budget ledger fidelity (self-reported only)
+
+Each **attempted** prospective trace must additionally retain six source-use
+fields: `source_count`, `successful_source_count`, `failed_source_count`
+(nonnegative JSON integers, never booleans/floats), and `scheduled_urls`,
+`successful_urls`, `failed_urls` (JSON arrays of distinct, nonempty, trimmed
+URL strings). `source_count` must not exceed the frozen assigned arm's
+`source_budget` (D3 = 3; D6/P6/P6V = 6). All URL counts must match their
+corresponding arrays; successful and failed URL sets must be disjoint and
+partition exactly the scheduled set. An attempted failed/cancelled/timed-out
+cell can legitimately declare zero sources, but still must retain the ledger.
+An unattempted cell retains no trace and therefore makes no invented source
+claim. A rehashed trace and evidence index cannot excuse a budget violation
+or fabricated, overlapping or unaccounted URL outcomes.
+
+This checks **consistency of recorded source-use metadata**, which is central
+to the treatment's retrieval-budget contrast. It does **not** authenticate web
+retrievals, browser/provider activity, external timestamps, source relevance
+or whether the treatment actually executed with its declared settings. Do not
+interpret a passing ledger as independently measured retrieval use. This
+prospective-only trace envelope does not retroactively alter or reclassify
+the frozen September 2026 experiment, its automated confirmatory analysis,
+diagnostic pilot, exploratory work or pending blinded human validation.

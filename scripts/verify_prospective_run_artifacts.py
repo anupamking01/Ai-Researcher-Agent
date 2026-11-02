@@ -213,6 +213,56 @@ def _require_readable_markdown_report(raw: bytes, *, number: int) -> None:
         )
 
 
+def _validate_source_budget_ledger(trace: dict, *, number: int, variant: str) -> None:
+    """Check *reported* source use against the assigned prospective browse cap.
+
+    A matching ledger is internally consistent evidence metadata, not proof
+    that URLs were fetched or that provider/browser calls occurred.
+    """
+    budget = design.PROSPECTIVE_TREATMENT_CONTROLS_V1[variant]["source_budget"]
+    for field in ("source_count", "successful_source_count", "failed_source_count"):
+        value = trace.get(field)
+        if type(value) is not int or value < 0:
+            raise design.DesignError(
+                f"trace {number} source ledger {field} must be a nonnegative integer"
+            )
+    if trace["source_count"] > budget:
+        raise design.DesignError(
+            f"trace {number} source ledger exceeds assigned {variant} browse budget"
+        )
+    if (trace["successful_source_count"] + trace["failed_source_count"]
+            != trace["source_count"]):
+        raise design.DesignError(
+            f"trace {number} source ledger outcome counts do not partition sources"
+        )
+
+    recorded = {}
+    for field, count_field in (
+        ("scheduled_urls", "source_count"),
+        ("successful_urls", "successful_source_count"),
+        ("failed_urls", "failed_source_count"),
+    ):
+        urls = trace.get(field)
+        if (type(urls) is not list
+                or len(urls) != trace[count_field]
+                or any(
+                    type(url) is not str or not url or url != url.strip()
+                    for url in urls
+                )
+                or len(set(urls)) != len(urls)):
+            raise design.DesignError(
+                f"trace {number} source ledger {field} is invalid or inconsistent"
+            )
+        recorded[field] = set(urls)
+    if (recorded["successful_urls"] & recorded["failed_urls"]
+            or recorded["scheduled_urls"] != (
+                recorded["successful_urls"] | recorded["failed_urls"]
+            )):
+        raise design.DesignError(
+            f"trace {number} source ledger has missing, invented or overlapping URL outcomes"
+        )
+
+
 def audit_run_artifacts(
     task_manifest: bytes,
     plan_receipt: bytes,
@@ -336,6 +386,11 @@ def audit_run_artifacts(
                 raise design.DesignError(
                     f"trace {number} treatment controls differ from frozen variant"
                 )
+            # A declared source budget is insufficient: the attempted run's
+            # own URL ledger must fit that budget and partition source outcomes.
+            _validate_source_budget_ledger(
+                trace, number=number, variant=event["variant"]
+            )
             # A run with the right ID can still claim the wrong question.
             # The exact UTF-8 question bytes (not normalized text) must agree
             # with the frozen manifest. This is self-reported provenance only.
@@ -453,6 +508,7 @@ def audit_run_artifacts(
         "artifact_bytes_equal_supplied_fingerprints": True,
         "trace_question_fingerprints_match_frozen_manifest": True,
         "trace_treatment_controls_match_frozen_design": True,
+        "self_reported_source_ledgers_within_frozen_budgets": True,
         "recorded_execution_independently_authenticated": False,
         "model_or_retrieval_calls_verified": False,
         "scientific_outcomes_validated": False,
