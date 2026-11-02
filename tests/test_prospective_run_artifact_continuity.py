@@ -85,6 +85,18 @@ def _fixture(tmp_path):
             "treatment_controls": dict(
                 design.PROSPECTIVE_TREATMENT_CONTROLS_V1[event["variant"]]
             ),
+            "runtime_context": {
+                "runner_commit": "a" * 40,
+                "requirements_sha256": "b" * 64,
+                "smart_model_id": "gpt-synthetic-smart",
+                "fast_model_id": "gpt-synthetic-fast",
+                "search_provider_id": "synthetic-search",
+                "generation_temperature": 0.0,
+                "search_candidate_multiplier": 3,
+                "browse_timeout_seconds": 60.0,
+                "run_timeout_seconds": 480.0,
+                "max_concurrent_browses": 2,
+            },
             "source_count": 0,
             "successful_source_count": 0,
             "failed_source_count": 0,
@@ -923,3 +935,97 @@ def test_valid_international_ipv6_and_fragment_urls_remain_distinct(tmp_path):
     receipt = _audit(fixture)
     assert receipt["self_reported_source_urls_http_and_fetch_distinct"] is True
     assert receipt["model_or_retrieval_calls_verified"] is False
+
+
+# Future-replication-only common runtime fidelity checks. These are synthetic
+# metadata contracts, not proof that any real model/search requests occurred.
+@pytest.mark.parametrize("field,bad_value", [
+    ("runner_commit", "not-an-immutable-commit"),
+    ("runner_commit", "A" * 40),
+    ("requirements_sha256", "Z" * 64),
+    ("smart_model_id", ""),
+    ("fast_model_id", 22),
+    ("search_provider_id", "backend with spaces"),
+    ("generation_temperature", True),
+    ("generation_temperature", -0.1),
+    ("generation_temperature", 2.1),
+    ("search_candidate_multiplier", 0),
+    ("search_candidate_multiplier", False),
+    ("browse_timeout_seconds", 0),
+    ("run_timeout_seconds", "480.0"),
+    ("max_concurrent_browses", 0),
+])
+def test_prospective_runtime_context_rejects_bad_rehashed_claim(
+    tmp_path, field, bad_value
+):
+    fixture = _fixture(tmp_path)
+    _rewrite_synthetic_source_ledger(
+        fixture, cell_number=0,
+        change=lambda trace: trace["runtime_context"].update({field: bad_value}),
+    )
+    with pytest.raises(design.DesignError, match="runtime"):
+        _audit(fixture)
+
+
+@pytest.mark.parametrize("replacement", [None, "not-an-object", {"runner_commit": "a" * 40}])
+def test_prospective_runtime_requires_complete_exact_object(tmp_path, replacement):
+    fixture = _fixture(tmp_path)
+    _rewrite_synthetic_source_ledger(
+        fixture, cell_number=0,
+        change=lambda trace: trace.update(runtime_context=replacement),
+    )
+    with pytest.raises(design.DesignError, match="exact common runtime-context fields"):
+        _audit(fixture)
+
+
+def test_prospective_runtime_cannot_invent_extra_fields(tmp_path):
+    fixture = _fixture(tmp_path)
+    _rewrite_synthetic_source_ledger(
+        fixture, cell_number=0,
+        change=lambda trace: trace["runtime_context"].update(extra_model="outcome-tuned"),
+    )
+    with pytest.raises(design.DesignError, match="exact common runtime-context fields"):
+        _audit(fixture)
+
+
+def test_prospective_runtime_drift_rejected_even_if_all_hashes_are_rewritten(tmp_path):
+    fixture = _fixture(tmp_path)
+    # Both values are valid independently, but non-treatment generation
+    # settings may not vary between arms without a recorded protocol deviation.
+    _rewrite_synthetic_source_ledger(
+        fixture, cell_number=1,
+        change=lambda trace: trace["runtime_context"].update(
+            generation_temperature=0.25
+        ),
+    )
+    with pytest.raises(design.DesignError, match="runtime context changed"):
+        _audit(fixture)
+
+
+def test_prospective_runtime_prerun_pin_blocks_consistent_relabeling(tmp_path):
+    fixture = _fixture(tmp_path)
+    first_trace = fixture[4] / fixture[3]["cells"][0]["trace"]["path"]
+    context = json.loads(first_trace.read_bytes())["runtime_context"]
+    digest = _digest(json.dumps(
+        context, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8"))
+    result = _audit(fixture, expected_runtime_context_sha256=digest)
+    assert result["common_runtime_context_sha256"] == digest
+    assert result["common_runtime_context_external_pin_matched"] is True
+    assert result["recorded_common_runtime_context_consistent"] is True
+    assert result["actual_common_runtime_independently_authenticated"] is False
+    assert "synthetic-search" not in str(result)
+    with pytest.raises(design.DesignError, match="does not match exact"):
+        _audit(fixture, expected_runtime_context_sha256="0" * 64)
+    with pytest.raises(design.DesignError, match="64 lowercase"):
+        _audit(fixture, expected_runtime_context_sha256="not-a-digest")
+
+
+def test_prospective_runtime_receipt_is_explicitly_unpinned_without_custody(tmp_path):
+    fixture = _fixture(tmp_path)
+    result = _audit(fixture)
+    assert result["common_runtime_context_sha256"]
+    assert result["common_runtime_context_external_pin_matched"] is False
+    assert result["recorded_common_runtime_context_consistent"] is True
+    assert result["actual_common_runtime_independently_authenticated"] is False

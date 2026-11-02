@@ -11,6 +11,7 @@ import argparse
 from contextlib import ExitStack
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -37,6 +38,14 @@ _CELL_FIELDS = frozenset({
 _FILE_FIELDS = frozenset({"path", "size_bytes", "sha256"})
 _PATH_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_GIT_SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
+_RUNTIME_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
+_RUNTIME_FIELDS = frozenset({
+    "runner_commit", "requirements_sha256", "smart_model_id",
+    "fast_model_id", "search_provider_id", "generation_temperature",
+    "search_candidate_multiplier", "browse_timeout_seconds",
+    "run_timeout_seconds", "max_concurrent_browses",
+})
 
 
 def _json_bytes(raw: bytes, description: str) -> object:
@@ -320,6 +329,59 @@ def _validate_source_budget_ledger(trace: dict, *, number: int, variant: str) ->
         )
 
 
+
+def _common_runtime_context_digest(context: object, *, number: int) -> str:
+    """Validate a prospective trace's *recorded* non-treatment environment.
+
+    Require the same declared code, model/provider and operational settings
+    across all attempted arms. An independently retained preregistration hash
+    may anchor these claims; the statements themselves cannot prove execution.
+    """
+    if type(context) is not dict or set(context) != _RUNTIME_FIELDS:
+        raise design.DesignError(
+            f"trace {number} requires exact common runtime-context fields"
+        )
+    if (type(context["runner_commit"]) is not str
+            or _GIT_SHA.fullmatch(context["runner_commit"]) is None):
+        raise design.DesignError(
+            f"trace {number} runtime runner_commit is not a Git commit identifier"
+        )
+    if (type(context["requirements_sha256"]) is not str
+            or _SHA256.fullmatch(context["requirements_sha256"]) is None):
+        raise design.DesignError(
+            f"trace {number} runtime requirements_sha256 is not a SHA-256 digest"
+        )
+    for field in ("smart_model_id", "fast_model_id", "search_provider_id"):
+        value = context[field]
+        if type(value) is not str or _RUNTIME_ID.fullmatch(value) is None:
+            raise design.DesignError(
+                f"trace {number} runtime {field} needs a bounded provider identifier"
+            )
+    temperature = context["generation_temperature"]
+    if (type(temperature) not in (int, float)
+            or not 0 <= temperature <= 2 or not math.isfinite(temperature)):
+        raise design.DesignError(
+            f"trace {number} runtime generation_temperature is not finite in [0, 2]"
+        )
+    for field in ("search_candidate_multiplier", "max_concurrent_browses"):
+        value = context[field]
+        if type(value) is not int or not 1 <= value <= 64:
+            raise design.DesignError(
+                f"trace {number} runtime {field} needs a bounded positive integer"
+            )
+    for field in ("browse_timeout_seconds", "run_timeout_seconds"):
+        value = context[field]
+        if (type(value) not in (int, float)
+                or not 0 < value <= 86400 or not math.isfinite(value)):
+            raise design.DesignError(
+                f"trace {number} runtime {field} needs finite positive seconds"
+            )
+    canonical = json.dumps(
+        context, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=True, allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
 def audit_run_artifacts(
     task_manifest: bytes,
     plan_receipt: bytes,
@@ -331,6 +393,7 @@ def audit_run_artifacts(
     expected_plan_file_sha256: str | None = None,
     expected_execution_log_sha256: str | None = None,
     expected_evidence_index_sha256: str | None = None,
+    expected_runtime_context_sha256: str | None = None,
 ) -> dict:
     """Audit recorded lineage and actual local bytes, without asserting execution."""
     recorded = chronology.audit_execution_log(
@@ -380,6 +443,8 @@ def audit_run_artifacts(
     seen_inodes: set[tuple[int, int]] = set()
     captured_claims: dict[str, tuple[tuple[int, int], int, str]] = {}
     total_bytes = trace_count = report_count = 0
+    common_runtime_sha256: str | None = None
+    runtime_context_external_pin_matched = False
     # Keep a single source-root inode pinned for the entire multi-file audit.
     # Re-opening its path per file risks mixing independent directory trees.
     if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
@@ -448,6 +513,23 @@ def audit_run_artifacts(
             _validate_source_budget_ledger(
                 trace, number=number, variant=event["variant"]
             )
+            # A recorded arm is not comparable to another if its declared
+            # model, source code, search backend or common guardrails drift.
+            # This validates candidate metadata only, not provider activity.
+            runtime_sha = _common_runtime_context_digest(
+                trace.get("runtime_context"), number=number
+            )
+            if common_runtime_sha256 is None:
+                common_runtime_sha256 = runtime_sha
+                runtime_context_external_pin_matched = chronology._check_pin(
+                    expected_runtime_context_sha256,
+                    label="expected common runtime-context SHA-256",
+                    actual=runtime_sha,
+                )
+            elif runtime_sha != common_runtime_sha256:
+                raise design.DesignError(
+                    f"trace {number} runtime context changed across attempted cells"
+                )
             # A run with the right ID can still claim the wrong question.
             # The exact UTF-8 question bytes (not normalized text) must agree
             # with the frozen manifest. This is self-reported provenance only.
@@ -567,6 +649,10 @@ def audit_run_artifacts(
         "trace_treatment_controls_match_frozen_design": True,
         "self_reported_source_ledgers_within_frozen_budgets": True,
         "self_reported_source_urls_http_and_fetch_distinct": True,
+        "common_runtime_context_sha256": common_runtime_sha256,
+        "common_runtime_context_external_pin_matched": runtime_context_external_pin_matched,
+        "recorded_common_runtime_context_consistent": True,
+        "actual_common_runtime_independently_authenticated": False,
         "recorded_execution_independently_authenticated": False,
         "model_or_retrieval_calls_verified": False,
         "scientific_outcomes_validated": False,
@@ -586,6 +672,7 @@ def main() -> int:
     parser.add_argument("--expected-plan-file-sha256")
     parser.add_argument("--expected-execution-log-sha256")
     parser.add_argument("--expected-evidence-index-sha256")
+    parser.add_argument("--expected-runtime-context-sha256")
     args = parser.parse_args()
     try:
         result = audit_run_artifacts(
@@ -598,6 +685,7 @@ def main() -> int:
             expected_plan_file_sha256=args.expected_plan_file_sha256,
             expected_execution_log_sha256=args.expected_execution_log_sha256,
             expected_evidence_index_sha256=args.expected_evidence_index_sha256,
+            expected_runtime_context_sha256=args.expected_runtime_context_sha256,
         )
     except design.DesignError as exc:
         parser.exit(2, f"PROSPECTIVE LOCAL ARTIFACT CONTINUITY: FAIL: {exc}\n")

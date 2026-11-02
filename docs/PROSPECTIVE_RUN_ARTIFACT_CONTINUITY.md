@@ -75,7 +75,8 @@ For a recorded failure, timeout or cancellation, require the trace even when no 
       --expected-task-manifest-sha256 <independently-retained-prerun-value> \
       --expected-plan-file-sha256 <independently-retained-prerun-value> \
       --expected-execution-log-sha256 <independently-retained-postrun-value> \
-      --expected-evidence-index-sha256 <independently-retained-postrun-value>
+      --expected-evidence-index-sha256 <independently-retained-postrun-value> \
+      --expected-runtime-context-sha256 <independently-retained-prerun-value>
 
 All four expected SHA-256 options are optional. The verifier reports separately which were provided and matched. Self-computed values from the candidate files must **not** be called independently preserved. Successful checks print only a compact status/digest/count receipt, including the count of artifact paths rechecked after the full scan and an explicitly local final-recheck stability flag; no report text, token content, source URLs, annotator identities or experimental measurements are printed or written. An invalid candidate fails closed. There are no model/network calls, and the verifier never mutates the source files.
 
@@ -139,3 +140,52 @@ deduplicated. Preserve any source trace rejected by the rule unchanged as
 a documented protocol deviation; do not select or rerun results to pass.
 The historical pilot, frozen automated confirmatory analysis, exploratory
 results, and pending human validation remain untouched.
+
+## Prospective common non-treatment runtime context (self-reported only)
+
+A future counterbalanced replication's retrieval and planning contrasts are
+confounded if its **model selection, search backend, code revision, dependency
+lock or non-treatment resource guardrails** silently change between the
+D3/D6/P6/P6V arms. The optional prospective verifier therefore requires an
+exact `runtime_context` JSON object inside **every attempted trace**,
+including failed, timed-out and cancelled attempts. The ten fields are:
+
+- `runner_commit`: lowercase 40- or 64-hex Git commit identifier for the
+  code actually intended to execute (the verifier does **not** inspect a
+  checkout or Git tree);
+- `requirements_sha256`: lowercase SHA-256 fingerprint of the intended
+  pinned dependency lock (not independently read by this verifier);
+- `smart_model_id`, `fast_model_id`, `search_provider_id`: nonempty,
+  bounded, visible ASCII identifiers, at most 128 characters, representing
+  the declared model/provider configuration;
+- `generation_temperature`: finite JSON number in [0, 2], not boolean;
+- `search_candidate_multiplier` and `max_concurrent_browses`: integers
+  from 1 to 64, not booleans;
+- `browse_timeout_seconds` and `run_timeout_seconds`: finite positive JSON
+  numbers at most 86,400 seconds, not booleans.
+
+These values describe **common non-treatment configuration**, not the
+arm-specific `treatment_controls` (which remain separately fixed by D3/D6/P6/P6V).
+Their exact JSON schema and canonical JSON SHA-256 must be identical across
+every attempted trace. A valid-looking second arm changing its recorded
+model, Git revision or timeout fails even when its trace and inventory
+hashes are consistently recomputed. The checker emits one digest of the
+common context, never model names, source URLs or secret values.
+
+Before future execution, coordinators can independently precommit the
+SHA-256 of `json.dumps(runtime_context, sort_keys=True,
+separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("utf-8")`
+and supply it through `--expected-runtime-context-sha256`. Only a
+matching **independently retained pre-run** digest may be described as
+externally pinned; merely calculating that value from candidate evidence
+does not establish preregistration. The receipt records the separately
+reported pin match and **always** states that actual runtime configuration
+was not independently authenticated. Preserve any drift or incomplete
+trace as a protocol deviation rather than rewriting historical outputs
+or selecting better experimental runs.
+
+This is prospective-only methodological reproducibility protection. It
+does not certify installed dependencies, actual provider model versions,
+true browsing, historical 2026 treatment authenticity, confirmatory
+replication, or human validation. Pilot, frozen automated main-study,
+exploratory and pending human assessments remain separate.
