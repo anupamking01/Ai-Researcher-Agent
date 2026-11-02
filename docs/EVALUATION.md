@@ -72,6 +72,21 @@ the balanced-pair checks as if it were the original study. This binding cannot
 verify the questions or reports behind those IDs; recovering the unchanged
 original traces and reports remains a separate mandatory gate.
 
+The standalone production audit additionally compares the **captured exact
+bytes of both CSVs** with fixed published SHA-256 inputs recorded in
+`outputs/main_study_analysis_inputs_manifest.json` (aggregate
+`4e94308472e87cc14b85e5911c40b5f72c63225862a347e624fc0725afd632aa`).
+A coherently rewritten 40-cell table can satisfy pairing, source budgets and
+support-rate arithmetic while changing scientific outcomes; it must **not**
+receive a pass receipt claiming to audit the frozen published data. The
+frozen byte fingerprints are pinned in the separate auditor implementation,
+rather than loaded as mutable expected values from the same input bundle.
+Only synthetic Python fixtures may explicitly disable this check with
+`require_published_input_bytes=False`, in which case the receipt marks the
+published-byte identity **unchecked**, not passed; CLI always enforces it.
+This is a Git-recorded published-summary identity safeguard, not independent
+authentication of original treatment traces, reports, or historical custody.
+
 Input capture now rejects symlinked CSV files and parent directories,
 non-regular files (including FIFOs), oversized inputs, and observed concurrent
 rewrites or pathname replacements. Each CSV is read through one bounded,

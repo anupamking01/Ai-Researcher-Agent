@@ -27,6 +27,12 @@ VARIANTS = ("D3", "D6", "P6", "P6V")
 EXPECTED_TASKS = 10
 MAX_INPUT_BYTES = 256 * 1024
 MAX_EXACT_COUNT = (1 << 53) - 1
+# Independently pinned from the published frozen-analysis input manifest,
+# outputs/main_study_analysis_inputs_manifest.json (aggregate below). These
+# are original Git-recorded *summary* bytes, not original trace authentication.
+FROZEN_MAIN_CSV_SHA256 = "966ea80519af5ea7b832c86d7868525a4ef75874f396f242291e3be949382a0e"
+FROZEN_SUPPORT_CSV_SHA256 = "5acd80d6115f269c7fab40180dec0d778a45eaafd7d5c23cb79c43fd7837773c"
+PUBLISHED_INPUT_AGGREGATE_SHA256 = "4e94308472e87cc14b85e5911c40b5f72c63225862a347e624fc0725afd632aa"
 
 
 class InputIntegrityError(ValueError):
@@ -191,8 +197,9 @@ def audit_frozen_csv_inputs(
     support_csv: Path = DEFAULT_SUPPORT,
     *,
     require_original_task_set: bool = True,
+    require_published_input_bytes: bool = True,
 ) -> dict:
-    """Audit retained summaries; the source-anchor opt-out is synthetic-only."""
+    """Audit frozen summaries; both source and byte-pin opt-outs are synthetic-only."""
     main_raw, main_rows = _read_csv(main_csv, label="treatment summary")
     support_raw, support_rows = _read_csv(support_csv, label="evaluator summary")
     main = _paired_rows(main_rows, label="treatment summary")
@@ -206,6 +213,19 @@ def audit_frozen_csv_inputs(
         _check_original_task_ids({task for _, task in main})
         if require_original_task_set else None
     )
+    main_sha = hashlib.sha256(main_raw).hexdigest()
+    evaluator_sha = hashlib.sha256(support_raw).hexdigest()
+    # Structural/arithmetic consistency alone cannot distinguish the frozen
+    # confirmatory data from a coherent 40-cell rewrite with different outcomes.
+    # Compare captured bytes with independently copied published fingerprints.
+    # The opt-out supports synthetic fixtures only; CLI never disables the pin.
+    if require_published_input_bytes and (
+        main_sha != FROZEN_MAIN_CSV_SHA256
+        or evaluator_sha != FROZEN_SUPPORT_CSV_SHA256
+    ):
+        raise InputIntegrityError(
+            "captured summary bytes differ from frozen published analysis inputs"
+        )
     seen_run_ids = set()
     for (variant, task), row in main.items():
         label = f"{variant}/{task}"
@@ -285,8 +305,14 @@ def audit_frozen_csv_inputs(
             raise InputIntegrityError(f"{label} zero-evidence sentinel contradicts sources")
     return {
         "status": "pass_summary_csv_internal_consistency_only",
-        "main_sha256": hashlib.sha256(main_raw).hexdigest(),
-        "evaluator_sha256": hashlib.sha256(support_raw).hexdigest(),
+        "main_sha256": main_sha,
+        "evaluator_sha256": evaluator_sha,
+        "published_input_bytes_match_frozen_manifest": (
+            True if require_published_input_bytes else None
+        ),
+        "published_input_manifest_aggregate_sha256_reference": (
+            PUBLISHED_INPUT_AGGREGATE_SHA256 if require_published_input_bytes else None
+        ),
         "paired_cells": len(main),
         "arms": list(VARIANTS),
         "frozen_task_ids_match_original_source": require_original_task_set,

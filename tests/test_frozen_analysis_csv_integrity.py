@@ -57,7 +57,9 @@ def matrix(tmp_path):
 def _check(matrix):
     # Non-original task IDs are intentional in synthetic arithmetic fixtures.
     return audit.audit_frozen_csv_inputs(
-        matrix[3], matrix[4], require_original_task_set=False
+        matrix[3], matrix[4],
+        require_original_task_set=False,
+        require_published_input_bytes=False,
     )
 
 
@@ -71,6 +73,8 @@ def test_valid_synthetic_matrix_is_read_only(matrix):
     assert result["human_validation_performed"] is False
     assert result["frozen_task_ids_match_original_source"] is False
     assert result["original_task_manifest_sha256"] is None
+    assert result["published_input_bytes_match_frozen_manifest"] is None
+    assert result["published_input_manifest_aggregate_sha256_reference"] is None
     assert tuple(path.read_bytes() for path in matrix[3:5]) == before
 
 
@@ -80,6 +84,10 @@ def test_retained_canonical_csvs_pass_internal_preflight():
     assert receipt["paired_cells"] == 40
     assert receipt["original_executions_independently_authenticated"] is False
     assert receipt["frozen_task_ids_match_original_source"] is True
+    assert receipt["published_input_bytes_match_frozen_manifest"] is True
+    assert receipt["published_input_manifest_aggregate_sha256_reference"] == (
+        audit.PUBLISHED_INPUT_AGGREGATE_SHA256
+    )
     assert receipt["original_task_manifest_sha256"] == (
         "5701df80036edb354f4f7d1efc409ea8f554a215f8c37da9d1a0b8ed01fdfd5f"
     )
@@ -238,7 +246,9 @@ def _relabel_all_cells(matrix, prefix: str) -> None:
 def test_original_source_anchor_accepts_pinned_task_ids_in_synthetic_counts(matrix):
     _relabel_all_cells(matrix, "main-")
     before = tuple(path.read_bytes() for path in matrix[3:5])
-    receipt = audit.audit_frozen_csv_inputs(matrix[3], matrix[4])
+    receipt = audit.audit_frozen_csv_inputs(
+        matrix[3], matrix[4], require_published_input_bytes=False
+    )
     assert receipt["frozen_task_ids_match_original_source"] is True
     assert receipt["original_task_manifest_sha256"] == (
         "5701df80036edb354f4f7d1efc409ea8f554a215f8c37da9d1a0b8ed01fdfd5f"
@@ -251,7 +261,9 @@ def test_coherent_forty_cell_task_substitution_fails_original_source_gate(matrix
     # All arithmetic, category partitions and cross-CSV pairs remain valid.
     assert _check(matrix)["paired_cells"] == 40
     with pytest.raises(audit.InputIntegrityError, match="pinned original treatment task set"):
-        audit.audit_frozen_csv_inputs(matrix[3], matrix[4])
+        audit.audit_frozen_csv_inputs(
+            matrix[3], matrix[4], require_published_input_bytes=False
+        )
 
 
 @pytest.mark.parametrize("corruption", ["missing", "rewritten"])
@@ -265,7 +277,9 @@ def test_original_task_manifest_missing_or_rewritten_fails_closed(
         source.parent.mkdir()
         source.write_text('{"tasks":[]}', encoding="utf-8")
     with pytest.raises(audit.InputIntegrityError, match="source failed verification"):
-        audit.audit_frozen_csv_inputs(matrix[3], matrix[4])
+        audit.audit_frozen_csv_inputs(
+            matrix[3], matrix[4], require_published_input_bytes=False
+        )
 
 
 @pytest.mark.parametrize("input_index", [3, 4])
@@ -381,3 +395,41 @@ def test_full_audit_rejects_ignored_blank_physical_record(matrix, input_index):
     with pytest.raises(audit.InputIntegrityError, match="noncanonical CSV record"):
         _check(matrix)
     assert path.read_bytes() == altered
+
+@pytest.mark.parametrize("coherent_edit", [
+    "treatment_cost", "evaluator_run_id", "supported_claim_outcome",
+])
+def test_published_frozen_csv_fingerprints_reject_coherent_alternate_tables(
+    matrix, coherent_edit,
+):
+    # Synthetic edits retain all forty completed paired cells and satisfy
+    # the independent arithmetic audit. They are not the published inputs.
+    _relabel_all_cells(matrix, "main-")
+    main, evaluator, save, main_path, support_path = matrix
+    if coherent_edit == "treatment_cost":
+        main[0]["treatment_cost_usd"] = "0.21"
+    elif coherent_edit == "evaluator_run_id":
+        evaluator[0]["run_id"] = "synthetic-replacement-report-id"
+    else:
+        evaluator[0].update({
+            "supported": "7", "partially_supported": "0",
+            "strict_support_rate": "0.875",
+        })
+        main[0]["posthoc_strict_support_rate"] = "0.875"
+    save()
+    alternative = audit.audit_frozen_csv_inputs(
+        main_path, support_path, require_published_input_bytes=False
+    )
+    assert alternative["paired_cells"] == 40
+    assert alternative["frozen_task_ids_match_original_source"] is True
+    assert alternative["published_input_bytes_match_frozen_manifest"] is None
+    with pytest.raises(audit.InputIntegrityError, match="frozen published analysis inputs"):
+        audit.audit_frozen_csv_inputs(main_path, support_path)
+
+
+def test_disabling_source_anchor_does_not_disable_published_byte_pin(matrix):
+    # Each synthetic-only bypass must be individually and explicitly requested.
+    with pytest.raises(audit.InputIntegrityError, match="frozen published analysis inputs"):
+        audit.audit_frozen_csv_inputs(
+            matrix[3], matrix[4], require_original_task_set=False
+        )
