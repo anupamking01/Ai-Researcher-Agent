@@ -260,6 +260,49 @@ def test_future_task_manifest_rejects_hidden_unicode_controls(
         plan.build_plan(_raw(candidate))
 
 
+
+@pytest.mark.parametrize("surrogate", ("\ud800", "\udfff"))
+@pytest.mark.parametrize("field", ("question", "category"))
+def test_lone_json_surrogate_escape_fails_closed_before_prospective_hash(
+    field, surrogate
+):
+    # json.dumps emits a syntactically legal ASCII \u escape; json.loads
+    # reconstructs a non-scalar surrogate that UTF-8 cannot encode.
+    # Report a design error, never a hashing/assignment traceback.
+    candidate = _payload()
+    candidate["tasks"][0][field] += surrogate
+    raw = _raw(candidate)
+    assert b"\\ud" in raw
+    with pytest.raises(
+        plan.DesignError,
+        match=rf"task 1 {field} contains invisible/control Unicode",
+    ):
+        plan.build_plan(raw)
+
+
+def test_independent_prospective_receipt_verifier_rejects_lone_surrogate():
+    from scripts import verify_counterbalanced_replication_plan as verifier
+
+    original = _raw()
+    receipt = json.dumps(plan.build_plan(original), sort_keys=True).encode("utf-8")
+    altered = _payload()
+    altered["tasks"][0]["question"] += "\udc00"
+    with pytest.raises(plan.DesignError, match="question contains invisible/control Unicode"):
+        verifier.verify_plan(_raw(altered), receipt)
+
+
+def test_json_escaped_valid_surrogate_pair_remains_supported():
+    from scripts import verify_counterbalanced_replication_plan as verifier
+
+    candidate = _payload()
+    candidate["tasks"][0]["question"] += " \U0001f680"
+    candidate["tasks"][0]["category"] += " \U0001f680"
+    raw = _raw(candidate)
+    assert b"\\ud83d\\ude80" in raw
+    receipt = json.dumps(plan.build_plan(raw), sort_keys=True).encode("utf-8")
+    assert verifier.verify_plan(raw, receipt)
+
+
 def test_hidden_historical_question_reuse_cannot_enter_prospective_plan():
     candidate = _payload()
     original = _frozen_2026_questions()[0]["question"]

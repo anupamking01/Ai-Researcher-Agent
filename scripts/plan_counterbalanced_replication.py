@@ -54,13 +54,15 @@ def _contains_hidden_task_control(text: str) -> bool:
     """Reject invisible prompt changes before freezing a NEW task schedule.
 
     The manifest is retained byte-for-byte; silently deleting formatting
-    controls would change what a future model actually receives. Do not
+    controls would change what a future model actually receives. JSON-escaped
+    lone UTF-16 surrogates are not Unicode scalar values and cannot form a
+    portable UTF-8 research prompt. Do not
     remove every combining mark: genuine accented text remains supported.
     """
     for character in text:
         codepoint = ord(character)
         if (
-            unicodedata.category(character) == "Cf"
+            unicodedata.category(character) in {"Cf", "Cs"}
             or (unicodedata.category(character) == "Cc" and character not in "\t\n\r")
             or codepoint == 0x034F  # Combining Grapheme Joiner
             or 0x180B <= codepoint <= 0x180D  # Mongolian variation selectors

@@ -154,3 +154,28 @@ ordinary visible edits. Independent pre-execution registration is still
 required. No original pilot/confirmatory/exploratory results, treatment runs,
 or human evaluations are changed.
 
+## Escaped-surrogate task-source integrity (prospective only)
+
+A JSON document may contain the ASCII escape \uD800 or a lone low
+surrogate even though neither represents a valid Unicode scalar value.
+Python's JSON decoder can accept these escapes as a string, while the
+resulting unpaired surrogate cannot be UTF-8-encoded for the frozen
+task-question fingerprint. Before this guard, this invalid task text
+could cause an uncaught UnicodeEncodeError instead of a controlled
+research-design failure.
+
+Prospective task manifests now reject Unicode surrogate code points
+(general category Cs) inside both question and category, including
+surrogates escaped in otherwise well-formed ASCII JSON. The submitted
+text is never silently rewritten. Properly paired JSON surrogate
+escapes representing a legitimate scalar value (such as an emoji)
+remain supported subject to the existing hidden-control restrictions.
+Independent plan verification rebuilds the schedule with the same rule.
+Offline synthetic regression cases cover both surrogate ranges, both
+task fields, independent receipt verification, and a valid pair.
+
+This only protects prospective input validity and deterministic
+fingerprinting. It neither proves task independence, execution or
+provenance, nor repairs historical fixed-order confounding. The frozen
+pilot and automated confirmatory measurements, exploratory analysis,
+and pending blinded human validation remain unchanged.
