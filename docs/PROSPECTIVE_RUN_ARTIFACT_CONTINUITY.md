@@ -127,7 +127,13 @@ IPv6 hosts, URL queries and ordinary fragment references remain eligible.
 individual scheduled/successful/failed URL list simply through spelling
 changes: the offline auditor compares scheme/host case-insensitively,
 normalizes default HTTP/HTTPS ports and an empty path to "/", and ignores
-fragments (which the browser does not send to an HTTP server). The query
+fragments (which the browser does not send to an HTTP server). Equivalent compressed and expanded bracketed IPv6 address spellings (including
+IPv4-mapped IPv6 literal forms) are treated as one network address, not
+separate sources. Link-local interface-zone suffixes such as
+`[fe80::1%25eth0]` are rejected as nonportable source identifiers rather
+than silently folded into a different fetch target. Distinct IP addresses
+and distinct query strings remain distinct.
+The query
 string remains significant. The outcome sets must partition the scheduled **fetch identities**.
 A reported outcome may have a different URL fragment, host capitalization,
 explicit default port or empty-path spelling without becoming a different

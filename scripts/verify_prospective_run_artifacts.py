@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from contextlib import ExitStack
 import hashlib
+import ipaddress
 import json
 import math
 import os
@@ -254,7 +255,17 @@ def _source_fetch_identity(url: object, *, number: int) -> str:
             or port == 0
         ):
             raise ValueError("not an absolute unauthenticated HTTP(S) resource")
-        normalized_host = host.encode("idna").decode("ascii").lower()
+        # A bracketed IP literal is an address, not a DNS name. Different
+        # compressed/expanded IPv6 spellings identify the *same* fetch target;
+        # do not let them inflate a claimed source count or break outcome
+        # reconciliation. Reject scoped addresses (whose interface-zone
+        # semantics are local and cannot anchor portable source evidence).
+        if ":" in host:
+            if "%" in host:
+                raise ValueError("scoped IPv6 addresses are not portable sources")
+            normalized_host = ipaddress.IPv6Address(host).compressed
+        else:
+            normalized_host = host.encode("idna").decode("ascii").lower()
         if not normalized_host or "%" in normalized_host:
             raise ValueError("invalid source host")
     except (UnicodeError, ValueError) as exc:

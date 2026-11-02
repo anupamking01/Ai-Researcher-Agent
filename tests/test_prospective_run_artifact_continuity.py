@@ -1001,6 +1001,97 @@ def test_same_fetch_resource_cannot_inflate_scheduled_source_count(
         _audit(fixture)
 
 
+@pytest.mark.parametrize("equivalent_urls", [
+    (
+        "https://[2001:db8::1]/study",
+        "https://[2001:0db8:0000:0000:0000:0000:0000:0001]/study",
+    ),
+    (
+        "https://[::ffff:192.0.2.1]/x",
+        "https://[::ffff:c000:201]:443/x#paragraph",
+    ),
+])
+def test_ipv6_address_spelling_aliases_cannot_inflate_source_exposure(
+    tmp_path, equivalent_urls
+):
+    fixture = _fixture(tmp_path)
+    urls = list(equivalent_urls)
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=2, successful_source_count=2, failed_source_count=0,
+            scheduled_urls=urls, successful_urls=urls, failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    with pytest.raises(design.DesignError, match="source ledger.*resource"):
+        _audit(fixture)
+
+
+@pytest.mark.parametrize("scheduled, outcome", [
+    (
+        "https://[2001:db8::1]/study",
+        "https://[2001:0db8:0000:0000:0000:0000:0000:0001]/study",
+    ),
+    (
+        "https://[::ffff:192.0.2.1]/x",
+        "https://[::ffff:c000:201]:443/x#paragraph",
+    ),
+])
+def test_ipv6_fetch_identity_reconciles_equivalent_outcome_spelling(
+    tmp_path, scheduled, outcome
+):
+    fixture = _fixture(tmp_path)
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[scheduled], successful_urls=[outcome], failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    receipt = _audit(fixture)
+    assert receipt["self_reported_source_urls_http_and_fetch_distinct"] is True
+    assert receipt["model_or_retrieval_calls_verified"] is False
+
+
+def test_distinct_ipv6_addresses_and_query_strings_remain_distinct(tmp_path):
+    fixture = _fixture(tmp_path)
+    urls = [
+        "https://[2001:db8::1]/study",
+        "https://[2001:db8::2]/study",
+        "https://[2001:db8::1]/study?edition=2",
+    ]
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=3, successful_source_count=3, failed_source_count=0,
+            scheduled_urls=urls, successful_urls=urls, failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    assert _audit(fixture)["self_reported_source_ledgers_within_frozen_budgets"] is True
+
+
+@pytest.mark.parametrize("nonportable_url", [
+    "https://[fe80::1%25eth0]/study",
+    "https://[fe80::1%eth0]/study",
+])
+def test_scoped_ipv6_source_rejected_as_nonportable(tmp_path, nonportable_url):
+    fixture = _fixture(tmp_path)
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[nonportable_url],
+            successful_urls=[nonportable_url], failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    with pytest.raises(design.DesignError, match="source ledger"):
+        _audit(fixture)
+
+
 def test_valid_international_ipv6_and_fragment_urls_remain_distinct(tmp_path):
     fixture = _fixture(tmp_path)
     urls = [
