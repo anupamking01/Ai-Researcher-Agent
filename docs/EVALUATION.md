@@ -46,8 +46,9 @@ negative source/usage/cost/time measurements, impossible evaluator category
 partitions, evaluator claim counts outside the frozen 1–12 cap, and
 source-count claims exceeding each assigned 3/6-source intervention budget.
 Integral-valued numerical CSV representations (such as 8 and 8.0) are
-equivalent; no rounding of genuinely fractional counts is allowed. Validated
-count measurements retain the original float representation downstream.
+equivalent; exact decimal parsing prevents binary-float rounding from
+concealing a fractional count. Values above 2^53-1 are rejected because
+count summaries retain the original float representation downstream.
 
 These are input-integrity checks, not changes to preregistered statistical
 estimands, dataset-selection rules, or automated findings. A rejected CSV is

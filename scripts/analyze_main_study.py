@@ -7,6 +7,7 @@ network/model calls and reads only the completed treatment/evaluator CSVs.
 from __future__ import annotations
 
 import csv
+from decimal import Decimal, InvalidOperation
 import itertools
 import json
 import math
@@ -66,8 +67,22 @@ def _float(row: dict[str, str], key: str) -> float:
 
 
 def _int(row: dict[str, str], key: str) -> int:
-    number = _float(row, key)
-    if not number.is_integer():
+    raw = row.get(key)
+    if not isinstance(raw, str) or not raw.strip():
+        raise SystemExit(f"Missing count field {key!r}")
+    # Parse the original decimal characters before any binary-float rounding.
+    # A count such as 7.99999999999999999 is NOT an integer, despite float
+    # conversion potentially rounding it to 8. Downstream summaries represent
+    # count metrics as floats, so reject numbers outside exact float integer range.
+    try:
+        number = Decimal(raw.strip())
+    except InvalidOperation as exc:
+        raise SystemExit(f"Invalid numeric count field {key!r}") from exc
+    if not number.is_finite():
+        raise SystemExit(f"Count field {key!r} must be finite")
+    if abs(number) > 9007199254740991:
+        raise SystemExit(f"Count field {key!r} is too large for exact analysis")
+    if number != number.to_integral_value():
         raise SystemExit(f"Count field {key!r} must be a whole number")
     return int(number)
 

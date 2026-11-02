@@ -119,9 +119,12 @@ def test_complete_synthetic_numeric_matrix_preserves_frozen_analysis(synthetic_m
     assert analysis._int({"claims_checked": "8.0"}, "claims_checked") == 8
 
 
-@pytest.mark.parametrize("value", ["2.5", "nan", "inf", "-inf", "1e309", "oops"])
+@pytest.mark.parametrize("value", [
+    "2.5", "0.99999999999999999", "8.0000000000000000001",
+    "nan", "inf", "-inf", "1e309", "9007199254740993", "oops",
+])
 def test_frozen_count_parser_rejects_rounded_or_nonfinite_claims(value):
-    with pytest.raises(SystemExit, match="(whole number|finite|Invalid numeric)"):
+    with pytest.raises(SystemExit, match="(whole number|finite|Invalid numeric|too large)"):
         analysis._int({"claims_checked": value}, "claims_checked")
 
 
