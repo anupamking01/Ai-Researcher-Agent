@@ -6,6 +6,7 @@ This is a prospective design aid, not evidence of random historical assignment.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import hashlib
 import json
 import math
@@ -117,36 +118,95 @@ def _source_generation(st) -> tuple:
 
 
 def read_manifest(path: Path) -> bytes:
-    """Capture one bounded regular file, rejecting links and observable swaps."""
+    """Capture a bounded file through no-follow, descriptor-held ancestry.
+
+    The same reader is used for both the NEW task manifest and its schedule
+    receipt. A pinned digest cannot establish a stable pathname if a parent
+    is a redirect or is replaced while the bytes are being captured.
+    """
     path = Path(path)
-    if not hasattr(os, "O_NOFOLLOW"):
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
         raise DesignError("the platform cannot guarantee a no-follow manifest read")
+    if ".." in path.parts:
+        raise DesignError("task manifest path cannot contain parent traversal")
+    absolute = path.absolute()
+    if any(parent.is_symlink() for parent in absolute.parents):
+        raise DesignError("task manifest has a symlinked parent directory")
+    ancestor_flags = (
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    file_flags = (
+        os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
     try:
         named_before = path.lstat()
         if not stat.S_ISREG(named_before.st_mode) or not (
             0 < named_before.st_size <= MAX_MANIFEST_BYTES
         ):
             raise DesignError("task manifest must be a bounded regular non-symlink file")
-        fd = os.open(
-            path, os.O_RDONLY | os.O_NOFOLLOW
-            | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0),
-        )
-        with os.fdopen(fd, "rb") as stream:
-            opened = os.fstat(stream.fileno())
+        with ExitStack() as stack:
+            parent_fd = os.open(absolute.anchor, ancestor_flags)
+            stack.callback(os.close, parent_fd)
+            ancestor_entries = []
+            # Walk the entire ancestor chain using openat and O_NOFOLLOW,
+            # retaining each directory descriptor until capture completes.
+            # A pathname-only symlink check would be vulnerable to a parent
+            # being replaced between the initial check and the file open.
+            for component in absolute.parts[1:-1]:
+                child_fd = os.open(component, ancestor_flags, dir_fd=parent_fd)
+                stack.callback(os.close, child_fd)
+                child_stat = os.fstat(child_fd)
+                linked_stat = os.stat(
+                    component, dir_fd=parent_fd, follow_symlinks=False
+                )
+                if _source_generation(child_stat) != _source_generation(linked_stat):
+                    raise DesignError("task manifest parent directory changed before capture")
+                ancestor_entries.append((parent_fd, component, child_fd))
+                parent_fd = child_fd
+
+            fd = os.open(absolute.name, file_flags, dir_fd=parent_fd)
+            stack.callback(os.close, fd)
+            opened = os.fstat(fd)
+            linked_before = os.stat(
+                absolute.name, dir_fd=parent_fd, follow_symlinks=False
+            )
             if (not stat.S_ISREG(opened.st_mode)
-                    or _source_generation(opened) != _source_generation(named_before)):
+                    or _source_generation(opened) != _source_generation(named_before)
+                    or _source_generation(opened) != _source_generation(linked_before)):
                 raise DesignError("task manifest changed before capture")
-            raw = stream.read(MAX_MANIFEST_BYTES + 1)
-            after = os.fstat(stream.fileno())
-        named_after = path.lstat()
+
+            captured = bytearray()
+            while len(captured) <= MAX_MANIFEST_BYTES:
+                piece = os.read(
+                    fd, min(65536, MAX_MANIFEST_BYTES + 1 - len(captured))
+                )
+                if not piece:
+                    break
+                captured.extend(piece)
+            after = os.fstat(fd)
+            linked_after = os.stat(
+                absolute.name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if (len(captured) != opened.st_size
+                    or len(captured) > MAX_MANIFEST_BYTES
+                    or _source_generation(opened) != _source_generation(after)
+                    or _source_generation(after) != _source_generation(linked_after)):
+                raise DesignError("task manifest changed during capture")
+
+            # A replacement parent can leave the original file descriptor and
+            # filename internally consistent while altering the path a future
+            # verifier or executor would resolve.
+            for holder_fd, component, child_fd in ancestor_entries:
+                linked = os.stat(
+                    component, dir_fd=holder_fd, follow_symlinks=False
+                )
+                if _source_generation(os.fstat(child_fd)) != _source_generation(linked):
+                    raise DesignError("task manifest parent directory changed during capture")
+            return bytes(captured)
     except OSError as exc:
         raise DesignError("cannot safely capture task manifest") from exc
-    if (len(raw) != opened.st_size or len(raw) > MAX_MANIFEST_BYTES
-            or _source_generation(opened) != _source_generation(after)
-            or _source_generation(after) != _source_generation(named_after)):
-        raise DesignError("task manifest changed during capture")
-    return raw
-
 
 def build_plan(source: bytes) -> dict:
     """Bind a fixed outcome-blind schedule to exact new-manifest bytes."""

@@ -213,6 +213,59 @@ def test_manifest_read_rejects_symlink_and_nonregular_source(tmp_path):
         plan.read_manifest(tmp_path)
 
 
+def test_manifest_read_accepts_ordinary_nested_directory(tmp_path):
+    directory = tmp_path / "a" / "b"
+    directory.mkdir(parents=True)
+    source = directory / "tasks.json"
+    source.write_bytes(_raw())
+    assert plan.read_manifest(source) == _raw()
+
+
+def test_manifest_read_rejects_symlinked_parent_and_ancestor(tmp_path):
+    real = tmp_path / "real"
+    nested = real / "nested"
+    nested.mkdir(parents=True)
+    source = nested / "tasks.json"
+    source.write_bytes(_raw())
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+    # The real bytes are valid, but the submitted pathname passes through
+    # a redirect; a later handoff could resolve to a different task set.
+    with pytest.raises(plan.DesignError, match="symlinked parent"):
+        plan.read_manifest(alias / "nested" / source.name)
+    nested_alias = real / "nested_alias"
+    nested_alias.symlink_to(nested, target_is_directory=True)
+    with pytest.raises(plan.DesignError, match="symlinked parent"):
+        plan.read_manifest(nested_alias / source.name)
+
+
+def test_manifest_read_detects_parent_directory_swap_during_capture(
+    tmp_path, monkeypatch,
+):
+    original = tmp_path / "source"
+    replacement = tmp_path / "replacement"
+    original.mkdir()
+    replacement.mkdir()
+    source = original / "tasks.json"
+    source.write_bytes(_raw())
+    (replacement / source.name).write_bytes(_raw())
+    original_read = plan.os.read
+    replaced = False
+
+    def swap_on_read(fd, amount):
+        nonlocal replaced
+        if not replaced:
+            original.rename(tmp_path / "old_source")
+            replacement.rename(original)
+            replaced = True
+        return original_read(fd, amount)
+
+    monkeypatch.setattr(plan.os, "read", swap_on_read)
+    with pytest.raises(plan.DesignError, match="parent directory changed during capture"):
+        plan.read_manifest(source)
+    assert replaced
+
+
 def test_cli_is_offline_print_only_without_automatic_treatment_execution(
     tmp_path, capsys, monkeypatch
 ):

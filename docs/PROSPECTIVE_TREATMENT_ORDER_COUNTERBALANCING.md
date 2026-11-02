@@ -32,6 +32,18 @@ Run in an offline checkout after an independently selected future task set is fr
 python -m scripts.plan_counterbalanced_replication --task-manifest /path/to/new_frozen_ten_tasks.json > /path/to/proposed_order_receipt.json
 ~~~
 
+The prospective task-manifest and schedule-receipt file reader now holds no-follow
+directory descriptors for **every parent path component** until the bounded
+input capture completes. It rejects symlinked parents and observed ancestor
+replacement, including a same-byte directory swap that leaves the opened file
+unchanged. This closes a path-identity gap: a digest of correct bytes alone
+does not guarantee that a later execution resolves the same source pathname.
+This is local pathname stability, **not** an independent timestamp, archival
+attestation, protection from an adversary able to swap and restore paths
+between checks, or a claim that any replication has run. Offline synthetic
+tests cover valid nested directories, symlinked ancestors, an in-flight
+parent replacement, and receipt-CLI enforcement.
+
 The helper itself writes **only to stdout**. It refuses the original historical task-set ID, the ten reserved original task IDs (`main-01` through `main-10`), verbatim reuse of any of the ten frozen original questions even under case changes, Unicode NFKC variants, or whitespace-only changes, unknown or outcome-bearing JSON fields, duplicate keys, IDs or questions, non-finite JSON, missing freeze flag, ambiguous source types, symlinks, oversized inputs (>256 KiB), and an incomplete matrix. These historical-question fingerprints are checked against the byte-pinned September 2026 original source manifest (`experiments/main_budget_tasks.json`) by offline regression tests; they are not derived from measured outcomes or from recovered report artifacts. This **does not** detect paraphrases, substantial rewrites, near-duplicate tasks, conceptual overlap, or deliberate evasions. A coordinator must still independently document task selection, genuine independence, pre-execution timestamp, and integrity, and ensure there is no treatment outcome feedback into selecting or rewording tasks.
 
 The printed receipt includes both the exact SHA-256 of the source manifest bytes and a separate canonical-semantic task-manifest SHA-256 used to assign slots, plus a deterministic design-version identifier, ordered treatment IDs by task, positional counts, pairwise precedence counts, and a SHA-256 of the canonical receipt fields. Reformatting JSON or changing key order does **not** change arm assignment, but does change the source-byte custody hash and full receipt hash. The receipt hash is **not** an external timestamp or independent pre-registration attestation. Preserve the actual manifest and the receipt in a separately reviewable pre-execution location before authorizing future work.

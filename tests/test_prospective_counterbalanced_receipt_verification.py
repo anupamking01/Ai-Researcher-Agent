@@ -193,6 +193,29 @@ def test_cli_emits_only_digests_and_rejects_bad_file_or_symlink(
     assert "recomputed manifest-bound" in capsys.readouterr().err
 
 
+def test_receipt_cli_rejects_symlinked_parent_even_for_valid_pinned_bytes(
+    tmp_path, monkeypatch, capsys,
+):
+    tasks = tmp_path / "tasks.json"
+    tasks.write_bytes(manifest_bytes())
+    actual = tmp_path / "actual"
+    actual.mkdir()
+    receipt = actual / "plan.json"
+    receipt.write_bytes(plan_bytes(tasks.read_bytes()))
+    alias = tmp_path / "alias"
+    alias.symlink_to(actual, target_is_directory=True)
+    monkeypatch.setattr(sys, "argv", [
+        "verify_counterbalanced_replication_plan.py",
+        "--task-manifest", str(tasks),
+        "--plan-file", str(alias / "plan.json"),
+        "--expected-plan-file-sha256", hashlib.sha256(receipt.read_bytes()).hexdigest(),
+    ])
+    with pytest.raises(SystemExit) as exc:
+        verify.main()
+    assert exc.value.code == 2
+    assert "symlinked parent" in capsys.readouterr().err
+
+
 def test_external_source_pin_rejects_self_consistent_manifest_and_plan_replacement():
     original = manifest_bytes()
     original_pin = hashlib.sha256(original).hexdigest()
