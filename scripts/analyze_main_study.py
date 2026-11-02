@@ -35,18 +35,41 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
     if not path.is_file():
         raise SystemExit(f"Missing required input: {path}")
     with path.open("r", encoding="utf-8", newline="") as handle:
-        return list(csv.DictReader(handle))
+        reader = csv.DictReader(handle, strict=True)
+        try:
+            headers = reader.fieldnames
+            if not headers or any(not name for name in headers):
+                raise SystemExit(f"Missing or empty CSV header in {path}")
+            if len(set(headers)) != len(headers):
+                raise SystemExit(f"Duplicate CSV headers in {path}")
+            rows = list(reader)
+        except csv.Error as exc:
+            raise SystemExit(f"Malformed CSV input in {path}: {exc}") from exc
+        # DictReader otherwise silently accepts extra cells under a None key
+        # and missing cells as None, obscuring a changed evaluator field.
+        if any(None in row or any(value is None for value in row.values()) for row in rows):
+            raise SystemExit(f"Missing or extra CSV cells in {path}")
+        return rows
 
 
 def _float(row: dict[str, str], key: str) -> float:
     value = row.get(key)
-    if value in (None, ""):
-        raise SystemExit(f"Missing numeric field {key!r} in row {row}")
-    return float(value)
+    if not isinstance(value, str) or not value.strip():
+        raise SystemExit(f"Missing numeric field {key!r}")
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise SystemExit(f"Invalid numeric field {key!r}") from exc
+    if not math.isfinite(number):
+        raise SystemExit(f"Numeric field {key!r} must be finite")
+    return number
 
 
 def _int(row: dict[str, str], key: str) -> int:
-    return int(round(_float(row, key)))
+    number = _float(row, key)
+    if not number.is_integer():
+        raise SystemExit(f"Count field {key!r} must be a whole number")
+    return int(number)
 
 
 def _mean(values: list[float]) -> float:
@@ -176,26 +199,55 @@ def _build_dataset() -> tuple[dict[tuple[str, str], dict], list[str]]:
             completed = str(m.get("completed", "")).strip().lower()
             if completed not in {"true", "1", "yes"}:
                 raise SystemExit(f"Incomplete treatment cell: {variant}/{task}")
+            # The frozen evaluator checks at most 12 claims per report.
+            # Never round fractional CSV counts or allow negative categories to
+            # cancel positive categories and manufacture plausible support rates.
             claims = _int(e, "claims_checked")
-            if claims <= 0:
-                raise SystemExit(f"Evaluator checked zero claims: {variant}/{task}")
+            if not 1 <= claims <= 12:
+                raise SystemExit(f"Evaluator claim count outside frozen cap: {variant}/{task}")
             supported = _int(e, "supported")
             partial = _int(e, "partially_supported")
             unsupported = _int(e, "unsupported")
             contradicted = _int(e, "contradicted")
-            if supported + partial + unsupported + contradicted != claims:
+            labels = (supported, partial, unsupported, contradicted)
+            if any(count < 0 or count > claims for count in labels):
+                raise SystemExit(f"Invalid evaluator category count: {variant}/{task}")
+            if sum(labels) != claims:
                 raise SystemExit(f"Evaluator count mismatch: {variant}/{task}")
+
+            # Count-based treatment measurements must be integral and within
+            # the frozen arm's browse cap; cost and time must be finite and
+            # nonnegative. These gates reject corrupt copies, not observed
+            # outcomes, and do not replace the existing source-custody audit.
+            assigned_budget = 3 if variant == "D3" else 6
+            if _int(m, "source_budget") != assigned_budget:
+                raise SystemExit(f"Assigned retrieval budget drift: {variant}/{task}")
+            count_fields = (
+                "successful_sources", "failed_sources", "total_tokens",
+                "model_calls", "report_words",
+            )
+            measurements = {field: _int(m, field) for field in count_fields}
+            if any(value < 0 for value in measurements.values()):
+                raise SystemExit(f"Negative treatment count: {variant}/{task}")
+            if (measurements["successful_sources"] + measurements["failed_sources"]
+                    > assigned_budget):
+                raise SystemExit(f"Treatment source counts exceed budget: {variant}/{task}")
+            cost = _float(m, "treatment_cost_usd")
+            latency = _float(m, "latency_seconds")
+            if cost < 0 or latency < 0:
+                raise SystemExit(f"Negative treatment cost or latency: {variant}/{task}")
 
             joined[(variant, task)] = {
                 "strict_support_rate": supported / claims,
                 "broad_support_rate": (supported + partial) / claims,
                 "unsupported_or_contradicted_rate": (unsupported + contradicted) / claims,
-                "successful_sources": _float(m, "successful_sources"),
-                "total_tokens": _float(m, "total_tokens"),
-                "treatment_cost_usd": _float(m, "treatment_cost_usd"),
-                "latency_seconds": _float(m, "latency_seconds"),
-                "model_calls": _float(m, "model_calls"),
-                "report_words": _float(m, "report_words"),
+                # Preserve the original float-valued analysis representation.
+                "successful_sources": float(measurements["successful_sources"]),
+                "total_tokens": float(measurements["total_tokens"]),
+                "treatment_cost_usd": cost,
+                "latency_seconds": latency,
+                "model_calls": float(measurements["model_calls"]),
+                "report_words": float(measurements["report_words"]),
                 "claims_checked": claims,
                 "evidence_status": e.get("evidence_status", ""),
             }

@@ -60,3 +60,119 @@ def test_paired_summary_rejects_unpaired_or_empty_vectors():
         _paired_summary([], [], seed=1, exact_p=False)
     with pytest.raises(ValueError, match="non-empty and equal length"):
         _paired_summary([1.0], [1.0, 2.0], seed=1, exact_p=False)
+
+
+# All matrices below are fabricated solely for offline contract regression.
+# They are not experimental treatments or evaluator results.
+import csv
+
+from scripts import analyze_main_study as analysis
+
+
+def _write_synthetic_matrix(path, rows):
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+@pytest.fixture
+def synthetic_matrix(tmp_path, monkeypatch):
+    treatment, evaluator = [], []
+    for variant in analysis.VARIANTS:
+        for ordinal in range(1, 11):
+            task = f"synthetic-{ordinal:02d}"
+            treatment.append({
+                "variant_id": variant, "task_id": task, "completed": "True",
+                "source_budget": "3" if variant == "D3" else "6",
+                "successful_sources": "2", "failed_sources": "1",
+                "total_tokens": "160", "treatment_cost_usd": "0.2",
+                "latency_seconds": "12.5", "model_calls": "2",
+                "report_words": "15",
+            })
+            evaluator.append({
+                "variant_id": variant, "task_id": task,
+                "claims_checked": "8", "supported": "6",
+                "partially_supported": "1", "unsupported": "1",
+                "contradicted": "0", "evidence_status": "",
+            })
+    treatment_path = tmp_path / "treatment.csv"
+    evaluator_path = tmp_path / "evaluator.csv"
+    monkeypatch.setattr(analysis, "MAIN_CSV", treatment_path)
+    monkeypatch.setattr(analysis, "SUPPORT_CSV", evaluator_path)
+
+    def write():
+        _write_synthetic_matrix(treatment_path, treatment)
+        _write_synthetic_matrix(evaluator_path, evaluator)
+
+    write()
+    return treatment, evaluator, write
+
+
+def test_complete_synthetic_numeric_matrix_preserves_frozen_analysis(synthetic_matrix):
+    _, _, _ = synthetic_matrix
+    joined, tasks = analysis._build_dataset()
+    assert len(joined) == 40
+    assert len(tasks) == 10
+    assert joined[("D3", "synthetic-01")]["strict_support_rate"] == 0.75
+    assert type(joined[("D3", "synthetic-01")]["total_tokens"]) is float
+    assert analysis._int({"claims_checked": "8.0"}, "claims_checked") == 8
+
+
+@pytest.mark.parametrize("value", ["2.5", "nan", "inf", "-inf", "1e309", "oops"])
+def test_frozen_count_parser_rejects_rounded_or_nonfinite_claims(value):
+    with pytest.raises(SystemExit, match="(whole number|finite|Invalid numeric)"):
+        analysis._int({"claims_checked": value}, "claims_checked")
+
+
+@pytest.mark.parametrize("field,value,expected_error", [
+    ("claims_checked", "13", "outside frozen cap"),
+    ("supported", "6.5", "whole number"),
+    ("supported", "-1", "category count"),
+    ("supported", "9", "category count"),
+    ("contradicted", "-1", "category count"),
+])
+def test_synthetic_evaluator_counts_fail_closed(
+    synthetic_matrix, field, value, expected_error
+):
+    _, evaluator, write = synthetic_matrix
+    evaluator[0][field] = value
+    # A negative supported count can still be made to sum to eight;
+    # that apparent partition must never pass the category-domain guard.
+    if field == "supported" and value == "-1":
+        evaluator[0]["unsupported"] = "8"
+    write()
+    with pytest.raises(SystemExit, match=expected_error):
+        analysis._build_dataset()
+
+
+@pytest.mark.parametrize("field,value,expected_error", [
+    ("treatment_cost_usd", "nan", "finite"),
+    ("latency_seconds", "inf", "finite"),
+    ("total_tokens", "1e309", "finite"),
+    ("report_words", "1.5", "whole number"),
+    ("model_calls", "-1", "Negative treatment count"),
+    ("treatment_cost_usd", "-0.01", "Negative treatment cost"),
+    ("source_budget", "6", "retrieval budget drift"),
+    ("successful_sources", "4", "source counts exceed budget"),
+])
+def test_synthetic_treatment_measurements_fail_closed(
+    synthetic_matrix, field, value, expected_error
+):
+    treatment, _, write = synthetic_matrix
+    treatment[0][field] = value
+    write()
+    with pytest.raises(SystemExit, match=expected_error):
+        analysis._build_dataset()
+
+
+@pytest.mark.parametrize("text,expected_error", [
+    ("variant_id,task_id,variant_id\nD3,synthetic-01,D6\n", "Duplicate CSV headers"),
+    ("variant_id,task_id\nD3,synthetic-01,extra\n", "Missing or extra CSV cells"),
+    ("variant_id,task_id\nD3\n", "Missing or extra CSV cells"),
+])
+def test_inference_csv_parser_rejects_ambiguous_columns(tmp_path, text, expected_error):
+    path = tmp_path / "unsafe.csv"
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(SystemExit, match=expected_error):
+        analysis._read_csv(path)

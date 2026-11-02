@@ -35,6 +35,27 @@ A fixed post-hoc evaluator is applied to all treatment variants so that support 
 
 Saved traces/evaluator records are summarized with a frozen paired analysis plan. Analysis operates on persisted artifacts; it does not rerun treatments merely because an observed result is inconvenient.
 
+### Offline frozen-analysis CSV integrity (read-only)
+
+The frozen confirmatory analysis continues to use the same first complete
+40-cell treatment and common-evaluator CSV inputs under
+paper/ANALYSIS_PLAN.md. Before calculating support-rate contrasts,
+scripts/analyze_main_study.py now rejects duplicate/ambiguous CSV columns,
+missing or extra cells, nonfinite numerical values, fractional count fields,
+negative source/usage/cost/time measurements, impossible evaluator category
+partitions, evaluator claim counts outside the frozen 1–12 cap, and
+source-count claims exceeding each assigned 3/6-source intervention budget.
+Integral-valued numerical CSV representations (such as 8 and 8.0) are
+equivalent; no rounding of genuinely fractional counts is allowed. Validated
+count measurements retain the original float representation downstream.
+
+These are input-integrity checks, not changes to preregistered statistical
+estimands, dataset-selection rules, or automated findings. A rejected CSV is
+a documented provenance/format discrepancy requiring source investigation;
+do not silently repair, selectively exclude, or rerun treatments to obtain
+preferred outcomes. This check cannot authenticate missing historical
+original traces or reports and does not constitute human validation.
+
 ### Layer D — Blinded human validation
 
 An offline packet builder with a coordinator-secret shuffle seed hides variant identity and prepares the same reports for rubric-based human evaluation. Human annotations are a complementary measure of overall quality and usefulness, not a synthetic replacement for the automated support metric.
