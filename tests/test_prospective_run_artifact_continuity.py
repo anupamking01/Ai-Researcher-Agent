@@ -128,6 +128,8 @@ def test_complete_synthetic_matrix_binds_all_traces_reports_and_events(tmp_path)
     assert result["unattempted_cells"] == 0
     assert result["verified_attempted_traces"] == 40
     assert result["verified_reports"] == 40
+    assert result["artifact_paths_rechecked_after_full_scan"] == 80
+    assert result["artifact_identity_and_bytes_stable_at_final_recheck"] is True
     assert result["all_planned_cells_completed"] is True
     assert result["artifact_bytes_equal_supplied_fingerprints"] is True
     assert result["trace_question_fingerprints_match_frozen_manifest"] is True
@@ -507,3 +509,66 @@ def test_artifact_root_mutation_between_reads_fails(tmp_path, monkeypatch):
     with pytest.raises(design.DesignError, match='artifact root changed during verification'):
         _audit(fixture)
     assert changed
+
+
+def test_early_trace_rewritten_after_check_is_rejected_at_final_sweep(tmp_path, monkeypatch):
+    # Mutating a nested trace file does not change the root directory inode.
+    fixture = _fixture(tmp_path)
+    path = fixture[4] / fixture[3]["cells"][0]["trace"]["path"]
+    original = evidence._validate_file_claim
+    changed = False
+
+    def rewrite_after_first(*args, **kwargs):
+        nonlocal changed
+        result = original(*args, **kwargs)
+        if not changed:
+            path.write_bytes(b"rewritten after its first successful hash check")
+            changed = True
+        return result
+
+    monkeypatch.setattr(evidence, "_validate_file_claim", rewrite_after_first)
+    with pytest.raises(design.DesignError, match="previously verified artifact changed"):
+        _audit(fixture)
+    assert changed
+
+
+def test_identical_byte_inode_replacement_after_check_is_rejected(tmp_path, monkeypatch):
+    fixture = _fixture(tmp_path)
+    path = fixture[4] / fixture[3]["cells"][0]["trace"]["path"]
+    original = evidence._validate_file_claim
+    replaced = False
+
+    def replace_after_first(*args, **kwargs):
+        nonlocal replaced
+        result = original(*args, **kwargs)
+        if not replaced:
+            substitute = path.with_name("same-bytes-substitute.json")
+            substitute.write_bytes(path.read_bytes())
+            os.replace(substitute, path)
+            replaced = True
+        return result
+
+    monkeypatch.setattr(evidence, "_validate_file_claim", replace_after_first)
+    with pytest.raises(design.DesignError, match="previously verified artifact changed"):
+        _audit(fixture)
+    assert replaced
+
+
+def test_early_trace_removed_after_check_is_rejected_at_final_sweep(tmp_path, monkeypatch):
+    fixture = _fixture(tmp_path)
+    path = fixture[4] / fixture[3]["cells"][0]["trace"]["path"]
+    original = evidence._validate_file_claim
+    removed = False
+
+    def remove_after_first(*args, **kwargs):
+        nonlocal removed
+        result = original(*args, **kwargs)
+        if not removed:
+            path.unlink()
+            removed = True
+        return result
+
+    monkeypatch.setattr(evidence, "_validate_file_claim", remove_after_first)
+    with pytest.raises(design.DesignError, match="became inaccessible during audit"):
+        _audit(fixture)
+    assert removed

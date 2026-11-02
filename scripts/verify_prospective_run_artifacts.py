@@ -98,7 +98,8 @@ def _read_regular_under(root_fd: int, relative: str) -> tuple[bytes, tuple[int, 
 
 def _validate_file_claim(claim: object, *, description: str,
                          root_fd: int, seen_paths: set[str],
-                         seen_inodes: set[tuple[int, int]]) -> tuple[bytes, int]:
+                         seen_inodes: set[tuple[int, int]],
+                         captured_claims: dict[str, tuple[tuple[int, int], int, str]]) -> tuple[bytes, int]:
     if type(claim) is not dict or set(claim) != _FILE_FIELDS:
         raise design.DesignError(f"{description} requires exact file fingerprint fields")
     path, length, digest = claim["path"], claim["size_bytes"], claim["sha256"]
@@ -115,6 +116,7 @@ def _validate_file_claim(claim: object, *, description: str,
         raise design.DesignError(f"{description} differs from supplied artifact bytes")
     seen_paths.add(path)
     seen_inodes.add(inode)
+    captured_claims[path] = (inode, length, digest)
     return raw, len(raw)
 
 
@@ -176,6 +178,7 @@ def audit_run_artifacts(
     events = _json_bytes(execution_log, "verified execution log")["events"]
     seen_paths: set[str] = set()
     seen_inodes: set[tuple[int, int]] = set()
+    captured_claims: dict[str, tuple[tuple[int, int], int, str]] = {}
     total_bytes = trace_count = report_count = 0
     # Keep a single source-root inode pinned for the entire multi-file audit.
     # Re-opening its path per file risks mixing independent directory trees.
@@ -210,6 +213,7 @@ def audit_run_artifacts(
             trace_raw, size = _validate_file_claim(
                 cell["trace"], description=f"trace {number}",
                 root_fd=root_fd, seen_paths=seen_paths, seen_inodes=seen_inodes,
+                captured_claims=captured_claims,
             )
             total_bytes += size
             trace_count += 1
@@ -268,6 +272,7 @@ def audit_run_artifacts(
                 _, size = _validate_file_claim(
                     report, description=f"report {number}",
                     root_fd=root_fd, seen_paths=seen_paths, seen_inodes=seen_inodes,
+                captured_claims=captured_claims,
                 )
                 total_bytes += size
                 report_count += 1
@@ -278,6 +283,23 @@ def audit_run_artifacts(
                     raise design.DesignError(
                         f"trace {number} does not bind the supplied report fingerprint"
                     )
+
+        # Source bytes may be replaced or rewritten after an early cell passes.
+        # Re-open every verified path beneath the original root descriptor;
+        # require both file identity and content to remain unchanged at the
+        # end of the bounded scan. This is not an atomic filesystem snapshot.
+        for path, (initial_inode, initial_size, initial_digest) in captured_claims.items():
+            try:
+                current_raw, current_inode = _read_regular_under(root_fd, path)
+            except design.DesignError as exc:
+                raise design.DesignError(
+                    "previously verified artifact became inaccessible during audit"
+                ) from exc
+            if (current_inode != initial_inode or len(current_raw) != initial_size
+                    or hashlib.sha256(current_raw).hexdigest() != initial_digest):
+                raise design.DesignError(
+                    "previously verified artifact changed during audit"
+                )
 
         root_after = os.fstat(root_fd)
         try:
@@ -309,6 +331,8 @@ def audit_run_artifacts(
         "unattempted_cells": recorded["unattempted_cells"],
         "verified_attempted_traces": trace_count,
         "verified_reports": report_count,
+        "artifact_paths_rechecked_after_full_scan": len(captured_claims),
+        "artifact_identity_and_bytes_stable_at_final_recheck": True,
         "recorded_status_counts": recorded["recorded_status_counts"],
         "all_planned_cells_completed": recorded["all_recorded_cells_completed"],
         "artifact_bytes_equal_supplied_fingerprints": True,
