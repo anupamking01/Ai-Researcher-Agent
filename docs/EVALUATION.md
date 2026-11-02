@@ -64,6 +64,15 @@ the balanced-pair checks as if it were the original study. This binding cannot
 verify the questions or reports behind those IDs; recovering the unchanged
 original traces and reports remains a separate mandatory gate.
 
+Input capture now rejects symlinked CSV files and parent directories,
+non-regular files (including FIFOs), oversized inputs, and observed concurrent
+rewrites or pathname replacements. Each CSV is read through one bounded,
+regular-file descriptor (256 KiB plus one overflow byte) with before/after
+identity, size, mtime and ctime checks; those exact bytes are both parsed and
+SHA-256 hashed. This is a local snapshot-integrity guard, **not** independent
+authentication of the historical experiment. An unobserved write-and-restore
+between filesystem checks is outside the guarantee.
+
 A compact receipt includes both summary-file SHA-256 values, the original
 task-manifest source SHA-256, and whether original task-ID matching was
 enforced, without scientific measurements or report text. Production CLI

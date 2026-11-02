@@ -14,6 +14,8 @@ import hashlib
 import io
 import json
 import math
+import os
+import stat
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -29,17 +31,58 @@ class InputIntegrityError(ValueError):
     """A retained summary is not an unambiguous numerical input."""
 
 
-def _read_csv(path: Path, *, label: str) -> tuple[bytes, list[dict[str, str]]]:
-    path = Path(path)
+def _file_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    """Metadata used to detect a path or open-file replacement during capture."""
+    return (
+        metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_size,
+        metadata.st_mtime_ns, metadata.st_ctime_ns,
+    )
+
+
+def _capture_csv_bytes(path: Path, *, label: str) -> bytes:
+    """Bounded descriptor capture, not historical experimental authentication."""
+    if any(parent.is_symlink() for parent in path.parents):
+        raise InputIntegrityError(f"{label} has a symlinked parent directory")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    fd = None
     try:
-        if not path.is_file() or path.stat().st_size > MAX_INPUT_BYTES:
-            raise InputIntegrityError(f"{label} must be a bounded regular CSV file")
-        raw = path.read_bytes()
-        if not raw or len(raw) > MAX_INPUT_BYTES:
+        fd = os.open(path, flags)
+        before = os.fstat(fd)
+        path_before = os.stat(path, follow_symlinks=False)
+        if not stat.S_ISREG(before.st_mode) or _file_identity(before) != _file_identity(path_before):
+            raise InputIntegrityError(f"{label} must be a non-symlink regular CSV file")
+        if not 0 < before.st_size <= MAX_INPUT_BYTES:
             raise InputIntegrityError(f"{label} is empty or exceeds input limit")
+        captured = bytearray()
+        while len(captured) <= MAX_INPUT_BYTES:
+            chunk = os.read(fd, min(65536, MAX_INPUT_BYTES + 1 - len(captured)))
+            if not chunk:
+                break
+            captured.extend(chunk)
+        after = os.fstat(fd)
+        path_after = os.stat(path, follow_symlinks=False)
+        if not 0 < len(captured) <= MAX_INPUT_BYTES:
+            raise InputIntegrityError(f"{label} is empty or exceeds input limit")
+        if (
+            len(captured) != before.st_size
+            or _file_identity(before) != _file_identity(after)
+            or _file_identity(before) != _file_identity(path_after)
+        ):
+            raise InputIntegrityError(f"{label} changed during bounded CSV capture")
+        return bytes(captured)
+    except OSError as exc:
+        raise InputIntegrityError(f"{label} cannot be opened as a stable CSV file") from exc
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _read_csv(path: Path, *, label: str) -> tuple[bytes, list[dict[str, str]]]:
+    raw = _capture_csv_bytes(Path(path), label=label)
+    try:
         text = raw.decode("utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        raise InputIntegrityError(f"{label} cannot be read as UTF-8 CSV") from exc
+    except UnicodeDecodeError as exc:
+        raise InputIntegrityError(f"{label} cannot be decoded as UTF-8 CSV") from exc
     with io.StringIO(text, newline="") as stream:
         reader = csv.DictReader(stream, strict=True)
         try:

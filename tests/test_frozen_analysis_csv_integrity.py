@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import os
 from pathlib import Path
 
 import pytest
@@ -265,3 +266,82 @@ def test_original_task_manifest_missing_or_rewritten_fails_closed(
         source.write_text('{"tasks":[]}', encoding="utf-8")
     with pytest.raises(audit.InputIntegrityError, match="source failed verification"):
         audit.audit_frozen_csv_inputs(matrix[3], matrix[4])
+
+
+@pytest.mark.parametrize("input_index", [3, 4])
+def test_audit_rejects_symlinked_csv_even_with_identical_valid_bytes(
+    matrix, input_index, tmp_path,
+):
+    source = matrix[input_index]
+    original = tmp_path / "unlinked_original.csv"
+    original.write_bytes(source.read_bytes())
+    source.unlink()
+    source.symlink_to(original)
+    with pytest.raises(audit.InputIntegrityError, match="stable CSV|non-symlink"):
+        _check(matrix)
+
+
+def test_audit_rejects_symlinked_parent_directory(matrix, tmp_path):
+    source = matrix[3]
+    parent_alias = tmp_path / "linked_parent"
+    parent_alias.symlink_to(source.parent, target_is_directory=True)
+    with pytest.raises(audit.InputIntegrityError, match="symlinked parent"):
+        audit._read_csv(parent_alias / source.name, label="synthetic")
+
+
+def test_audit_rejects_nonregular_fifo_without_blocking(tmp_path):
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("FIFO test requires POSIX")
+    path = tmp_path / "pretend.csv"
+    os.mkfifo(path)
+    with pytest.raises(audit.InputIntegrityError, match="non-symlink regular"):
+        audit._read_csv(path, label="synthetic")
+
+
+def test_audit_rejects_oversized_csv_before_parsing(tmp_path):
+    path = tmp_path / "oversized.csv"
+    path.write_bytes(b"a" * (audit.MAX_INPUT_BYTES + 1))
+    with pytest.raises(audit.InputIntegrityError, match="exceeds input limit"):
+        audit._read_csv(path, label="synthetic")
+
+
+def test_audit_detects_same_byte_path_swap_during_capture(matrix, monkeypatch, tmp_path):
+    source = matrix[3]
+    replacement = tmp_path / "same_bytes.csv"
+    replacement.write_bytes(source.read_bytes())
+    original_read = os.read
+    moved = False
+
+    def swap_then_read(fd, count):
+        nonlocal moved
+        if not moved:
+            os.replace(replacement, source)
+            moved = True
+        return original_read(fd, count)
+
+    monkeypatch.setattr(audit.os, "read", swap_then_read)
+    with pytest.raises(audit.InputIntegrityError, match="changed during bounded CSV capture"):
+        audit._read_csv(source, label="synthetic")
+    assert moved
+
+
+def test_audit_detects_inplace_rewrite_during_capture(matrix, monkeypatch):
+    source = matrix[3]
+    original_read = os.read
+    changed = False
+
+    def rewrite_then_read(fd, count):
+        nonlocal changed
+        if not changed:
+            with source.open("r+b") as stream:
+                stream.seek(0)
+                stream.write(b"X")
+                stream.flush()
+                os.fsync(stream.fileno())
+            changed = True
+        return original_read(fd, count)
+
+    monkeypatch.setattr(audit.os, "read", rewrite_then_read)
+    with pytest.raises(audit.InputIntegrityError, match="changed during bounded CSV capture"):
+        audit._read_csv(source, label="synthetic")
+    assert changed
