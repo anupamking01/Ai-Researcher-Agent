@@ -710,3 +710,53 @@ def test_malformed_report_claim_fails_as_design_error(tmp_path, malformed_report
     fixture[3]["cells"][0]["report"] = malformed_report
     with pytest.raises(design.DesignError, match="exact file fingerprint|invalid file fingerprint"):
         _audit(fixture)
+
+
+@pytest.mark.parametrize("replacement_report", [
+    b"Research report\x1b[31m with terminal escape",
+    b"Research report\x01 with hidden C0 control",
+    b"Research report\x7f with DEL",
+    "Research report\u0085 with C1 control".encode("utf-8"),
+    "Research report\u202e with reversed display".encode("utf-8"),
+    "Research report\u2066 with directional isolate".encode("utf-8"),
+])
+def test_report_display_controls_fail_even_when_trace_and_index_are_rehashed(
+    tmp_path, replacement_report
+):
+    # A matching report digest is insufficient when the text presentation can
+    # be changed by nonprinting controls or bidirectional formatting commands.
+    fixture = _fixture(tmp_path)
+    index, root = fixture[3], fixture[4]
+    first_cell = index["cells"][0]
+    report_claim = first_cell["report"]
+    (root / report_claim["path"]).write_bytes(replacement_report)
+    first_cell["report"] = _file_claim(report_claim["path"], replacement_report)
+    trace_claim = first_cell["trace"]
+    trace_path = root / trace_claim["path"]
+    trace = json.loads(trace_path.read_bytes())
+    trace["report_sha256"] = _digest(replacement_report)
+    trace_bytes = _bytes(trace)
+    trace_path.write_bytes(trace_bytes)
+    first_cell["trace"] = _file_claim(trace_claim["path"], trace_bytes)
+    with pytest.raises(
+        design.DesignError, match="unsafe control or bidirectional formatting"
+    ):
+        _audit(fixture)
+
+
+def test_printable_multilingual_markdown_and_normal_line_controls_remain_valid(tmp_path):
+    fixture = _fixture(tmp_path)
+    index, root = fixture[3], fixture[4]
+    first_cell = index["cells"][0]
+    report_claim = first_cell["report"]
+    report = "Evidence — research\n\tIndented हिंदी العربية 中文\n".encode("utf-8")
+    (root / report_claim["path"]).write_bytes(report)
+    first_cell["report"] = _file_claim(report_claim["path"], report)
+    trace_claim = first_cell["trace"]
+    trace_path = root / trace_claim["path"]
+    trace = json.loads(trace_path.read_bytes())
+    trace["report_sha256"] = _digest(report)
+    trace_bytes = _bytes(trace)
+    trace_path.write_bytes(trace_bytes)
+    first_cell["trace"] = _file_claim(trace_claim["path"], trace_bytes)
+    assert _audit(fixture)["verified_reports"] == 40

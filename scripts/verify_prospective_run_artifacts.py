@@ -198,6 +198,19 @@ def _require_readable_markdown_report(raw: bytes, *, number: int) -> None:
         raise design.DesignError(
             f"report {number} must contain nonblank Markdown text without NUL bytes"
         )
+    # Text that decodes correctly can still contain terminal escape bytes or
+    # explicit bidirectional overrides that misrepresent what an annotator sees.
+    # Keep ordinary tab/newline/CR and multilingual printable text intact.
+    if any(
+        (ord(character) < 0x20 and character not in "\t\n\r")
+        or 0x7f <= ord(character) <= 0x9f
+        or 0x202a <= ord(character) <= 0x202e
+        or 0x2066 <= ord(character) <= 0x2069
+        for character in report_text
+    ):
+        raise design.DesignError(
+            f"report {number} contains unsafe control or bidirectional formatting"
+        )
 
 
 def audit_run_artifacts(
