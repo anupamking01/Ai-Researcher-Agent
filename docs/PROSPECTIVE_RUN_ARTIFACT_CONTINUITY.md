@@ -226,3 +226,37 @@ based on these counts. Any interpretation of achieved retrieval exposure
 is descriptive and prospective; it does not change the frozen 2026 pilot,
 confirmatory automated results, exploratory results, or pending human
 validation.
+
+
+
+## Paired source-exposure contrast diagnostic (prospective, descriptive)
+
+The four arm-wide source totals cannot establish whether the **same task**
+received more recorded retrieval exposure under a higher-budget treatment.
+A task-pooled total can obscure unequal within-task exposure, which matters
+when interpreting the three frozen *task-paired* contrasts. The prospective
+artifact verifier therefore also emits
+`self_reported_paired_source_exposure_by_contrast` for **D6 - D3**,
+**P6 - D6** and **P6V - P6**, without reading or generating outcomes.
+
+For each contrast, `both_attempted_tasks` counts only tasks with a trace
+for **both** arms, and `both_completed_tasks` separately counts pairs
+whose two recorded statuses are `completed`. Failed/timed-out/cancelled
+attempts are kept in the first denominator; unattempted arms are **not**
+imputed to have zero retrieval. Among both-attempted pairs, signed
+`scheduled` and `successful` source-count differences (later arm
+minus earlier arm) are summarized as `*_delta_positive`,
+`*_delta_zero`, `*_delta_negative` and integer `*_delta_sum`.
+The three direction counts must sum to `both_attempted_tasks`; no
+per-task IDs, source URLs, generated text or individual outcome scores are
+emitted. All completed forty-cell matrices have ten task pairs per contrast,
+but this should never be inferred for an interrupted replication.
+
+These are **self-reported, within-task exposure descriptions**, not
+independent proof of requests or evidence quality, a manipulation-success
+test, a new preregistered endpoint, or a reason to rerun/omit a task.
+Differences can be negative even in higher-budget arms, because a
+configured cap is not guaranteed usage. They cannot authenticate the missing
+2026 source evidence, change the frozen confirmatory analysis, or substitute
+for real blinded human ratings. Keep pilot, confirmatory automated,
+exploratory and pending human-validation claims separate.

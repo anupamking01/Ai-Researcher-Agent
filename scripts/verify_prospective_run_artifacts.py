@@ -466,6 +466,9 @@ def audit_run_artifacts(
         }
         for variant in design.VARIANTS
     }
+    # Keep only bounded, task-paired source counts in memory for a prospective
+    # exposure diagnostic; never use them to exclude or rerun treatment cells.
+    paired_exposure_by_task: dict[str, dict[str, dict]] = {}
     # Keep a single source-root inode pinned for the entire multi-file audit.
     # Re-opening its path per file risks mixing independent directory trees.
     if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
@@ -547,6 +550,13 @@ def audit_run_artifacts(
                 source_usage["zero_scheduled_source_attempts"] += 1
             if trace["successful_source_count"] == 0:
                 source_usage["zero_successful_source_attempts"] += 1
+            paired_exposure_by_task.setdefault(event["task_id"], {})[
+                event["variant"]
+            ] = {
+                "status": event["status"],
+                "scheduled": trace["source_count"],
+                "successful": trace["successful_source_count"],
+            }
             # A recorded arm is not comparable to another if its declared
             # model, source code, search backend or common guardrails drift.
             # This validates candidate metadata only, not provider activity.
@@ -657,6 +667,40 @@ def audit_run_artifacts(
     finally:
         os.close(root_fd)
 
+    # Arm-wide totals can conceal whether extra retrieval was used for the
+    # *same task* in a paired primary contrast. Report descriptive, integer
+    # signed differences only for tasks with both attempts; do not count a
+    # missing arm as zero exposure. Failed attempts remain in this denominator,
+    # with complete pairs disclosed separately. No scientific effect is tested.
+    paired_source_exposure_by_contrast = {}
+    for earlier, later in (("D3", "D6"), ("D6", "P6"), ("P6", "P6V")):
+        counts = {
+            "both_attempted_tasks": 0,
+            "both_completed_tasks": 0,
+            "scheduled_delta_positive": 0,
+            "scheduled_delta_zero": 0,
+            "scheduled_delta_negative": 0,
+            "scheduled_delta_sum": 0,
+            "successful_delta_positive": 0,
+            "successful_delta_zero": 0,
+            "successful_delta_negative": 0,
+            "successful_delta_sum": 0,
+        }
+        for per_arm in paired_exposure_by_task.values():
+            if earlier not in per_arm or later not in per_arm:
+                continue
+            earlier_cell, later_cell = per_arm[earlier], per_arm[later]
+            counts["both_attempted_tasks"] += 1
+            if (earlier_cell["status"] == "completed"
+                    and later_cell["status"] == "completed"):
+                counts["both_completed_tasks"] += 1
+            for metric in ("scheduled", "successful"):
+                delta = later_cell[metric] - earlier_cell[metric]
+                counts[f"{metric}_delta_sum"] += delta
+                direction = "positive" if delta > 0 else "negative" if delta < 0 else "zero"
+                counts[f"{metric}_delta_{direction}"] += 1
+        paired_source_exposure_by_contrast[f"{later} - {earlier}"] = counts
+
     return {
         "status": "pass_local_artifact_continuity_only",
         "classification": INDEX_CLASSIFICATION,
@@ -683,6 +727,7 @@ def audit_run_artifacts(
         "trace_treatment_controls_match_frozen_design": True,
         "self_reported_source_ledgers_within_frozen_budgets": True,
         "self_reported_source_usage_by_variant": source_usage_by_variant,
+        "self_reported_paired_source_exposure_by_contrast": paired_source_exposure_by_contrast,
         "self_reported_source_urls_http_and_fetch_distinct": True,
         "common_runtime_context_sha256": common_runtime_sha256,
         "common_runtime_context_external_pin_matched": runtime_context_external_pin_matched,

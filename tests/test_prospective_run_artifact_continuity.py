@@ -1207,3 +1207,107 @@ def test_aliases_cannot_double_count_one_resource_across_outcomes(tmp_path):
     _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=change)
     with pytest.raises(design.DesignError, match="missing, invented or overlapping"):
         _audit(fixture)
+
+
+# Synthetic future-replication diagnostics only: do not promote to historical
+# treatment-compliance tests or use exposure to filter primary comparisons.
+def test_paired_source_exposure_zero_is_not_assumed_to_be_full_budget(tmp_path):
+    receipt = _audit(_fixture(tmp_path))
+    for contrast in ("D6 - D3", "P6 - D6", "P6V - P6"):
+        pairs = receipt["self_reported_paired_source_exposure_by_contrast"][contrast]
+        assert pairs == {
+            "both_attempted_tasks": 10,
+            "both_completed_tasks": 10,
+            "scheduled_delta_positive": 0,
+            "scheduled_delta_zero": 10,
+            "scheduled_delta_negative": 0,
+            "scheduled_delta_sum": 0,
+            "successful_delta_positive": 0,
+            "successful_delta_zero": 10,
+            "successful_delta_negative": 0,
+            "successful_delta_sum": 0,
+        }
+    assert receipt["model_or_retrieval_calls_verified"] is False
+
+
+def test_paired_source_exposure_tracks_within_task_contrast_direction(tmp_path):
+    fixture = _fixture(tmp_path)
+    first_task_id = fixture[3]["cells"][0]["task_id"]
+    for variant, (scheduled, successful) in {
+        "D3": (3, 2),
+        "D6": (5, 4),
+        "P6": (1, 1),
+        "P6V": (6, 6),
+    }.items():
+        position = next(
+            n for n, cell in enumerate(fixture[3]["cells"])
+            if cell["task_id"] == first_task_id and cell["variant"] == variant
+        )
+        urls = [f"https://synthetic.invalid/{variant}/{i}" for i in range(scheduled)]
+
+        def set_ledger(trace):
+            trace.update(
+                source_count=scheduled,
+                successful_source_count=successful,
+                failed_source_count=scheduled - successful,
+                scheduled_urls=urls,
+                successful_urls=urls[:successful],
+                failed_urls=urls[successful:],
+            )
+
+        _rewrite_synthetic_source_ledger(fixture, cell_number=position, change=set_ledger)
+    receipt = _audit(fixture)
+    comparisons = receipt["self_reported_paired_source_exposure_by_contrast"]
+    for contrast, scheduled_delta, successful_delta in (
+        ("D6 - D3", 2, 2),
+        ("P6 - D6", -4, -3),
+        ("P6V - P6", 5, 5),
+    ):
+        counts = comparisons[contrast]
+        assert counts["both_attempted_tasks"] == 10
+        assert counts["both_completed_tasks"] == 10
+        assert counts["scheduled_delta_sum"] == scheduled_delta
+        assert counts["successful_delta_sum"] == successful_delta
+        for prefix, delta in (
+            ("scheduled", scheduled_delta), ("successful", successful_delta)
+        ):
+            assert counts[f"{prefix}_delta_positive"] == int(delta > 0)
+            assert counts[f"{prefix}_delta_negative"] == int(delta < 0)
+            assert counts[f"{prefix}_delta_zero"] == 9
+            assert sum(counts[f"{prefix}_delta_{direction}"]
+                       for direction in ("negative", "zero", "positive")) == 10
+
+
+def test_paired_source_exposure_keeps_partial_and_failed_attempts(tmp_path):
+    fixture = _fixture(tmp_path)
+    _mark_unattempted(fixture, 4)
+    _, _, log, index, root = fixture
+    failed_variant = log["events"][0]["variant"]
+    log["events"][0]["status"] = "failed"
+    index["cells"][0]["status"] = "failed"
+    claim = index["cells"][0]["trace"]
+    trace_path = root / claim["path"]
+    trace = json.loads(trace_path.read_bytes())
+    trace["status"] = "failed"
+    raw = _bytes(trace)
+    trace_path.write_bytes(raw)
+    index["cells"][0]["trace"] = _file_claim(claim["path"], raw)
+    index["execution_log_sha256"] = _digest(_bytes(log))
+
+    receipt = _audit(fixture)
+    comparisons = receipt["self_reported_paired_source_exposure_by_contrast"]
+    assert receipt["attempted_cells"] == 4
+    for contrast, earlier, later in (
+        ("D6 - D3", "D3", "D6"),
+        ("P6 - D6", "D6", "P6"),
+        ("P6V - P6", "P6", "P6V"),
+    ):
+        counts = comparisons[contrast]
+        assert counts["both_attempted_tasks"] == 1
+        assert counts["both_completed_tasks"] == int(
+            failed_variant not in (earlier, later)
+        )
+        assert counts["scheduled_delta_zero"] == 1
+        assert counts["successful_delta_zero"] == 1
+        assert counts["scheduled_delta_sum"] == 0
+        assert counts["successful_delta_sum"] == 0
