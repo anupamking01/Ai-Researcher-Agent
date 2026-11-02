@@ -55,6 +55,14 @@ consistent but nonzero support/partial-support/contradiction count with
 zero retrieved sources, fails the audit. Historical nonzero-source
 cells may legitimately have an empty evidence-status field.
 Count integrality is checked from decimal text before any float rounding.
+The independent auditor now also applies the canonical CSV lexical rules to
+its exact descriptor-captured byte snapshot before parsing or hashing: every
+physical line must be one complete record; blank lines, quoted fields that
+span lines, quotes inside unquoted fields, and text after closing quotes are
+rejected. `csv.DictReader` would otherwise silently discard or normalize
+some of these records while a SHA-256 fingerprint still describes their raw
+bytes. This is internal input-interpretation integrity, not authentication of
+unavailable treatment traces or a change to frozen statistical analysis.
 The production/default audit now also verifies the exact original-run
 `experiments/main_budget_tasks.json` source SHA-256 through
 `scripts.verify_frozen_main_study_tasks` and requires all ten summary task

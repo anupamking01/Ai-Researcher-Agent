@@ -18,6 +18,8 @@ import os
 import stat
 from pathlib import Path
 
+from scripts.validate_main_study_inputs import _validate_csv_record
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MAIN = REPO_ROOT / "outputs" / "main_study_runs.csv"
 DEFAULT_SUPPORT = REPO_ROOT / "outputs" / "posthoc_support_runs.csv"
@@ -83,6 +85,16 @@ def _read_csv(path: Path, *, label: str) -> tuple[bytes, list[dict[str, str]]]:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise InputIntegrityError(f"{label} cannot be decoded as UTF-8 CSV") from exc
+    # Apply the canonical one-record-per-physical-line lexical contract to
+    # the exact captured text. DictReader otherwise skips blank lines and
+    # accepts ambiguous quoted fields; a checksum alone cannot detect that
+    # its interpretation has discarded or normalized input records.
+    try:
+        with io.StringIO(text, newline="") as lines:
+            for line_number, record in enumerate(lines, start=1):
+                _validate_csv_record(record, path=Path(path), line_number=line_number)
+    except ValueError as exc:
+        raise InputIntegrityError(f"{label} has noncanonical CSV record: {exc}") from exc
     with io.StringIO(text, newline="") as stream:
         reader = csv.DictReader(stream, strict=True)
         try:

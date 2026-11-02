@@ -345,3 +345,39 @@ def test_audit_detects_inplace_rewrite_during_capture(matrix, monkeypatch):
     with pytest.raises(audit.InputIntegrityError, match="changed during bounded CSV capture"):
         audit._read_csv(source, label="synthetic")
     assert changed
+
+
+@pytest.mark.parametrize("contents", [
+    "variant_id,task_id\r\nD3,item\r\n\r\n",
+    "variant_id,task_id\nD3,item\n\nD6,other\n",
+    'variant_id,task_id\nD3,mis"quoted\n',
+    'variant_id,task_id\nD3,"item"trailing\n',
+    'variant_id,task_id\nD3,"item\ncontinued"\n',
+])
+def test_independent_reader_rejects_noncanonical_physical_records(tmp_path, contents):
+    # All records are read from the captured byte snapshot, not a second path read.
+    path = tmp_path / "lexical.csv"
+    path.write_bytes(contents.encode("utf-8"))
+    with pytest.raises(audit.InputIntegrityError, match="noncanonical CSV record"):
+        audit._read_csv(path, label="synthetic")
+
+
+def test_independent_reader_accepts_legal_escaped_quotes(tmp_path):
+    path = tmp_path / "quoted.csv"
+    data = b'variant_id,task_id\r\nD3,"literal ""quoted"" task"\r\n'
+    path.write_bytes(data)
+    captured, rows = audit._read_csv(path, label="synthetic")
+    assert captured == data
+    assert rows == [{"variant_id": "D3", "task_id": 'literal "quoted" task'}]
+
+
+@pytest.mark.parametrize("input_index", [3, 4])
+def test_full_audit_rejects_ignored_blank_physical_record(matrix, input_index):
+    # Previously DictReader discarded this record and all 40 semantic cells
+    # still passed, even though the published SHA-256 described extra input.
+    path = matrix[input_index]
+    altered = path.read_bytes() + b"\r\n"
+    path.write_bytes(altered)
+    with pytest.raises(audit.InputIntegrityError, match="noncanonical CSV record"):
+        _check(matrix)
+    assert path.read_bytes() == altered
