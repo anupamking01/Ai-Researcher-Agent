@@ -152,3 +152,65 @@ def test_malformed_csv_fails_closed(tmp_path, contents, term):
     path.write_text(contents, encoding="utf-8")
     with pytest.raises(audit.InputIntegrityError, match=term):
         audit._read_csv(path, label="synthetic")
+
+
+def _set_synthetic_zero_source(matrix):
+    """Configure one coherent zero-evidence cell without touching original data."""
+    main, evaluator, save, _, _ = matrix
+    main[0]["successful_sources"] = "0"
+    main[0]["failed_sources"] = "3"
+    main[0]["posthoc_strict_support_rate"] = "0"
+    evaluator[0].update({
+        "evidence_status": "zero_successful_sources",
+        "supported": "0",
+        "partially_supported": "0",
+        "unsupported": "8",
+        "contradicted": "0",
+        "strict_support_rate": "0",
+    })
+    save()
+
+
+def test_zero_source_sentinel_with_all_unsupported_claims_is_valid(matrix):
+    _set_synthetic_zero_source(matrix)
+    assert _check(matrix)["paired_cells"] == 40
+
+
+@pytest.mark.parametrize("labels,rate", [
+    ((1, 0, 7, 0), "0.125"),
+    ((0, 1, 7, 0), "0"),
+    ((0, 0, 7, 1), "0"),
+])
+def test_zero_source_disallows_coherently_rewritten_non_unsupported_labels(
+    matrix, labels, rate,
+):
+    _set_synthetic_zero_source(matrix)
+    main, evaluator, save, _, _ = matrix
+    for key, count in zip(
+        ("supported", "partially_supported", "unsupported", "contradicted"),
+        labels,
+    ):
+        evaluator[0][key] = str(count)
+    evaluator[0]["strict_support_rate"] = rate
+    main[0]["posthoc_strict_support_rate"] = rate
+    save()
+    with pytest.raises(audit.InputIntegrityError, match="non-unsupported labels"):
+        _check(matrix)
+
+
+@pytest.mark.parametrize("status", ["", "retrieved_evidence", "unknown"])
+def test_zero_source_requires_explicit_frozen_evidence_sentinel(matrix, status):
+    _set_synthetic_zero_source(matrix)
+    _, evaluator, save, _, _ = matrix
+    evaluator[0]["evidence_status"] = status
+    save()
+    with pytest.raises(audit.InputIntegrityError, match="lacks evidence sentinel"):
+        _check(matrix)
+
+
+def test_nonzero_source_rejects_zero_evidence_sentinel(matrix):
+    _, evaluator, save, _, _ = matrix
+    evaluator[0]["evidence_status"] = "zero_successful_sources"
+    save()
+    with pytest.raises(audit.InputIntegrityError, match="contradicts sources"):
+        _check(matrix)

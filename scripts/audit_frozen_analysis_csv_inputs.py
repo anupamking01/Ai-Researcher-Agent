@@ -185,11 +185,18 @@ def audit_frozen_csv_inputs(
             )
         ):
             raise InputIntegrityError(f"{label} treatment/evaluator mirror disagreement")
-        if (
-            evaluation.get("evidence_status") == "zero_successful_sources"
-            and source_counts["successful_sources"] != 0
-        ):
-            raise InputIntegrityError(f"{label} zero-evidence status contradicts source count")
+        # Frozen evidence-only scoring: without successfully retrieved evidence,
+        # no checked claim can receive support, partial support or contradiction.
+        # Validate the self-reported sentinel and the complete label partition;
+        # internally consistent but fabricated nonzero rates must not pass.
+        evidence_status = evaluation.get("evidence_status", "")
+        if source_counts["successful_sources"] == 0:
+            if evidence_status != "zero_successful_sources":
+                raise InputIntegrityError(f"{label} zero-source cell lacks evidence sentinel")
+            if counts != [0, 0, claims, 0]:
+                raise InputIntegrityError(f"{label} zero-source cell has non-unsupported labels")
+        elif evidence_status == "zero_successful_sources":
+            raise InputIntegrityError(f"{label} zero-evidence sentinel contradicts sources")
     return {
         "status": "pass_summary_csv_internal_consistency_only",
         "main_sha256": hashlib.sha256(main_raw).hexdigest(),

@@ -47,8 +47,14 @@ on ambiguous CSV rows/columns, incomplete or unbalanced task matrices,
 fractional or nonfinite counts, negative usage/cost/latency measurements,
 impossible evaluator count partitions, source-budget violations, and
 disagreements between the evaluator's reported rates/costs and their
-mirrored treatment-summary fields. Count integrality is checked from
-decimal text before any float rounding. A compact receipt includes
+mirrored treatment-summary fields. For the frozen evidence-only rubric,
+a cell recording zero successful sources must carry the explicit
+`zero_successful_sources` evaluator sentinel and classify every checked
+claim as unsupported. A sentinel with nonzero sources, or an internally
+consistent but nonzero support/partial-support/contradiction count with
+zero retrieved sources, fails the audit. Historical nonzero-source
+cells may legitimately have an empty evidence-status field.
+Count integrality is checked from decimal text before any float rounding. A compact receipt includes
 the exact SHA-256 for both input CSV files, with zero scientific
 measurements or report text emitted. Synthetic tests exercise the
 same preflight on malformed and internally consistent fabricated inputs.
