@@ -290,11 +290,17 @@ def _rendered_markdown_parts(
 
 def _decoded_attribute_forms(value: str):
     """Yield canonical URL/metadata text through every percent-decoding layer."""
-    current = _canonical_audit_text(value)
+    current = value
     for layer in range(MAX_METADATA_DECODE_LAYERS + 1):
+        # Yield the actual attribute/URL text before dropping Unicode format
+        # controls for marker search. A decoded bidi control would otherwise
+        # disappear during canonicalization before the display safety check.
         yield current
-        decoded = _canonical_audit_text(unquote(current))
-        if decoded == current:
+        canonical = _canonical_audit_text(current)
+        if canonical != current:
+            yield canonical
+        decoded = unquote(canonical)
+        if decoded == canonical:
             return
         if layer == MAX_METADATA_DECODE_LAYERS:
             raise ValueError(
