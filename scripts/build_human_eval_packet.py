@@ -365,6 +365,15 @@ def validate_annotator_facing_content(rows: list[dict], *, label: str) -> None:
                     f"{label} {blind_id} {field}: Markdown images are not permitted"
                 )
             rendered_text, attribute_values = _rendered_markdown_parts(text)
+            # Markdown character references can become invisible Unicode controls
+            # only after rendering (e.g. &#x202E;). The raw-source check above
+            # cannot detect that decoded display surface.
+            if _contains_unsafe_annotator_display_controls(rendered_text):
+                raise ValueError(
+                    "annotator-facing display-integrity risk in "
+                    f"{label} {blind_id} {field}: "
+                    "unsafe rendered control or bidirectional formatting"
+                )
             audit_texts = (
                 _canonical_audit_text(text),
                 _canonical_audit_text(rendered_text),
@@ -381,6 +390,15 @@ def validate_annotator_facing_content(rows: list[dict], *, label: str) -> None:
                     )
             for attribute_name, value in attribute_values:
                 for audit_text in _decoded_attribute_forms(value):
+                    # Titles, reference URLs and link destinations are visible
+                    # through renderer attributes/tooltips, including decoded
+                    # HTML character references and percent-encoded URL text.
+                    if _contains_unsafe_annotator_display_controls(audit_text):
+                        raise ValueError(
+                            "annotator-facing display-integrity risk in "
+                            f"{label} {blind_id} {field}: "
+                            "unsafe rendered metadata control or bidirectional formatting"
+                        )
                     if (
                         attribute_name in {"href", "src"}
                         and _OPAQUE_DATA_URI_RE.search(audit_text)

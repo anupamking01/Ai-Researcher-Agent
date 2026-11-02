@@ -226,3 +226,25 @@ annotator independence, or historical tamper-proof storage. A transient change
 that is restored between observations may escape detection. Frozen automated
 confirmatory findings, exploratory diagnostics, and pending human validation
 remain distinct.
+
+## Rendered Markdown and encoded display controls
+
+The shared blinding/content validator must audit **what an annotator could see**
+after CommonMark rendering, not only the bytes of the original source. For
+example, a report containing the literal source text `&#x202E;` can render
+as a bidirectional override. Link title metadata may similarly decode numeric
+character references, and link destinations may contain percent-encoded
+control bytes or direction controls that appear in tooltips or when inspected.
+These surfaces are rejected under the same unsafe-control policy that already
+governs raw questions and reports. The check covers both fields when building
+a packet and when verifying an independently retained or coherently rehashed
+standalone annotator bundle.
+
+The check is **fail-closed**, not a sanitizer: original report/question bytes
+must be preserved for provenance and any rejection recorded as a protocol
+deviation. Literal examples inside Markdown code spans and genuinely escaped
+entity text are not interpreted as active direction controls, and ordinary
+multilingual prose, citation links, and formatting remain supported. This is
+a pre-distribution display-integrity measure, **not** evidence of recovered
+historical report authenticity, actual treatment blinding, real human ratings,
+or validation of the frozen automated confirmatory findings.

@@ -423,6 +423,74 @@ def test_blinding_audit_rejects_unsafe_display_controls_in_both_fields(
         )
 
 
+
+@pytest.mark.parametrize("field", ["question", "report_markdown"])
+@pytest.mark.parametrize(
+    "encoded_text",
+    [
+        "Evidence &#x202E; reversed after rendering.",
+        "Evidence &#8238; reordered after rendering.",
+        "Evidence &#x2066; isolated after rendering.",
+        '[paper](https://example.test "Title &#x202E; concealed")',
+        "[paper](https://example.test/%E2%80%AE)",
+        "[paper][source]\n\n[source]: https://example.test/%E2%80%AE",
+        "[paper](https://example.test/%1B)",
+    ],
+    ids=[
+        "hex-numeric-entity", "decimal-numeric-entity", "bidi-isolate-entity",
+        "title-entity", "url-encoded-bidi", "reference-url-encoded-bidi",
+        "url-encoded-escape",
+    ],
+)
+def test_blinding_audit_rejects_rendered_or_decoded_controls(field, encoded_text):
+    row = {
+        "blind_id": "H001",
+        "question": "Synthetic research question?",
+        "report_markdown": "Synthetic evidence report.",
+    }
+    row[field] = encoded_text
+    with pytest.raises(ValueError, match="annotator-facing display-integrity risk"):
+        packet_builder.validate_annotator_facing_content(
+            [row], label="synthetic packet"
+        )
+
+
+@pytest.mark.parametrize(
+    "literal_text",
+    [
+        r"Literal \&#x202E; escaped entity is not a direction override.",
+        r"`&#x202E;` is a code-span example, not a rendered override.",
+        "[source](https://example.test/Caf%C3%A9) — हिंदी العربية 中文.",
+    ],
+)
+def test_blinding_audit_preserves_nonrendered_entities_and_multilingual_links(
+    literal_text,
+):
+    packet_builder.validate_annotator_facing_content(
+        [{
+            "blind_id": "H001",
+            "question": "Synthetic question?",
+            "report_markdown": literal_text,
+        }],
+        label="synthetic packet",
+    )
+
+
+def test_packet_builder_rejects_encoded_display_control_before_publication(tmp_path):
+    trace_root = _write_complete_matrix(tmp_path)
+    report = tmp_path / "outputs" / "d3-main-01" / "research_report.md"
+    original = report.read_bytes()
+    report.write_text(
+        "# Synthetic report\n\nEncoded direction &#x202E; inside report.",
+        encoding="utf-8",
+    )
+    output_root = tmp_path / "encoded-control-packet"
+    with pytest.raises(ValueError, match="annotator-facing display-integrity risk"):
+        _build_packet(trace_root, output_root, tmp_path)
+    assert not output_root.exists()
+    assert report.read_bytes() != original  # Rejected original remains untouched.
+
+
 def test_blinding_audit_accepts_multilingual_text_with_normal_layout_controls():
     packet_builder.validate_annotator_facing_content(
         [{

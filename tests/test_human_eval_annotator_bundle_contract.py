@@ -85,6 +85,29 @@ def _rehash_packet(root: Path, packet_bytes: bytes) -> None:
     )
 
 
+
+@pytest.mark.parametrize("field", ["question", "report_markdown"])
+@pytest.mark.parametrize(
+    "encoded_text",
+    [
+        "Evidence &#x202E; visibly reordered.",
+        '[paper](https://example.test "Tooltip &#x2066; reordered")',
+    ],
+)
+def test_standalone_bundle_rejects_rehashed_encoded_display_controls(
+    tmp_path, field, encoded_text
+):
+    # The standalone auditor must reject semantic presentation hazards even
+    # when the attacker can produce a self-consistent packet/manifest pair.
+    rows = _rows()
+    rows[0][field] = encoded_text
+    root = _write_bundle(tmp_path / "bundle", rows)
+    original_packet = (root / "packet.jsonl").read_bytes()
+    with pytest.raises(ValueError, match="annotator-facing display-integrity risk"):
+        exporter.verify_annotator_bundle(root)
+    assert (root / "packet.jsonl").read_bytes() == original_packet
+
+
 def test_standalone_bundle_accepts_valid_synthetic_packet(tmp_path):
     root = _write_bundle(tmp_path / "bundle", _rows())
     receipt = exporter.verify_annotator_bundle(root)
