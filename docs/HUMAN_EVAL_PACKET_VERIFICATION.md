@@ -234,6 +234,27 @@ cannot guarantee that humans will never infer treatment identity from style.
 All four experimental conditions, frozen measurements, and the human rubric
 remain unchanged; genuine independent ratings are still outstanding.
 
+## Annotator-facing display-integrity controls
+
+The actual human-packet content validator now rejects terminal escape and
+other nonprinting C0 controls (except tab, LF, and CR), DEL/C1 controls, and
+explicit Unicode bidirectional embeddings, overrides, and isolates in **both**
+the frozen research question and the report Markdown. A report can satisfy a
+SHA-256 check and avoid literal treatment labels yet still change what a human
+sees through invisible formatting directives. This guard runs during packet
+construction and independent packet/content re-verification, before distribution;
+ordinary multilingual text, combining accents, and regular line breaks remain
+permitted. It is a human-evaluation preflight, not an annotation or a scoring
+operation.
+
+Failing historical source reports or questions must be retained **unchanged**.
+Do not remove problematic characters to manufacture a passing packet or change
+the frozen question set; record a source/formatting protocol deviation and
+resolve the original-evidence gate before any blinded distribution. This check
+does not authenticate missing 2026 traces or reports and does not establish
+independent human blinding. It supplements, rather than replaces, existing
+rendered-Markdown HTML/image/identifier leakage checks and source-byte custody.
+
 ## Production verification must check original treatment/evaluator identities
 
 The standalone packet verifier previously accepted a locally coherent frozen

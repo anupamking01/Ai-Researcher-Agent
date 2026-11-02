@@ -393,6 +393,66 @@ def test_blinding_audit_rejects_invisible_combining_mark_leakage(field, leaked_t
         )
 
 
+@pytest.mark.parametrize("field", ["question", "report_markdown"])
+@pytest.mark.parametrize(
+    "spoofed_text",
+    [
+        "Research finding\\x1b[31m highlighted by terminal escape",
+        "Research finding\\x01 with concealed C0 byte",
+        "Research finding\\x7f with DEL control",
+        "Research finding\\u0085 with C1 control",
+        "Research finding\\u202e with bidirectional override",
+        "Research finding\\u2066 with bidirectional isolate",
+    ],
+    ids=[
+        "ansi-escape", "C0", "DEL", "C1", "bidi-override", "bidi-isolate",
+    ],
+)
+def test_blinding_audit_rejects_unsafe_display_controls_in_both_fields(
+    field, spoofed_text
+):
+    row = {
+        "blind_id": "H001",
+        "question": "Original synthetic question?",
+        "report_markdown": "Original synthetic report.",
+    }
+    row[field] = spoofed_text
+    with pytest.raises(ValueError, match="annotator-facing display-integrity risk"):
+        packet_builder.validate_annotator_facing_content(
+            [row], label="synthetic packet"
+        )
+
+
+def test_blinding_audit_accepts_multilingual_text_with_normal_layout_controls():
+    packet_builder.validate_annotator_facing_content(
+        [{
+            "blind_id": "H001",
+            "question": "Café: compare evidence?\\n\\tहिंदी العربية 中文",
+            "report_markdown": "# Evidence\\r\\n\\tReadable multilingual prose — 日本語.",
+        }],
+        label="synthetic packet",
+    )
+
+
+@pytest.mark.parametrize(
+    "unsafe_report",
+    [
+        "# Synthetic report\\n\\nConcealed\\x1b[31m formatting",
+        "# Synthetic report\\n\\nReordered\\u202e rendering",
+    ],
+)
+def test_packet_builder_rejects_display_controls_before_publication(
+    tmp_path, unsafe_report
+):
+    trace_root = _write_complete_matrix(tmp_path)
+    source_report = tmp_path / "outputs" / "d3-main-01" / "research_report.md"
+    source_report.write_text(unsafe_report, encoding="utf-8")
+    output_root = tmp_path / "packet"
+    with pytest.raises(ValueError, match="annotator-facing display-integrity risk"):
+        _build_packet(trace_root, output_root, tmp_path)
+    assert not output_root.exists()
+
+
 def test_blinding_audit_preserves_meaningful_combining_diacritics():
     # Do not delete every Mn character: ordinary user-facing accents remain.
     assert packet_builder._canonical_audit_text("Cafe\u0301") == "Café"

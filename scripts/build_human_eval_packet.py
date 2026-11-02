@@ -325,6 +325,21 @@ def _contains_markdown_image(text: str) -> bool:
     return False
 
 
+def _contains_unsafe_annotator_display_controls(text: str) -> bool:
+    """Reject display-spoofing controls without rewriting genuine source text.
+
+    Retain ordinary whitespace line formatting and printable multilingual
+    characters. The frozen report bytes remain untouched on rejection.
+    """
+    return any(
+        (ord(character) < 0x20 and character not in "\\t\\n\\r")
+        or 0x7f <= ord(character) <= 0x9f
+        or 0x202a <= ord(character) <= 0x202e
+        or 0x2066 <= ord(character) <= 0x2069
+        for character in text
+    )
+
+
 def validate_annotator_facing_content(rows: list[dict], *, label: str) -> None:
     """Reject treatment/coordinator markers embedded in annotator-visible text."""
     for index, row in enumerate(rows, start=1):
@@ -333,6 +348,12 @@ def validate_annotator_facing_content(rows: list[dict], *, label: str) -> None:
             text = row.get(field)
             if not isinstance(text, str):
                 continue
+            if _contains_unsafe_annotator_display_controls(text):
+                raise ValueError(
+                    "annotator-facing display-integrity risk in "
+                    f"{label} {blind_id} {field}: "
+                    "unsafe control or bidirectional formatting"
+                )
             if _contains_raw_html(text):
                 raise ValueError(
                     "annotator-facing treatment leakage risk in "
