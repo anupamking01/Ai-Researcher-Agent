@@ -35,27 +35,33 @@ A fixed post-hoc evaluator is applied to all treatment variants so that support 
 
 Saved traces/evaluator records are summarized with a frozen paired analysis plan. Analysis operates on persisted artifacts; it does not rerun treatments merely because an observed result is inconvenient.
 
-### Offline frozen-analysis CSV integrity (read-only)
+### Independent frozen-summary CSV preflight (offline, read-only)
 
-The frozen confirmatory analysis continues to use the same first complete
-40-cell treatment and common-evaluator CSV inputs under
-paper/ANALYSIS_PLAN.md. Before calculating support-rate contrasts,
-scripts/analyze_main_study.py now rejects duplicate/ambiguous CSV columns,
-missing or extra cells, nonfinite numerical values, fractional count fields,
-negative source/usage/cost/time measurements, impossible evaluator category
-partitions, evaluator claim counts outside the frozen 1–12 cap, and
-source-count claims exceeding each assigned 3/6-source intervention budget.
-Integral-valued numerical CSV representations (such as 8 and 8.0) are
-equivalent; exact decimal parsing prevents binary-float rounding from
-concealing a fractional count. Values above 2^53-1 are rejected because
-count summaries retain the original float representation downstream.
+The separately invocable offline command
 
-These are input-integrity checks, not changes to preregistered statistical
-estimands, dataset-selection rules, or automated findings. A rejected CSV is
-a documented provenance/format discrepancy requiring source investigation;
-do not silently repair, selectively exclude, or rerun treatments to obtain
-preferred outcomes. This check cannot authenticate missing historical
-original traces or reports and does not constitute human validation.
+    python -m scripts.audit_frozen_analysis_csv_inputs
+
+audits the existing 40-cell treatment and common-evaluator **summary CSV
+bytes**, without calling models or rerunning experiments. It fails closed
+on ambiguous CSV rows/columns, incomplete or unbalanced task matrices,
+fractional or nonfinite counts, negative usage/cost/latency measurements,
+impossible evaluator count partitions, source-budget violations, and
+disagreements between the evaluator's reported rates/costs and their
+mirrored treatment-summary fields. Count integrality is checked from
+decimal text before any float rounding. A compact receipt includes
+the exact SHA-256 for both input CSV files, with zero scientific
+measurements or report text emitted. Synthetic tests exercise the
+same preflight on malformed and internally consistent fabricated inputs.
+
+**The canonical inference script scripts/analyze_main_study.py remains
+byte-for-byte unchanged.** Its historical SHA-256 is pinned in immutable
+analysis provenance and must not be edited merely to add checks; editing
+it invalidates independently reproducible historical-receipt verification.
+This optional new audit neither changes the preregistered estimands nor
+reclassifies original outputs; it does not authenticate missing
+source traces/reports, prove experimental execution, or establish human
+validation. Any discrepancy warrants investigation and a documented
+protocol deviation, not silent alteration or selective treatment reruns.
 
 ### Layer D — Blinded human validation
 
