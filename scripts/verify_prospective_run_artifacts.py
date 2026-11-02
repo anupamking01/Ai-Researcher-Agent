@@ -449,6 +449,23 @@ def audit_run_artifacts(
     total_bytes = trace_count = report_count = 0
     common_runtime_sha256: str | None = None
     runtime_context_external_pin_matched = False
+    # A configured browse cap is not evidence that any sources were actually
+    # scheduled or resolved. Report integer exposure denominators separately
+    # for each arm, including failed and partial executions, without implying
+    # that these self-reported URLs were independently fetched.
+    source_usage_by_variant = {
+        variant: {
+            "attempted_cells": 0,
+            "completed_cells": 0,
+            "scheduled_source_claims": 0,
+            "successful_source_claims": 0,
+            "failed_source_claims": 0,
+            "at_budget_attempted_cells": 0,
+            "zero_scheduled_source_attempts": 0,
+            "zero_successful_source_attempts": 0,
+        }
+        for variant in design.VARIANTS
+    }
     # Keep a single source-root inode pinned for the entire multi-file audit.
     # Re-opening its path per file risks mixing independent directory trees.
     if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
@@ -517,6 +534,19 @@ def audit_run_artifacts(
             _validate_source_budget_ledger(
                 trace, number=number, variant=event["variant"]
             )
+            source_usage = source_usage_by_variant[event["variant"]]
+            source_usage["attempted_cells"] += 1
+            if event["status"] == "completed":
+                source_usage["completed_cells"] += 1
+            source_usage["scheduled_source_claims"] += trace["source_count"]
+            source_usage["successful_source_claims"] += trace["successful_source_count"]
+            source_usage["failed_source_claims"] += trace["failed_source_count"]
+            if trace["source_count"] == expected_controls["source_budget"]:
+                source_usage["at_budget_attempted_cells"] += 1
+            if trace["source_count"] == 0:
+                source_usage["zero_scheduled_source_attempts"] += 1
+            if trace["successful_source_count"] == 0:
+                source_usage["zero_successful_source_attempts"] += 1
             # A recorded arm is not comparable to another if its declared
             # model, source code, search backend or common guardrails drift.
             # This validates candidate metadata only, not provider activity.
@@ -652,6 +682,7 @@ def audit_run_artifacts(
         "trace_question_fingerprints_match_frozen_manifest": True,
         "trace_treatment_controls_match_frozen_design": True,
         "self_reported_source_ledgers_within_frozen_budgets": True,
+        "self_reported_source_usage_by_variant": source_usage_by_variant,
         "self_reported_source_urls_http_and_fetch_distinct": True,
         "common_runtime_context_sha256": common_runtime_sha256,
         "common_runtime_context_external_pin_matched": runtime_context_external_pin_matched,

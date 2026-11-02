@@ -197,3 +197,32 @@ does not certify installed dependencies, actual provider model versions,
 true browsing, historical 2026 treatment authenticity, confirmatory
 replication, or human validation. Pilot, frozen automated main-study,
 exploratory and pending human assessments remain separate.
+
+## Prospective source-use exposure receipt (no new measurements)
+
+A valid recorded source ledger may use **fewer** sources than the assigned
+D3/D6/P6/P6V upper budget. The within-cap verification alone must not be
+reported as evidence that higher-budget arms actually scheduled more
+retrievals. To make this distinction reviewable, the local audit receipt now
+includes `self_reported_source_usage_by_variant` with all four arms, even
+when a study stops partway through the 40-cell schedule.
+
+Each arm contains integer `attempted_cells` and `completed_cells`
+denominators, `scheduled_source_claims`, `successful_source_claims`,
+`failed_source_claims`, `at_budget_attempted_cells`,
+`zero_scheduled_source_attempts` and
+`zero_successful_source_attempts`. Unattempted cells contribute nothing;
+failed, timed-out and cancelled **attempted** cells remain in the denominator.
+Counts are summed from the same trace fields that were checked against the
+frozen browse cap and URL outcome partition. The receipt never includes
+individual URLs, questions, reports, or human ratings.
+
+These are **unverified, self-reported exposure diagnostics**, not a fourth
+outcome measure, a treatment-compliance exclusion criterion, or evidence of
+actual HTTP requests. In particular, a completed D6 cell with zero scheduled
+sources remains visible as such rather than being silently treated as having
+used its six-source allowance. Do not remove, rerun, or reclassify cells
+based on these counts. Any interpretation of achieved retrieval exposure
+is descriptive and prospective; it does not change the frozen 2026 pilot,
+confirmatory automated results, exploratory results, or pending human
+validation.

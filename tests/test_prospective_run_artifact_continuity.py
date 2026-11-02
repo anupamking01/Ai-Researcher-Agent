@@ -793,6 +793,92 @@ def _rewrite_synthetic_source_ledger(fixture, *, cell_number: int, change) -> No
     cell["trace"] = _file_claim(cell["trace"]["path"], raw)
 
 
+
+def test_source_usage_receipt_does_not_infer_actual_exposure_from_budget(tmp_path):
+    # Forty completed cells with zero scheduled sources can satisfy upper caps.
+    # The receipt must not imply that D3 or D6 actually used their allowances.
+    receipt = _audit(_fixture(tmp_path))
+    usage = receipt["self_reported_source_usage_by_variant"]
+    assert set(usage) == set(design.VARIANTS)
+    for variant in design.VARIANTS:
+        assert usage[variant] == {
+            "attempted_cells": 10,
+            "completed_cells": 10,
+            "scheduled_source_claims": 0,
+            "successful_source_claims": 0,
+            "failed_source_claims": 0,
+            "at_budget_attempted_cells": 0,
+            "zero_scheduled_source_attempts": 10,
+            "zero_successful_source_attempts": 10,
+        }
+    assert receipt["model_or_retrieval_calls_verified"] is False
+
+
+@pytest.mark.parametrize("variant,scheduled,failed", [
+    ("D3", 3, 1),
+    ("D6", 2, 0),
+    ("P6V", 6, 2),
+])
+def test_source_usage_receipt_reconciles_partial_and_full_arm_exposure(
+    tmp_path, variant, scheduled, failed
+):
+    fixture = _fixture(tmp_path)
+    position = next(
+        i for i, cell in enumerate(fixture[3]["cells"])
+        if cell["variant"] == variant
+    )
+    urls = [f"https://synthetic.invalid/{variant}/{i}" for i in range(scheduled)]
+
+    def set_usage(trace):
+        trace.update(
+            source_count=scheduled,
+            successful_source_count=scheduled - failed,
+            failed_source_count=failed,
+            scheduled_urls=urls,
+            successful_urls=urls[:scheduled - failed],
+            failed_urls=urls[scheduled - failed:],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=position, change=set_usage)
+    receipt = _audit(fixture)
+    usage = receipt["self_reported_source_usage_by_variant"][variant]
+    assert usage["attempted_cells"] == 10
+    assert usage["completed_cells"] == 10
+    assert usage["scheduled_source_claims"] == scheduled
+    assert usage["successful_source_claims"] == scheduled - failed
+    assert usage["failed_source_claims"] == failed
+    budget = design.PROSPECTIVE_TREATMENT_CONTROLS_V1[variant]["source_budget"]
+    assert usage["at_budget_attempted_cells"] == int(scheduled == budget)
+    assert usage["zero_scheduled_source_attempts"] == 9
+    assert usage["zero_successful_source_attempts"] == 9
+
+
+def test_source_usage_receipt_denominators_preserve_failed_and_unattempted(tmp_path):
+    fixture = _fixture(tmp_path)
+    _mark_unattempted(fixture, 4)
+    _, _, log, index, root = fixture
+    # Keep the first failed attempt and its (optional) report, rather than
+    # excluding an unfavorable outcome from the source-exposure denominator.
+    log["events"][0]["status"] = "failed"
+    index["cells"][0]["status"] = "failed"
+    claim = index["cells"][0]["trace"]
+    path = root / claim["path"]
+    trace = json.loads(path.read_bytes())
+    trace["status"] = "failed"
+    changed = _bytes(trace)
+    path.write_bytes(changed)
+    index["cells"][0]["trace"] = _file_claim(claim["path"], changed)
+    index["execution_log_sha256"] = _digest(_bytes(log))
+
+    receipt = _audit(fixture)
+    usage = receipt["self_reported_source_usage_by_variant"]
+    assert receipt["attempted_cells"] == 4
+    assert sum(item["attempted_cells"] for item in usage.values()) == 4
+    assert sum(item["completed_cells"] for item in usage.values()) == 3
+    assert sum(item["zero_scheduled_source_attempts"] for item in usage.values()) == 4
+    assert sum(item["at_budget_attempted_cells"] for item in usage.values()) == 0
+    assert all(item["attempted_cells"] == 1 for item in usage.values())
+
 @pytest.mark.parametrize("variant", design.VARIANTS)
 def test_recorded_source_budget_at_limit_with_one_failed_url_is_valid(
     tmp_path, variant
