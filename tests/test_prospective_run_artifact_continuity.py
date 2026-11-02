@@ -310,7 +310,7 @@ def test_hardlink_and_symlink_artifact_aliases_are_rejected(tmp_path):
     first_path = root / index["cells"][0]["trace"]["path"]
     alias = root / "traces" / "hardlink.json"
     os.link(first_path, alias)
-    with pytest.raises(design.DesignError, match="no hardlink aliases"):
+    with pytest.raises(design.DesignError, match="single-link regular files"):
         _audit(fixture)
     alias.unlink()
     second_path = root / index["cells"][0]["trace"]["path"]
@@ -332,7 +332,8 @@ def test_symlinked_root_or_parent_directory_rejected(tmp_path):
     renamed = root / "trace_source"
     parent.rename(renamed)
     parent.symlink_to(renamed, target_is_directory=True)
-    with pytest.raises(design.DesignError, match="could not be safely opened"):
+    # The initial dedicated-root inventory now rejects the symlink parent.
+    with pytest.raises(design.DesignError, match="single-link regular files"):
         _audit(fixture)
 
 
