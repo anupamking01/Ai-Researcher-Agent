@@ -572,3 +572,72 @@ def test_early_trace_removed_after_check_is_rejected_at_final_sweep(tmp_path, mo
     with pytest.raises(design.DesignError, match="became inaccessible during audit"):
         _audit(fixture)
     assert removed
+
+
+def _replace_report_bytes_and_refresh_claims(fixture, raw):
+    """Keep the synthetic ledger and trace/index hashes internally consistent."""
+    _, _, _, index, root = fixture
+    cell = index["cells"][0]
+    report_claim = cell["report"]
+    (root / report_claim["path"]).write_bytes(raw)
+    cell["report"] = _file_claim(report_claim["path"], raw)
+    trace_claim = cell["trace"]
+    trace_file = root / trace_claim["path"]
+    trace = json.loads(trace_file.read_bytes())
+    trace["report_sha256"] = _digest(raw)
+    trace_raw = _bytes(trace)
+    trace_file.write_bytes(trace_raw)
+    cell["trace"] = _file_claim(trace_claim["path"], trace_raw)
+
+
+@pytest.mark.parametrize("recorded_status", ["completed", "failed"])
+@pytest.mark.parametrize("bad_report", [
+    b" \t\r\n",                      # No substantive textual evidence.
+    b"\xff\xfeBinary report",          # Cannot decode as UTF-8.
+    b"Readable\x00hidden payload",    # NUL embedded in apparent text.
+    b"\xef\xbb\xbf",                 # Only a UTF-8 BOM.
+    b"",                              # Zero-byte report.
+])
+def test_unreadable_or_blank_rehashed_report_rejected(
+    tmp_path, recorded_status, bad_report
+):
+    fixture = _fixture(tmp_path)
+    _, _, log, index, root = fixture
+    if recorded_status == "failed":
+        # Failed attempts may legitimately retain a report; those reports
+        # must not bypass the text gate simply because success was not claimed.
+        log["events"][0]["status"] = "failed"
+        index["cells"][0]["status"] = "failed"
+        index["execution_log_sha256"] = _digest(_bytes(log))
+        trace_claim = index["cells"][0]["trace"]
+        trace_path = root / trace_claim["path"]
+        trace = json.loads(trace_path.read_bytes())
+        trace["status"] = "failed"
+        changed_trace = _bytes(trace)
+        trace_path.write_bytes(changed_trace)
+        index["cells"][0]["trace"] = _file_claim(trace_claim["path"], changed_trace)
+    _replace_report_bytes_and_refresh_claims(fixture, bad_report)
+    with pytest.raises(design.DesignError, match="Markdown text|invalid file fingerprint"):
+        _audit(fixture)
+
+
+@pytest.mark.parametrize("extension", ["pdf", "txt"])
+def test_nonmarkdown_report_suffix_rejected_with_valid_sha256(tmp_path, extension):
+    fixture = _fixture(tmp_path)
+    index, root = fixture[3], fixture[4]
+    claim = index["cells"][0]["report"]
+    old_path = root / claim["path"]
+    new_relative = f"reports/trial-00.{extension}"
+    old_path.rename(root / new_relative)
+    claim["path"] = new_relative
+    with pytest.raises(design.DesignError, match=r"requires a \.md Markdown"):
+        _audit(fixture)
+
+
+def test_genuine_nonascii_utf8_markdown_remains_eligible_for_local_audit(tmp_path):
+    fixture = _fixture(tmp_path)
+    report = "# Síntesis de investigación\n\n日本語の研究ノート。\n".encode("utf-8")
+    _replace_report_bytes_and_refresh_claims(fixture, report)
+    receipt = _audit(fixture)
+    assert receipt["verified_reports"] == 40
+    assert receipt["scientific_outcomes_validated"] is False

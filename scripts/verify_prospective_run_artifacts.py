@@ -120,6 +120,25 @@ def _validate_file_claim(claim: object, *, description: str,
     return raw, len(raw)
 
 
+def _require_readable_markdown_report(raw: bytes, *, number: int) -> None:
+    """Reject reports that cannot be reviewed as nonblank UTF-8 Markdown text.
+
+    Fingerprints alone allow a binary, whitespace-only, or NUL-containing
+    payload to masquerade as a completed research report. This validates only
+    the report's textual envelope, not its quality or scientific accuracy.
+    """
+    try:
+        report_text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise design.DesignError(
+            f"report {number} is not valid UTF-8 Markdown text"
+        ) from exc
+    if "\x00" in report_text or not report_text.lstrip("\ufeff").strip():
+        raise design.DesignError(
+            f"report {number} must contain nonblank Markdown text without NUL bytes"
+        )
+
+
 def audit_run_artifacts(
     task_manifest: bytes,
     plan_receipt: bytes,
@@ -269,11 +288,16 @@ def audit_run_artifacts(
                         f"trace {number} claims a report not supplied in the inventory"
                     )
             else:
-                _, size = _validate_file_claim(
+                if not report["path"].endswith(".md"):
+                    raise design.DesignError(
+                        f"report {number} requires a .md Markdown artifact path"
+                    )
+                report_raw, size = _validate_file_claim(
                     report, description=f"report {number}",
                     root_fd=root_fd, seen_paths=seen_paths, seen_inodes=seen_inodes,
-                captured_claims=captured_claims,
+                    captured_claims=captured_claims,
                 )
+                _require_readable_markdown_report(report_raw, number=number)
                 total_bytes += size
                 report_count += 1
                 if total_bytes > MAX_TOTAL_ARTIFACT_BYTES:
