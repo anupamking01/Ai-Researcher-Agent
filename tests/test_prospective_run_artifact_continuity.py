@@ -1207,6 +1207,48 @@ def test_prospective_runtime_receipt_is_explicitly_unpinned_without_custody(tmp_
     assert result["recorded_common_runtime_context_consistent"] is True
     assert result["actual_common_runtime_independently_authenticated"] is False
 
+
+@pytest.mark.parametrize("field,equivalent", [
+    ("generation_temperature", 0),
+    ("generation_temperature", -0.0),
+    ("browse_timeout_seconds", 60),
+    ("run_timeout_seconds", 480),
+])
+def test_prospective_runtime_numeric_json_spelling_is_not_treatment_drift(
+    tmp_path, field, equivalent
+):
+    # These numbers are equal as execution settings even though JSON distinguishes
+    # integer, decimal, and negative-zero renderings. Keep the original trace
+    # bytes and their index hashes; normalize only the comparison receipt.
+    fixture = _fixture(tmp_path)
+    first_trace = fixture[4] / fixture[3]["cells"][0]["trace"]["path"]
+    original_context = json.loads(first_trace.read_bytes())["runtime_context"]
+    external_pin = evidence._common_runtime_context_digest(original_context, number=1)
+    _rewrite_synthetic_source_ledger(
+        fixture, cell_number=0,
+        change=lambda trace: trace["runtime_context"].update({field: equivalent}),
+    )
+    changed_trace = first_trace.read_bytes()
+    receipt = _audit(fixture, expected_runtime_context_sha256=external_pin)
+    assert receipt["common_runtime_context_sha256"] == external_pin
+    assert receipt["common_runtime_context_external_pin_matched"] is True
+    assert receipt["recorded_common_runtime_context_consistent"] is True
+    assert receipt["actual_common_runtime_independently_authenticated"] is False
+    assert first_trace.read_bytes() == changed_trace
+
+
+def test_prospective_runtime_numeric_change_still_counts_as_drift(tmp_path):
+    fixture = _fixture(tmp_path)
+    _rewrite_synthetic_source_ledger(
+        fixture, cell_number=0,
+        change=lambda trace: trace["runtime_context"].update(
+            browse_timeout_seconds=61,
+        ),
+    )
+    with pytest.raises(design.DesignError, match="runtime context changed"):
+        _audit(fixture)
+
+
 # A fragment or host spelling change does not identify a new HTTP fetch.
 # Require outcome partitioning by the same canonical fetch identities used
 # by the no-duplicate budget check, while retaining raw URL evidence intact.

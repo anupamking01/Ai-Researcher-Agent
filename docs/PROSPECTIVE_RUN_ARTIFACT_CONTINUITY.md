@@ -180,16 +180,28 @@ including failed, timed-out and cancelled attempts. The ten fields are:
 
 These values describe **common non-treatment configuration**, not the
 arm-specific `treatment_controls` (which remain separately fixed by D3/D6/P6/P6V).
-Their exact JSON schema and canonical JSON SHA-256 must be identical across
-every attempted trace. A valid-looking second arm changing its recorded
+Their exact JSON schema and **value-canonical** JSON SHA-256 must be
+identical across every attempted trace. The three finite numeric settings
+(`generation_temperature`, `browse_timeout_seconds`, and
+`run_timeout_seconds`) are compared by numeric value: JSON `60` and
+`60.0`, or `0` and `-0.0`, are not runtime drift. Integer-only
+settings remain strictly typed. This comparison does **not** rewrite
+original evidence: raw trace and index byte fingerprints remain exact. A valid-looking second arm changing its recorded
 model, Git revision or timeout fails even when its trace and inventory
 hashes are consistently recomputed. The checker emits one digest of the
 common context, never model names, source URLs or secret values.
 
 Before future execution, coordinators can independently precommit the
-SHA-256 of `json.dumps(runtime_context, sort_keys=True,
-separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("utf-8")`
-and supply it through `--expected-runtime-context-sha256`. Only a
+SHA-256 of the **value-canonical** runtime object, not a raw JSON
+serialization, and supply it through `--expected-runtime-context-sha256`.
+To compute that canonical digest with Python after validating the numeric
+domains, copy the context, convert the three numeric settings named above
+to `float` (using `0.0` for either signed zero), then hash
+`json.dumps(copy, sort_keys=True, separators=(",", ":"),
+ensure_ascii=True, allow_nan=False).encode("utf-8")`. A precommitted
+digest from the older integer-sensitive rendering must not be silently
+relabeled as a value-canonical precommitment; record a protocol deviation
+if a prospective coordinator already independently pinned that rendering. Only a
 matching **independently retained pre-run** digest may be described as
 externally pinned; merely calculating that value from candidate evidence
 does not establish preregistration. The receipt records the separately

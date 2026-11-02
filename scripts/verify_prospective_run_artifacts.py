@@ -391,8 +391,19 @@ def _common_runtime_context_digest(context: object, *, number: int) -> str:
             raise design.DesignError(
                 f"trace {number} runtime {field} needs finite positive seconds"
             )
+    # Compare permitted continuous settings by VALUE, not by whether the
+    # recorder serialized an integral value as 60 or 60.0. All accepted
+    # integers are small enough to convert exactly to float. Preserve the
+    # original trace bytes and their independent inventory fingerprint.
+    canonical_context = dict(context)
+    for field in (
+        "generation_temperature", "browse_timeout_seconds",
+        "run_timeout_seconds",
+    ):
+        value = canonical_context[field]
+        canonical_context[field] = 0.0 if value == 0 else float(value)
     canonical = json.dumps(
-        context, sort_keys=True, separators=(",", ":"),
+        canonical_context, sort_keys=True, separators=(",", ":"),
         ensure_ascii=True, allow_nan=False,
     ).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
