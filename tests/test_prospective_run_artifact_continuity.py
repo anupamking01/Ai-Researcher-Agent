@@ -317,7 +317,7 @@ def test_hardlink_and_symlink_artifact_aliases_are_rejected(tmp_path):
     original = second_path.read_bytes()
     second_path.unlink()
     second_path.symlink_to(root / index["cells"][1]["trace"]["path"])
-    with pytest.raises(design.DesignError, match="could not be safely opened"):
+    with pytest.raises(design.DesignError, match="single-link regular files"):
         _audit(fixture)
 
 
