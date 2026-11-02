@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
+import shutil
 import sys
 
 import pytest
@@ -464,3 +465,45 @@ def test_wrong_recorded_intervention_rejected_even_after_trace_rehash(
     cell["trace"] = _file_claim(claim["path"], changed)
     with pytest.raises(design.DesignError, match="frozen treatment-control|frozen variant"):
         _audit(fixture)
+
+
+def test_artifact_root_replacement_between_reads_fails(tmp_path, monkeypatch):
+    fixture = _fixture(tmp_path)
+    root = fixture[4]
+    original = evidence._validate_file_claim
+    swapped = False
+
+    def replace_after_first(*args, **kwargs):
+        nonlocal swapped
+        result = original(*args, **kwargs)
+        if not swapped:
+            moved = tmp_path / 'original-retained-root'
+            root.rename(moved)
+            shutil.copytree(moved, root)
+            swapped = True
+        return result
+
+    monkeypatch.setattr(evidence, '_validate_file_claim', replace_after_first)
+    with pytest.raises(design.DesignError, match='artifact root changed during verification'):
+        _audit(fixture)
+    assert swapped
+
+
+def test_artifact_root_mutation_between_reads_fails(tmp_path, monkeypatch):
+    fixture = _fixture(tmp_path)
+    root = fixture[4]
+    original = evidence._validate_file_claim
+    changed = False
+
+    def mutate_after_first(*args, **kwargs):
+        nonlocal changed
+        result = original(*args, **kwargs)
+        if not changed:
+            (root / 'unexpected-new-entry').write_bytes(b'unexpected')
+            changed = True
+        return result
+
+    monkeypatch.setattr(evidence, '_validate_file_claim', mutate_after_first)
+    with pytest.raises(design.DesignError, match='artifact root changed during verification'):
+        _audit(fixture)
+    assert changed

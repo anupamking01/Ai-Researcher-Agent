@@ -57,7 +57,7 @@ def _file_generation(st: os.stat_result) -> tuple:
     )
 
 
-def _read_regular_under(root: Path, relative: str) -> tuple[bytes, tuple[int, int]]:
+def _read_regular_under(root_fd: int, relative: str) -> tuple[bytes, tuple[int, int]]:
     """Open each path segment relative to directory descriptors, without links.
 
     Reject hardlinks as well as repeated inode identities: a candidate index
@@ -72,7 +72,7 @@ def _read_regular_under(root: Path, relative: str) -> tuple[bytes, tuple[int, in
     directory_flags = flags | os.O_DIRECTORY
     try:
         with ExitStack() as stack:
-            parent = os.open(root, directory_flags)
+            parent = os.dup(root_fd)
             stack.callback(os.close, parent)
             for component in relative.split("/")[:-1]:
                 parent = os.open(component, directory_flags, dir_fd=parent)
@@ -97,7 +97,7 @@ def _read_regular_under(root: Path, relative: str) -> tuple[bytes, tuple[int, in
 
 
 def _validate_file_claim(claim: object, *, description: str,
-                         root: Path, seen_paths: set[str],
+                         root_fd: int, seen_paths: set[str],
                          seen_inodes: set[tuple[int, int]]) -> tuple[bytes, int]:
     if type(claim) is not dict or set(claim) != _FILE_FIELDS:
         raise design.DesignError(f"{description} requires exact file fingerprint fields")
@@ -108,7 +108,7 @@ def _validate_file_claim(claim: object, *, description: str,
         raise design.DesignError(f"{description} has invalid file fingerprint types")
     if path in seen_paths:
         raise design.DesignError(f"{description} reuses an artifact path")
-    raw, inode = _read_regular_under(root, path)
+    raw, inode = _read_regular_under(root_fd, path)
     if inode in seen_inodes:
         raise design.DesignError(f"{description} reuses an artifact inode")
     if len(raw) != length or hashlib.sha256(raw).hexdigest() != digest:
@@ -177,93 +177,122 @@ def audit_run_artifacts(
     seen_paths: set[str] = set()
     seen_inodes: set[tuple[int, int]] = set()
     total_bytes = trace_count = report_count = 0
-    for number, (event, cell) in enumerate(zip(events, cells, strict=True), start=1):
-        if type(cell) is not dict or set(cell) != _CELL_FIELDS:
-            raise design.DesignError(f"artifact cell {number} has incorrect fields")
-        for field in ("task_id", "variant", "run_id", "status"):
-            if type(cell[field]) is not type(event[field]) or cell[field] != event[field]:
-                raise design.DesignError(
-                    f"artifact cell {number} differs from recorded event {field}"
-                )
-        if event["status"] == "not_started":
-            if cell["trace"] is not None or cell["report"] is not None:
-                raise design.DesignError(
-                    f"unattempted artifact cell {number} invents source evidence"
-                )
-            continue
-        if cell["trace"] is None:
-            raise design.DesignError(f"attempted artifact cell {number} lacks a trace")
-        trace_raw, size = _validate_file_claim(
-            cell["trace"], description=f"trace {number}",
-            root=Path(artifact_root), seen_paths=seen_paths, seen_inodes=seen_inodes,
+    # Keep a single source-root inode pinned for the entire multi-file audit.
+    # Re-opening its path per file risks mixing independent directory trees.
+    if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
+        raise design.DesignError('platform lacks safe descriptor-relative artifact reads')
+    root_path = Path(artifact_root)
+    try:
+        root_fd = os.open(
+            root_path,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY | getattr(os, 'O_CLOEXEC', 0),
         )
-        total_bytes += size
-        trace_count += 1
-        if total_bytes > MAX_TOTAL_ARTIFACT_BYTES:
-            raise design.DesignError("aggregate artifact bytes exceed supported budget")
-        trace = _json_bytes(trace_raw, f"trace {number}")
-        if type(trace) is not dict:
-            raise design.DesignError(f"trace {number} must be a JSON object")
-        for field in ("task_id", "variant", "run_id", "status"):
-            if type(trace.get(field)) is not str or trace[field] != event[field]:
-                raise design.DesignError(
-                    f"trace {number} {field} does not bind to recorded event"
-                )
-        # The arm label alone cannot establish that its self-reported
-        # intervention settings agree with the original four-arm design.
-        expected_controls = design.PROSPECTIVE_TREATMENT_CONTROLS_V1[event["variant"]]
-        controls = trace.get("treatment_controls")
-        if type(controls) is not dict or set(controls) != set(expected_controls):
-            raise design.DesignError(
-                f"trace {number} requires exact frozen treatment-control fields"
-            )
-        if any(
-            type(controls[field]) is not type(expected) or controls[field] != expected
-            for field, expected in expected_controls.items()
-        ):
-            raise design.DesignError(
-                f"trace {number} treatment controls differ from frozen variant"
-            )
-        # A run with the right ID can still claim the wrong question.
-        # The exact UTF-8 question bytes (not normalized text) must agree
-        # with the frozen manifest. This is self-reported provenance only.
-        if (type(trace.get("task_question_sha256")) is not str
-                or trace["task_question_sha256"] != frozen_questions[event["task_id"]]):
-            raise design.DesignError(
-                f"trace {number} question fingerprint differs from frozen task manifest"
-            )
-        # Require each retained trace to corroborate the logged UTC interval.
-        # Identical self-reported timestamps are not external clock evidence.
-        for field in ("started_at_utc", "finished_at_utc"):
-            if type(trace.get(field)) is not str or trace[field] != event[field]:
-                raise design.DesignError(
-                    f"trace {number} {field} does not bind to recorded chronology"
-                )
-        if "report_sha256" not in trace:
-            raise design.DesignError(f"trace {number} lacks a report hash binding")
-
-        report = cell["report"]
-        if event["status"] == "completed" and report is None:
-            raise design.DesignError(f"completed cell {number} lacks a report")
-        if report is None:
-            if trace["report_sha256"] is not None:
-                raise design.DesignError(
-                    f"trace {number} claims a report not supplied in the inventory"
-                )
-        else:
-            _, size = _validate_file_claim(
-                report, description=f"report {number}",
-                root=Path(artifact_root), seen_paths=seen_paths, seen_inodes=seen_inodes,
+    except OSError as exc:
+        raise design.DesignError('artifact root could not be safely opened') from exc
+    try:
+        root_before = os.fstat(root_fd)
+        for number, (event, cell) in enumerate(zip(events, cells, strict=True), start=1):
+            if type(cell) is not dict or set(cell) != _CELL_FIELDS:
+                raise design.DesignError(f"artifact cell {number} has incorrect fields")
+            for field in ("task_id", "variant", "run_id", "status"):
+                if type(cell[field]) is not type(event[field]) or cell[field] != event[field]:
+                    raise design.DesignError(
+                        f"artifact cell {number} differs from recorded event {field}"
+                    )
+            if event["status"] == "not_started":
+                if cell["trace"] is not None or cell["report"] is not None:
+                    raise design.DesignError(
+                        f"unattempted artifact cell {number} invents source evidence"
+                    )
+                continue
+            if cell["trace"] is None:
+                raise design.DesignError(f"attempted artifact cell {number} lacks a trace")
+            trace_raw, size = _validate_file_claim(
+                cell["trace"], description=f"trace {number}",
+                root_fd=root_fd, seen_paths=seen_paths, seen_inodes=seen_inodes,
             )
             total_bytes += size
-            report_count += 1
+            trace_count += 1
             if total_bytes > MAX_TOTAL_ARTIFACT_BYTES:
                 raise design.DesignError("aggregate artifact bytes exceed supported budget")
-            if (type(trace["report_sha256"]) is not str
-                    or trace["report_sha256"] != report["sha256"]):
+            trace = _json_bytes(trace_raw, f"trace {number}")
+            if type(trace) is not dict:
+                raise design.DesignError(f"trace {number} must be a JSON object")
+            for field in ("task_id", "variant", "run_id", "status"):
+                if type(trace.get(field)) is not str or trace[field] != event[field]:
+                    raise design.DesignError(
+                        f"trace {number} {field} does not bind to recorded event"
+                    )
+            # The arm label alone cannot establish that its self-reported
+            # intervention settings agree with the original four-arm design.
+            expected_controls = design.PROSPECTIVE_TREATMENT_CONTROLS_V1[event["variant"]]
+            controls = trace.get("treatment_controls")
+            if type(controls) is not dict or set(controls) != set(expected_controls):
                 raise design.DesignError(
-                    f"trace {number} does not bind the supplied report fingerprint"
+                    f"trace {number} requires exact frozen treatment-control fields"
                 )
+            if any(
+                type(controls[field]) is not type(expected) or controls[field] != expected
+                for field, expected in expected_controls.items()
+            ):
+                raise design.DesignError(
+                    f"trace {number} treatment controls differ from frozen variant"
+                )
+            # A run with the right ID can still claim the wrong question.
+            # The exact UTF-8 question bytes (not normalized text) must agree
+            # with the frozen manifest. This is self-reported provenance only.
+            if (type(trace.get("task_question_sha256")) is not str
+                    or trace["task_question_sha256"] != frozen_questions[event["task_id"]]):
+                raise design.DesignError(
+                    f"trace {number} question fingerprint differs from frozen task manifest"
+                )
+            # Require each retained trace to corroborate the logged UTC interval.
+            # Identical self-reported timestamps are not external clock evidence.
+            for field in ("started_at_utc", "finished_at_utc"):
+                if type(trace.get(field)) is not str or trace[field] != event[field]:
+                    raise design.DesignError(
+                        f"trace {number} {field} does not bind to recorded chronology"
+                    )
+            if "report_sha256" not in trace:
+                raise design.DesignError(f"trace {number} lacks a report hash binding")
+
+            report = cell["report"]
+            if event["status"] == "completed" and report is None:
+                raise design.DesignError(f"completed cell {number} lacks a report")
+            if report is None:
+                if trace["report_sha256"] is not None:
+                    raise design.DesignError(
+                        f"trace {number} claims a report not supplied in the inventory"
+                    )
+            else:
+                _, size = _validate_file_claim(
+                    report, description=f"report {number}",
+                    root_fd=root_fd, seen_paths=seen_paths, seen_inodes=seen_inodes,
+                )
+                total_bytes += size
+                report_count += 1
+                if total_bytes > MAX_TOTAL_ARTIFACT_BYTES:
+                    raise design.DesignError("aggregate artifact bytes exceed supported budget")
+                if (type(trace["report_sha256"]) is not str
+                        or trace["report_sha256"] != report["sha256"]):
+                    raise design.DesignError(
+                        f"trace {number} does not bind the supplied report fingerprint"
+                    )
+
+        root_after = os.fstat(root_fd)
+        try:
+            root_at_path = os.lstat(root_path)
+        except OSError as exc:
+            raise design.DesignError('artifact root changed during verification') from exc
+        if (
+            _file_generation(root_before) != _file_generation(root_after)
+            or not stat.S_ISDIR(root_at_path.st_mode)
+            or root_at_path.st_dev != root_after.st_dev
+            or root_at_path.st_ino != root_after.st_ino
+        ):
+            raise design.DesignError('artifact root changed during verification')
+    finally:
+        os.close(root_fd)
 
     return {
         "status": "pass_local_artifact_continuity_only",
