@@ -23,6 +23,8 @@ INDEX_CLASSIFICATION = "prospective_replication_local_artifact_continuity_only"
 MAX_INDEX_BYTES = 256 * 1024
 MAX_ARTIFACT_BYTES = 2 * 1024 * 1024
 MAX_TOTAL_ARTIFACT_BYTES = 16 * 1024 * 1024
+MAX_ARTIFACT_TREE_ENTRIES = 256
+MAX_ARTIFACT_TREE_DEPTH = 16
 _INDEX_FIELDS = frozenset({
     "schema_version", "classification", "task_set_id",
     "execution_log_sha256", "cells",
@@ -120,6 +122,65 @@ def _validate_file_claim(claim: object, *, description: str,
     return raw, len(raw)
 
 
+
+def _inventory_artifact_paths(root_fd: int) -> set[str]:
+    """Enumerate a dedicated evidence root; reject unindexed retained artifacts.
+
+    This is a bounded local custody check. It cannot detect traces deleted
+    before capture, files outside this root, or transient concurrent changes.
+    """
+    directory_flags = (os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY
+                       | getattr(os, "O_CLOEXEC", 0))
+    seen: set[str] = set()
+    entries_seen = 0
+    try:
+        with ExitStack() as stack:
+            opened_root = os.dup(root_fd)
+            stack.callback(os.close, opened_root)
+            pending = [(opened_root, "", 0)]
+            while pending:
+                parent, prefix, depth = pending.pop()
+                with os.scandir(parent) as entries:
+                    for entry in entries:
+                        entries_seen += 1
+                        if entries_seen > MAX_ARTIFACT_TREE_ENTRIES:
+                            raise design.DesignError(
+                                "artifact root has too many directory entries"
+                            )
+                        name = entry.name
+                        if _PATH_COMPONENT.fullmatch(name) is None:
+                            raise design.DesignError(
+                                "artifact root contains an unsafe path component"
+                            )
+                        relative = prefix + name
+                        if len(relative) > 384:
+                            raise design.DesignError(
+                                "artifact root contains an overlong relative path"
+                            )
+                        before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                        if stat.S_ISDIR(before.st_mode):
+                            if depth >= MAX_ARTIFACT_TREE_DEPTH:
+                                raise design.DesignError(
+                                    "artifact root directory nesting exceeds limit"
+                                )
+                            child = os.open(name, directory_flags, dir_fd=parent)
+                            stack.callback(os.close, child)
+                            if _file_generation(os.fstat(child)) != _file_generation(before):
+                                raise design.DesignError(
+                                    "artifact directory changed during inventory"
+                                )
+                            pending.append((child, relative + "/", depth + 1))
+                        elif stat.S_ISREG(before.st_mode) and before.st_nlink == 1:
+                            seen.add(relative)
+                        else:
+                            raise design.DesignError(
+                                "artifact root must contain only single-link regular files and directories"
+                            )
+    except OSError as exc:
+        raise design.DesignError("artifact root could not be safely inventoried") from exc
+    return seen
+
+
 def _require_readable_markdown_report(raw: bytes, *, number: int) -> None:
     """Reject reports that cannot be reviewed as nonblank UTF-8 Markdown text.
 
@@ -213,6 +274,7 @@ def audit_run_artifacts(
         raise design.DesignError('artifact root could not be safely opened') from exc
     try:
         root_before = os.fstat(root_fd)
+        initial_paths = _inventory_artifact_paths(root_fd)
         for number, (event, cell) in enumerate(zip(events, cells, strict=True), start=1):
             if type(cell) is not dict or set(cell) != _CELL_FIELDS:
                 raise design.DesignError(f"artifact cell {number} has incorrect fields")
@@ -328,6 +390,17 @@ def audit_run_artifacts(
                     "previously verified artifact changed during audit"
                 )
 
+        # Every file present in this dedicated root must be accounted for by
+        # an attempted cell. Otherwise retained alternative attempts could be
+        # omitted from the submitted forty-cell index without being noticed.
+        # Compare both the initial and final bounded inventories to the
+        # paths actually verified; this is not an atomic or external audit.
+        final_paths = _inventory_artifact_paths(root_fd)
+        if initial_paths != seen_paths or final_paths != seen_paths:
+            raise design.DesignError(
+                "artifact root contains unindexed or missing evidence files"
+            )
+
         root_after = os.fstat(root_fd)
         try:
             root_at_path = os.lstat(root_path)
@@ -359,6 +432,8 @@ def audit_run_artifacts(
         "verified_attempted_traces": trace_count,
         "verified_reports": report_count,
         "artifact_paths_rechecked_after_full_scan": len(captured_claims),
+        "artifact_root_inventory_file_count": len(seen_paths),
+        "artifact_root_inventory_matches_index": True,
         "artifact_identity_and_bytes_stable_at_final_recheck": True,
         "recorded_status_counts": recorded["recorded_status_counts"],
         "all_planned_cells_completed": recorded["all_recorded_cells_completed"],

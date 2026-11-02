@@ -129,6 +129,8 @@ def test_complete_synthetic_matrix_binds_all_traces_reports_and_events(tmp_path)
     assert result["verified_attempted_traces"] == 40
     assert result["verified_reports"] == 40
     assert result["artifact_paths_rechecked_after_full_scan"] == 80
+    assert result["artifact_root_inventory_file_count"] == 80
+    assert result["artifact_root_inventory_matches_index"] is True
     assert result["artifact_identity_and_bytes_stable_at_final_recheck"] is True
     assert result["all_planned_cells_completed"] is True
     assert result["artifact_bytes_equal_supplied_fingerprints"] is True
@@ -143,9 +145,14 @@ def test_complete_synthetic_matrix_binds_all_traces_reports_and_events(tmp_path)
 
 
 def _mark_unattempted(fixture, start_index):
-    _, _, log, index, _ = fixture
+    _, _, log, index, root = fixture
     for event, cell in zip(log["events"][start_index:],
                            index["cells"][start_index:], strict=True):
+        # Unattempted cells have no retained output; do not leave artificial
+        # candidate runs outside the inventory in the synthetic fixture.
+        for kind in ("trace", "report"):
+            if cell[kind] is not None:
+                (root / cell[kind]["path"]).unlink()
         event.update({
             "status": "not_started", "run_id": None,
             "started_at_utc": None, "finished_at_utc": None,
@@ -173,6 +180,7 @@ def test_failed_attempt_preserves_trace_without_inventing_report(tmp_path):
     _, _, log, index, root = fixture
     log["events"][0]["status"] = "failed"
     index["cells"][0]["status"] = "failed"
+    (root / index["cells"][0]["report"]["path"]).unlink()
     index["cells"][0]["report"] = None
     path = root / index["cells"][0]["trace"]["path"]
     trace = json.loads(path.read_bytes())
@@ -326,6 +334,53 @@ def test_symlinked_root_or_parent_directory_rejected(tmp_path):
     parent.symlink_to(renamed, target_is_directory=True)
     with pytest.raises(design.DesignError, match="could not be safely opened"):
         _audit(fixture)
+
+
+
+@pytest.mark.parametrize("relative", [
+    "traces/unindexed-alternative.json",
+    "reports/unindexed-alternative.md",
+    "traces/additional-attempt/hidden.json",
+])
+def test_retained_unindexed_attempt_or_report_cannot_be_silently_omitted(
+    tmp_path, relative
+):
+    fixture = _fixture(tmp_path)
+    candidate = fixture[4] / relative
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.write_text("synthetic alternative evidence", encoding="utf-8")
+    with pytest.raises(design.DesignError, match="unindexed or missing evidence"):
+        _audit(fixture)
+
+
+def test_unindexed_symlink_cannot_hide_candidate_evidence(tmp_path):
+    fixture = _fixture(tmp_path)
+    root = fixture[4]
+    (root / "traces" / "hidden-link.json").symlink_to("trial-00.json")
+    with pytest.raises(design.DesignError, match="single-link regular files"):
+        _audit(fixture)
+
+
+def test_unindexed_file_appearing_in_nested_directory_mid_audit_is_rejected(
+    tmp_path, monkeypatch
+):
+    fixture = _fixture(tmp_path)
+    original = evidence._validate_file_claim
+    extra = fixture[4] / "traces" / "late-alternative.json"
+    created = False
+
+    def insert_after_first(*args, **kwargs):
+        nonlocal created
+        result = original(*args, **kwargs)
+        if not created:
+            extra.write_bytes(b"synthetic late retained attempt")
+            created = True
+        return result
+
+    monkeypatch.setattr(evidence, "_validate_file_claim", insert_after_first)
+    with pytest.raises(design.DesignError, match="unindexed or missing evidence"):
+        _audit(fixture)
+    assert created
 
 
 def test_external_index_pin_detects_coherently_rewritten_inventory(tmp_path):
