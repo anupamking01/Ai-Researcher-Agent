@@ -288,7 +288,10 @@ def audit_run_artifacts(
                         f"trace {number} claims a report not supplied in the inventory"
                     )
             else:
-                if not report["path"].endswith(".md"):
+                # Let the strict fingerprint-schema validator reject malformed
+                # claims before attempting to interpret the optional path.
+                if (type(report) is dict and type(report.get("path")) is str
+                        and not report["path"].endswith(".md")):
                     raise design.DesignError(
                         f"report {number} requires a .md Markdown artifact path"
                     )

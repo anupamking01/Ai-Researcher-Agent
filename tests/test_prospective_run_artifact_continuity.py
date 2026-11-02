@@ -641,3 +641,14 @@ def test_genuine_nonascii_utf8_markdown_remains_eligible_for_local_audit(tmp_pat
     receipt = _audit(fixture)
     assert receipt["verified_reports"] == 40
     assert receipt["scientific_outcomes_validated"] is False
+
+
+@pytest.mark.parametrize("malformed_report", [
+    99, "reports/trial-00.md", {"path": "reports/trial-00.md"},
+    {"path": None, "size_bytes": 20, "sha256": "0" * 64},
+])
+def test_malformed_report_claim_fails_as_design_error(tmp_path, malformed_report):
+    fixture = _fixture(tmp_path)
+    fixture[3]["cells"][0]["report"] = malformed_report
+    with pytest.raises(design.DesignError, match="exact file fingerprint|invalid file fingerprint"):
+        _audit(fixture)
