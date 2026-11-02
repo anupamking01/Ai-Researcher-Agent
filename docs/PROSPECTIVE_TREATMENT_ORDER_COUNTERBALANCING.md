@@ -124,3 +124,33 @@ the Williams assignment. A matching self-computed digest is *not* proof of
 independent retention, preregistration, task independence or execution. The
 pilot, historical automated confirmatory findings, exploratory analyses,
 future design and pending human ratings remain separate.
+
+## Invisible-character task-source integrity (prospective-only)
+
+The offline plan now **rejects** hidden Unicode formatting and control characters
+in the proposed new task's \`question\` or \`category\` before computing its
+manifest-bound schedule. Previously, a zero-width character, bidirectional
+override/isolate, grapheme joiner, or variation selector could change the
+original task bytes **and** the assignment digest while leaving the task
+visually indistinguishable. It could also make an otherwise identical
+historical or within-manifest question evade normalized-exact duplicate
+checks, undermining the independence claim for ten future task units.
+
+The validator refuses Unicode format characters (\`Cf\`), C0/C1/DEL controls
+other than ordinary tab/newline/carriage-return formatting, U+034F,
+Mongolian variation selectors, and standard/supplementary variation
+selectors. It **does not rewrite** submitted task text; accented characters,
+ordinary combining diacritics, line breaks, and printable multilingual text
+remain accepted. The independent receipt verifier rebuilds the plan through
+this same validation and rejects coherently rehashed invalid input.
+
+This is a conservative pre-execution validity rule: some languages and emoji
+uses intentionally rely on format characters or variation selectors. Those
+future task designs require an explicit, separately reviewed/versioned rule
+rather than silently stripping characters before giving the prompt to a model.
+The guard cannot detect visually confusable letters, paraphrases, conceptual
+overlap, biased task selection, or results-based schedule selection through
+ordinary visible edits. Independent pre-execution registration is still
+required. No original pilot/confirmatory/exploratory results, treatment runs,
+or human evaluations are changed.
+

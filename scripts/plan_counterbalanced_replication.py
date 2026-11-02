@@ -49,6 +49,29 @@ ORIGINAL_2026_QUESTION_SHA256 = frozenset({
 ORIGINAL_2026_TASK_IDS = frozenset(f"main-{index:02d}" for index in range(1, 11))
 
 
+
+def _contains_hidden_task_control(text: str) -> bool:
+    """Reject invisible prompt changes before freezing a NEW task schedule.
+
+    The manifest is retained byte-for-byte; silently deleting formatting
+    controls would change what a future model actually receives. Do not
+    remove every combining mark: genuine accented text remains supported.
+    """
+    for character in text:
+        codepoint = ord(character)
+        if (
+            unicodedata.category(character) == "Cf"
+            or (unicodedata.category(character) == "Cc" and character not in "\t\n\r")
+            or codepoint == 0x034F  # Combining Grapheme Joiner
+            or 0x180B <= codepoint <= 0x180D  # Mongolian variation selectors
+            or codepoint == 0x180F  # Mongolian variation selector four
+            or 0xFE00 <= codepoint <= 0xFE0F  # Variation selectors 1-16
+            or 0xE0100 <= codepoint <= 0xE01EF  # Supplementary selectors
+        ):
+            return True
+    return False
+
+
 def _normalized_question_sha256(question: str) -> str:
     normalized = " ".join(unicodedata.normalize("NFKC", question).split()).casefold()
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
@@ -171,6 +194,17 @@ def build_plan(source: bytes) -> dict:
             raise DesignError(f"task {index} has no category")
         if type(question) is not str or not question.strip():
             raise DesignError(f"task {index} has no question")
+        # Unseen Unicode marks can change the raw prompt and the deterministic
+        # assignment digest without changing what a coordinator sees. Refuse
+        # them instead of silently normalizing a future treatment prompt.
+        if _contains_hidden_task_control(category):
+            raise DesignError(
+                f"task {index} category contains invisible/control Unicode"
+            )
+        if _contains_hidden_task_control(question):
+            raise DesignError(
+                f"task {index} question contains invisible/control Unicode"
+            )
         question_fingerprint = _normalized_question_sha256(question)
         if question_fingerprint in ORIGINAL_2026_QUESTION_SHA256:
             raise DesignError(

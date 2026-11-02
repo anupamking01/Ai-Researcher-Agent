@@ -229,3 +229,63 @@ def test_cli_is_offline_print_only_without_automatic_treatment_execution(
     published = json.loads(capsys.readouterr().out)
     assert published == plan.build_plan(_raw())
     assert list(tmp_path.iterdir()) == [file]
+
+@pytest.mark.parametrize(
+    ("character_name", "character"),
+    [
+        ("zero_width_space", "\u200b"),
+        ("zero_width_joiner", "\u200d"),
+        ("word_joiner", "\u2060"),
+        ("byte_order_mark", "\ufeff"),
+        ("bidi_override", "\u202e"),
+        ("bidi_isolate", "\u2066"),
+        ("combining_grapheme_joiner", "\u034f"),
+        ("variation_selector", "\ufe0f"),
+        ("supplementary_variation_selector", "\U000e0100"),
+        ("mongolian_variation_selector", "\u180b"),
+        ("nul", "\x00"),
+        ("escape", "\x1b"),
+        ("c1_control", "\u0085"),
+        ("backspace", "\x08"),
+        ("delete", "\x7f"),
+    ],
+)
+@pytest.mark.parametrize("field", ("question", "category"))
+def test_future_task_manifest_rejects_hidden_unicode_controls(
+    character_name, character, field
+):
+    candidate = _payload()
+    candidate["tasks"][0][field] += character
+    with pytest.raises(plan.DesignError, match=rf"task 1 {field} contains invisible/control Unicode"):
+        plan.build_plan(_raw(candidate))
+
+
+def test_hidden_historical_question_reuse_cannot_enter_prospective_plan():
+    candidate = _payload()
+    original = _frozen_2026_questions()[0]["question"]
+    candidate["tasks"][0]["question"] = original[:12] + "\u200b" + original[12:]
+    with pytest.raises(plan.DesignError, match="task 1 question contains invisible/control Unicode"):
+        plan.build_plan(_raw(candidate))
+
+
+def test_independent_plan_verification_rejects_invisible_manifest_revision():
+    from scripts import verify_counterbalanced_replication_plan as verifier
+
+    original = _raw()
+    receipt = json.dumps(plan.build_plan(original), sort_keys=True).encode("utf-8")
+    revised = _payload()
+    revised["tasks"][0]["category"] += "\u2060"
+    with pytest.raises(plan.DesignError, match="task 1 category contains invisible/control Unicode"):
+        verifier.verify_plan(_raw(revised), receipt)
+
+
+def test_legitimate_multilingual_accents_and_linebreaks_remain_supported():
+    candidate = _payload()
+    candidate["tasks"][0]["category"] = "étude"
+    candidate["tasks"][0]["question"] = "What does the e\u0301vidence show?\nCompare both approaches."
+    candidate["tasks"][1]["question"] = "What does the evidence show?\nCompare both approaches."
+    # Meaningful accent distinctions are not silently erased or recoded.
+    result = plan.build_plan(_raw(candidate))
+    assert result["task_count"] == 10
+    assert result["classification"] == "prospective_design_only_no_executions"
+
