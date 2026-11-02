@@ -332,7 +332,7 @@ def _contains_unsafe_annotator_display_controls(text: str) -> bool:
     characters. The frozen report bytes remain untouched on rejection.
     """
     return any(
-        (ord(character) < 0x20 and character not in "\\t\\n\\r")
+        (ord(character) < 0x20 and character not in "\t\n\r")
         or 0x7f <= ord(character) <= 0x9f
         or 0x202a <= ord(character) <= 0x202e
         or 0x2066 <= ord(character) <= 0x2069

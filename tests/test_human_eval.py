@@ -397,12 +397,12 @@ def test_blinding_audit_rejects_invisible_combining_mark_leakage(field, leaked_t
 @pytest.mark.parametrize(
     "spoofed_text",
     [
-        "Research finding\\x1b[31m highlighted by terminal escape",
-        "Research finding\\x01 with concealed C0 byte",
-        "Research finding\\x7f with DEL control",
-        "Research finding\\u0085 with C1 control",
-        "Research finding\\u202e with bidirectional override",
-        "Research finding\\u2066 with bidirectional isolate",
+        "Research finding\x1b[31m highlighted by terminal escape",
+        "Research finding\x01 with concealed C0 byte",
+        "Research finding\x7f with DEL control",
+        "Research finding\u0085 with C1 control",
+        "Research finding\u202e with bidirectional override",
+        "Research finding\u2066 with bidirectional isolate",
     ],
     ids=[
         "ansi-escape", "C0", "DEL", "C1", "bidi-override", "bidi-isolate",
@@ -427,8 +427,8 @@ def test_blinding_audit_accepts_multilingual_text_with_normal_layout_controls():
     packet_builder.validate_annotator_facing_content(
         [{
             "blind_id": "H001",
-            "question": "Café: compare evidence?\\n\\tहिंदी العربية 中文",
-            "report_markdown": "# Evidence\\r\\n\\tReadable multilingual prose — 日本語.",
+            "question": "Café: compare evidence?\n\tहिंदी العربية 中文",
+            "report_markdown": "# Evidence\r\n\tReadable multilingual prose — 日本語.",
         }],
         label="synthetic packet",
     )
@@ -437,8 +437,8 @@ def test_blinding_audit_accepts_multilingual_text_with_normal_layout_controls():
 @pytest.mark.parametrize(
     "unsafe_report",
     [
-        "# Synthetic report\\n\\nConcealed\\x1b[31m formatting",
-        "# Synthetic report\\n\\nReordered\\u202e rendering",
+        "# Synthetic report\n\nConcealed\x1b[31m formatting",
+        "# Synthetic report\n\nReordered\u202e rendering",
     ],
 )
 def test_packet_builder_rejects_display_controls_before_publication(
