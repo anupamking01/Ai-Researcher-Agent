@@ -109,17 +109,48 @@ def _paired_rows(rows: list[dict[str, str]], *, label: str) -> dict[tuple[str, s
     return indexed
 
 
+def _check_original_task_ids(task_ids: set[str]) -> str:
+    """Bind summary cell IDs to the original-run source manifest, not only each other.
+
+    The anchor is a Git-preserved treatment-source identity, never independent
+    authentication of missing historical traces, reports or retrievals.
+    """
+    from scripts.verify_frozen_main_study_tasks import verify_frozen_task_manifest
+
+    try:
+        source_receipt = verify_frozen_task_manifest(repo_root=REPO_ROOT)
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise InputIntegrityError(
+            "original treatment task-manifest source failed verification"
+        ) from exc
+    expected = {f"main-{ordinal:02d}" for ordinal in range(1, EXPECTED_TASKS + 1)}
+    if task_ids != expected:
+        raise InputIntegrityError(
+            "summary task IDs differ from the pinned original treatment task set"
+        )
+    return source_receipt["original_task_manifest_sha256"]
+
+
 def audit_frozen_csv_inputs(
     main_csv: Path = DEFAULT_MAIN,
     support_csv: Path = DEFAULT_SUPPORT,
+    *,
+    require_original_task_set: bool = True,
 ) -> dict:
-    """Audit only retained summary-input consistency; preserve all original bytes."""
+    """Audit retained summaries; the source-anchor opt-out is synthetic-only."""
     main_raw, main_rows = _read_csv(main_csv, label="treatment summary")
     support_raw, support_rows = _read_csv(support_csv, label="evaluator summary")
     main = _paired_rows(main_rows, label="treatment summary")
     support = _paired_rows(support_rows, label="evaluator summary")
     if set(main) != set(support):
         raise InputIntegrityError("treatment and evaluator cell identities differ")
+    # Balanced CSVs can both be relabelled to a different 10-task study.
+    # Production/default auditing requires the exact original task-source pin
+    # and its fixed IDs; only deliberately synthetic API fixtures may opt out.
+    original_manifest_sha = (
+        _check_original_task_ids({task for _, task in main})
+        if require_original_task_set else None
+    )
     seen_run_ids = set()
     for (variant, task), row in main.items():
         label = f"{variant}/{task}"
@@ -203,6 +234,8 @@ def audit_frozen_csv_inputs(
         "evaluator_sha256": hashlib.sha256(support_raw).hexdigest(),
         "paired_cells": len(main),
         "arms": list(VARIANTS),
+        "frozen_task_ids_match_original_source": require_original_task_set,
+        "original_task_manifest_sha256": original_manifest_sha,
         "frozen_analysis_recomputed": False,
         "original_executions_independently_authenticated": False,
         "human_validation_performed": False,

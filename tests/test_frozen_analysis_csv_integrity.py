@@ -54,7 +54,10 @@ def matrix(tmp_path):
 
 
 def _check(matrix):
-    return audit.audit_frozen_csv_inputs(matrix[3], matrix[4])
+    # Non-original task IDs are intentional in synthetic arithmetic fixtures.
+    return audit.audit_frozen_csv_inputs(
+        matrix[3], matrix[4], require_original_task_set=False
+    )
 
 
 def test_valid_synthetic_matrix_is_read_only(matrix):
@@ -65,6 +68,8 @@ def test_valid_synthetic_matrix_is_read_only(matrix):
     assert result["frozen_analysis_recomputed"] is False
     assert result["original_executions_independently_authenticated"] is False
     assert result["human_validation_performed"] is False
+    assert result["frozen_task_ids_match_original_source"] is False
+    assert result["original_task_manifest_sha256"] is None
     assert tuple(path.read_bytes() for path in matrix[3:5]) == before
 
 
@@ -73,6 +78,10 @@ def test_retained_canonical_csvs_pass_internal_preflight():
     receipt = audit.audit_frozen_csv_inputs()
     assert receipt["paired_cells"] == 40
     assert receipt["original_executions_independently_authenticated"] is False
+    assert receipt["frozen_task_ids_match_original_source"] is True
+    assert receipt["original_task_manifest_sha256"] == (
+        "5701df80036edb354f4f7d1efc409ea8f554a215f8c37da9d1a0b8ed01fdfd5f"
+    )
 
 
 @pytest.mark.parametrize("value", [
@@ -214,3 +223,45 @@ def test_nonzero_source_rejects_zero_evidence_sentinel(matrix):
     save()
     with pytest.raises(audit.InputIntegrityError, match="contradicts sources"):
         _check(matrix)
+
+
+def _relabel_all_cells(matrix, prefix: str) -> None:
+    # Edit both CSVs consistently: pair/cardinality checks alone cannot catch
+    # a wholesale task substitution with ten new, equally balanced task IDs.
+    for rows in matrix[:2]:
+        for row in rows:
+            row["task_id"] = row["task_id"].replace("synthetic-", prefix)
+    matrix[2]()
+
+
+def test_original_source_anchor_accepts_pinned_task_ids_in_synthetic_counts(matrix):
+    _relabel_all_cells(matrix, "main-")
+    before = tuple(path.read_bytes() for path in matrix[3:5])
+    receipt = audit.audit_frozen_csv_inputs(matrix[3], matrix[4])
+    assert receipt["frozen_task_ids_match_original_source"] is True
+    assert receipt["original_task_manifest_sha256"] == (
+        "5701df80036edb354f4f7d1efc409ea8f554a215f8c37da9d1a0b8ed01fdfd5f"
+    )
+    assert tuple(path.read_bytes() for path in matrix[3:5]) == before
+
+
+def test_coherent_forty_cell_task_substitution_fails_original_source_gate(matrix):
+    _relabel_all_cells(matrix, "other-")
+    # All arithmetic, category partitions and cross-CSV pairs remain valid.
+    assert _check(matrix)["paired_cells"] == 40
+    with pytest.raises(audit.InputIntegrityError, match="pinned original treatment task set"):
+        audit.audit_frozen_csv_inputs(matrix[3], matrix[4])
+
+
+@pytest.mark.parametrize("corruption", ["missing", "rewritten"])
+def test_original_task_manifest_missing_or_rewritten_fails_closed(
+    matrix, tmp_path, monkeypatch, corruption,
+):
+    _relabel_all_cells(matrix, "main-")
+    monkeypatch.setattr(audit, "REPO_ROOT", tmp_path)
+    if corruption == "rewritten":
+        source = tmp_path / "experiments" / "main_budget_tasks.json"
+        source.parent.mkdir()
+        source.write_text('{"tasks":[]}', encoding="utf-8")
+    with pytest.raises(audit.InputIntegrityError, match="source failed verification"):
+        audit.audit_frozen_csv_inputs(matrix[3], matrix[4])

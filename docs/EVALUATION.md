@@ -54,10 +54,25 @@ claim as unsupported. A sentinel with nonzero sources, or an internally
 consistent but nonzero support/partial-support/contradiction count with
 zero retrieved sources, fails the audit. Historical nonzero-source
 cells may legitimately have an empty evidence-status field.
-Count integrality is checked from decimal text before any float rounding. A compact receipt includes
-the exact SHA-256 for both input CSV files, with zero scientific
-measurements or report text emitted. Synthetic tests exercise the
-same preflight on malformed and internally consistent fabricated inputs.
+Count integrality is checked from decimal text before any float rounding.
+The production/default audit now also verifies the exact original-run
+`experiments/main_budget_tasks.json` source SHA-256 through
+`scripts.verify_frozen_main_study_tasks` and requires all ten summary task
+IDs to match the pinned original `main-01` through `main-10` set.
+Previously, a coordinated replacement of all task IDs in both CSVs could pass
+the balanced-pair checks as if it were the original study. This binding cannot
+verify the questions or reports behind those IDs; recovering the unchanged
+original traces and reports remains a separate mandatory gate.
+
+A compact receipt includes both summary-file SHA-256 values, the original
+task-manifest source SHA-256, and whether original task-ID matching was
+enforced, without scientific measurements or report text. Production CLI
+audits always enforce this source identity. Only synthetic callers of the
+Python API may explicitly pass `require_original_task_set=False`; the
+receipt then marks the original task identity **unchecked**, not passed.
+The source pin refers to the historical Git revision, **not** an independently
+authenticated archive of the original executed reports. Synthetic regression
+tests cover coherent task substitution and missing or rewritten source pins.
 
 **The canonical inference script scripts/analyze_main_study.py remains
 byte-for-byte unchanged.** Its historical SHA-256 is pinned in immutable
