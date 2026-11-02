@@ -110,3 +110,32 @@ interpret a passing ledger as independently measured retrieval use. This
 prospective-only trace envelope does not retroactively alter or reclassify
 the frozen September 2026 experiment, its automated confirmatory analysis,
 diagnostic pilot, exploratory work or pending blinded human validation.
+
+
+## Prospective source URL validity and fetch-identity nonduplication
+
+The six-field prospective source ledger additionally requires each recorded
+source identifier to be an **absolute HTTP(S) URL**, at most 2,048 characters,
+with a nonempty host and an optional valid, nonzero network port. Non-web
+schemes, local paths, embedded credentials, whitespace, control/format
+characters, backslashes and malformed authorities fail closed. IDN domains,
+IPv6 hosts, URL queries and ordinary fragment references remain eligible.
+
+**One fetchable HTTP resource cannot count multiple times** within an
+individual scheduled/successful/failed URL list simply through spelling
+changes: the offline auditor compares scheme/host case-insensitively,
+normalizes default HTTP/HTTPS ports and an empty path to "/", and ignores
+fragments (which the browser does not send to an HTTP server). The query
+string remains significant. The original URL strings must still partition
+exactly into reported successful and failed outcomes; no strings are
+silently rewritten in the trace. The success receipt explicitly marks
+the syntactic URL/fetch-identity gate.
+
+This is a conservative **prospective, self-reported non-overcounting rule**,
+not proof that a network request occurred, the URL resolved, the server
+returned particular evidence, or that distinct URLs had distinct contents.
+Redirects, percent-encoding equivalences and near-duplicate pages are not
+deduplicated. Preserve any source trace rejected by the rule unchanged as
+a documented protocol deviation; do not select or rerun results to pass.
+The historical pilot, frozen automated confirmatory analysis, exploratory
+results, and pending human validation remain untouched.

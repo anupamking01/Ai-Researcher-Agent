@@ -840,3 +840,86 @@ def test_inconsistent_recorded_source_ledger_rejected_despite_rehashed_trace(
     _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=change)
     with pytest.raises(design.DesignError, match="source ledger"):
         _audit(fixture)
+
+
+@pytest.mark.parametrize("bad_url", [
+    "source without a URI",
+    "ftp://synthetic.invalid/record",
+    "file:///tmp/not-a-web-source",
+    "javascript:alert(1)",
+    "/relative/resource",
+    "https:/broken.invalid/path",
+    "https://",
+    "https://user:pass@synthetic.invalid/document",
+    "https://synthetic.invalid:0/document",
+    "https://synthetic.invalid:99999/document",
+    "https://synthetic.invalid:bad/document",
+    "https://synthetic.invalid/a b",
+    "https://synthetic.invalid/with\\backslash",
+    "https://synthetic.invalid/\u200bhidden",
+    "https://synthetic.invalid/\u202eoverride",
+    "https://[unmatched",
+])
+def test_nonweb_or_unsafe_source_url_rejected_with_consistent_hashes(
+    tmp_path, bad_url
+):
+    fixture = _fixture(tmp_path)
+
+    def replace_ledger(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[bad_url], successful_urls=[bad_url], failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(
+        fixture, cell_number=0, change=replace_ledger
+    )
+    with pytest.raises(design.DesignError, match="source ledger"):
+        _audit(fixture)
+
+
+@pytest.mark.parametrize("equivalent_urls", [
+    ("https://synthetic.invalid/a#first", "https://synthetic.invalid/a#second"),
+    ("https://synthetic.invalid", "https://synthetic.invalid/"),
+    ("https://synthetic.invalid:443/a", "https://SYNTHETIC.invalid/a"),
+    ("http://SYNTHETIC.invalid:80/a", "http://synthetic.invalid/a"),
+])
+def test_same_fetch_resource_cannot_inflate_scheduled_source_count(
+    tmp_path, equivalent_urls
+):
+    fixture = _fixture(tmp_path)
+    urls = list(equivalent_urls)
+
+    def replace_ledger(trace):
+        trace.update(
+            source_count=2, successful_source_count=2, failed_source_count=0,
+            scheduled_urls=urls, successful_urls=urls, failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(
+        fixture, cell_number=0, change=replace_ledger
+    )
+    with pytest.raises(design.DesignError, match="source ledger.*resource"):
+        _audit(fixture)
+
+
+def test_valid_international_ipv6_and_fragment_urls_remain_distinct(tmp_path):
+    fixture = _fixture(tmp_path)
+    urls = [
+        "https://bücher.example/overview#section",
+        "https://[2001:db8::1]/study",
+        "https://synthetic.invalid/record?version=1",
+    ]
+
+    def replace_ledger(trace):
+        trace.update(
+            source_count=3, successful_source_count=2, failed_source_count=1,
+            scheduled_urls=urls, successful_urls=urls[:2], failed_urls=urls[2:],
+        )
+
+    _rewrite_synthetic_source_ledger(
+        fixture, cell_number=0, change=replace_ledger
+    )
+    receipt = _audit(fixture)
+    assert receipt["self_reported_source_urls_http_and_fetch_distinct"] is True
+    assert receipt["model_or_retrieval_calls_verified"] is False

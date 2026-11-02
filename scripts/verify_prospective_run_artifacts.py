@@ -15,6 +15,8 @@ import os
 from pathlib import Path
 import re
 import stat
+import unicodedata
+from urllib.parse import urlsplit
 
 from scripts import plan_counterbalanced_replication as design
 from scripts import verify_counterbalanced_replication_execution as chronology
@@ -213,6 +215,54 @@ def _require_readable_markdown_report(raw: bytes, *, number: int) -> None:
         )
 
 
+def _source_fetch_identity(url: object, *, number: int) -> str:
+    """Canonicalize the HTTP resource named in a *self-reported* source ledger.
+
+    URL fragments do not affect the HTTP request. An alternate spelling must
+    not be counted as an additional scheduled retrieval for the same resource.
+    This is syntactic validation only: no DNS, redirects or retrievals occur.
+    """
+    if (
+        type(url) is not str or not 0 < len(url) <= 2048
+        or url != url.strip() or "\\" in url
+        or any(
+            character.isspace() or unicodedata.category(character) in {
+                "Cc", "Cf", "Zl", "Zp"
+            }
+            for character in url
+        )
+    ):
+        raise design.DesignError(
+            f"trace {number} source ledger requires bounded, visible HTTP(S) URLs"
+        )
+    try:
+        parsed = urlsplit(url)
+        host = parsed.hostname
+        port = parsed.port
+        if (
+            parsed.scheme not in ("http", "https")
+            or not parsed.netloc or not host or "@" in parsed.netloc
+            or port == 0
+        ):
+            raise ValueError("not an absolute unauthenticated HTTP(S) resource")
+        normalized_host = host.encode("idna").decode("ascii").lower()
+        if not normalized_host or "%" in normalized_host:
+            raise ValueError("invalid source host")
+    except (UnicodeError, ValueError) as exc:
+        raise design.DesignError(
+            f"trace {number} source ledger has invalid HTTP(S) source URL"
+        ) from exc
+    authority = (
+        f"[{normalized_host}]" if ":" in normalized_host else normalized_host
+    )
+    default_port = 443 if parsed.scheme == "https" else 80
+    if port is not None and port != default_port:
+        authority += f":{port}"
+    path = parsed.path or "/"
+    query = f"?{parsed.query}" if parsed.query else ""
+    return f"{parsed.scheme}://{authority}{path}{query}"
+
+
 def _validate_source_budget_ledger(trace: dict, *, number: int, variant: str) -> None:
     """Check *reported* source use against the assigned prospective browse cap.
 
@@ -252,6 +302,13 @@ def _validate_source_budget_ledger(trace: dict, *, number: int, variant: str) ->
                 or len(set(urls)) != len(urls)):
             raise design.DesignError(
                 f"trace {number} source ledger {field} is invalid or inconsistent"
+            )
+        fetch_identities = [
+            _source_fetch_identity(url, number=number) for url in urls
+        ]
+        if len(set(fetch_identities)) != len(urls):
+            raise design.DesignError(
+                f"trace {number} source ledger {field} counts one HTTP resource repeatedly"
             )
         recorded[field] = set(urls)
     if (recorded["successful_urls"] & recorded["failed_urls"]
@@ -509,6 +566,7 @@ def audit_run_artifacts(
         "trace_question_fingerprints_match_frozen_manifest": True,
         "trace_treatment_controls_match_frozen_design": True,
         "self_reported_source_ledgers_within_frozen_budgets": True,
+        "self_reported_source_urls_http_and_fetch_distinct": True,
         "recorded_execution_independently_authenticated": False,
         "model_or_retrieval_calls_verified": False,
         "scientific_outcomes_validated": False,
