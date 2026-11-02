@@ -319,7 +319,11 @@ def _validate_source_budget_ledger(trace: dict, *, number: int, variant: str) ->
             raise design.DesignError(
                 f"trace {number} source ledger {field} counts one HTTP resource repeatedly"
             )
-        recorded[field] = set(urls)
+        # Match each outcome to the HTTP resource scheduled for retrieval,
+        # not the literal URL spelling: fragments, host case and default
+        # ports can legitimately differ between scheduling and reporting.
+        # The original strings remain unchanged in the trace evidence.
+        recorded[field] = set(fetch_identities)
     if (recorded["successful_urls"] & recorded["failed_urls"]
             or recorded["scheduled_urls"] != (
                 recorded["successful_urls"] | recorded["failed_urls"]

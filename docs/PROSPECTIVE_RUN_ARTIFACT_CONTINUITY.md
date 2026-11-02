@@ -97,7 +97,8 @@ fields: `source_count`, `successful_source_count`, `failed_source_count`
 URL strings). `source_count` must not exceed the frozen assigned arm's
 `source_budget` (D3 = 3; D6/P6/P6V = 6). All URL counts must match their
 corresponding arrays; successful and failed URL sets must be disjoint and
-partition exactly the scheduled set. An attempted failed/cancelled/timed-out
+partition exactly the scheduled set **by canonical HTTP fetch identity** (rather
+than by byte-identical URL spelling). An attempted failed/cancelled/timed-out
 cell can legitimately declare zero sources, but still must retain the ledger.
 An unattempted cell retains no trace and therefore makes no invented source
 claim. A rehashed trace and evidence index cannot excuse a budget violation
@@ -127,9 +128,16 @@ individual scheduled/successful/failed URL list simply through spelling
 changes: the offline auditor compares scheme/host case-insensitively,
 normalizes default HTTP/HTTPS ports and an empty path to "/", and ignores
 fragments (which the browser does not send to an HTTP server). The query
-string remains significant. The original URL strings must still partition
-exactly into reported successful and failed outcomes; no strings are
-silently rewritten in the trace. The success receipt explicitly marks
+string remains significant. The outcome sets must partition the scheduled **fetch identities**.
+A reported outcome may have a different URL fragment, host capitalization,
+explicit default port or empty-path spelling without becoming a different
+HTTP request. A different scheme, path or query still denotes a distinct
+resource and cannot satisfy a scheduled source claim. All original URL strings
+remain unchanged in the trace, and duplicate fetch identities inside any
+individual ledger list or across success/failure outcomes are rejected.
+This prevents rejecting faithful source accounting when the same resource
+is represented by slightly different URLs, while still detecting missing,
+invented or overlapping outcomes. The success receipt explicitly marks
 the syntactic URL/fetch-identity gate.
 
 This is a conservative **prospective, self-reported non-overcounting rule**,

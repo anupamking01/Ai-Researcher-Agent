@@ -1029,3 +1029,95 @@ def test_prospective_runtime_receipt_is_explicitly_unpinned_without_custody(tmp_
     assert result["common_runtime_context_external_pin_matched"] is False
     assert result["recorded_common_runtime_context_consistent"] is True
     assert result["actual_common_runtime_independently_authenticated"] is False
+
+# A fragment or host spelling change does not identify a new HTTP fetch.
+# Require outcome partitioning by the same canonical fetch identities used
+# by the no-duplicate budget check, while retaining raw URL evidence intact.
+@pytest.mark.parametrize("scheduled,outcome", [
+    ("https://SYNTHETIC.invalid:443/record#source",
+     "https://synthetic.invalid/record#view"),
+    ("https://synthetic.invalid", "https://synthetic.invalid/"),
+    ("https://bücher.example/overview#section-a",
+     "https://xn--bcher-kva.example/overview#section-b"),
+    ("http://SYNTHETIC.invalid:80/record",
+     "http://synthetic.invalid/record"),
+])
+@pytest.mark.parametrize("outcome_field", ["successful_urls", "failed_urls"])
+def test_equivalent_fetch_resource_outcome_spelling_is_valid(
+    tmp_path, scheduled, outcome, outcome_field
+):
+    fixture = _fixture(tmp_path)
+
+    def change(trace):
+        trace.update(
+            source_count=1,
+            successful_source_count=int(outcome_field == "successful_urls"),
+            failed_source_count=int(outcome_field == "failed_urls"),
+            scheduled_urls=[scheduled],
+            successful_urls=[outcome] if outcome_field == "successful_urls" else [],
+            failed_urls=[outcome] if outcome_field == "failed_urls" else [],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=change)
+    receipt = _audit(fixture)
+    assert receipt["self_reported_source_urls_http_and_fetch_distinct"] is True
+    assert receipt["model_or_retrieval_calls_verified"] is False
+
+
+def test_mixed_alias_outcomes_partition_two_distinct_fetches(tmp_path):
+    fixture = _fixture(tmp_path)
+
+    def change(trace):
+        trace.update(
+            source_count=2, successful_source_count=1, failed_source_count=1,
+            scheduled_urls=[
+                "https://synthetic.invalid/one#first",
+                "https://synthetic.invalid/two?version=1#first",
+            ],
+            successful_urls=["https://SYNTHETIC.invalid:443/two?version=1#later"],
+            failed_urls=["https://synthetic.invalid/one"],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=change)
+    assert _audit(fixture)["self_reported_source_ledgers_within_frozen_budgets"] is True
+
+
+@pytest.mark.parametrize("scheduled,outcome", [
+    ("https://synthetic.invalid/item?version=1",
+     "https://synthetic.invalid/item?version=2"),
+    ("https://synthetic.invalid/item", "http://synthetic.invalid/item"),
+    ("https://synthetic.invalid/Item", "https://synthetic.invalid/item"),
+])
+def test_distinct_fetch_resource_cannot_be_reported_as_scheduled(
+    tmp_path, scheduled, outcome
+):
+    fixture = _fixture(tmp_path)
+
+    def change(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[scheduled], successful_urls=[outcome], failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=change)
+    with pytest.raises(design.DesignError, match="missing, invented or overlapping"):
+        _audit(fixture)
+
+
+def test_aliases_cannot_double_count_one_resource_across_outcomes(tmp_path):
+    fixture = _fixture(tmp_path)
+
+    def change(trace):
+        trace.update(
+            source_count=2, successful_source_count=1, failed_source_count=1,
+            scheduled_urls=[
+                "https://synthetic.invalid/one",
+                "https://synthetic.invalid/two",
+            ],
+            successful_urls=["https://synthetic.invalid/one#success"],
+            failed_urls=["https://SYNTHETIC.invalid:443/one#failure"],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=change)
+    with pytest.raises(design.DesignError, match="missing, invented or overlapping"):
+        _audit(fixture)
