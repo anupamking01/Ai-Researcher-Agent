@@ -561,7 +561,9 @@ def test_artifact_root_mutation_between_reads_fails(tmp_path, monkeypatch):
         return result
 
     monkeypatch.setattr(evidence, '_validate_file_claim', mutate_after_first)
-    with pytest.raises(design.DesignError, match='artifact root changed during verification'):
+    # The full-root inventory now rejects the unexpected retained file
+    # before the later root metadata consistency check is reached.
+    with pytest.raises(design.DesignError, match='unindexed or missing evidence'):
         _audit(fixture)
     assert changed
 
