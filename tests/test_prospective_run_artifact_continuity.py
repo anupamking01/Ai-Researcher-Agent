@@ -2020,3 +2020,54 @@ def test_cross_task_reuse_keeps_failed_and_unattempted_cells_separate(tmp_path):
         "excess_task_source_incidences_from_reuse": 0,
         "tasks_with_reused_source": 0,
     }
+
+
+# Future-replication-only source ledger: dot-segment source aliases can
+# collapse under HTTP client path resolution, inflating claimed unique sources.
+@pytest.mark.parametrize("ambiguous_url", [
+    "https://synthetic.invalid/a/./source",
+    "https://synthetic.invalid/a/../source",
+    "https://synthetic.invalid/./source",
+    "https://synthetic.invalid/a/..",
+    "https://synthetic.invalid/a/%2e/source",
+    "https://synthetic.invalid/a/%2E%2e/source",
+    "https://synthetic.invalid/a/.%2e/source",
+    "https://synthetic.invalid/a/%2e./source",
+])
+def test_dot_segment_http_source_path_rejected_with_rehashed_trace_index(
+    tmp_path, ambiguous_url
+):
+    fixture = _fixture(tmp_path)
+
+    def change(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[ambiguous_url], successful_urls=[ambiguous_url],
+            failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=change)
+    with pytest.raises(design.DesignError, match="source ledger.*dot-segments"):
+        _audit(fixture)
+
+
+@pytest.mark.parametrize("valid_url", [
+    "https://synthetic.invalid/.well-known/research",
+    "https://synthetic.invalid/a/%2ehidden",
+    "https://synthetic.invalid/a/%2e%2ehidden",
+    "https://synthetic.invalid/a/file?next=/../report",
+])
+def test_ordinary_dots_and_dot_like_query_remain_valid_http_sources(
+    tmp_path, valid_url
+):
+    fixture = _fixture(tmp_path)
+
+    def change(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[valid_url], successful_urls=[valid_url],
+            failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=change)
+    assert _audit(fixture)["self_reported_source_ledgers_within_frozen_budgets"] is True

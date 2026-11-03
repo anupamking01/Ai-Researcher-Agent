@@ -49,6 +49,7 @@ _RUNTIME_FIELDS = frozenset({
 })
 _BAD_PERCENT_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _PERCENT_TRIPLET = re.compile(r"%[0-9A-Fa-f]{2}")
+_PERCENT_DOT = re.compile(r"%2e", re.IGNORECASE)
 
 
 def _json_bytes(raw: bytes, description: str) -> object:
@@ -322,6 +323,16 @@ def _source_fetch_identity(url: object, *, number: int) -> str:
     default_port = 443 if parsed.scheme == "https" else 80
     if port is not None and port != default_port:
         authority += f":{port}"
+    # HTTP clients may collapse relative dot-segments before a request.
+    # Disallow these raw or percent-encoded aliases, without rewriting evidence
+    # or treating encoded slashes and ordinary dotted filenames as delimiters.
+    if any(
+        _PERCENT_DOT.sub(".", segment) in (".", "..")
+        for segment in parsed.path.split("/")
+    ):
+        raise design.DesignError(
+            f"trace {number} source ledger contains noncanonical path dot-segments"
+        )
     # RFC 3986 percent-triplet hexadecimal case is not part of a resource's
     # identity. Normalize only hex digits, never unquote: an encoded reserved
     # delimiter can be distinct from the literal delimiter.

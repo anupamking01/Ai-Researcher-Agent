@@ -150,7 +150,14 @@ IPv4-mapped IPv6 literal forms) are treated as one network address, not
 separate sources. Link-local interface-zone suffixes such as
 `[fe80::1%25eth0]` are rejected as nonportable source identifiers rather
 than silently folded into a different fetch target. Distinct IP addresses
-and distinct query strings remain distinct. Valid percent-encoded octets
+and distinct query strings remain distinct. Dot-segment path components (`/./`, `/../` and percent-encoded-dot
+variants such as `/%2e/` and `/%2e%2e/`) are rejected rather than
+silently normalized. Standard HTTP clients can eliminate these before issuing
+a request, potentially inflating distinct recorded retrieval counts or
+misrepresenting overlap. Dotted filenames (e.g. `.well-known`), longer
+segments containing encoded dots, and query parameters containing dots remain
+eligible. This is syntactic self-reported evidence accounting only, not proof
+of actual fetching. Valid percent-encoded octets
 are normalized **only** for hexadecimal letter case within path and query
 (so %2f and %2F identify the same recorded fetch target). Encoded reserved
 characters (such as %2F) remain distinct from literal delimiters (such as /).
