@@ -1547,6 +1547,87 @@ def test_equivalent_fetch_resource_outcome_spelling_is_valid(
     assert receipt["model_or_retrieval_calls_verified"] is False
 
 
+# Future-only source accounting: RFC 3986 unreserved ASCII characters are
+# URI-equivalent whether literal or percent-encoded. Preserve the raw strings.
+@pytest.mark.parametrize("scheduled,outcome", [
+    ("https://synthetic.invalid/%7eprofile",
+     "https://synthetic.invalid/~profile"),
+    ("https://synthetic.invalid/S%65rvice",
+     "https://synthetic.invalid/Service"),
+    ("https://synthetic.invalid/search?q=%41%2d%7e",
+     "https://synthetic.invalid/search?q=A-~"),
+])
+@pytest.mark.parametrize("outcome_field", ["successful_urls", "failed_urls"])
+def test_unreserved_percent_alias_reconciles_source_outcome(
+    tmp_path, scheduled, outcome, outcome_field
+):
+    fixture = _fixture(tmp_path)
+
+    def change(trace):
+        trace.update(
+            source_count=1,
+            successful_source_count=int(outcome_field == "successful_urls"),
+            failed_source_count=int(outcome_field == "failed_urls"),
+            scheduled_urls=[scheduled],
+            successful_urls=[outcome] if outcome_field == "successful_urls" else [],
+            failed_urls=[outcome] if outcome_field == "failed_urls" else [],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=change)
+    assert _audit(fixture)["self_reported_source_urls_http_and_fetch_distinct"] is True
+
+
+@pytest.mark.parametrize("left,right", [
+    ("/%7e", "/~"),
+    ("/search?word=%41", "/search?word=A"),
+    ("/a/%2ehidden", "/a/.hidden"),
+    ("/search?token=%2d", "/search?token=-"),
+])
+def test_unreserved_percent_alias_cannot_double_count_retrieval(tmp_path, left, right):
+    fixture = _fixture(tmp_path)
+    urls = [f"https://synthetic.invalid{path}" for path in (left, right)]
+
+    def change(trace):
+        trace.update(
+            source_count=2, successful_source_count=2, failed_source_count=0,
+            scheduled_urls=urls, successful_urls=urls, failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=change)
+    with pytest.raises(design.DesignError, match="counts one HTTP resource repeatedly"):
+        _audit(fixture)
+
+
+@pytest.mark.parametrize("left,right", [
+    ("/path%2Fpart", "/path/part"),
+    ("/search?q=a%26b", "/search?q=a&b"),
+])
+def test_reserved_percent_delimiters_remain_distinct_sources(tmp_path, left, right):
+    fixture = _fixture(tmp_path)
+    urls = [f"https://synthetic.invalid{path}" for path in (left, right)]
+
+    def change(trace):
+        trace.update(
+            source_count=2, successful_source_count=2, failed_source_count=0,
+            scheduled_urls=urls, successful_urls=urls, failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=change)
+    assert _audit(fixture)["self_reported_source_ledgers_within_frozen_budgets"] is True
+
+
+def test_unreserved_percent_alias_counts_as_cross_task_source_reuse(tmp_path):
+    fixture = _fixture(tmp_path)
+    _set_synthetic_one_source(fixture, 0, "https://synthetic.invalid/%7e")
+    _set_synthetic_one_source(fixture, 4, "https://synthetic.invalid/~")
+    reused = _audit(fixture)["self_reported_cross_task_source_reuse_by_scope"][
+        "all_attempted_cells"]["pooled_across_arms_by_task"]["scheduled"]
+    assert reused["task_source_incidences"] == 2
+    assert reused["distinct_source_identities"] == 1
+    assert reused["source_identities_reused_across_tasks"] == 1
+    assert reused["tasks_with_reused_source"] == 2
+
+
 def test_mixed_alias_outcomes_partition_two_distinct_fetches(tmp_path):
     fixture = _fixture(tmp_path)
 

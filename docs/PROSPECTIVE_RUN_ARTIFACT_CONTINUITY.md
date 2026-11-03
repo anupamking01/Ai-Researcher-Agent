@@ -157,11 +157,17 @@ a request, potentially inflating distinct recorded retrieval counts or
 misrepresenting overlap. Dotted filenames (e.g. `.well-known`), longer
 segments containing encoded dots, and query parameters containing dots remain
 eligible. This is syntactic self-reported evidence accounting only, not proof
-of actual fetching. Valid percent-encoded octets
-are normalized **only** for hexadecimal letter case within path and query
-(so %2f and %2F identify the same recorded fetch target). Encoded reserved
-characters (such as %2F) remain distinct from literal delimiters (such as /).
-The query
+of actual fetching. Under RFC 3986, percent-encoded **unreserved ASCII** octets
+(letters, digits, hyphen, period, underscore and tilde) are equivalent to their
+literal characters in both paths and queries: e.g. `%7e` and `~`, or `%41`
+and `A`, count as the same recorded fetch identity. This applies to outcome
+partitioning, within-cell distinct-source budgets, paired source overlap and
+cross-task source-reuse diagnostics. All remaining percent triplets are
+normalized only for hexadecimal letter case (so `%2f` and `%2F` reconcile).
+Encoded **reserved** characters (such as `%2F` or `%26`) remain distinct from
+literal delimiters (such as `/` or `&`); arbitrary decoding would merge
+potentially different HTTP request targets. Dot segments are still rejected
+before normalization. The query
 string remains significant. The outcome sets must partition the scheduled **fetch identities**.
 A reported outcome may have a different URL fragment, host capitalization,
 explicit default port or empty-path spelling without becoming a different
@@ -177,8 +183,8 @@ the syntactic URL/fetch-identity gate.
 This is a conservative **prospective, self-reported non-overcounting rule**,
 not proof that a network request occurred, the URL resolved, the server
 returned particular evidence, or that distinct URLs had distinct contents.
-Redirects, other percent-encoding equivalences (including percent-encoded
-unreserved characters), and near-duplicate pages are not deduplicated. Preserve any source trace rejected by the rule unchanged as
+Redirects, server-specific query interpretation, and near-duplicate pages
+are not deduplicated. Preserve any source trace rejected by the rule unchanged as
 a documented protocol deviation; do not select or rerun results to pass.
 The historical pilot, frozen automated confirmatory analysis, exploratory
 results, and pending human validation remain untouched.

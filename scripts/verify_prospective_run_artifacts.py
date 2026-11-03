@@ -50,6 +50,23 @@ _RUNTIME_FIELDS = frozenset({
 _BAD_PERCENT_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _PERCENT_TRIPLET = re.compile(r"%[0-9A-Fa-f]{2}")
 _PERCENT_DOT = re.compile(r"%2e", re.IGNORECASE)
+_UNRESERVED_URI_OCTETS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+)
+
+
+def _canonical_percent_triplet(match: re.Match[str]) -> str:
+    """Normalize only RFC 3986 unreserved percent-encoded ASCII octets.
+
+    Decoding reserved delimiters (e.g. %2F, %26) could collapse distinct
+    request targets. Keep those encoded, with their hexadecimal case fixed.
+    Source trace bytes are never modified by this comparison helper.
+    """
+    character = chr(int(match.group(0)[1:], 16))
+    return (
+        character if character in _UNRESERVED_URI_OCTETS
+        else match.group(0).upper()
+    )
 
 
 def _json_bytes(raw: bytes, description: str) -> object:
@@ -333,15 +350,15 @@ def _source_fetch_identity(url: object, *, number: int) -> str:
         raise design.DesignError(
             f"trace {number} source ledger contains noncanonical path dot-segments"
         )
-    # RFC 3986 percent-triplet hexadecimal case is not part of a resource's
-    # identity. Normalize only hex digits, never unquote: an encoded reserved
-    # delimiter can be distinct from the literal delimiter.
+    # RFC 3986 unreserved ASCII octets denote the same URI characters whether
+    # literal or percent-encoded; do not count those spellings as new sources.
+    # Reserved percent-encoded delimiters stay distinct from literal syntax.
     path = _PERCENT_TRIPLET.sub(
-        lambda match: match.group(0).upper(), parsed.path or "/"
+        _canonical_percent_triplet, parsed.path or "/"
     )
     query = (
         "?" + _PERCENT_TRIPLET.sub(
-            lambda match: match.group(0).upper(), parsed.query
+            _canonical_percent_triplet, parsed.query
         )
         if parsed.query else ""
     )
