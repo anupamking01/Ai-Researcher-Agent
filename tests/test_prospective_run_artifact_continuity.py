@@ -1096,6 +1096,64 @@ def test_scoped_ipv6_source_rejected_as_nonportable(tmp_path, nonportable_url):
         _audit(fixture)
 
 
+@pytest.mark.parametrize("bad_host_url", [
+    "https://synthetic.invalid./source",  # terminal DNS root dot
+    "https://synthetic..invalid/source",  # empty interior DNS label
+    "https://-synthetic.invalid/source",  # leading DNS hyphen
+    "https://synthetic-.invalid/source",  # trailing DNS hyphen
+    "https://synthetic_invalid/source",   # invalid DNS hostname label
+    f"https://{'a' * 64}.invalid/source",  # overlong DNS label
+])
+def test_noncanonical_dns_source_host_fails_even_with_rehashed_evidence(
+    tmp_path, bad_host_url
+):
+    fixture = _fixture(tmp_path)
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[bad_host_url], successful_urls=[bad_host_url],
+            failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    with pytest.raises(design.DesignError, match="source ledger.*invalid HTTP"):
+        _audit(fixture)
+
+
+def test_idn_punycode_aliases_cannot_double_count_one_scheduled_source(tmp_path):
+    fixture = _fixture(tmp_path)
+    urls = [
+        "https://bücher.example/paper",
+        "https://xn--bcher-kva.example/paper",
+    ]
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=2, successful_source_count=2, failed_source_count=0,
+            scheduled_urls=urls, successful_urls=urls, failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    with pytest.raises(design.DesignError, match="source ledger.*resource"):
+        _audit(fixture)
+
+
+def test_idn_punycode_alias_reconciles_one_scheduled_outcome(tmp_path):
+    fixture = _fixture(tmp_path)
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=["https://bücher.example/paper#section"],
+            successful_urls=["https://xn--bcher-kva.example/paper"],
+            failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    assert _audit(fixture)["self_reported_source_ledgers_within_frozen_budgets"] is True
+
+
 def test_valid_international_ipv6_and_fragment_urls_remain_distinct(tmp_path):
     fixture = _fixture(tmp_path)
     urls = [

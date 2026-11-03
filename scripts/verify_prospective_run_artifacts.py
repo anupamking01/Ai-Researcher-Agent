@@ -267,6 +267,19 @@ def _source_fetch_identity(url: object, *, number: int) -> str:
             normalized_host = ipaddress.IPv6Address(host).compressed
         else:
             normalized_host = host.encode("idna").decode("ascii").lower()
+            # A recorded portable HTTP source needs valid DNS host labels.
+            # Empty or invalid labels (including a terminal DNS root dot)
+            # introduce noncanonical authorities and can inflate the
+            # declared scheduled-unique-source budget. Reject them rather
+            # than guessing whether a particular HTTP client/server treats
+            # a noncanonical Host header as the same virtual resource.
+            if (len(normalized_host) > 253 or any(
+                len(label) > 63 or re.fullmatch(
+                    r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label
+                ) is None
+                for label in normalized_host.split(".")
+            )):
+                raise ValueError("source DNS host labels are not canonical")
         if not normalized_host or "%" in normalized_host:
             raise ValueError("invalid source host")
     except (UnicodeError, ValueError) as exc:

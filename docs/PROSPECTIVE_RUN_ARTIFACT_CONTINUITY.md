@@ -120,8 +120,14 @@ The six-field prospective source ledger additionally requires each recorded
 source identifier to be an **absolute HTTP(S) URL**, at most 2,048 characters,
 with a nonempty host and an optional valid, nonzero network port. Non-web
 schemes, local paths, embedded credentials, whitespace, control/format
-characters, backslashes and malformed authorities fail closed. IDN domains,
-IPv6 hosts, URL queries and ordinary fragment references remain eligible.
+characters, backslashes and malformed authorities fail closed. DNS hosts must
+have valid, nonempty ASCII/IDNA labels (at most 63 characters each and 253
+characters overall, with no leading/trailing label hyphen); terminal-dot
+DNS aliases and empty interior labels are rejected as noncanonical rather
+than guessed to be equivalent across varying HTTP Host-header behavior.
+Standard IDN domains remain valid and their Punycode spellings reconcile as
+one fetch identity. IPv6 literals are handled separately; URL queries and
+ordinary fragment references remain eligible.
 
 **One fetchable HTTP resource cannot count multiple times** within an
 individual scheduled/successful/failed URL list simply through spelling
