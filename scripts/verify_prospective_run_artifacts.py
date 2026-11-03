@@ -801,6 +801,57 @@ def audit_run_artifacts(
         paired_source_exposure_by_contrast[f"{later} - {earlier}"] = counts
         paired_source_overlap_by_contrast[f"{later} - {earlier}"] = overlap
 
+
+    # Cross-task source reuse can expose shared evidence across distinct
+    # research questions. Within-task reuse by different arms is not itself
+    # cross-task reuse. These descriptive claims do not authenticate browsing.
+    def cross_task_reuse_summary(task_sources: dict[str, frozenset[str]]) -> dict:
+        frequency: dict[str, int] = {}
+        for sources in task_sources.values():
+            for source in sources:
+                frequency[source] = frequency.get(source, 0) + 1
+        shared = {
+            source for source, task_count in frequency.items()
+            if task_count > 1
+        }
+        return {
+            "recorded_tasks": len(task_sources),
+            "task_source_incidences": sum(map(len, task_sources.values())),
+            "distinct_source_identities": len(frequency),
+            "source_identities_reused_across_tasks": len(shared),
+            "excess_task_source_incidences_from_reuse": sum(
+                count - 1 for count in frequency.values() if count > 1
+            ),
+            "tasks_with_reused_source": sum(
+                bool(sources & shared) for sources in task_sources.values()
+            ),
+        }
+
+    cross_task_reuse_by_scope = {}
+    for scope, only_completed in (
+        ("all_attempted_cells", False), ("completed_cells_only", True),
+    ):
+        by_arm = {}
+        for arm in (*design.VARIANTS, "pooled_across_arms_by_task"):
+            per_metric = {"scheduled": {}, "successful": {}}
+            for task_id, available_arms in paired_exposure_by_task.items():
+                selected = [
+                    cell for variant, cell in available_arms.items()
+                    if (arm == "pooled_across_arms_by_task" or variant == arm)
+                    and (not only_completed or cell["status"] == "completed")
+                ]
+                if not selected:
+                    continue
+                for metric in per_metric:
+                    per_metric[metric][task_id] = frozenset().union(
+                        *(cell["source_identities"][metric] for cell in selected)
+                    )
+            by_arm[arm] = {
+                metric: cross_task_reuse_summary(task_sources)
+                for metric, task_sources in per_metric.items()
+            }
+        cross_task_reuse_by_scope[scope] = by_arm
+
     return {
         "status": "pass_local_artifact_continuity_only",
         "classification": INDEX_CLASSIFICATION,
@@ -831,6 +882,7 @@ def audit_run_artifacts(
         "self_reported_primary_pair_source_overlap_by_contrast": (
             paired_source_overlap_by_contrast
         ),
+        "self_reported_cross_task_source_reuse_by_scope": cross_task_reuse_by_scope,
         "self_reported_source_urls_http_and_fetch_distinct": True,
         "common_runtime_context_sha256": common_runtime_sha256,
         "common_runtime_context_external_pin_matched": runtime_context_external_pin_matched,

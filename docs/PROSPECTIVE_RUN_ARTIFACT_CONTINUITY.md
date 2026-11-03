@@ -319,6 +319,42 @@ higher budget, justify post-hoc treatment exclusions/reruns, or alter the
 frozen pilot, automated confirmatory inference, exploratory analyses, or
 pending human-validation gate.
 
+
+## Cross-task recorded source reuse (prospective; outcome-blind)
+
+The prior source-exposure and source-overlap receipts describe **within-task**
+comparisons but cannot reveal whether distinct research tasks relied on the
+*same recorded HTTP resource*. Repeated sources across tasks may be useful
+context when discussing task-level evidence diversity and possible dependence;
+they do **not**, on their own, establish correlated errors or invalidate a
+paired analysis. The optional, prospective-only receipt field
+self_reported_cross_task_source_reuse_by_scope adds this descriptive audit
+without reading outcome scores or changing the study design.
+
+For all_attempted_cells and completed_cells_only separately, it reports
+both scheduled and successful source identities for each arm plus the
+pooled_across_arms_by_task scope. The latter unions resource identities
+**within each task first**, so D3 and D6 visiting one URL in the same task
+do not masquerade as cross-task reuse. Counts include recorded_tasks
+(including eligible tasks with zero source claims), task_source_incidences,
+distinct_source_identities, source_identities_reused_across_tasks,
+excess_task_source_incidences_from_reuse and tasks_with_reused_source.
+A source counts as cross-task reused only when it is recorded for at least
+**two distinct task IDs**; alternative URL spelling is reconciled with the
+same conservative canonical fetch identity as the source-budget verifier.
+
+Failed/timed-out/cancelled attempts remain in the attempted stratum; only
+completed attempts enter the completed stratum. Unstarted cells add no
+fictitious tasks or zero-source observations. All receipt fields are aggregate
+integers; no URL, task prompt, output or rater data is disclosed. These
+records remain **self-reported**, cannot authenticate browsing, show whether
+two pages contained equivalent evidence, demonstrate statistical dependence,
+authorize post-hoc exclusions, or revise the frozen 2026 automated analysis.
+Preserve missingness and protocol deviations without rerunning treatments for
+more favorable results. Pilot findings, frozen confirmatory automated results,
+exploratory descriptions, prospective methodology and pending human validation
+remain distinct.
+
 ### Prospective report-direction marks (display integrity only)
 
 The local trace/report continuity checker now rejects the invisible Arabic

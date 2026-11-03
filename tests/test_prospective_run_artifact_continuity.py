@@ -1730,3 +1730,123 @@ def test_paired_source_exposure_keeps_partial_and_failed_attempts(tmp_path):
         assert counts["successful_delta_zero"] == 1
         assert counts["scheduled_delta_sum"] == 0
         assert counts["successful_delta_sum"] == 0
+
+
+def _set_synthetic_one_source(fixture, index, url):
+    """Keep the test trace, source partition, and file claim in agreement."""
+    def change(trace):
+        trace.update(
+            source_count=1,
+            successful_source_count=1,
+            failed_source_count=0,
+            scheduled_urls=[url],
+            successful_urls=[url],
+            failed_urls=[],
+        )
+    _rewrite_synthetic_source_ledger(fixture, cell_number=index, change=change)
+
+
+def test_cross_task_source_reuse_empty_ledgers_preserve_task_denominators(tmp_path):
+    receipt = _audit(_fixture(tmp_path))
+    reuse = receipt["self_reported_cross_task_source_reuse_by_scope"]
+    expected = {
+        "recorded_tasks": 10,
+        "task_source_incidences": 0,
+        "distinct_source_identities": 0,
+        "source_identities_reused_across_tasks": 0,
+        "excess_task_source_incidences_from_reuse": 0,
+        "tasks_with_reused_source": 0,
+    }
+    assert set(reuse) == {"all_attempted_cells", "completed_cells_only"}
+    for scope in reuse.values():
+        assert set(scope) == set(design.VARIANTS) | {"pooled_across_arms_by_task"}
+        for by_metric in scope.values():
+            assert by_metric == {"scheduled": expected, "successful": expected}
+    assert receipt["model_or_retrieval_calls_verified"] is False
+
+
+def test_cross_task_source_reuse_canonicalizes_urls_and_deduplicates_arms(tmp_path):
+    fixture = _fixture(tmp_path)
+    # Two research tasks reuse one URL. The first task has two arms seeing
+    # the identical resource, which must count only once in the task-pooled
+    # cross-task incidence tally. Distinct new URLs remain distinct.
+    for task, variant, url in (
+        ("new-00", "D3", "https://EXAMPLE.invalid:443/shared#first"),
+        ("new-00", "D6", "https://example.invalid/shared"),
+        ("new-01", "D3", "https://example.invalid/shared#second"),
+        ("new-01", "D6", "https://example.invalid/separate"),
+        ("new-01", "P6", "https://example.invalid/shared"),
+    ):
+        index = next(
+            i for i, cell in enumerate(fixture[3]["cells"])
+            if (cell["task_id"], cell["variant"]) == (task, variant)
+        )
+        _set_synthetic_one_source(fixture, index, url)
+
+    receipt = _audit(fixture)
+    reuse = receipt["self_reported_cross_task_source_reuse_by_scope"]
+    for scope in ("all_attempted_cells", "completed_cells_only"):
+        d3 = reuse[scope]["D3"]["scheduled"]
+        assert d3 == {
+            "recorded_tasks": 10,
+            "task_source_incidences": 2,
+            "distinct_source_identities": 1,
+            "source_identities_reused_across_tasks": 1,
+            "excess_task_source_incidences_from_reuse": 1,
+            "tasks_with_reused_source": 2,
+        }
+        d6 = reuse[scope]["D6"]["scheduled"]
+        assert d6["task_source_incidences"] == 2
+        assert d6["source_identities_reused_across_tasks"] == 0
+        pooled = reuse[scope]["pooled_across_arms_by_task"]["scheduled"]
+        assert pooled == {
+            "recorded_tasks": 10,
+            "task_source_incidences": 3,
+            "distinct_source_identities": 2,
+            "source_identities_reused_across_tasks": 1,
+            "excess_task_source_incidences_from_reuse": 1,
+            "tasks_with_reused_source": 2,
+        }
+        assert reuse[scope]["pooled_across_arms_by_task"]["successful"] == pooled
+    assert "example.invalid" not in str(reuse)
+    assert receipt["recorded_execution_independently_authenticated"] is False
+
+
+def test_cross_task_reuse_keeps_failed_and_unattempted_cells_separate(tmp_path):
+    fixture = _fixture(tmp_path)
+    _mark_unattempted(fixture, 5)
+    _, _, log, index, root = fixture
+    # With only five attempted cells, the same source is declared in two
+    # distinct tasks; one of those claims belongs to a failed treatment.
+    for i in (0, 4):
+        _set_synthetic_one_source(fixture, i, "https://example.invalid/one")
+    log["events"][0]["status"] = "failed"
+    index["cells"][0]["status"] = "failed"
+    claim = index["cells"][0]["trace"]
+    path = root / claim["path"]
+    trace = json.loads(path.read_bytes())
+    trace["status"] = "failed"
+    raw = _bytes(trace)
+    path.write_bytes(raw)
+    index["cells"][0]["trace"] = _file_claim(claim["path"], raw)
+    index["execution_log_sha256"] = _digest(_bytes(log))
+
+    reuse = _audit(fixture)["self_reported_cross_task_source_reuse_by_scope"]
+    attempted = reuse["all_attempted_cells"]["pooled_across_arms_by_task"]["scheduled"]
+    completed = reuse["completed_cells_only"]["pooled_across_arms_by_task"]["scheduled"]
+    assert attempted == {
+        "recorded_tasks": 2,
+        "task_source_incidences": 2,
+        "distinct_source_identities": 1,
+        "source_identities_reused_across_tasks": 1,
+        "excess_task_source_incidences_from_reuse": 1,
+        "tasks_with_reused_source": 2,
+    }
+    assert completed == {
+        "recorded_tasks": 2,  # Other arms for the failed task completed.
+        "task_source_incidences": 1,
+        "distinct_source_identities": 1,
+        "source_identities_reused_across_tasks": 0,
+        "excess_task_source_incidences_from_reuse": 0,
+        "tasks_with_reused_source": 0,
+    }
