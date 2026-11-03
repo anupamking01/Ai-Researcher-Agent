@@ -129,6 +129,16 @@ def audit_execution_log(
     previous_finish = study_start
     run_ids: set[str] = set()
     counts = {status: 0 for status in STATUSES}
+    # Report arm-specific missingness and *recorded* paired coverage. A full
+    # ledger can be mostly complete while missing one arm for several tasks.
+    # These are claims in the coordinator log, never authenticated outcomes.
+    status_counts_by_variant = {
+        variant: {status: 0 for status in STATUSES}
+        for variant in design.VARIANTS
+    }
+    completed_variants_by_task = {
+        row["task_id"]: set() for row in plan["schedule"]
+    }
     unstarted_suffix = False
     for index, (event, (task_id, variant)) in enumerate(
         zip(events, expected_cells, strict=True), start=1
@@ -154,6 +164,7 @@ def audit_execution_log(
                 )
             unstarted_suffix = True
             counts[status] += 1
+            status_counts_by_variant[variant][status] += 1
             continue
         if unstarted_suffix:
             raise design.DesignError(
@@ -167,6 +178,9 @@ def audit_execution_log(
         # Attempted failures/timeouts/cancellations remain visible. Never
         # conceal them as unattempted work or cherry-pick favorable reruns.
         counts[status] += 1
+        status_counts_by_variant[variant][status] += 1
+        if status == "completed":
+            completed_variants_by_task[task_id].add(variant)
         started = _timestamp(event["started_at_utc"], f"event {index} start")
         finished = _timestamp(event["finished_at_utc"], f"event {index} finish")
         if started < previous_finish or finished <= started:
@@ -181,6 +195,22 @@ def audit_execution_log(
         raise design.DesignError(
             "execution log has no attempted cells; use the design-only verifier"
         )
+
+    # Count *logged* completed pairs by task, not favorable outcomes or
+    # non-missing score observations. Do not treat these as an authorization
+    # to run confirmatory inference without authenticated source artifacts.
+    primary_pairs = {
+        "D6_minus_D3": ("D6", "D3"),
+        "P6_minus_D6": ("P6", "D6"),
+        "P6V_minus_P6": ("P6V", "P6"),
+    }
+    completed_pair_task_counts = {
+        name: sum(
+            all(arm in completed for arm in pair)
+            for completed in completed_variants_by_task.values()
+        )
+        for name, pair in primary_pairs.items()
+    }
 
     return {
         "status": "pass_recorded_chronology_only",
@@ -197,6 +227,12 @@ def audit_execution_log(
         "unattempted_cells": counts["not_started"],
         "all_planned_cells_attempted": counts["not_started"] == 0,
         "recorded_status_counts": counts,
+        "recorded_status_counts_by_variant": status_counts_by_variant,
+        "recorded_fully_completed_task_count": sum(
+            len(completed) == len(design.VARIANTS)
+            for completed in completed_variants_by_task.values()
+        ),
+        "recorded_completed_primary_pair_task_counts": completed_pair_task_counts,
         "all_recorded_cells_completed": counts["completed"] == len(events),
         "actual_execution_independently_authenticated": False,
         "scientific_outcomes_validated": False,

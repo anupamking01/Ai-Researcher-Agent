@@ -356,3 +356,65 @@ def test_chronology_cli_checks_preexecution_task_source_pin(tmp_path, monkeypatc
     receipt_out = json.loads(capsys.readouterr().out)
     assert receipt_out["task_manifest_external_pin_matched"] is True
     assert receipt_out["actual_execution_independently_authenticated"] is False
+
+def test_arm_level_and_primary_pair_counts_for_fully_recorded_synthetic_log():
+    source, receipt, log = _fixture()
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    assert result["recorded_status_counts_by_variant"] == {
+        variant: {
+            "completed": 10, "failed": 0, "timeout": 0,
+            "cancelled": 0, "not_started": 0,
+        }
+        for variant in design.VARIANTS
+    }
+    assert result["recorded_fully_completed_task_count"] == 10
+    assert result["recorded_completed_primary_pair_task_counts"] == {
+        "D6_minus_D3": 10, "P6_minus_D6": 10, "P6V_minus_P6": 10,
+    }
+    assert result["actual_execution_independently_authenticated"] is False
+
+
+def test_one_logged_timeout_changes_only_affected_primary_pair_coverage():
+    source, receipt, log = _fixture()
+    next(event for event in log["events"] if event["variant"] == "P6V")[
+        "status"
+    ] = "timeout"
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    assert result["recorded_status_counts_by_variant"]["P6V"] == {
+        "completed": 9, "failed": 0, "timeout": 1,
+        "cancelled": 0, "not_started": 0,
+    }
+    assert result["recorded_fully_completed_task_count"] == 9
+    assert result["recorded_completed_primary_pair_task_counts"] == {
+        "D6_minus_D3": 10, "P6_minus_D6": 10, "P6V_minus_P6": 9,
+    }
+    assert result["all_planned_cells_attempted"] is True
+    assert result["all_recorded_cells_completed"] is False
+
+
+def test_interrupted_log_exposes_variant_skew_and_missing_paired_tasks():
+    source, receipt, log = _fixture()
+    # One entire task attempted, with the D6 arm failed; all later tasks
+    # explicitly unstarted. Aggregate completed count alone hides this skew.
+    next(event for event in log["events"][:4] if event["variant"] == "D6")[
+        "status"
+    ] = "failed"
+    for event in log["events"][4:]:
+        event.update({
+            "run_id": None, "status": "not_started",
+            "started_at_utc": None, "finished_at_utc": None,
+        })
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    assert result["attempted_cells"] == 4
+    assert result["unattempted_cells"] == 36
+    for variant in design.VARIANTS:
+        counts = result["recorded_status_counts_by_variant"][variant]
+        assert counts["not_started"] == 9
+        assert counts["failed"] == (1 if variant == "D6" else 0)
+        assert counts["completed"] == (0 if variant == "D6" else 1)
+    assert result["recorded_fully_completed_task_count"] == 0
+    assert result["recorded_completed_primary_pair_task_counts"] == {
+        "D6_minus_D3": 0, "P6_minus_D6": 0, "P6V_minus_P6": 1,
+    }
+    assert result["all_recorded_cells_completed"] is False
+    assert result["scientific_outcomes_validated"] is False
