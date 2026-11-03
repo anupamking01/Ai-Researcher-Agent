@@ -529,3 +529,77 @@ def test_missingness_cannot_be_hidden_by_aggregate_completed_count():
         assert sum(counts.values()) == result[
             "recorded_completed_primary_pair_task_counts"
         ][contrast]
+
+
+def test_full_prospective_run_exposes_planned_first_order_predecessors():
+    source, receipt, log = _fixture()
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    expected = {
+        arm: {prior: 0 for prior in design.VARIANTS if prior != arm}
+        for arm in design.VARIANTS
+    }
+    for row in design.build_plan(source)["schedule"]:
+        for prior, arm in zip(row["arm_order"], row["arm_order"][1:]):
+            expected[arm][prior] += 1
+    assert result["planned_immediate_predecessor_counts_by_variant"] == expected
+    assert result["recorded_attempted_immediate_predecessor_counts_by_variant"] == expected
+    assert result["recorded_completed_immediate_predecessor_counts_by_variant"] == expected
+    assert result["recorded_completed_after_noncompleted_predecessor_counts_by_variant"] == {
+        arm: 0 for arm in design.VARIANTS
+    }
+    assert sum(sum(row.values()) for row in expected.values()) == 30
+    assert result["actual_execution_independently_authenticated"] is False
+
+
+def test_predecessor_timeout_excludes_completed_pair_not_attempted_exposure():
+    source, receipt, log = _fixture()
+    first, successor = design.build_plan(source)["schedule"][0]["arm_order"][:2]
+    log["events"][0]["status"] = "timeout"
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    planned = result["planned_immediate_predecessor_counts_by_variant"]
+    attempted = result["recorded_attempted_immediate_predecessor_counts_by_variant"]
+    completed = result["recorded_completed_immediate_predecessor_counts_by_variant"]
+    assert attempted == planned
+    assert completed[successor][first] == planned[successor][first] - 1
+    assert sum(sum(row.values()) for row in completed.values()) == 29
+    assert result["recorded_completed_after_noncompleted_predecessor_counts_by_variant"] == {
+        arm: int(arm == successor) for arm in design.VARIANTS
+    }
+    assert result["recorded_status_counts"]["timeout"] == 1
+
+
+def test_failed_successor_removes_both_completed_adjacent_pairs_without_erasing_attempt():
+    source, receipt, log = _fixture()
+    first, middle, third = design.build_plan(source)["schedule"][0]["arm_order"][:3]
+    log["events"][1]["status"] = "failed"
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    planned = result["planned_immediate_predecessor_counts_by_variant"]
+    assert result["recorded_attempted_immediate_predecessor_counts_by_variant"] == planned
+    complete = result["recorded_completed_immediate_predecessor_counts_by_variant"]
+    assert complete[middle][first] == planned[middle][first] - 1
+    assert complete[third][middle] == planned[third][middle] - 1
+    assert sum(sum(row.values()) for row in complete.values()) == 28
+    assert result["recorded_completed_after_noncompleted_predecessor_counts_by_variant"][third] == 1
+
+
+def test_interrupted_study_does_not_invent_unattempted_predecessor_exposure():
+    source, receipt, log = _fixture()
+    _mark_unattempted_suffix(log, 5)
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    row = design.build_plan(source)["schedule"][0]["arm_order"]
+    expected = {
+        arm: {prior: 0 for prior in design.VARIANTS if prior != arm}
+        for arm in design.VARIANTS
+    }
+    for prior, arm in zip(row, row[1:]):
+        expected[arm][prior] += 1
+    assert sum(sum(v.values()) for v in expected.values()) == 3
+    assert result["recorded_attempted_immediate_predecessor_counts_by_variant"] == expected
+    assert result["recorded_completed_immediate_predecessor_counts_by_variant"] == expected
+    assert sum(sum(v.values()) for v in result[
+        "planned_immediate_predecessor_counts_by_variant"
+    ].values()) == 30
+    assert result["recorded_completed_after_noncompleted_predecessor_counts_by_variant"] == {
+        arm: 0 for arm in design.VARIANTS
+    }
+    assert result["recorded_status_counts"]["not_started"] == 35

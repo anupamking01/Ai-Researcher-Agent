@@ -150,6 +150,9 @@ def audit_execution_log(
         arm: {position: 0 for position in slot_keys}
         for arm in design.VARIANTS
     }
+    # Keep every status (including an unstarted suffix) so immediate-predecessor
+    # exposure can be distinguished from successful adjacent pairs.
+    status_by_task = {row["task_id"]: {} for row in plan["schedule"]}
     unstarted_suffix = False
     for index, (event, (task_id, variant)) in enumerate(
         zip(events, expected_cells, strict=True), start=1
@@ -164,6 +167,7 @@ def audit_execution_log(
         status = event["status"]
         if type(status) is not str or status not in counts:
             raise design.DesignError(f"event {index} has an unknown status")
+        status_by_task[task_id][variant] = status
         if status == "not_started":
             # A halted sequential study retains every unattempted planned
             # cell without inventing a run identifier or execution interval.
@@ -244,6 +248,35 @@ def audit_execution_log(
             )
             completed_pair_order_counts[name][direction] += 1
 
+    # First-order/adjacent exposure matters separately from pair precedence:
+    # an arm that occurs earlier but is not adjacent is not its predecessor.
+    # Planned and attempted adjacency describe schedule/exposure, while the
+    # completed matrix requires BOTH arms logged completed. A failed or
+    # timed-out predecessor still precedes a completed successor, but is not
+    # silently treated as a completed treatment or an authenticated carryover.
+    def blank_predecessor_matrix() -> dict[str, dict[str, int]]:
+        return {
+            arm: {predecessor: 0 for predecessor in design.VARIANTS if predecessor != arm}
+            for arm in design.VARIANTS
+        }
+
+    planned_predecessors = blank_predecessor_matrix()
+    attempted_predecessors = blank_predecessor_matrix()
+    completed_predecessors = blank_predecessor_matrix()
+    completed_after_noncompleted_predecessor = {arm: 0 for arm in design.VARIANTS}
+    for row in plan["schedule"]:
+        statuses = status_by_task[row["task_id"]]
+        for predecessor, successor in zip(row["arm_order"], row["arm_order"][1:]):
+            planned_predecessors[successor][predecessor] += 1
+            if statuses[successor] != "not_started":
+                # The sequential suffix rule guarantees the predecessor was attempted.
+                attempted_predecessors[successor][predecessor] += 1
+            if statuses[successor] == "completed":
+                if statuses[predecessor] == "completed":
+                    completed_predecessors[successor][predecessor] += 1
+                else:
+                    completed_after_noncompleted_predecessor[successor] += 1
+
     return {
         "status": "pass_recorded_chronology_only",
         "classification": LOG_CLASSIFICATION,
@@ -263,6 +296,12 @@ def audit_execution_log(
         "recorded_attempted_position_counts_by_variant": attempted_position_counts_by_variant,
         "recorded_completed_position_counts_by_variant": completed_position_counts_by_variant,
         "recorded_completed_primary_pair_order_counts": completed_pair_order_counts,
+        "planned_immediate_predecessor_counts_by_variant": planned_predecessors,
+        "recorded_attempted_immediate_predecessor_counts_by_variant": attempted_predecessors,
+        "recorded_completed_immediate_predecessor_counts_by_variant": completed_predecessors,
+        "recorded_completed_after_noncompleted_predecessor_counts_by_variant": (
+            completed_after_noncompleted_predecessor
+        ),
         "recorded_fully_completed_task_count": sum(
             len(completed) == len(design.VARIANTS)
             for completed in completed_variants_by_task.values()
