@@ -162,7 +162,15 @@ It also rejects Windows/NTFS-unsafe component names (reserved device names,
 trailing periods/spaces, alternate-data-stream colons, and forbidden filesystem
 characters) after normalization. These otherwise create aliases, inaccessible
 paths, or streams on a different platform despite appearing valid in a ZIP.
-Names merely resembling device names remain valid. These checks reduce
+Names merely resembling device names remain valid. The preflight also parses
+both the central and local ZIP extra-field records and rejects Info-ZIP Unicode
+Path (0x7075) metadata, which can advertise an alternate filename that ZIP
+readers may prefer over the raw entry name. Allowing both interpretations could
+change which treatment trace or report appears in a recovered file inventory.
+Malformed extra-field lengths also fail closed; normal unambiguous extras
+(such as extended timestamps) remain allowed. This is a conservative
+single-identity restriction for recovered GitHub Actions archives, not a claim
+that Unicode filenames themselves are unsafe. These checks reduce
 cross-platform recovery hazards, but do not authorize extraction or establish
 evidence authenticity. Harmless Unicode filenames remain supported, and original member spellings are
 preserved in the current-observation receipt. Empty directory entries are also read through the

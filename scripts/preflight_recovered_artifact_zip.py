@@ -107,7 +107,32 @@ def _path_key(name: str) -> str:
     return normalized
 
 
+def _check_zip_extra_fields(extra: bytes, *, label: str) -> None:
+    """Forbid a second interpretation of a recovered member's filename.
+
+    Info-ZIP Unicode Path (0x7075) can override the raw ZIP filename in
+    Python and other readers, or be honored by only one of them. A recovery
+    manifest must have one portable path identity, not a competing alias in
+    either local or central metadata. Other well-formed extra fields are
+    allowed for compatibility with ordinary ZIP writers.
+    """
+    offset = 0
+    while offset < len(extra):
+        if len(extra) - offset < 4:
+            raise RecoveredArchiveError(f"malformed {label} ZIP extra-field header")
+        field_id, size = struct.unpack_from("<HH", extra, offset)
+        offset += 4
+        if size > len(extra) - offset:
+            raise RecoveredArchiveError(f"malformed {label} ZIP extra-field length")
+        if field_id == 0x7075:
+            raise RecoveredArchiveError(
+                f"alternate Unicode ZIP path metadata in {label} header"
+            )
+        offset += size
+
+
 def _inspect_member(info: zipfile.ZipInfo) -> tuple[str, bool]:
+    _check_zip_extra_fields(info.extra, label="central")
     key = _path_key(info.filename)
     is_directory = info.is_dir()
     mode = stat.S_IFMT(info.external_attr >> 16)
@@ -224,6 +249,14 @@ def _verify_local_header_metadata(handle, info: zipfile.ZipInfo, *, cd_offset: i
         raise RecoveredArchiveError("invalid local ZIP header signature")
     if flags != info.flag_bits or method != info.compress_type:
         raise RecoveredArchiveError("local ZIP header flags/compression disagree with central directory")
+    extra_start = start + LOCAL_HEADER.size + name_length
+    if extra_start + extra_length > cd_offset:
+        raise RecoveredArchiveError("local ZIP extra fields extend into central directory")
+    handle.seek(extra_start)
+    local_extra = handle.read(extra_length)
+    if len(local_extra) != extra_length:
+        raise RecoveredArchiveError("truncated local ZIP extra fields")
+    _check_zip_extra_fields(local_extra, label="local")
     if flags & 0x08:
         # A streaming writer may put zero placeholders here and append a data
         # descriptor. Nonzero fields must still agree with the central record.

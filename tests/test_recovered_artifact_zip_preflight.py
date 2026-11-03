@@ -6,7 +6,9 @@ import io
 import os
 from pathlib import Path
 import stat
+import struct
 import zipfile
+import zlib
 
 import pytest
 
@@ -538,4 +540,72 @@ def test_overlapping_local_member_ranges_rejected_before_decode(tmp_path):
     raw[central + 20:central + 24] = overlap_compressed_size.to_bytes(4, "little")
     path.write_bytes(raw)
     with pytest.raises(audit.RecoveredArchiveError, match="overlapping ZIP local member"):
+        audit.audit_recovered_zip(path)
+
+
+def _zip_with_unicode_path_alias(path: Path) -> tuple[Path, bytes, bytes]:
+    """A valid Info-ZIP Unicode Path field that asserts a different filename."""
+    raw_name = b"reports/original.md"
+    alternate = b"reports/renamed.md"
+    body = b"\x01" + struct.pack("<I", zlib.crc32(raw_name)) + alternate
+    field = struct.pack("<HH", 0x7075, len(body)) + body
+    info = zipfile.ZipInfo(raw_name.decode("ascii"))
+    info.extra = field
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(info, b"# Synthetic report")
+    return path, raw_name, alternate
+
+
+@pytest.mark.parametrize("field_location", ["both", "local_only", "central_only"])
+def test_recovered_zip_rejects_alternate_unicode_path_identity(tmp_path, field_location):
+    """Different readers may honor central/local 0x7075 name aliases differently."""
+    path, raw_name, alternate = _zip_with_unicode_path_alias(
+        tmp_path / "alternate-name.zip"
+    )
+    content = bytearray(path.read_bytes())
+    local_extra = 30 + len(raw_name)
+    central_header = content.index(b"PK\x01\x02")
+    central_extra = central_header + 46 + len(raw_name)
+    assert content[local_extra:local_extra + 2] == b"up"
+    assert content[central_extra:central_extra + 2] == b"up"
+    # Replace the field ID on just one header with a non-path metadata ID.
+    # Payload lengths remain valid; zipfile can still read the archive.
+    if field_location == "local_only":
+        content[central_extra:central_extra + 2] = b"UT"
+    elif field_location == "central_only":
+        content[local_extra:local_extra + 2] = b"UT"
+    path.write_bytes(content)
+
+    with zipfile.ZipFile(path) as archive:
+        assert archive.namelist()[0] in (raw_name.decode(), alternate.decode())
+        assert archive.read(archive.namelist()[0]) == b"# Synthetic report"
+    with pytest.raises(audit.RecoveredArchiveError, match="alternate Unicode ZIP path"):
+        audit.audit_recovered_zip(path)
+
+
+def test_recovered_zip_accepts_regular_extended_timestamp_extra(tmp_path):
+    """Ordinary, unambiguous extra fields are not banned wholesale."""
+    path = tmp_path / "timestamp.zip"
+    info = zipfile.ZipInfo("reports/normal.md")
+    info.extra = struct.pack("<HHBI", 0x5455, 5, 1, 1)
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(info, b"# Synthetic")
+    receipt = audit.audit_recovered_zip(path)
+    assert receipt["files"][0]["path"] == "reports/normal.md"
+
+
+def test_recovered_zip_rejects_malformed_local_extra_length(tmp_path):
+    """The central parser does not validate the local extra-field TLV."""
+    path = tmp_path / "malformed-local-extra.zip"
+    info = zipfile.ZipInfo("reports/normal.md")
+    info.extra = struct.pack("<HHBI", 0x5455, 5, 1, 1)
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(info, b"# Synthetic")
+    data = bytearray(path.read_bytes())
+    local_extra = 30 + len(info.filename.encode())
+    data[local_extra + 2:local_extra + 4] = (10).to_bytes(2, "little")
+    path.write_bytes(data)
+    with zipfile.ZipFile(path) as archive:
+        assert archive.read(info.filename) == b"# Synthetic"
+    with pytest.raises(audit.RecoveredArchiveError, match="malformed local ZIP extra-field length"):
         audit.audit_recovered_zip(path)
