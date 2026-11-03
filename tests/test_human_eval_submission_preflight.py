@@ -882,6 +882,53 @@ def test_receipt_verifier_rejects_symlinked_receipt_file(tmp_path):
         )
 
 
+
+@pytest.mark.skipif(not hasattr(os, "link"), reason="requires hard-link support")
+def test_receipt_verifier_rejects_hardlinked_receipt_outside_escrow(tmp_path):
+    """A retained receipt must not have a writable alias outside its one-file root."""
+    receipt_root, submission, bundle = _published_receipt(tmp_path)
+    os.link(receipt_root / verify.RECEIPT_NAME, tmp_path / "outside-receipt.json")
+
+    with pytest.raises(ValueError, match="hardlink aliases"):
+        verify.verify_preflight_receipt(
+            receipt_root=receipt_root,
+            rating_path=submission,
+            annotator_bundle_root=bundle,
+        )
+
+
+def test_receipt_verifier_detects_same_bytes_rewrite_after_mtime_restore(
+    tmp_path, monkeypatch
+):
+    """Identical content and mtime cannot hide a rewrite during verification."""
+    receipt_root, submission, bundle = _published_receipt(tmp_path)
+    receipt_path = receipt_root / verify.RECEIPT_NAME
+    original_preflight = freeze.preflight_annotator_submission
+
+    def rewrite_receipt_during_preflight(*args, **kwargs):
+        receipt = original_preflight(*args, **kwargs)
+        before = receipt_path.stat()
+        original_bytes = receipt_path.read_bytes()
+        with receipt_path.open("r+b") as stream:
+            stream.write(original_bytes)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # Simulate an adversarial or accidental same-size rewrite whose mtime
+        # is restored. The opened inode and receipt bytes still match.
+        os.utime(receipt_path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        return receipt
+
+    monkeypatch.setattr(
+        freeze, "preflight_annotator_submission", rewrite_receipt_during_preflight
+    )
+    with pytest.raises(ValueError, match="changed during verification"):
+        verify.verify_preflight_receipt(
+            receipt_root=receipt_root,
+            rating_path=submission,
+            annotator_bundle_root=bundle,
+        )
+
+
 def test_receipt_verifier_rejects_boolean_in_integer_field(tmp_path):
     receipt_root, submission, bundle = _published_receipt(tmp_path)
     receipt_path = receipt_root / verify.RECEIPT_NAME

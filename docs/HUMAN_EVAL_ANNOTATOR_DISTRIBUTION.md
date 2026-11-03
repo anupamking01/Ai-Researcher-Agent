@@ -63,6 +63,17 @@ annotator ID, report and missing-dimension counts, the exact submitted-file
 fingerprint, and the verified annotator-manifest fingerprint; it contains no
 scores, agreement statistic, treatment identity, or research result.
 
+A retained treatment-blind preflight receipt is checked through a bound
+file descriptor before it can support a ratings freeze. The independent reader
+requires a **single-link regular receipt file**: a hardlink outside the
+one-file receipt directory would otherwise permit invisible edits through an
+alternate name. During recomputation it also checks inode, size, mode, link
+count, mtime, **ctime**, unchanged bytes, and the directory binding. In
+particular, rewriting the same receipt bytes and restoring mtime is treated as
+a mutation of the verification window, not as unchanged custody. These local
+checks strengthen the retained-receipt handoff but do not independently
+authenticate any original experimental source, annotation, or human rating.
+
 ## Integrity properties
 
 The exporter fails closed if the coordinator packet does not pass its existing

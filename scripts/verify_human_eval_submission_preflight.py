@@ -95,10 +95,16 @@ def _bounded_receipt_entries(root_fd: int) -> set[str]:
 
 
 def _require_same_object(current: os.stat_result, opened: os.stat_result) -> None:
+    # Equal byte counts and a restored mtime alone cannot establish a stable
+    # receipt: an in-place rewrite can preserve both. Check ctime, link count,
+    # and file type/mode throughout the descriptor-bound verification window.
     if (
         (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
         or current.st_size != opened.st_size
         or current.st_mtime_ns != opened.st_mtime_ns
+        or current.st_ctime_ns != opened.st_ctime_ns
+        or current.st_mode != opened.st_mode
+        or current.st_nlink != opened.st_nlink
     ):
         raise ValueError(
             "human-evaluation preflight receipt changed during verification"
@@ -144,11 +150,11 @@ def _retained_receipt_window(receipt_root: Path):
             )
         except OSError as exc:
             raise ValueError(
-                "human-evaluation preflight receipt must be a regular file"
+                "human-evaluation preflight receipt must be a regular file without hardlink aliases"
             ) from exc
-        if not stat.S_ISREG(candidate.st_mode):
+        if not stat.S_ISREG(candidate.st_mode) or candidate.st_nlink != 1:
             raise ValueError(
-                "human-evaluation preflight receipt must be a regular file"
+                "human-evaluation preflight receipt must be a regular file without hardlink aliases"
             )
         _require_receipt_size(candidate.st_size)
         try:
@@ -160,13 +166,13 @@ def _retained_receipt_window(receipt_root: Path):
             )
         except OSError as exc:
             raise ValueError(
-                "human-evaluation preflight receipt must be a regular file"
+                "human-evaluation preflight receipt must be a regular file without hardlink aliases"
             ) from exc
         try:
             opened = os.fstat(receipt_fd)
-            if not stat.S_ISREG(opened.st_mode):
+            if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
                 raise ValueError(
-                    "human-evaluation preflight receipt must be a regular file"
+                    "human-evaluation preflight receipt must be a regular file without hardlink aliases"
                 )
             _require_receipt_size(opened.st_size)
             _require_same_object(opened, candidate)
@@ -176,9 +182,9 @@ def _retained_receipt_window(receipt_root: Path):
                 dir_fd=root_fd,
                 follow_symlinks=False,
             )
-            if not stat.S_ISREG(current.st_mode):
+            if not stat.S_ISREG(current.st_mode) or current.st_nlink != 1:
                 raise ValueError(
-                    "human-evaluation preflight receipt must be a regular file"
+                    "human-evaluation preflight receipt must be a regular file without hardlink aliases"
                 )
             _require_same_object(current, opened)
             try:
@@ -218,7 +224,7 @@ def _retained_receipt_window(receipt_root: Path):
                 raise ValueError(
                     "human-evaluation preflight receipt changed during verification"
                 ) from exc
-            if not stat.S_ISREG(visible_receipt.st_mode):
+            if not stat.S_ISREG(visible_receipt.st_mode) or visible_receipt.st_nlink != 1:
                 raise ValueError(
                     "human-evaluation preflight receipt changed during verification"
                 )
