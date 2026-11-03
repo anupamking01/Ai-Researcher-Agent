@@ -26,7 +26,10 @@ def _snapshot_bundle_pair_sources(canonical_root: Path, reverse_root: Path) -> d
 
     observations = {}
     for order, root in (("canonical", canonical_root), ("reverse", reverse_root)):
-        exporter._require_annotator_artifact_set(root)
+        try:
+            exporter._require_annotator_artifact_set(root)
+        except OSError as exc:
+            raise ValueError(f"{order} bundle root unavailable during paired handoff") from exc
         paths = [root, *(root / name for name in exporter.ANNOTATOR_ARTIFACTS)]
         try:
             identities = [exporter._evidence_stat_signature(path) for path in paths]
@@ -57,7 +60,15 @@ def _require_bundle_pair_sources_unchanged(observations: dict) -> None:
             except OSError as exc:
                 raise ValueError(f"{order} bundle disappeared during paired handoff") from exc
             if current != identities:
-                raise ValueError(f"{order} bundle changed during paired handoff")
+                for index, (before, after) in enumerate(zip(identities, current, strict=True)):
+                    if before != after:
+                        name = (
+                            "bundle root" if index == 0
+                            else exporter.ANNOTATOR_ARTIFACTS[index - 1]
+                        )
+                        raise ValueError(
+                            f"{order} {name} changed during combined paired handoff verification"
+                        )
 
     check_identities()
     for order, (root, _, digests) in observations.items():

@@ -150,7 +150,7 @@ def test_first_bundle_content_mutation_during_reverse_verification_fails(case, m
         return original(expected_presentation_order=expected_presentation_order, **kwargs)
 
     monkeypatch.setattr(exporter, "verify_annotator_bundle_against_source", mutate_canonical)
-    with pytest.raises(ValueError, match="canonical bundle changed during paired handoff"):
+    with pytest.raises(ValueError, match="canonical packet.jsonl changed during combined"):
         handoff.verify_counterbalanced_handoff(**case)
 
 
@@ -167,7 +167,7 @@ def test_first_bundle_same_byte_inode_replacement_during_reverse_fails(case, mon
         return original(expected_presentation_order=expected_presentation_order, **kwargs)
 
     monkeypatch.setattr(exporter, "verify_annotator_bundle_against_source", replace_canonical)
-    with pytest.raises(ValueError, match="canonical bundle changed during paired handoff"):
+    with pytest.raises(ValueError, match="canonical packet.jsonl changed during combined"):
         handoff.verify_counterbalanced_handoff(**case)
 
 
