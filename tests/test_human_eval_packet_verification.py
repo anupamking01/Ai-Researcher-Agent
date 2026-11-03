@@ -1273,3 +1273,31 @@ def test_rehashed_packet_csv_with_skipped_blank_record_fails_closed(
     _refresh_artifact(case, artifact_name)
     with pytest.raises(ValueError, match="blank physical CSV record"):
         _verify(case)
+
+# The create-only builder writes canonical, LF-terminated JSONL. Rehashing
+# its mutable coordinator manifest must not legitimize unaccounted physical
+# records or alternative byte serializations in annotator-facing packets.
+@pytest.mark.parametrize(
+    ("transformation", "diagnostic"),
+    [
+        (lambda raw: b"\n" + raw, "blank physical record"),
+        (lambda raw: raw.replace(b"\n", b"\n\n", 1), "blank physical record"),
+        (lambda raw: raw + b" \n", "blank physical record"),
+        (lambda raw: raw.replace(b"\n", b"\r\n"), "LF-terminated physical records"),
+        (lambda raw: raw[:-1], "LF-terminated physical records"),
+        (lambda raw: raw.replace(b'": "', b'":"', 1),
+         "not canonical generator JSON"),
+    ],
+)
+def test_rehashed_packet_jsonl_requires_generator_record_envelope(
+    packet_case, transformation, diagnostic
+):
+    path = packet_case["output_root"] / "packet.jsonl"
+    original = path.read_bytes()
+    changed = transformation(original)
+    assert changed != original
+    path.write_bytes(changed)
+    _refresh_artifact(packet_case, "packet")
+
+    with pytest.raises(ValueError, match=diagnostic):
+        _verify(packet_case)

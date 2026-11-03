@@ -304,3 +304,18 @@ alone does not validate a CSV's lexical interpretation.
 This is a pre-distribution ambiguity gate only. It does not recover or
 authenticate missing 2026 treatment traces, prove annotator independence,
 change the 2026 confirmatory analysis, or generate human ratings.
+
+### Canonical physical records in annotator-facing JSONL
+
+The create-only builder emits `packet.jsonl` as **one canonically serialized
+JSON object per LF-terminated physical line**, including a final LF. The
+independent coordinator verifier now checks this byte envelope before
+interpreting the packet: no blank/whitespace-only records, CRLF or lone CR
+terminators, missing final LF, or noncanonical JSON serialization are accepted,
+even if someone coherently recomputes the candidate manifest fingerprints.
+The authoritative report contents, treatment mapping, blinding key and source
+continuity checks are unchanged. This is an offline syntactic/custody guard
+for *future* packet handoff, not independent recovery of historical 2026
+source reports, an attestation that annotators were blinded, or evidence that
+any human scores were collected. Preserve rejected bytes as a deviation;
+do not silently repair or reblind an issued packet.

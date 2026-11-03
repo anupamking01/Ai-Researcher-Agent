@@ -168,19 +168,34 @@ def _read_csv(content: bytes, *, fields: tuple[str, ...], label: str) -> list[di
 
 def _read_packet(content: bytes, *, task_manifest: dict) -> list[dict]:
     try:
-        lines = content.decode("utf-8").splitlines()
+        packet_text = content.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("packet.jsonl is not valid UTF-8") from exc
+
+    # The create-only packet builder emits one JSON object per LF-delimited
+    # line, with a final LF. splitlines() and skip-empty would silently
+    # accept unaccounted blank records even after coherent manifest rehashing.
+    # Require the original generator's physical-record envelope before parsing.
+    if not packet_text.endswith("\n") or "\r" in packet_text:
+        raise ValueError("packet.jsonl requires LF-terminated physical records")
+    lines = packet_text[:-1].split("\n")
+    if any(not raw.strip() for raw in lines):
+        raise ValueError("packet.jsonl contains a blank physical record")
 
     rows = []
     seen = set()
     required = {"blind_id", "task_id", "question", "report_markdown"}
     for line_number, raw in enumerate(lines, start=1):
-        if not raw.strip():
-            continue
         row = _load_json_object(
             raw.encode("utf-8"), label=f"packet.jsonl line {line_number}"
         )
+        # Re-serialization must reproduce the generator's exact canonical
+        # record bytes. A self-consistently rehashed packet must not gain
+        # alternate whitespace, encoding or record-boundary interpretations.
+        if raw != json.dumps(row, ensure_ascii=False, sort_keys=True):
+            raise ValueError(
+                f"packet.jsonl line {line_number} is not canonical generator JSON"
+            )
         if not isinstance(row, dict) or set(row) != required:
             raise ValueError(
                 f"packet.jsonl line {line_number} schema must be exactly {sorted(required)}"
