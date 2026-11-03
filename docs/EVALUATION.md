@@ -557,7 +557,12 @@ the coordinator mapping is opened. Every directory is held by descriptor while
 its entry inventory is copied and rescanned; entry replacement, late additions,
 symlinks, and non-regular entries fail closed. The freeze-root inventory is
 similarly bound across the optional-archive decision, so a late archive cannot
-be silently omitted by selective copying. This
+be silently omitted by selective copying. Directory enumeration is also bounded
+*at the scan*, not only after a full listing is sorted: each source directory
+aborts at its first excess entry, and post-capture rescans stop at the first
+addition beyond the original cardinality. This limits malicious or damaged
+freeze-tree resource exhaustion without changing ratings, analysis outcomes,
+or the predeclared statistical plan. This
 records reproducibility metadata; it does not create ratings or convert pending
 human validation into a result.
 

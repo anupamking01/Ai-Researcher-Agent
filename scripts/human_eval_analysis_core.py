@@ -321,6 +321,30 @@ def _require_snapshot_tree_depth(depth, *, label):
         )
 
 
+def _bounded_snapshot_names(descriptor, *, maximum, label, checking_stability=False):
+    """Enumerate at most one name over the limit before sorting a bounded set.
+
+    Rechecks use the original entry count as the bound, so a changed directory
+    cannot force an unbounded scan during source-custody verification.
+    """
+    names = []
+    try:
+        with os.scandir(descriptor) as entries:
+            for entry in entries:
+                if len(names) >= maximum:
+                    if checking_stability:
+                        raise ValueError(
+                            f"{label} changed while it was being snapshotted"
+                        )
+                    raise ValueError(
+                        f"{label} exceeds human-analysis freeze snapshot entry limit"
+                    )
+                names.append(entry.name)
+    except OSError as exc:
+        raise ValueError(f"{label} could not be enumerated") from exc
+    return tuple(sorted(names))
+
+
 def _snapshot_directory_descriptor(
     source_root,
     destination_root,
@@ -339,7 +363,11 @@ def _snapshot_directory_descriptor(
     if not stat.S_ISDIR(opened.st_mode):
         raise ValueError(f"{label} must be a regular directory: {source_root}")
     try:
-        names_before = tuple(sorted(os.listdir(descriptor)))
+        names_before = _bounded_snapshot_names(
+            descriptor,
+            maximum=MAX_HUMAN_ANALYSIS_SNAPSHOT_TREE_ENTRIES - budget["entries"],
+            label=label,
+        )
     except OSError as exc:
         raise ValueError(f"{label} could not be enumerated: {source_root}") from exc
 
@@ -412,7 +440,10 @@ def _snapshot_directory_descriptor(
             )
 
     try:
-        names_after = tuple(sorted(os.listdir(descriptor)))
+        names_after = _bounded_snapshot_names(
+            descriptor, maximum=len(names_before), label=label,
+            checking_stability=True,
+        )
     except OSError as exc:
         raise ValueError(
             f"{label} changed while it was being snapshotted"
@@ -547,7 +578,9 @@ def _reject_undeclared_freeze_sidecars(
                 raise ValueError(
                     "freeze provenance changed while it was being inspected"
                 )
-            names_before = tuple(sorted(os.listdir(provenance_descriptor)))
+            names_before = _bounded_snapshot_names(
+                provenance_descriptor, maximum=2, label="freeze provenance",
+            )
             provenance_extra_names = set(names_before) - {
                 "freeze_human_eval_ratings.py",
                 "build_human_eval_packet.py",
@@ -573,7 +606,10 @@ def _reject_undeclared_freeze_sidecars(
                     raise ValueError(f"{label} must be a regular file") from exc
                 if not stat.S_ISREG(child.st_mode):
                     raise ValueError(f"{label} must be a regular file")
-            names_after = tuple(sorted(os.listdir(provenance_descriptor)))
+            names_after = _bounded_snapshot_names(
+                provenance_descriptor, maximum=len(names_before),
+                label="freeze provenance", checking_stability=True,
+            )
             if names_after != names_before:
                 raise ValueError(
                     "freeze provenance changed while it was being inspected"
@@ -626,7 +662,10 @@ def _require_freeze_inventory_stable(
     metadata,
 ):
     try:
-        current_names = tuple(sorted(os.listdir(descriptor)))
+        current_names = _bounded_snapshot_names(
+            descriptor, maximum=len(names), label="freeze root",
+            checking_stability=True,
+        )
     except OSError as exc:
         raise ValueError("freeze root changed while it was being snapshotted") from exc
     if current_names != names:
@@ -677,7 +716,11 @@ def _snapshot_directory_inventory(
     if not stat.S_ISDIR(opened.st_mode):
         raise ValueError(f"{label} must be a regular directory: {source_root}")
     try:
-        names = tuple(sorted(os.listdir(descriptor)))
+        names = _bounded_snapshot_names(
+            descriptor,
+            maximum=MAX_HUMAN_ANALYSIS_SNAPSHOT_TREE_ENTRIES - budget["entries"],
+            label=label,
+        )
     except OSError as exc:
         raise ValueError(f"{label} could not be enumerated: {source_root}") from exc
 
@@ -738,7 +781,10 @@ def _snapshot_directory_inventory(
             )
 
     try:
-        names_after = tuple(sorted(os.listdir(descriptor)))
+        names_after = _bounded_snapshot_names(
+            descriptor, maximum=len(names), label=label,
+            checking_stability=True,
+        )
     except OSError as exc:
         raise ValueError(f"{label} changed while it was being snapshotted") from exc
     if names_after != names or _snapshot_entry_identity(
@@ -784,7 +830,10 @@ def _snapshot_freeze_tree(freeze_root, blind_freeze):
     try:
         root_opened = os.fstat(descriptor)
         try:
-            names = tuple(sorted(os.listdir(descriptor)))
+            names = _bounded_snapshot_names(
+                descriptor, maximum=MAX_HUMAN_ANALYSIS_SNAPSHOT_TREE_ENTRIES,
+                label="freeze root",
+            )
         except OSError as exc:
             raise ValueError(
                 f"freeze root could not be enumerated: {freeze_root}"

@@ -129,3 +129,127 @@ def test_exact_depth_limit_is_accepted(tmp_path, monkeypatch):
     dest = tmp_path / "copy"
     core._snapshot_directory_tree(root, dest, label="synthetic tree")
     assert (dest / "parent" / "item").read_bytes() == b"safe"
+
+
+
+def test_bounded_scan_accepts_exact_limit_without_listdir(tmp_path, monkeypatch):
+    """A valid directory still has a deterministic name order."""
+    root = tmp_path / "synthetic"
+    _write(root, "z", b"z")
+    _write(root, "a", b"a")
+    _write(root, "m", b"m")
+    original_listdir = core.os.listdir
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            core.os, "listdir",
+            lambda *args, **kwargs: pytest.fail("unbounded listdir called"),
+        )
+        descriptor = core._open_snapshot_directory(root, label="synthetic")
+        try:
+            assert core._bounded_snapshot_names(
+                descriptor, maximum=3, label="synthetic"
+            ) == ("a", "m", "z")
+            copy = tmp_path / "copy"
+            core._snapshot_directory_tree(root, copy, label="synthetic")
+        finally:
+            core.os.close(descriptor)
+    assert original_listdir is core.os.listdir
+    assert sorted(path.name for path in copy.iterdir()) == ["a", "m", "z"]
+
+
+def test_bounded_scan_stops_after_first_excess_entry(tmp_path, monkeypatch):
+    """Do not collect/sort an adversarial directory before checking the cap."""
+    root = tmp_path / "synthetic"
+    for index in range(30):
+        _write(root, f"{index:04d}.csv", b"x")
+    original_scandir = core.os.scandir
+    observed = []
+
+    class GuardedScanner:
+        def __init__(self, iterator):
+            self.iterator = iterator
+
+        def __enter__(self):
+            self.iterator.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.iterator.__exit__(*args)
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            observed.append(1)
+            if len(observed) > 4:
+                pytest.fail("read past the first entry over the scan cap")
+            return next(self.iterator)
+
+    def limited_scandir(path):
+        iterator = original_scandir(path)
+        if isinstance(path, int) and (
+            core.os.fstat(path).st_dev, core.os.fstat(path).st_ino
+        ) == (root.stat().st_dev, root.stat().st_ino):
+            return GuardedScanner(iterator)
+        return iterator
+
+    with monkeypatch.context() as patch:
+        patch.setattr(core, "MAX_HUMAN_ANALYSIS_SNAPSHOT_TREE_ENTRIES", 3)
+        patch.setattr(core.os, "scandir", limited_scandir)
+        patch.setattr(
+            core.os, "listdir",
+            lambda *args, **kwargs: pytest.fail("unbounded listdir called"),
+        )
+        with pytest.raises(ValueError, match="freeze snapshot entry limit"):
+            core._snapshot_directory_tree(root, tmp_path / "copy", label="synthetic")
+    assert len(observed) == 4
+    assert not (tmp_path / "copy").exists()
+
+
+def test_inventory_scan_rejects_overflow_without_listdir(tmp_path, monkeypatch):
+    root = tmp_path / "synthetic"
+    for index in range(4):
+        _write(root, f"{index}.csv", b"x")
+    with monkeypatch.context() as patch:
+        patch.setattr(core, "MAX_HUMAN_ANALYSIS_SNAPSHOT_TREE_ENTRIES", 3)
+        patch.setattr(
+            core.os, "listdir",
+            lambda *args, **kwargs: pytest.fail("unbounded listdir called"),
+        )
+        descriptor = core._open_snapshot_directory(root, label="synthetic")
+        try:
+            with pytest.raises(ValueError, match="freeze snapshot entry limit"):
+                core._snapshot_directory_inventory(root, descriptor, label="synthetic")
+        finally:
+            core.os.close(descriptor)
+
+
+def test_freeze_root_rejects_overflow_before_inventory_or_copy(tmp_path, monkeypatch):
+    root = tmp_path / "synthetic-freeze"
+    for index in range(4):
+        _write(root, f"{index}.csv", b"x")
+    destination = tmp_path / "copy"
+    with monkeypatch.context() as patch:
+        patch.setattr(core, "MAX_HUMAN_ANALYSIS_SNAPSHOT_TREE_ENTRIES", 3)
+        patch.setattr(
+            core.os, "listdir",
+            lambda *args, **kwargs: pytest.fail("unbounded listdir called"),
+        )
+        with pytest.raises(ValueError, match="freeze snapshot entry limit"):
+            core._snapshot_freeze_tree(root, destination)
+    assert not destination.exists()
+
+
+def test_provenance_scan_rejects_sidecars_before_copy(tmp_path, monkeypatch):
+    root = tmp_path / "synthetic-freeze"
+    for index in range(3):
+        _write(root, f"provenance/{index}.py", b"x")
+    destination = tmp_path / "copy"
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            core.os, "listdir",
+            lambda *args, **kwargs: pytest.fail("unbounded listdir called"),
+        )
+        with pytest.raises(ValueError, match="freeze snapshot entry limit"):
+            core._snapshot_freeze_tree(root, destination)
+    assert not destination.exists()
