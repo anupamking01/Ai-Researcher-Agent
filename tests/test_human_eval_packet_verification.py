@@ -1237,11 +1237,11 @@ def test_packet_verifier_accepts_restrictive_coordinator_file_modes(packet_case)
 @pytest.mark.parametrize(
     ("csv_bytes", "diagnostic"),
     [
-        (b"blind_id,variant_id\\r\\nH001,D3\\r\\n\\r\\n", "blank physical CSV record"),
-        (b"blind_id,variant_id\\r\\nH001,\\\"D3\\\"junk\\r\\n", "malformed CSV quoting"),
-        (b"blind_id,variant_id\\r\\nH001,\\\"D3\\r\\n", "malformed CSV quoting"),
-        (b"blind_id,variant_id\\r\\n\\\"H001\\r\\ncontinuation\\\",D3\\r\\n", "multiline CSV record"),
-        (b"\\\"blind_id\\r\\ncontinuation\\\",variant_id\\r\\nH001,D3\\r\\n", "multiline CSV header"),
+        (b"blind_id,variant_id\r\nH001,D3\r\n\r\n", "blank physical CSV record"),
+        (b"blind_id,variant_id\r\nH001,\"D3\"junk\r\n", "malformed CSV quoting"),
+        (b"blind_id,variant_id\r\nH001,\"D3\r\n", "malformed CSV quoting"),
+        (b"blind_id,variant_id\r\n\"H001\r\ncontinuation\",D3\r\n", "multiline CSV record"),
+        (b"\"blind_id\r\ncontinuation\",variant_id\r\nH001,D3\r\n", "multiline CSV header"),
     ],
 )
 def test_packet_mapping_csv_rejects_ambiguous_physical_records(csv_bytes, diagnostic):
@@ -1254,7 +1254,7 @@ def test_packet_mapping_csv_rejects_ambiguous_physical_records(csv_bytes, diagno
 
 def test_packet_mapping_csv_accepts_valid_quoted_fields():
     rows = packet_verifier._read_csv(
-        b'blind_id,variant_id\\r\\n"H,001","D3"\\r\\n',
+        b'blind_id,variant_id\r\n"H,001","D3"\r\n',
         fields=("blind_id", "variant_id"), label="synthetic.csv",
     )
     assert rows == [{"blind_id": "H,001", "variant_id": "D3"}]
@@ -1269,7 +1269,7 @@ def test_rehashed_packet_csv_with_skipped_blank_record_fails_closed(
     manifest = json.loads((case["output_root"] / "manifest.json").read_text(encoding="utf-8"))
     path = case["output_root"] / manifest[artifact_name]
     raw = path.read_bytes()
-    path.write_bytes(raw + b"\\r\\n")
+    path.write_bytes(raw + b"\r\n")
     _refresh_artifact(case, artifact_name)
     with pytest.raises(ValueError, match="blank physical CSV record"):
         _verify(case)
