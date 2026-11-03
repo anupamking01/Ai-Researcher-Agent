@@ -75,3 +75,14 @@ not an atomic snapshot or cryptographic proof of historic origin. A transient
 change restored between observations may be missed. A passing pair receipt
 does not mean source reports have been recovered, eligible humans recruited,
 or blinded evaluations completed.
+
+The pair gate also rejects **hard-linked annotator-facing files** at both
+initial capture and final recheck (filesystem link count must be one). This
+covers sharing the byte-identical instructions file between the two bundle
+directories, and aliases outside either directory. A file shared by inode can
+be altered through the other path after it has been certified for one rater;
+independent copies with identical bytes remain acceptable. This prevents
+mutable filesystem aliasing, not unauthorized post-verification access,
+physical distribution mistakes, or an absence of genuinely independent human
+annotators.
+

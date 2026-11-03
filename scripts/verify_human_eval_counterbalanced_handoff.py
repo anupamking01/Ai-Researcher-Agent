@@ -8,10 +8,31 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from pathlib import Path
 
 from scripts import export_human_eval_annotator_bundle as exporter
+
+
+def _require_unlinked_annotator_artifacts(order: str, root: Path) -> None:
+    """Reject hard links: independently distributed bundles need distinct inodes.
+
+    In particular, both orders legitimately contain byte-identical instructions.
+    A hard-linked guide lets edits to one distribution copy alter the other
+    even when each bundle separately passes content and source checks.
+    """
+    try:
+        for name in exporter.ANNOTATOR_ARTIFACTS:
+            if os.stat(root / name, follow_symlinks=False).st_nlink != 1:
+                raise ValueError(
+                    f"{order} {name} is hard-linked; distribution files "
+                    "must have independent inodes"
+                )
+    except OSError as exc:
+        raise ValueError(
+            f"{order} bundle artifact unavailable during paired handoff"
+        ) from exc
 
 
 def _snapshot_bundle_pair_sources(canonical_root: Path, reverse_root: Path) -> dict:
@@ -30,6 +51,7 @@ def _snapshot_bundle_pair_sources(canonical_root: Path, reverse_root: Path) -> d
             exporter._require_annotator_artifact_set(root)
         except OSError as exc:
             raise ValueError(f"{order} bundle root unavailable during paired handoff") from exc
+        _require_unlinked_annotator_artifacts(order, root)
         paths = [root, *(root / name for name in exporter.ANNOTATOR_ARTIFACTS)]
         try:
             identities = [exporter._evidence_stat_signature(path) for path in paths]
@@ -54,6 +76,7 @@ def _require_bundle_pair_sources_unchanged(observations: dict) -> None:
     def check_identities() -> None:
         for order, (root, identities, _) in observations.items():
             exporter._require_annotator_artifact_set(root)
+            _require_unlinked_annotator_artifacts(order, root)
             paths = [root, *(root / name for name in exporter.ANNOTATOR_ARTIFACTS)]
             try:
                 current = [exporter._evidence_stat_signature(path) for path in paths]

@@ -74,6 +74,38 @@ def test_valid_pair_emits_only_source_bound_distribution_receipt(case):
     assert not any(secret in json.dumps(receipt) for secret in ("blinding_key", "variant_id", "run_id", "annotator_id", "correctness_1_5"))
 
 
+def test_cross_bundle_hardlinked_guide_fails_even_with_identical_valid_bytes(case):
+    """Same guide contents are valid, but two paths may not share one inode."""
+    canonical = case["canonical_root"] / "annotator_instructions.md"
+    reverse = case["reverse_root"] / "annotator_instructions.md"
+    assert canonical.read_bytes() == reverse.read_bytes()
+    reverse.unlink()
+    reverse.hardlink_to(canonical)
+    with pytest.raises(ValueError, match="reverse annotator_instructions.md is hard-linked"):
+        handoff.verify_counterbalanced_handoff(**case)
+
+
+def test_external_hardlink_to_bundle_guide_fails(case):
+    """A bundle artifact must not be mutable via an external alias either."""
+    guide = case["canonical_root"] / "annotator_instructions.md"
+    alias = case["canonical_root"].parent / "external-guide-alias.md"
+    alias.hardlink_to(guide)
+    with pytest.raises(ValueError, match="canonical annotator_instructions.md is hard-linked"):
+        handoff.verify_counterbalanced_handoff(**case)
+
+
+def test_separate_guide_copies_with_identical_bytes_remain_allowed(case):
+    canonical = case["canonical_root"] / "annotator_instructions.md"
+    reverse = case["reverse_root"] / "annotator_instructions.md"
+    assert canonical.read_bytes() == reverse.read_bytes()
+    assert (canonical.stat().st_dev, canonical.stat().st_ino) != (
+        reverse.stat().st_dev, reverse.stat().st_ino
+    )
+    assert handoff.verify_counterbalanced_handoff(**case)["status"] == (
+        "human_eval_counterbalanced_handoff_verified"
+    )
+
+
 def test_same_directory_cannot_supply_two_independent_handoffs(case):
     case["reverse_root"] = case["canonical_root"]
     with pytest.raises(ValueError, match="two distinct bundle directories"):
