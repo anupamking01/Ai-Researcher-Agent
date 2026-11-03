@@ -162,19 +162,21 @@ def _packet_blind_ids(packet_path: Path, *, content: bytes | None = None) -> lis
             raise ValueError(f"blinded packet is missing: {packet_path}")
         content = packet_path.read_bytes()
 
-    # The source-bound packet verifier already enforces the generator's
-    # canonical LF-delimited JSONL envelope. Do not accept a weaker physical
-    # record contract when freezing or independently checking blinded ratings:
-    # a coherent packet hash alone cannot account for skipped blank records.
+    # Count physical LF records rather than silently skipping blank entries.
+    # Preserve legacy CRLF/serialization bytes in retrospective blinded freezes:
+    # the separate source-bound coordinator verifier has a stricter generator
+    # format contract. A direct freeze cannot establish original packet custody.
     try:
         packet_text = content.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("blinded packet is not valid UTF-8") from exc
     if not packet_text:
         raise ValueError("blinded packet contains no evaluation items")
-    if not packet_text.endswith("\n") or "\r" in packet_text:
-        raise ValueError("blinded packet requires LF-terminated physical records")
-    physical_records = packet_text[:-1].split("\n")
+    physical_records = packet_text.split("\n")
+    # Exactly one trailing LF terminates the last physical record; two LFs
+    # contain an additional empty record and must be rejected.
+    if packet_text.endswith("\n"):
+        physical_records.pop()
     if any(not raw.strip() for raw in physical_records):
         raise ValueError("blinded packet contains a blank physical record")
 
@@ -186,10 +188,6 @@ def _packet_blind_ids(packet_path: Path, *, content: bytes | None = None) -> lis
             row = json.loads(raw, object_pairs_hook=_unique_json_object)
         except json.JSONDecodeError as exc:
             raise ValueError(f"malformed packet JSON on line {line_number}") from exc
-        if raw != json.dumps(row, ensure_ascii=False, sort_keys=True):
-            raise ValueError(
-                f"blinded packet line {line_number} is not canonical generator JSON"
-            )
         if not isinstance(row, dict) or set(row) != set(PACKET_FIELDS):
             raise ValueError(
                 f"packet line {line_number} schema must be exactly {sorted(PACKET_FIELDS)}"

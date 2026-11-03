@@ -697,7 +697,14 @@ def test_bundle_verifier_rejects_coordinator_artifact_added_later(packet_case):
 def test_bundle_verifier_rejects_manifest_fingerprint_drift(packet_case):
     _export(packet_case)
     packet = packet_case["export_root"] / "packet.jsonl"
-    packet.write_text(packet.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    # Keep this mutation valid JSONL so this test isolates the fingerprint
+    # mismatch; blank physical records have a dedicated rejection gate.
+    packet.write_text(
+        packet.read_text(encoding="utf-8").replace(
+            "Synthetic report", "Changed synthetic report", 1
+        ),
+        encoding="utf-8",
+    )
 
     with pytest.raises(ValueError, match="fingerprint mismatch"):
         exporter.verify_annotator_bundle(packet_case["export_root"])

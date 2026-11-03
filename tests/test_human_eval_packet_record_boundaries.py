@@ -1,7 +1,6 @@
-"""Synthetic-only regression checks for a common blinded packet JSONL envelope.
+"""Synthetic regression checks for blinded packet physical-record accounting.
 
-These tests do not create human ratings or authenticate historical treatment
-evidence; they test source-byte interpretation across prospective handoffs.
+No historical treatment reports or genuine human ratings are used here.
 """
 import json
 from pathlib import Path
@@ -64,56 +63,52 @@ def _blank_between_records(packet: bytes) -> bytes:
     return packet.replace(b"\n", b"\n \n", 1)
 
 
-def _crlf(packet: bytes) -> bytes:
-    return packet.replace(b"\n", b"\r\n")
-
-
-def _no_final_lf(packet: bytes) -> bytes:
-    return packet[:-1]
-
-
-def _prefixed_whitespace(packet: bytes) -> bytes:
-    return b" " + packet
-
-
-def _noncanonical_spacing(packet: bytes) -> bytes:
-    return packet.replace(b'": "', b'":"', 1)
-
-
-def _escaped_unicode(packet: bytes) -> bytes:
-    return packet.replace("Café".encode("utf-8"), b"Caf\\u00e9", 1)
-
-
-def _invalid_utf8(packet: bytes) -> bytes:
-    return packet.replace("Café".encode("utf-8"), b"\xff", 1)
+def _multiple_blank_records(packet: bytes) -> bytes:
+    return packet + b"\n \n"
 
 
 @pytest.mark.parametrize(
-    ("mutate", "error"),
-    (
-        (_blank_after_last_record, "blank physical record"),
-        (_blank_between_records, "blank physical record"),
-        (_crlf, "LF-terminated physical records"),
-        (_no_final_lf, "LF-terminated physical records"),
-        (_prefixed_whitespace, "not canonical generator JSON"),
-        (_noncanonical_spacing, "not canonical generator JSON"),
-        (_escaped_unicode, "not canonical generator JSON"),
-        (_invalid_utf8, "not valid UTF-8"),
-    ),
-    ids=(
-        "extra-physical-record", "blank-middle-record", "crlf",
-        "missing-final-lf", "leading-whitespace", "alternate-spacing",
-        "escaped-unicode", "invalid-utf8",
-    ),
+    "mutate",
+    (_blank_after_last_record, _blank_between_records, _multiple_blank_records),
+    ids=("extra-terminal-record", "blank-middle-record", "multiple-blank-records"),
 )
 @pytest.mark.parametrize(
     "reader",
     (_freeze_reader, _bundle_reader),
     ids=("ratings-freeze", "annotator-bundle"),
 )
-def test_noncanonical_or_ambiguous_packet_rejected_by_both_readers(reader, mutate, error):
-    with pytest.raises(ValueError, match=error):
+def test_unaccounted_blank_packet_record_rejected_by_both_readers(reader, mutate):
+    with pytest.raises(ValueError, match="blank physical record"):
         reader(mutate(_canonical_packet()))
+
+
+@pytest.mark.parametrize(
+    "reader",
+    (_freeze_reader, _bundle_reader),
+    ids=("ratings-freeze", "annotator-bundle"),
+)
+def test_legacy_packet_format_still_parses_without_mutating_source_bytes(reader):
+    packet = _canonical_packet()
+    # Noncanonical serialization and CRLF are allowed by these standalone
+    # readers; the source-bound coordinator verifier remains stricter.
+    legacy_bytes = (
+        packet.replace("Café".encode("utf-8"), b"Caf\\u00e9")
+        .replace(b'": "', b'":"', 1)
+        .replace(b"\n", b"\r\n")
+    )
+    assert reader(legacy_bytes)
+    assert reader(legacy_bytes[:-2])  # Historical packet without final CRLF.
+
+
+@pytest.mark.parametrize(
+    "reader",
+    (_freeze_reader, _bundle_reader),
+    ids=("ratings-freeze", "annotator-bundle"),
+)
+def test_invalid_utf8_packet_is_rejected(reader):
+    packet = _canonical_packet().replace("Café".encode("utf-8"), b"\xff", 1)
+    with pytest.raises(ValueError, match="not valid UTF-8"):
+        reader(packet)
 
 
 def test_freeze_rejects_blank_packet_record_before_reading_ratings(tmp_path, monkeypatch):

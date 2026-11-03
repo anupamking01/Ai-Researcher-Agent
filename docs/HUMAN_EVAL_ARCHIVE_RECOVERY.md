@@ -3,18 +3,21 @@
 **Status (2026-10-27): blocked on original report and handoff custody.**
 This is an operational inventory and recovery plan, not an experiment or human-evaluation result.
 
-## Canonical blinded packet custody at every handoff
+## Blinded packet physical-record integrity across handoffs
 
-The coordinator packet verifier already requires the packet builder's exact
-physical JSONL format: UTF-8, one canonically serialized JSON object per LF-only
-line, no blank physical records, and a final LF. The annotator-bundle reader
-and blinded ratings freezer/independent freeze verifier now enforce that same
-record envelope rather than silently skipping lines or accepting alternative
-JSON spellings. A self-consistently rehashed candidate is not enough to waive
-this contract. Original packet bytes and fingerprints are preserved; invalid
-candidates must be rejected rather than normalized or rewritten. This
-prospective integrity check does **not** authenticate the unavailable original
-treatment reports or create human-evaluation evidence.
+The coordinator packet verifier requires the packet builder's exact canonical
+JSONL serialization, LF-only records, and final LF. Independently, the
+annotator-bundle reader and blinded ratings freezer/retained freeze verifier now
+reject **every extra blank or whitespace-only physical LF record**, including
+between items and after the final item. Previously these paths silently
+discarded such lines even when a candidate was self-consistently rehashed.
+
+These downstream readers retain compatibility with legacy synthetic/archived
+packet JSON serialization, optional terminal newline, and CRLF: they do not
+replace the **stricter production coordinator source-bound verifier**. They do
+not rewrite any packet bytes or fingerprints. This prospective integrity check
+does **not** authenticate unavailable original reports, allow an otherwise
+unverified human distribution, or create human-evaluation evidence.
 
 ## Why this is a research gate
 
