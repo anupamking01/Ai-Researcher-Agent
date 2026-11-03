@@ -126,8 +126,20 @@ def _read_csv(content: bytes, *, fields: tuple[str, ...], label: str) -> list[di
     except UnicodeDecodeError as exc:
         raise ValueError(f"{label} is not valid UTF-8") from exc
 
-    reader = csv.DictReader(io.StringIO(text, newline=""))
-    fieldnames = reader.fieldnames or []
+    # DictReader silently skips physical blank lines, and its permissive
+    # default accepts ambiguous quoting. A rehashed coordinator manifest
+    # must not turn those unaccounted bytes into an apparently clean packet.
+    # These machine-generated mapping/template CSVs have one physical record
+    # per row; unlike genuine annotator notes, they need no multiline cells.
+    if any(not line.strip() for line in text.splitlines()):
+        raise ValueError(f"{label} contains a blank physical CSV record")
+    reader = csv.DictReader(io.StringIO(text, newline=""), strict=True)
+    try:
+        fieldnames = reader.fieldnames or []
+    except csv.Error as exc:
+        raise ValueError(f"{label} contains malformed CSV header: {exc}") from exc
+    if reader.line_num != 1:
+        raise ValueError(f"{label} contains a multiline CSV header")
     duplicates = sorted({name for name in fieldnames if fieldnames.count(name) > 1})
     if duplicates:
         raise ValueError(f"{label} has duplicate columns: {duplicates}")
@@ -137,13 +149,20 @@ def _read_csv(content: bytes, *, fields: tuple[str, ...], label: str) -> list[di
         )
 
     rows = []
-    for raw in reader:
-        if None in raw:
-            raise ValueError(f"{label} contains extra fields")
-        missing = [name for name, value in raw.items() if value is None]
-        if missing:
-            raise ValueError(f"{label} contains missing fields: {missing}")
-        rows.append({name: str(raw[name]) for name in fields})
+    previous_line = reader.line_num
+    try:
+        for raw in reader:
+            if reader.line_num != previous_line + 1:
+                raise ValueError(f"{label} contains a multiline CSV record")
+            previous_line = reader.line_num
+            if None in raw:
+                raise ValueError(f"{label} contains extra fields")
+            missing = [name for name, value in raw.items() if value is None]
+            if missing:
+                raise ValueError(f"{label} contains missing fields: {missing}")
+            rows.append({name: str(raw[name]) for name in fields})
+    except csv.Error as exc:
+        raise ValueError(f"{label} contains malformed CSV quoting: {exc}") from exc
     return rows
 
 

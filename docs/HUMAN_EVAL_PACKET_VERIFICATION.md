@@ -285,3 +285,22 @@ actual human blinding or collected ratings.
 Do not edit the pinned CSV or task manifest, replace treatment runs, or
 regenerate a packet merely to make this check pass. Preserve problematic
 material and halt human-evaluation handoff pending original-source recovery.
+
+
+## Canonical physical CSV records for blinded mapping and templates
+
+The independent packet verifier now reads `blinding_key.csv` and
+`ratings_template.csv` with strict CSV quoting, and requires a single
+physical line for every header and data record. It rejects blank physical
+records (including trailing blanks), unterminated or trailing-junk quotes,
+and multiline mapping/template records instead of silently skipping or
+reinterpreting their bytes. Valid one-line quoted values remain supported.
+These are deterministic, machine-generated handoff artifacts, **not** the
+free-text human-ratings submissions, which retain their separate documented
+multiline-notes policy. Synthetic tests also change an artifact and update
+its packet-manifest SHA-256 coherently, demonstrating why hash agreement
+alone does not validate a CSV's lexical interpretation.
+
+This is a pre-distribution ambiguity gate only. It does not recover or
+authenticate missing 2026 treatment traces, prove annotator independence,
+change the 2026 confirmatory analysis, or generate human ratings.
