@@ -107,8 +107,13 @@ def test_legacy_packet_format_still_parses_without_mutating_source_bytes(reader)
 )
 def test_invalid_utf8_packet_is_rejected(reader):
     packet = _canonical_packet().replace("Café".encode("utf-8"), b"\xff", 1)
-    with pytest.raises(ValueError, match="not valid UTF-8"):
-        reader(packet)
+    if reader is _freeze_reader:
+        # The freezer's existing API propagates Python's decoder exception.
+        with pytest.raises(UnicodeDecodeError):
+            reader(packet)
+    else:
+        with pytest.raises(ValueError, match="not valid UTF-8"):
+            reader(packet)
 
 
 def test_freeze_rejects_blank_packet_record_before_reading_ratings(tmp_path, monkeypatch):

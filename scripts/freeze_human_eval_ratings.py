@@ -166,10 +166,8 @@ def _packet_blind_ids(packet_path: Path, *, content: bytes | None = None) -> lis
     # Preserve legacy CRLF/serialization bytes in retrospective blinded freezes:
     # the separate source-bound coordinator verifier has a stricter generator
     # format contract. A direct freeze cannot establish original packet custody.
-    try:
-        packet_text = content.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ValueError("blinded packet is not valid UTF-8") from exc
+    # Preserve the existing UnicodeDecodeError contract for invalid snapshots.
+    packet_text = content.decode("utf-8")
     if not packet_text:
         raise ValueError("blinded packet contains no evaluation items")
     physical_records = packet_text.split("\n")
