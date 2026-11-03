@@ -603,3 +603,124 @@ def test_interrupted_study_does_not_invent_unattempted_predecessor_exposure():
         arm: 0 for arm in design.VARIANTS
     }
     assert result["recorded_status_counts"]["not_started"] == 35
+
+
+def test_complete_chronology_reports_exact_primary_pair_start_time_separation():
+    source, receipt, log = _fixture()
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    separation = result["recorded_completed_primary_pair_start_separation_us"]
+    for contrast, (right, left) in {
+        "D6_minus_D3": ("D6", "D3"),
+        "P6_minus_D6": ("P6", "D6"),
+        "P6V_minus_P6": ("P6V", "P6"),
+    }.items():
+        expected = {"left_before_right": [], "right_before_left": []}
+        for row in design.build_plan(source)["schedule"]:
+            order = row["arm_order"]
+            direction = (
+                "left_before_right"
+                if order.index(left) < order.index(right)
+                else "right_before_left"
+            )
+            expected[direction].append(
+                abs(order.index(right) - order.index(left)) * 12_000_000
+            )
+        for direction, values in expected.items():
+            observed = separation[contrast][direction]
+            assert observed == {
+                "count": len(values),
+                "minimum_microseconds": min(values),
+                "maximum_microseconds": max(values),
+                "total_microseconds": sum(values),
+            }
+        assert sum(v["count"] for v in separation[contrast].values()) == 10
+    assert result["actual_execution_independently_authenticated"] is False
+
+
+def test_large_gap_is_visible_without_changing_completed_pair_coverage():
+    source, receipt, log = _fixture()
+    baseline = audit.audit_execution_log(source, receipt, _bytes(log))
+    from datetime import datetime
+    for event in log["events"][1:]:
+        for key in ("started_at_utc", "finished_at_utc"):
+            stamp = datetime.fromisoformat(event[key].replace("Z", "+00:00"))
+            event[key] = _utc(stamp + timedelta(hours=1))
+    log["finished_at_utc"] = _utc(
+        datetime.fromisoformat(log["finished_at_utc"].replace("Z", "+00:00"))
+        + timedelta(hours=1)
+    )
+    altered = audit.audit_execution_log(source, receipt, _bytes(log))
+    assert (altered["recorded_completed_primary_pair_task_counts"]
+            == baseline["recorded_completed_primary_pair_task_counts"])
+    first_arm = design.build_plan(source)["schedule"][0]["arm_order"][0]
+    pairs = {
+        "D6_minus_D3": {"D6", "D3"},
+        "P6_minus_D6": {"P6", "D6"},
+        "P6V_minus_P6": {"P6V", "P6"},
+    }
+    for contrast, arms in pairs.items():
+        old = baseline["recorded_completed_primary_pair_start_separation_us"][contrast]
+        new = altered["recorded_completed_primary_pair_start_separation_us"][contrast]
+        old_total = sum(value["total_microseconds"] for value in old.values())
+        new_total = sum(value["total_microseconds"] for value in new.values())
+        assert new_total - old_total == (
+            3_600_000_000 if first_arm in arms else 0
+        )
+
+
+def test_failed_primary_arm_excludes_its_timing_not_other_pairs():
+    source, receipt, log = _fixture()
+    baseline = audit.audit_execution_log(source, receipt, _bytes(log))
+    first_d6 = next(event for event in log["events"] if event["variant"] == "D6")
+    first_d6["status"] = "timeout"
+    altered = audit.audit_execution_log(source, receipt, _bytes(log))
+    for contrast in ("D6_minus_D3", "P6_minus_D6", "P6V_minus_P6"):
+        lag = altered["recorded_completed_primary_pair_start_separation_us"][contrast]
+        assert sum(value["count"] for value in lag.values()) == (
+            altered["recorded_completed_primary_pair_task_counts"][contrast]
+        )
+        assert sum(value["count"] for value in lag.values()) == (
+            10 if contrast == "P6V_minus_P6" else 9
+        )
+        if contrast == "P6V_minus_P6":
+            assert lag == baseline[
+                "recorded_completed_primary_pair_start_separation_us"
+            ][contrast]
+
+
+def test_no_completed_primary_pairs_yield_null_extrema_not_invented_zeros():
+    source, receipt, log = _fixture()
+    _mark_unattempted_suffix(log, 1)
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    for directions in result[
+        "recorded_completed_primary_pair_start_separation_us"
+    ].values():
+        for metrics in directions.values():
+            assert metrics == {
+                "count": 0, "minimum_microseconds": None,
+                "maximum_microseconds": None, "total_microseconds": 0,
+            }
+
+
+def test_fractional_start_times_retain_microsecond_precision():
+    source, receipt, log = _fixture()
+    baseline = audit.audit_execution_log(source, receipt, _bytes(log))
+    first = log["events"][0]
+    first["started_at_utc"] = first["started_at_utc"].replace(
+        "Z", ".123456Z"
+    )
+    first["finished_at_utc"] = first["finished_at_utc"].replace(
+        "Z", ".123456Z"
+    )
+    altered = audit.audit_execution_log(source, receipt, _bytes(log))
+    first_arm = design.build_plan(source)["schedule"][0]["arm_order"][0]
+    for contrast, arms in {
+        "D6_minus_D3": {"D6", "D3"},
+        "P6_minus_D6": {"P6", "D6"},
+        "P6V_minus_P6": {"P6V", "P6"},
+    }.items():
+        old = baseline["recorded_completed_primary_pair_start_separation_us"][contrast]
+        new = altered["recorded_completed_primary_pair_start_separation_us"][contrast]
+        old_total = sum(value["total_microseconds"] for value in old.values())
+        new_total = sum(value["total_microseconds"] for value in new.values())
+        assert new_total - old_total == (-123456 if first_arm in arms else 0)

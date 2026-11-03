@@ -139,6 +139,11 @@ def audit_execution_log(
     completed_variants_by_task = {
         row["task_id"]: set() for row in plan["schedule"]
     }
+    # Preserve only successfully completed, validated event start timestamps
+    # for outcome-blind within-task time-separation diagnostics.
+    completed_starts_by_task = {
+        row["task_id"]: {} for row in plan["schedule"]
+    }
     # A balanced *planned* Williams schedule need not remain balanced among
     # actually attempted or completed cells after interruption/attrition.
     slot_keys = ("1", "2", "3", "4")
@@ -208,6 +213,8 @@ def audit_execution_log(
         if finished > study_finish:
             raise design.DesignError(f"event {index} finishes outside study window")
         previous_finish = finished
+        if status == "completed":
+            completed_starts_by_task[task_id][variant] = started
 
     if counts["not_started"] == len(events):
         raise design.DesignError(
@@ -236,6 +243,10 @@ def audit_execution_log(
         name: {"left_before_right": 0, "right_before_left": 0}
         for name in primary_pairs
     }
+    pair_start_separations_us = {
+        name: {"left_before_right": [], "right_before_left": []}
+        for name in primary_pairs
+    }
     for row in plan["schedule"]:
         completed = completed_variants_by_task[row["task_id"]]
         for name, (right, left) in primary_pairs.items():
@@ -247,6 +258,27 @@ def audit_execution_log(
                 else "right_before_left"
             )
             completed_pair_order_counts[name][direction] += 1
+            starts = completed_starts_by_task[row["task_id"]]
+            # Use integer microseconds rather than floating-point total_seconds()
+            # so fractional UTC timestamps retain exact subsecond custody.
+            delta = abs(starts[right] - starts[left])
+            elapsed_us = (
+                (delta.days * 86400 + delta.seconds) * 1_000_000
+                + delta.microseconds
+            )
+            pair_start_separations_us[name][direction].append(elapsed_us)
+    completed_pair_start_separation_us = {
+        name: {
+            direction: {
+                "count": len(values),
+                "minimum_microseconds": min(values, default=None),
+                "maximum_microseconds": max(values, default=None),
+                "total_microseconds": sum(values),
+            }
+            for direction, values in direction_values.items()
+        }
+        for name, direction_values in pair_start_separations_us.items()
+    }
 
     # First-order/adjacent exposure matters separately from pair precedence:
     # an arm that occurs earlier but is not adjacent is not its predecessor.
@@ -296,6 +328,9 @@ def audit_execution_log(
         "recorded_attempted_position_counts_by_variant": attempted_position_counts_by_variant,
         "recorded_completed_position_counts_by_variant": completed_position_counts_by_variant,
         "recorded_completed_primary_pair_order_counts": completed_pair_order_counts,
+        "recorded_completed_primary_pair_start_separation_us": (
+            completed_pair_start_separation_us
+        ),
         "planned_immediate_predecessor_counts_by_variant": planned_predecessors,
         "recorded_attempted_immediate_predecessor_counts_by_variant": attempted_predecessors,
         "recorded_completed_immediate_predecessor_counts_by_variant": completed_predecessors,
