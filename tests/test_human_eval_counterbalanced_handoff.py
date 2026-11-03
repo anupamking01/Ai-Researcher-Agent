@@ -81,7 +81,7 @@ def test_cross_bundle_hardlinked_guide_fails_even_with_identical_valid_bytes(cas
     assert canonical.read_bytes() == reverse.read_bytes()
     reverse.unlink()
     reverse.hardlink_to(canonical)
-    with pytest.raises(ValueError, match="reverse annotator_instructions.md is hard-linked"):
+    with pytest.raises(ValueError, match=r"(?:canonical|reverse) annotator_instructions.md is hard-linked"):
         handoff.verify_counterbalanced_handoff(**case)
 
 
