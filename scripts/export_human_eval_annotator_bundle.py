@@ -302,14 +302,20 @@ def _source_bound_receipt(
 
 def _read_jsonl_packet(content: bytes) -> list[dict]:
     try:
-        lines = content.decode("utf-8").splitlines()
+        packet_text = content.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("annotator packet is not valid UTF-8") from exc
+    if not packet_text:
+        raise ValueError("annotator packet contains no reports")
+    if not packet_text.endswith("\n") or "\r" in packet_text:
+        raise ValueError("annotator packet requires LF-terminated physical records")
+    lines = packet_text[:-1].split("\n")
+    if any(not raw.strip() for raw in lines):
+        raise ValueError("annotator packet contains a blank physical record")
+
     rows = []
     expected = {"blind_id", "task_id", "question", "report_markdown"}
     for line_number, raw in enumerate(lines, start=1):
-        if not raw.strip():
-            continue
         try:
             row = json.loads(
                 raw,
@@ -319,6 +325,10 @@ def _read_jsonl_packet(content: bytes) -> list[dict]:
             )
         except json.JSONDecodeError as exc:
             raise ValueError(f"annotator packet line {line_number} is not valid JSON") from exc
+        if raw != json.dumps(row, ensure_ascii=False, sort_keys=True):
+            raise ValueError(
+                f"annotator packet line {line_number} is not canonical generator JSON"
+            )
         if not isinstance(row, dict) or set(row) != expected:
             raise ValueError(
                 f"annotator packet line {line_number} schema must be exactly {sorted(expected)}"

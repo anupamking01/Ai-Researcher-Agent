@@ -162,16 +162,34 @@ def _packet_blind_ids(packet_path: Path, *, content: bytes | None = None) -> lis
             raise ValueError(f"blinded packet is missing: {packet_path}")
         content = packet_path.read_bytes()
 
+    # The source-bound packet verifier already enforces the generator's
+    # canonical LF-delimited JSONL envelope. Do not accept a weaker physical
+    # record contract when freezing or independently checking blinded ratings:
+    # a coherent packet hash alone cannot account for skipped blank records.
+    try:
+        packet_text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("blinded packet is not valid UTF-8") from exc
+    if not packet_text:
+        raise ValueError("blinded packet contains no evaluation items")
+    if not packet_text.endswith("\n") or "\r" in packet_text:
+        raise ValueError("blinded packet requires LF-terminated physical records")
+    physical_records = packet_text[:-1].split("\n")
+    if any(not raw.strip() for raw in physical_records):
+        raise ValueError("blinded packet contains a blank physical record")
+
     ids: list[str] = []
     packet_rows: list[dict] = []
     seen: set[str] = set()
-    for line_number, raw in enumerate(content.decode("utf-8").splitlines(), start=1):
-        if not raw.strip():
-            continue
+    for line_number, raw in enumerate(physical_records, start=1):
         try:
             row = json.loads(raw, object_pairs_hook=_unique_json_object)
         except json.JSONDecodeError as exc:
             raise ValueError(f"malformed packet JSON on line {line_number}") from exc
+        if raw != json.dumps(row, ensure_ascii=False, sort_keys=True):
+            raise ValueError(
+                f"blinded packet line {line_number} is not canonical generator JSON"
+            )
         if not isinstance(row, dict) or set(row) != set(PACKET_FIELDS):
             raise ValueError(
                 f"packet line {line_number} schema must be exactly {sorted(PACKET_FIELDS)}"

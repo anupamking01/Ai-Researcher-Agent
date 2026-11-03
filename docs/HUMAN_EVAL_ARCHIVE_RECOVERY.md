@@ -3,6 +3,19 @@
 **Status (2026-10-27): blocked on original report and handoff custody.**
 This is an operational inventory and recovery plan, not an experiment or human-evaluation result.
 
+## Canonical blinded packet custody at every handoff
+
+The coordinator packet verifier already requires the packet builder's exact
+physical JSONL format: UTF-8, one canonically serialized JSON object per LF-only
+line, no blank physical records, and a final LF. The annotator-bundle reader
+and blinded ratings freezer/independent freeze verifier now enforce that same
+record envelope rather than silently skipping lines or accepting alternative
+JSON spellings. A self-consistently rehashed candidate is not enough to waive
+this contract. Original packet bytes and fingerprints are preserved; invalid
+candidates must be rejected rather than normalized or rewritten. This
+prospective integrity check does **not** authenticate the unavailable original
+treatment reports or create human-evaluation evidence.
+
 ## Why this is a research gate
 
 VERA's versioned checkout contains the frozen automated-treatment/evaluator
