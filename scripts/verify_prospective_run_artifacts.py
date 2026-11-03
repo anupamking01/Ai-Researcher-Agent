@@ -47,6 +47,8 @@ _RUNTIME_FIELDS = frozenset({
     "search_candidate_multiplier", "browse_timeout_seconds",
     "run_timeout_seconds", "max_concurrent_browses",
 })
+_BAD_PERCENT_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
+_PERCENT_TRIPLET = re.compile(r"%[0-9A-Fa-f]{2}")
 
 
 def _json_bytes(raw: bytes, description: str) -> object:
@@ -246,6 +248,13 @@ def _source_fetch_identity(url: object, *, number: int) -> str:
         raise design.DesignError(
             f"trace {number} source ledger requires bounded, visible HTTP(S) URLs"
         )
+    # urlsplit accepts bare '%' and malformed escapes without complaint.
+    # Reject them even in ignored fragments: a ledger needs a valid URL, not
+    # just a parsable host. Never silently repair submitted source evidence.
+    if _BAD_PERCENT_ESCAPE.search(url):
+        raise design.DesignError(
+            f"trace {number} source ledger has malformed percent encoding"
+        )
     try:
         parsed = urlsplit(url)
         host = parsed.hostname
@@ -292,8 +301,18 @@ def _source_fetch_identity(url: object, *, number: int) -> str:
     default_port = 443 if parsed.scheme == "https" else 80
     if port is not None and port != default_port:
         authority += f":{port}"
-    path = parsed.path or "/"
-    query = f"?{parsed.query}" if parsed.query else ""
+    # RFC 3986 percent-triplet hexadecimal case is not part of a resource's
+    # identity. Normalize only hex digits, never unquote: an encoded reserved
+    # delimiter can be distinct from the literal delimiter.
+    path = _PERCENT_TRIPLET.sub(
+        lambda match: match.group(0).upper(), parsed.path or "/"
+    )
+    query = (
+        "?" + _PERCENT_TRIPLET.sub(
+            lambda match: match.group(0).upper(), parsed.query
+        )
+        if parsed.query else ""
+    )
     return f"{parsed.scheme}://{authority}{path}{query}"
 
 

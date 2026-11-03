@@ -1005,6 +1005,118 @@ def test_same_fetch_resource_cannot_inflate_scheduled_source_count(
         _audit(fixture)
 
 
+# Synthetic prospective evidence only: source URL syntax and RFC 3986
+# percent-triplet case must not distort recorded retrieval-budget accounting.
+
+
+@pytest.mark.parametrize("bad_url", [
+    "https://synthetic.invalid/source%",
+    "https://synthetic.invalid/source%2",
+    "https://synthetic.invalid/source%GG",
+    "https://synthetic.invalid/search?q=%xF",
+    "https://synthetic.invalid/search?q=%20%Z0",
+    "https://synthetic.invalid/source#ignored%ZZ",
+])
+def test_malformed_percent_escape_rejected_even_with_rehashed_trace(
+    tmp_path, bad_url
+):
+    fixture = _fixture(tmp_path)
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[bad_url], successful_urls=[bad_url], failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    with pytest.raises(design.DesignError, match="source ledger.*percent"):
+        _audit(fixture)
+
+
+@pytest.mark.parametrize("aliases", [
+    ("https://synthetic.invalid/doc%2fpart", "https://synthetic.invalid/doc%2Fpart"),
+    ("https://synthetic.invalid/search?q=%3a", "https://synthetic.invalid/search?q=%3A"),
+])
+def test_percent_escape_hex_case_cannot_double_count_a_fetch_target(tmp_path, aliases):
+    fixture = _fixture(tmp_path)
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=2, successful_source_count=2, failed_source_count=0,
+            scheduled_urls=list(aliases), successful_urls=list(aliases), failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    with pytest.raises(design.DesignError, match="source ledger.*resource"):
+        _audit(fixture)
+
+
+@pytest.mark.parametrize("scheduled, outcome", [
+    ("https://synthetic.invalid/doc%2fpart", "https://synthetic.invalid/doc%2Fpart"),
+    ("https://synthetic.invalid/search?q=%3a", "https://synthetic.invalid/search?q=%3A"),
+])
+def test_percent_escape_case_reconciles_scheduled_with_success(tmp_path, scheduled, outcome):
+    fixture = _fixture(tmp_path)
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[scheduled], successful_urls=[outcome], failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    assert _audit(fixture)["self_reported_source_ledgers_within_frozen_budgets"] is True
+
+
+def test_encoded_reserved_slash_is_not_confused_with_literal_slash(tmp_path):
+    fixture = _fixture(tmp_path)
+    urls = [
+        "https://synthetic.invalid/doc%2Fpart",
+        "https://synthetic.invalid/doc/part",
+    ]
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=2, successful_source_count=2, failed_source_count=0,
+            scheduled_urls=urls, successful_urls=urls, failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    assert _audit(fixture)["self_reported_source_ledgers_within_frozen_budgets"] is True
+
+
+def test_paired_overlap_canonicalizes_percent_triplet_case(tmp_path):
+    fixture = _fixture(tmp_path)
+    _, _, _, index, _ = fixture
+    task_id = index["cells"][0]["task_id"]
+    for variant, url in (
+        ("D3", "https://synthetic.invalid/doc%2fpart"),
+        ("D6", "https://synthetic.invalid/doc%2Fpart"),
+    ):
+        number = next(
+            i for i, cell in enumerate(index["cells"])
+            if cell["task_id"] == task_id and cell["variant"] == variant
+        )
+
+        def set_ledger(trace):
+            trace.update(
+                source_count=1, successful_source_count=1, failed_source_count=0,
+                scheduled_urls=[url], successful_urls=[url], failed_urls=[],
+            )
+
+        _rewrite_synthetic_source_ledger(fixture, cell_number=number, change=set_ledger)
+
+    receipt = _audit(fixture)
+    pair = receipt["self_reported_primary_pair_source_overlap_by_contrast"]["D6 - D3"]
+    for bucket in ("all_attempted_pairs", "both_completed_pairs_only"):
+        for metric in ("scheduled", "successful"):
+            assert pair[bucket][metric] == {
+                "shared": 1, "earlier_only": 0, "later_only": 0,
+            }
+    assert "synthetic.invalid" not in str(receipt)
+    assert receipt["model_or_retrieval_calls_verified"] is False
+
+
 @pytest.mark.parametrize("equivalent_urls", [
     (
         "https://[2001:db8::1]/study",

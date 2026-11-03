@@ -120,7 +120,8 @@ The six-field prospective source ledger additionally requires each recorded
 source identifier to be an **absolute HTTP(S) URL**, at most 2,048 characters,
 with a nonempty host and an optional valid, nonzero network port. Non-web
 schemes, local paths, embedded credentials, whitespace, control/format
-characters, backslashes and malformed authorities fail closed. DNS hosts must
+characters, backslashes, malformed percent escapes (including in fragments),
+and malformed authorities fail closed. DNS hosts must
 have valid, nonempty ASCII/IDNA labels (at most 63 characters each and 253
 characters overall, with no leading/trailing label hyphen); terminal-dot
 DNS aliases and empty interior labels are rejected as noncanonical rather
@@ -138,7 +139,10 @@ IPv4-mapped IPv6 literal forms) are treated as one network address, not
 separate sources. Link-local interface-zone suffixes such as
 `[fe80::1%25eth0]` are rejected as nonportable source identifiers rather
 than silently folded into a different fetch target. Distinct IP addresses
-and distinct query strings remain distinct.
+and distinct query strings remain distinct. Valid percent-encoded octets
+are normalized **only** for hexadecimal letter case within path and query
+(so %2f and %2F identify the same recorded fetch target). Encoded reserved
+characters (such as %2F) remain distinct from literal delimiters (such as /).
 The query
 string remains significant. The outcome sets must partition the scheduled **fetch identities**.
 A reported outcome may have a different URL fragment, host capitalization,
@@ -155,8 +159,8 @@ the syntactic URL/fetch-identity gate.
 This is a conservative **prospective, self-reported non-overcounting rule**,
 not proof that a network request occurred, the URL resolved, the server
 returned particular evidence, or that distinct URLs had distinct contents.
-Redirects, percent-encoding equivalences and near-duplicate pages are not
-deduplicated. Preserve any source trace rejected by the rule unchanged as
+Redirects, other percent-encoding equivalences (including percent-encoded
+unreserved characters), and near-duplicate pages are not deduplicated. Preserve any source trace rejected by the rule unchanged as
 a documented protocol deviation; do not select or rerun results to pass.
 The historical pilot, frozen automated confirmatory analysis, exploratory
 results, and pending human validation remain untouched.
