@@ -293,11 +293,17 @@ def _source_fetch_identity(url: object, *, number: int) -> str:
                 for label in normalized_host.split(".")
             )):
                 raise ValueError("source DNS host labels are not canonical")
-        # Some HTTP clients interpret all-numeric host spellings as IPv4,
-        # including abbreviated, decimal-integer and leading-zero forms.
-        # Reject ambiguous spellings instead of counting aliases as new
-        # sources or guessing which client interpretation was used.
-        if ":" not in normalized_host and re.fullmatch(r"[0-9.]+", normalized_host):
+        # Some HTTP clients interpret numeric-looking DNS host spellings
+        # as IPv4, including hexadecimal octets/integer aliases such as
+        # 0x7f.0.0.1 or 0x7f000001. A [0-9.]+ check alone misses those
+        # spellings, which can count the same resource more than once.
+        # Reject numeric-style labels unless the *whole* host is canonical
+        # four-octet dotted-decimal IPv4. Keep normal mixed DNS labels.
+        numeric_style_host = ":" not in normalized_host and all(
+            re.fullmatch(r"(?:[0-9]+|0x[0-9a-f]+)", label) is not None
+            for label in normalized_host.split(".")
+        )
+        if numeric_style_host:
             try:
                 ipv4 = ipaddress.IPv4Address(normalized_host)
             except ValueError as exc:

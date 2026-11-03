@@ -130,13 +130,16 @@ Standard IDN domains remain valid and their Punycode spellings reconcile as
 one fetch identity. IPv6 literals are handled separately; URL queries and
 ordinary fragment references remain eligible. Empty explicitly written
 network ports (for DNS or bracketed IPv6 authorities) are rejected even
-though Python's URL parser treats them as an omitted port. All-numeric
-hostname forms are accepted only as canonical four-octet dotted-decimal
-IPv4 literals (e.g. 127.0.0.1). Leading-zero, abbreviated, integer-only
-and invalid dotted-numeric spellings fail closed, since HTTP clients can
-interpret such spellings differently and they could inflate unique
-retrieval-source counts. Ordinary DNS names and canonical IPv4/IPv6 with
-valid ports are unaffected. Do not silently repair a rejected recorded URL.
+though Python's URL parser treats them as an omitted port. Numeric-style
+hostnames (decimal and `0x`-prefixed hexadecimal labels) are accepted only
+as canonical four-octet dotted-decimal IPv4 literals (e.g. 127.0.0.1).
+Leading-zero, abbreviated, decimal-integer, hexadecimal-integer, mixed
+hexadecimal-octet and invalid dotted-numeric spellings fail closed, since
+HTTP clients can interpret them as aliases of the same IPv4 resource and
+inflate unique retrieval-source counts. A hexadecimal-looking label in
+an otherwise ordinary DNS name (e.g. `0x7f.synthetic.invalid`) is not
+reclassified as an IP literal. Canonical IPv4/IPv6 and ordinary DNS names
+with valid ports are unaffected. Do not silently repair a rejected URL.
 
 **One fetchable HTTP resource cannot count multiple times** within an
 individual scheduled/successful/failed URL list simply through spelling

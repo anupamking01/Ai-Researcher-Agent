@@ -1260,6 +1260,50 @@ def test_ambiguous_http_authority_rejected_despite_rehashed_index(tmp_path, ambi
         _audit(fixture)
 
 
+# Numeric-looking hexadecimal authorities can be interpreted as IPv4 by
+# HTTP clients (including the libc inet_aton parser), yet were previously
+# accepted as ordinary DNS labels after an all-decimal-only check.
+@pytest.mark.parametrize("hex_alias_url", [
+    "https://0x7f000001/source",       # hexadecimal integer localhost
+    "https://0X7F.0.0.1/source",       # uppercase hex octet
+    "https://127.0.0x1/source",       # mixed decimal and hexadecimal
+    "https://0x7f.1/source",          # abbreviated mixed notation
+    "https://0xff.0xff.0xff.0xff/source",
+    "https://0x100000000/source",     # out-of-range hexadecimal integer
+])
+def test_hexadecimal_ipv4_alias_rejected_even_with_rehashed_index(tmp_path, hex_alias_url):
+    fixture = _fixture(tmp_path)
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[hex_alias_url], successful_urls=[hex_alias_url],
+            failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    with pytest.raises(design.DesignError, match="source ledger.*invalid HTTP"):
+        _audit(fixture)
+
+
+@pytest.mark.parametrize("dns_url", [
+    "https://0x7f.synthetic.invalid/source",
+    "https://123.456.synthetic.invalid/source",
+    "https://data-0x7f.synthetic.invalid/source",
+])
+def test_numeric_like_dns_label_with_nonnumeric_suffix_remains_valid(tmp_path, dns_url):
+    fixture = _fixture(tmp_path)
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[dns_url], successful_urls=[dns_url], failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    assert _audit(fixture)["self_reported_source_ledgers_within_frozen_budgets"] is True
+
+
 @pytest.mark.parametrize("scheduled,outcome", [
     ("https://127.0.0.1/source#part", "https://127.0.0.1:443/source"),
     ("http://127.0.0.1:80/source", "http://127.0.0.1/source#part"),
