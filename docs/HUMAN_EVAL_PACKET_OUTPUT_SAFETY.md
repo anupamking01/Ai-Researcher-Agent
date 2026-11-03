@@ -51,3 +51,28 @@ This guardrail does not prove annotator independence, make all four writes an
 atomic filesystem transaction, or protect against an unrelated process that
 deletes files after publication. The packet verifier and the pre-unblinding
 freeze verifier remain separate required provenance checks.
+
+## Invisible directional-mark display integrity (prospective packets)
+
+Before publishing a blinded packet, the offline content checker rejects three
+invisible bidirectional marks (U+061C ARABIC LETTER MARK, U+200E LEFT-TO-RIGHT
+MARK, U+200F RIGHT-TO-LEFT MARK) as well as the previously blocked explicit
+embedding/override/isolate characters and deprecated directional controls
+U+206A–U+206F. The policy checks the original question/report text, rendered
+Markdown character references, and decoded link/title metadata. Invisible
+marks can change the perceived order of identifiers, citations, or source URLs
+without changing their underlying bytes; permitting them could make otherwise
+identical blind review materials appear different to annotators. Synthetic
+regressions cover raw marks, HTML character references, and percent-encoded
+link metadata. Ordinary printable Arabic, Hebrew, Hindi, and other Unicode
+text remains allowed, as do regular tabs and line breaks.
+
+This is a conservative presentation-integrity rule for **future** blinded
+human evaluation, not a claim that any historical report contained these marks
+or that hidden markers are the only possible source of unblinding. If an
+authentic recovered report contains a legitimate directional mark, preserve
+its exact source bytes, record the display limitation, and resolve a
+pre-distribution protocol deviation rather than silently editing the report.
+The source-recovery gate, independent archival authentication, and recruitment
+of two independent blinded annotators remain unmet. No human ratings or
+historical measurements are produced or changed by this check.

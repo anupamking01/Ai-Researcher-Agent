@@ -340,8 +340,9 @@ def _contains_unsafe_annotator_display_controls(text: str) -> bool:
     return any(
         (ord(character) < 0x20 and character not in "\t\n\r")
         or 0x7f <= ord(character) <= 0x9f
+        or ord(character) in (0x061c, 0x200e, 0x200f)
         or 0x202a <= ord(character) <= 0x202e
-        or 0x2066 <= ord(character) <= 0x2069
+        or 0x2066 <= ord(character) <= 0x206f
         for character in text
     )
 

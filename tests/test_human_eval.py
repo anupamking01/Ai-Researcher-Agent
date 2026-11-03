@@ -403,9 +403,15 @@ def test_blinding_audit_rejects_invisible_combining_mark_leakage(field, leaked_t
         "Research finding\u0085 with C1 control",
         "Research finding\u202e with bidirectional override",
         "Research finding\u2066 with bidirectional isolate",
+        "Research finding\u061c with Arabic letter mark",
+        "Research finding\u200e with left-to-right mark",
+        "Research finding\u200f with right-to-left mark",
+        "Research finding\u206a with deprecated directional formatting",
     ],
     ids=[
         "ansi-escape", "C0", "DEL", "C1", "bidi-override", "bidi-isolate",
+        "arabic-letter-mark", "left-to-right-mark", "right-to-left-mark",
+        "deprecated-directional-control",
     ],
 )
 def test_blinding_audit_rejects_unsafe_display_controls_in_both_fields(
@@ -431,6 +437,9 @@ def test_blinding_audit_rejects_unsafe_display_controls_in_both_fields(
         "Evidence &#x202E; reversed after rendering.",
         "Evidence &#8238; reordered after rendering.",
         "Evidence &#x2066; isolated after rendering.",
+        "Evidence &#x200E; reordered after rendering.",
+        "Evidence &#x61C; carries an invisible Arabic letter mark.",
+        "[paper](https://example.test/%E2%80%8F)",
         '[paper](https://example.test "Title &#x202E; concealed")',
         "[paper](https://example.test/%E2%80%AE)",
         "[paper][source]\n\n[source]: https://example.test/%E2%80%AE",
@@ -438,7 +447,9 @@ def test_blinding_audit_rejects_unsafe_display_controls_in_both_fields(
     ],
     ids=[
         "hex-numeric-entity", "decimal-numeric-entity", "bidi-isolate-entity",
-        "title-entity", "url-encoded-bidi", "reference-url-encoded-bidi",
+        "left-to-right-mark-entity", "arabic-letter-mark-entity",
+        "url-encoded-right-to-left-mark", "title-entity",
+        "url-encoded-bidi", "reference-url-encoded-bidi",
         "url-encoded-escape",
     ],
 )

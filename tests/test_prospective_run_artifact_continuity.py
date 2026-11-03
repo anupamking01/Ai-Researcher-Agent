@@ -738,6 +738,10 @@ def test_malformed_report_claim_fails_as_design_error(tmp_path, malformed_report
     "Research report\u0085 with C1 control".encode("utf-8"),
     "Research report\u202e with reversed display".encode("utf-8"),
     "Research report\u2066 with directional isolate".encode("utf-8"),
+    "Research report\u061c with Arabic letter mark".encode("utf-8"),
+    "Research report\u200e with left-to-right mark".encode("utf-8"),
+    "Research report\u200f with right-to-left mark".encode("utf-8"),
+    "Research report\u206a with deprecated direction control".encode("utf-8"),
 ])
 def test_report_display_controls_fail_even_when_trace_and_index_are_rehashed(
     tmp_path, replacement_report
