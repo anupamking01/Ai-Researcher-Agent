@@ -460,7 +460,7 @@ def test_failed_arm_removes_one_realized_exposure_and_precedence_not_attempt():
     assert sum(attempted.values()) == 10
     assert sum(completed.values()) == 9
     assert result["recorded_completed_primary_pair_order_counts"]["D6_minus_D3"] == {
-        "left_before_right": 4, "right_before_left": 5,
+        "left_before_right": 5, "right_before_left": 4,
     }
     assert result["recorded_completed_primary_pair_order_counts"]["P6V_minus_P6"] == {
         "left_before_right": 5, "right_before_left": 5,
@@ -489,7 +489,7 @@ def test_interruption_exposes_surviving_position_and_order_imbalance():
         assert result["recorded_completed_position_counts_by_variant"][arm] == expected
     assert result["unattempted_cells"] == 35
     assert result["recorded_fully_completed_task_count"] == 1
-    for contrast, (right, left) in {
+    for contrast, (left, right) in {
         "D6_minus_D3": ("D6", "D3"),
         "P6_minus_D6": ("P6", "D6"),
         "P6V_minus_P6": ("P6V", "P6"),
@@ -605,11 +605,56 @@ def test_interrupted_study_does_not_invent_unattempted_predecessor_exposure():
     assert result["recorded_status_counts"]["not_started"] == 35
 
 
+@pytest.mark.parametrize("contrast", (
+    "D6_minus_D3", "P6_minus_D6", "P6V_minus_P6",
+))
+@pytest.mark.parametrize("left_first", (True, False))
+def test_primary_contrast_direction_uses_named_subtraction_operands(
+    contrast, left_first,
+):
+    """A non-balanced completed subset must preserve the operand orientation."""
+    source, receipt, log = _fixture()
+    left, right = contrast.split("_minus_")
+    schedule = design.build_plan(source)["schedule"]
+    selected = next(
+        row for row in schedule
+        if (row["arm_order"].index(left) < row["arm_order"].index(right))
+        == left_first
+    )
+    # Remove all but one completed pair from this contrast.  The full 5:5
+    # schedule would mask an accidental swap of left/right direction labels.
+    for event in log["events"]:
+        if event["task_id"] != selected["task_id"] and event["variant"] == left:
+            event["status"] = "failed"
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    expected_direction = "left_before_right" if left_first else "right_before_left"
+    other_direction = "right_before_left" if left_first else "left_before_right"
+    counts = result["recorded_completed_primary_pair_order_counts"][contrast]
+    assert counts == {expected_direction: 1, other_direction: 0}
+    distance_us = (
+        abs(selected["arm_order"].index(left) - selected["arm_order"].index(right))
+        * 12_000_000
+    )
+    timing = result["recorded_completed_primary_pair_start_separation_us"][contrast]
+    assert timing[expected_direction] == {
+        "count": 1,
+        "minimum_microseconds": distance_us,
+        "maximum_microseconds": distance_us,
+        "total_microseconds": distance_us,
+    }
+    assert timing[other_direction] == {
+        "count": 0,
+        "minimum_microseconds": None,
+        "maximum_microseconds": None,
+        "total_microseconds": 0,
+    }
+
+
 def test_complete_chronology_reports_exact_primary_pair_start_time_separation():
     source, receipt, log = _fixture()
     result = audit.audit_execution_log(source, receipt, _bytes(log))
     separation = result["recorded_completed_primary_pair_start_separation_us"]
-    for contrast, (right, left) in {
+    for contrast, (left, right) in {
         "D6_minus_D3": ("D6", "D3"),
         "P6_minus_D6": ("P6", "D6"),
         "P6V_minus_P6": ("P6V", "P6"),

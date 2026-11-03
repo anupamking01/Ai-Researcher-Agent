@@ -224,6 +224,9 @@ def audit_execution_log(
     # Count *logged* completed pairs by task, not favorable outcomes or
     # non-missing score observations. Do not treat these as an authorization
     # to run confirmatory inference without authenticated source artifacts.
+    # Every contrast is named <left>_minus_<right>.  Use that operand
+    # orientation for both direction counts and timing strata; swapping
+    # sides would silently invert the interpretation under attrition.
     primary_pairs = {
         "D6_minus_D3": ("D6", "D3"),
         "P6_minus_D6": ("P6", "D6"),
@@ -249,7 +252,7 @@ def audit_execution_log(
     }
     for row in plan["schedule"]:
         completed = completed_variants_by_task[row["task_id"]]
-        for name, (right, left) in primary_pairs.items():
+        for name, (left, right) in primary_pairs.items():
             if left not in completed or right not in completed:
                 continue
             direction = (
