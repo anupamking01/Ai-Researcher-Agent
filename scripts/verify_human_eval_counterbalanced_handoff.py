@@ -14,6 +14,64 @@ from pathlib import Path
 from scripts import export_human_eval_annotator_bundle as exporter
 
 
+def _snapshot_bundle_pair_sources(canonical_root: Path, reverse_root: Path) -> dict:
+    """Capture both still-blinded bundle revisions before either serial audit.
+
+    One-bundle source verifiers close their own observation windows, but a
+    previously verified canonical bundle may be replaced while the reverse
+    bundle is checked. Retain bounded fingerprints and inode metadata across
+    the *whole pair*; never read coordinator-only mapping or rating files.
+    """
+    import hashlib
+
+    observations = {}
+    for order, root in (("canonical", canonical_root), ("reverse", reverse_root)):
+        exporter._require_annotator_artifact_set(root)
+        paths = [root, *(root / name for name in exporter.ANNOTATOR_ARTIFACTS)]
+        try:
+            identities = [exporter._evidence_stat_signature(path) for path in paths]
+            digests = {
+                name: hashlib.sha256(
+                    exporter._regular_bytes(root / name, label=f"{order} paired handoff {name}")
+                ).hexdigest()
+                for name in exporter.ANNOTATOR_ARTIFACTS
+            }
+            if identities != [exporter._evidence_stat_signature(path) for path in paths]:
+                raise ValueError(f"{order} bundle changed during paired handoff capture")
+        except OSError as exc:
+            raise ValueError(f"{order} bundle unavailable during paired handoff capture") from exc
+        observations[order] = (root, identities, digests)
+    return observations
+
+
+def _require_bundle_pair_sources_unchanged(observations: dict) -> None:
+    """Recheck both full inventories, identities and bytes before pair success."""
+    import hashlib
+
+    def check_identities() -> None:
+        for order, (root, identities, _) in observations.items():
+            exporter._require_annotator_artifact_set(root)
+            paths = [root, *(root / name for name in exporter.ANNOTATOR_ARTIFACTS)]
+            try:
+                current = [exporter._evidence_stat_signature(path) for path in paths]
+            except OSError as exc:
+                raise ValueError(f"{order} bundle disappeared during paired handoff") from exc
+            if current != identities:
+                raise ValueError(f"{order} bundle changed during paired handoff")
+
+    check_identities()
+    for order, (root, _, digests) in observations.items():
+        for name, expected in digests.items():
+            observed = hashlib.sha256(
+                exporter._regular_bytes(
+                    root / name, label=f"{order} paired handoff recheck {name}"
+                )
+            ).hexdigest()
+            if observed != expected:
+                raise ValueError(f"{order} {name} bytes changed during paired handoff")
+    check_identities()
+
+
 def verify_counterbalanced_handoff(
     *,
     packet_root: Path,
@@ -55,6 +113,10 @@ def verify_counterbalanced_handoff(
         "repo_root": Path(repo_root),
         "annotator_guide_path": Path(annotator_guide_path),
     }
+    # Take the pair-wide checkpoint before either serial source-bound audit.
+    # The audits validate contents; the closing check prevents a stale first
+    # bundle from being accepted after the second has been inspected.
+    pair_sources = _snapshot_bundle_pair_sources(canonical_root, reverse_root)
     receipts = {
         "canonical": exporter.verify_annotator_bundle_against_source(
             output_root=canonical_root,
@@ -76,6 +138,8 @@ def verify_counterbalanced_handoff(
             raise ValueError(f"{order} bundle does not cover the expected report count")
     if receipts["canonical"]["annotator_guide_sha256"] != receipts["reverse"]["annotator_guide_sha256"]:
         raise ValueError("counterbalanced annotator guides do not match")
+
+    _require_bundle_pair_sources_unchanged(pair_sources)
 
     # The export verifier proves both presentations contain the same rows and
     # content in opposite order relative to the pinned coordinator source.

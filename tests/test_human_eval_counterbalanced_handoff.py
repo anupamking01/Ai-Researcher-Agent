@@ -137,3 +137,67 @@ def test_verifier_does_not_change_source_bytes(case):
     before = [path.read_bytes() for path in files]
     handoff.verify_counterbalanced_handoff(**case)
     assert [path.read_bytes() for path in files] == before
+
+
+def test_first_bundle_content_mutation_during_reverse_verification_fails(case, monkeypatch):
+    """A source-bound receipt for one bundle cannot outlive the pair audit."""
+    original = exporter.verify_annotator_bundle_against_source
+
+    def mutate_canonical(*, expected_presentation_order, **kwargs):
+        if expected_presentation_order == "reverse":
+            first = case["canonical_root"] / "packet.jsonl"
+            first.write_bytes(first.read_bytes() + b"\\n")
+        return original(expected_presentation_order=expected_presentation_order, **kwargs)
+
+    monkeypatch.setattr(exporter, "verify_annotator_bundle_against_source", mutate_canonical)
+    with pytest.raises(ValueError, match="canonical bundle changed during paired handoff"):
+        handoff.verify_counterbalanced_handoff(**case)
+
+
+def test_first_bundle_same_byte_inode_replacement_during_reverse_fails(case, monkeypatch):
+    """Even a byte-identical pathname replacement invalidates pair custody."""
+    original = exporter.verify_annotator_bundle_against_source
+
+    def replace_canonical(*, expected_presentation_order, **kwargs):
+        if expected_presentation_order == "reverse":
+            first = case["canonical_root"] / "packet.jsonl"
+            original_bytes = first.read_bytes()
+            first.unlink()
+            first.write_bytes(original_bytes)
+        return original(expected_presentation_order=expected_presentation_order, **kwargs)
+
+    monkeypatch.setattr(exporter, "verify_annotator_bundle_against_source", replace_canonical)
+    with pytest.raises(ValueError, match="canonical bundle changed during paired handoff"):
+        handoff.verify_counterbalanced_handoff(**case)
+
+
+def test_first_bundle_receives_extra_file_during_reverse_fails(case, monkeypatch):
+    """Do not issue pair success after a coordinator-only file was injected."""
+    original = exporter.verify_annotator_bundle_against_source
+
+    def inject_extra(*, expected_presentation_order, **kwargs):
+        if expected_presentation_order == "reverse":
+            (case["canonical_root"] / "blinding_key.csv").write_text("synthetic key")
+        return original(expected_presentation_order=expected_presentation_order, **kwargs)
+
+    monkeypatch.setattr(exporter, "verify_annotator_bundle_against_source", inject_extra)
+    with pytest.raises(ValueError, match="artifact set mismatch"):
+        handoff.verify_counterbalanced_handoff(**case)
+
+
+def test_pair_verification_never_reads_coordinator_blinding_key(case, monkeypatch):
+    """The pair-window hash pass must inspect only treatment-blind files."""
+    original = exporter._regular_bytes
+
+    def forbid_private(path, *, label):
+        if "blinding_key" in str(path):
+            raise AssertionError("pair gate must not open the blinding key")
+        return original(path, label=label)
+
+    # Underlying one-bundle source verification legitimately reads coordinator
+    # private files, so exercise only the new pair-window capture and closing check.
+    monkeypatch.setattr(exporter, "_regular_bytes", forbid_private)
+    observed = handoff._snapshot_bundle_pair_sources(
+        case["canonical_root"], case["reverse_root"]
+    )
+    handoff._require_bundle_pair_sources_unchanged(observed)

@@ -56,3 +56,22 @@ bias, authenticate any human rating, or guarantee treatment concealment from
 semantic hints in a report. Revalidate the selected bundle before distribution
 and freeze genuine submissions using the existing unblinded-key-free workflow.
 No report may be added, removed, rewritten, rerun, or selected using its scores.
+
+## Pair-wide custody across serial bundle verification
+
+A successful source-bound audit of the canonical bundle does not by itself
+guarantee that those original files still exist unchanged after the reverse
+bundle has been audited. The counterbalanced gate now captures the exact four
+annotator-visible artifacts in **both** directories before either source-bound
+verification. It preserves bounded SHA-256 digests, file identities and the
+directory inventory, then rechecks both bundles after the two verifiers pass.
+
+This rejects a first-bundle edit, same-byte inode substitution, or a newly
+injected file during verification of the second bundle. The new pair-wide
+checkpoint never opens the coordinator blinding key, annotator submissions,
+or rating files; the pre-existing one-bundle source verifier separately handles
+the restricted coordinator evidence. This is observable filesystem custody,
+not an atomic snapshot or cryptographic proof of historic origin. A transient
+change restored between observations may be missed. A passing pair receipt
+does not mean source reports have been recovered, eligible humans recruited,
+or blinded evaluations completed.
