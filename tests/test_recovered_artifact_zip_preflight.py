@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 from pathlib import Path
 import stat
 import zipfile
@@ -140,6 +141,41 @@ def test_symlink_archive_is_rejected(tmp_path):
     alias.symlink_to(target)
     with pytest.raises(audit.RecoveredArchiveError):
         audit.audit_recovered_zip(alias)
+
+
+@pytest.mark.skipif(not hasattr(os, "link"), reason="requires hardlink support")
+def test_archive_hardlink_alias_rejected_before_recovery_preflight(tmp_path):
+    """An external name could mutate an otherwise valid candidate after audit."""
+    path = _zip(tmp_path / "candidate.zip", {"report.md": b"synthetic"})
+    alias = tmp_path / "outside" / "alias.zip"
+    alias.parent.mkdir()
+    os.link(path, alias)
+
+    with pytest.raises(audit.RecoveredArchiveError, match="single-link regular"):
+        audit.audit_recovered_zip(path)
+
+
+@pytest.mark.skipif(not hasattr(os, "link"), reason="requires hardlink support")
+def test_archive_link_created_during_final_digest_fails_closed(tmp_path, monkeypatch):
+    """The final digest must precede the final file-generation checks."""
+    path = _zip(tmp_path / "candidate.zip", {"report.md": b"synthetic"})
+    alias = tmp_path / "outside" / "alias.zip"
+    alias.parent.mkdir()
+    original_fingerprint = audit._fingerprint
+    calls = 0
+
+    def fingerprint_then_alias(handle):
+        nonlocal calls
+        digest = original_fingerprint(handle)
+        calls += 1
+        if calls == 2:
+            os.link(path, alias)
+        return digest
+
+    monkeypatch.setattr(audit, "_fingerprint", fingerprint_then_alias)
+    with pytest.raises(audit.RecoveredArchiveError, match="archive changed during inspection"):
+        audit.audit_recovered_zip(path)
+    assert alias.samefile(path)
 
 
 def test_tampered_pin_rejected(tmp_path):

@@ -140,6 +140,16 @@ inspect it **before any extraction**:
 
     python -m scripts.preflight_recovered_artifact_zip <candidate.zip>
 
+The ZIP file passed to this preflight must itself be a **single-link regular
+file**, not a hardlink alias with an unobserved writable name elsewhere. The
+verifier now binds the file's link count, identity, timestamps, and size across
+the verification window; it rehashes the same descriptor **before** its final
+descriptor/path metadata observations, so a link added during the final digest
+cannot silently pass. This protects the integrity of the local inspection
+window, not custody after the command exits, and is not independent historical
+authentication. Keep recovered originals unchanged in separately controlled
+archival storage; inspect a safe working copy without modifying the source.
+
 An optional previously retained **independent ZIP-byte SHA-256** can be checked
 with `--expected-archive-sha256 <lowercase-64-hex>`. Never derive this
 historical pin from the ZIP being evaluated. This offline, read-only verifier

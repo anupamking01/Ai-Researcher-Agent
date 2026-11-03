@@ -266,10 +266,10 @@ def _verify_local_header_metadata(handle, info: zipfile.ZipInfo, *, cd_offset: i
 def _unchanged(original: os.stat_result, current: os.stat_result) -> bool:
     return (
         original.st_dev, original.st_ino, original.st_mode,
-        original.st_size, original.st_mtime_ns, original.st_ctime_ns,
+        original.st_size, original.st_nlink, original.st_mtime_ns, original.st_ctime_ns,
     ) == (
         current.st_dev, current.st_ino, current.st_mode,
-        current.st_size, current.st_mtime_ns, current.st_ctime_ns,
+        current.st_size, current.st_nlink, current.st_mtime_ns, current.st_ctime_ns,
     )
 
 
@@ -302,8 +302,14 @@ def audit_recovered_zip(
         with os.fdopen(os.open(path, flags), "rb") as handle:
             before = os.fstat(handle.fileno())
             path_before = os.stat(path, follow_symlinks=False)
-            if not stat.S_ISREG(before.st_mode) or not _unchanged(before, path_before):
-                raise RecoveredArchiveError("archive must be a stable regular file, not a link")
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or not _unchanged(before, path_before)
+            ):
+                raise RecoveredArchiveError(
+                    "archive must be a stable single-link regular file"
+                )
             if not 0 < before.st_size <= MAX_ARCHIVE_BYTES:
                 raise RecoveredArchiveError("archive file exceeds the bounded ZIP size range")
             if github_log_anchor is not None and before.st_size != github_log_anchor["size_bytes"]:
@@ -408,10 +414,14 @@ def audit_recovered_zip(
                     })
             # Re-read the same descriptor, and recheck its on-disk pathname:
             # an in-place edit or a path swap must not yield a PASS.
+            # Rehash first, then check both descriptor and directory entry.
+            # Otherwise a hardlink alias created during this final read could
+            # escape the earlier metadata checks with identical archive bytes.
+            final_archive_sha256 = _fingerprint(handle)
             if (
-                not _unchanged(before, os.fstat(handle.fileno()))
+                final_archive_sha256 != archive_sha256
+                or not _unchanged(before, os.fstat(handle.fileno()))
                 or not _unchanged(before, os.stat(path, follow_symlinks=False))
-                or _fingerprint(handle) != archive_sha256
             ):
                 raise RecoveredArchiveError("archive changed during inspection")
     except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile, EOFError, RuntimeError,
