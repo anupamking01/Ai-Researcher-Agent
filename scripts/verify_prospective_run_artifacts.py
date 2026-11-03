@@ -592,6 +592,16 @@ def audit_run_artifacts(
                 "status": event["status"],
                 "scheduled": trace["source_count"],
                 "successful": trace["successful_source_count"],
+                # URLs are already validated against exact outcome partitions.
+                # Keep fetch identities, not display URLs, and only within the
+                # bounded 40-cell audit; never emit per-task/source URLs.
+                "source_identities": {
+                    metric: frozenset(
+                        _source_fetch_identity(url, number=number)
+                        for url in trace[f"{metric}_urls"]
+                    )
+                    for metric in ("scheduled", "successful")
+                },
             }
             # A recorded arm is not comparable to another if its declared
             # model, source code, search backend or common guardrails drift.
@@ -709,7 +719,24 @@ def audit_run_artifacts(
     # missing arm as zero exposure. Failed attempts remain in this denominator,
     # with complete pairs disclosed separately. No scientific effect is tested.
     paired_source_exposure_by_contrast = {}
+    paired_source_overlap_by_contrast = {}
     for earlier, later in (("D3", "D6"), ("D6", "P6"), ("P6", "P6V")):
+        # Source identity overlap is a separate descriptive measure from
+        # the number of scheduled/successful sources. The same URL may be
+        # counted in different tasks, but never twice within one task/arm.
+        # "Earlier" and "later" are subtraction operands, NOT chronology.
+        def blank_overlap():
+            return {
+                metric: {"shared": 0, "earlier_only": 0, "later_only": 0}
+                for metric in ("scheduled", "successful")
+            }
+
+        overlap = {
+            "both_attempted_tasks": 0,
+            "both_completed_tasks": 0,
+            "all_attempted_pairs": blank_overlap(),
+            "both_completed_pairs_only": blank_overlap(),
+        }
         counts = {
             "both_attempted_tasks": 0,
             "both_completed_tasks": 0,
@@ -727,15 +754,33 @@ def audit_run_artifacts(
                 continue
             earlier_cell, later_cell = per_arm[earlier], per_arm[later]
             counts["both_attempted_tasks"] += 1
-            if (earlier_cell["status"] == "completed"
-                    and later_cell["status"] == "completed"):
+            overlap["both_attempted_tasks"] += 1
+            completed_pair = (
+                earlier_cell["status"] == "completed"
+                and later_cell["status"] == "completed"
+            )
+            if completed_pair:
                 counts["both_completed_tasks"] += 1
+                overlap["both_completed_tasks"] += 1
             for metric in ("scheduled", "successful"):
+                earlier_sources = earlier_cell["source_identities"][metric]
+                later_sources = later_cell["source_identities"][metric]
+                source_partition = {
+                    "shared": len(earlier_sources & later_sources),
+                    "earlier_only": len(earlier_sources - later_sources),
+                    "later_only": len(later_sources - earlier_sources),
+                }
+                for bucket in ("all_attempted_pairs", "both_completed_pairs_only"):
+                    if bucket == "both_completed_pairs_only" and not completed_pair:
+                        continue
+                    for key, value in source_partition.items():
+                        overlap[bucket][metric][key] += value
                 delta = later_cell[metric] - earlier_cell[metric]
                 counts[f"{metric}_delta_sum"] += delta
                 direction = "positive" if delta > 0 else "negative" if delta < 0 else "zero"
                 counts[f"{metric}_delta_{direction}"] += 1
         paired_source_exposure_by_contrast[f"{later} - {earlier}"] = counts
+        paired_source_overlap_by_contrast[f"{later} - {earlier}"] = overlap
 
     return {
         "status": "pass_local_artifact_continuity_only",
@@ -764,6 +809,9 @@ def audit_run_artifacts(
         "self_reported_source_ledgers_within_frozen_budgets": True,
         "self_reported_source_usage_by_variant": source_usage_by_variant,
         "self_reported_paired_source_exposure_by_contrast": paired_source_exposure_by_contrast,
+        "self_reported_primary_pair_source_overlap_by_contrast": (
+            paired_source_overlap_by_contrast
+        ),
         "self_reported_source_urls_http_and_fetch_distinct": True,
         "common_runtime_context_sha256": common_runtime_sha256,
         "common_runtime_context_external_pin_matched": runtime_context_external_pin_matched,

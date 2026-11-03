@@ -285,6 +285,36 @@ configured cap is not guaranteed usage. They cannot authenticate the missing
 for real blinded human ratings. Keep pilot, confirmatory automated,
 exploratory and pending human-validation claims separate.
 
+## Paired source-identity overlap (prospective; outcome-blind)
+
+The paired source-count differences do not reveal whether the *same recorded
+HTTP resource* was scheduled/successfully resolved in both arms or whether
+one arm reported new fetch targets. The additional
+`self_reported_primary_pair_source_overlap_by_contrast` receipt uses the
+already-validated URL outcome ledgers for the same three task-matched
+contrasts: `D6 - D3`, `P6 - D6`, and `P6V - P6`. This is descriptive
+source-use metadata, **not** an added confirmatory metric.
+
+For each contrast the receipt preserves `both_attempted_tasks` and
+`both_completed_tasks` and, for both `scheduled` and `successful`
+identities, sums across eligible **within-task** arm pairs: `shared`,
+`earlier_only`, and `later_only` (earlier/later mean the baseline and
+second operands of the *named* contrast, not execution time). Separate
+`all_attempted_pairs` and `both_completed_pairs_only` partitions prevent
+failed, timed-out, or cancelled attempts from silently becoming completed-pair
+evidence; an unattempted arm is **never** imputed to have zero URLs. A resource
+can contribute in more than one *task* but not twice within the same task/arm.
+HTTP fragments, host case and default ports share a canonical fetch identity;
+unverified redirects, page equivalence, provider behavior, actual source
+retrieval and source *quality* are **not** inferred.
+
+Only aggregate integer counts are emitted, never per-task URLs, source
+identities, reports, model outputs, or human ratings. These claims cannot
+establish that browsing occurred, certify genuine added information from a
+higher budget, justify post-hoc treatment exclusions/reruns, or alter the
+frozen pilot, automated confirmatory inference, exploratory analyses, or
+pending human-validation gate.
+
 ### Prospective report-direction marks (display integrity only)
 
 The local trace/report continuity checker now rejects the invisible Arabic

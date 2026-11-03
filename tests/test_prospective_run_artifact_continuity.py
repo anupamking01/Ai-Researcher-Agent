@@ -1406,6 +1406,118 @@ def test_aliases_cannot_double_count_one_resource_across_outcomes(tmp_path):
 
 # Synthetic future-replication diagnostics only: do not promote to historical
 # treatment-compliance tests or use exposure to filter primary comparisons.
+
+
+def test_paired_source_overlap_distinguishes_reuse_from_new_retrievals(tmp_path):
+    # Four synthetically reported arms for one task: a higher budget can
+    # reuse the same fetch target while introducing genuinely new URLs.
+    # Host spelling/default port/fragments must not inflate overlap counts.
+    fixture = _fixture(tmp_path)
+    task_id = fixture[3]["cells"][0]["task_id"]
+    ledgers = {
+        "D3": (["https://EXAMPLE.invalid:443/shared#first",
+                 "https://example.invalid/d3-only"], 1),
+        "D6": (["https://example.invalid/shared",
+                 "https://example.invalid/d6-only",
+                 "https://example.invalid/d6-failed"], 2),
+        "P6": (["https://example.invalid/shared#second",
+                 "https://example.invalid/p6-only"], 2),
+        "P6V": (["https://example.invalid/p6-only"], 1),
+    }
+    for variant, (urls, success_count) in ledgers.items():
+        index = next(
+            i for i, cell in enumerate(fixture[3]["cells"])
+            if cell["task_id"] == task_id and cell["variant"] == variant
+        )
+
+        def set_urls(trace):
+            trace.update(
+                source_count=len(urls),
+                successful_source_count=success_count,
+                failed_source_count=len(urls) - success_count,
+                scheduled_urls=urls,
+                successful_urls=urls[:success_count],
+                failed_urls=urls[success_count:],
+            )
+
+        _rewrite_synthetic_source_ledger(fixture, cell_number=index, change=set_urls)
+
+    receipt = _audit(fixture)
+    pairs = receipt["self_reported_primary_pair_source_overlap_by_contrast"]
+    assert set(pairs) == {"D6 - D3", "P6 - D6", "P6V - P6"}
+    expected = {
+        "D6 - D3": ((1, 1, 2), (1, 0, 1)),
+        "P6 - D6": ((1, 2, 1), (1, 1, 1)),
+        "P6V - P6": ((1, 1, 0), (1, 1, 0)),
+    }
+    for contrast, (scheduled, successful) in expected.items():
+        data = pairs[contrast]
+        assert data["both_attempted_tasks"] == 10
+        assert data["both_completed_tasks"] == 10
+        for metric, triplet in (("scheduled", scheduled), ("successful", successful)):
+            expected_partition = dict(zip(
+                ("shared", "earlier_only", "later_only"), triplet, strict=True
+            ))
+            assert data["all_attempted_pairs"][metric] == expected_partition
+            assert data["both_completed_pairs_only"][metric] == expected_partition
+    assert "example.invalid" not in str(pairs)
+    assert receipt["model_or_retrieval_calls_verified"] is False
+
+
+def test_paired_source_overlap_zero_budget_claims_do_not_invent_reuse(tmp_path):
+    receipt = _audit(_fixture(tmp_path))
+    for data in receipt["self_reported_primary_pair_source_overlap_by_contrast"].values():
+        assert data["both_attempted_tasks"] == 10
+        assert data["both_completed_tasks"] == 10
+        for partition in ("all_attempted_pairs", "both_completed_pairs_only"):
+            for metric in ("scheduled", "successful"):
+                assert data[partition][metric] == {
+                    "shared": 0, "earlier_only": 0, "later_only": 0,
+                }
+
+
+def test_paired_source_overlap_separates_failed_and_unattempted_pairs(tmp_path):
+    fixture = _fixture(tmp_path)
+    _mark_unattempted(fixture, 4)
+    _, _, log, index, root = fixture
+    failed_variant = log["events"][0]["variant"]
+    for i in range(4):
+        url = "https://shared.invalid/one"
+        def set_one(trace):
+            trace.update(
+                source_count=1, successful_source_count=1, failed_source_count=0,
+                scheduled_urls=[url], successful_urls=[url], failed_urls=[],
+            )
+        _rewrite_synthetic_source_ledger(fixture, cell_number=i, change=set_one)
+    log["events"][0]["status"] = "failed"
+    index["cells"][0]["status"] = "failed"
+    claim = index["cells"][0]["trace"]
+    trace_path = root / claim["path"]
+    trace = json.loads(trace_path.read_bytes())
+    trace["status"] = "failed"
+    raw = _bytes(trace)
+    trace_path.write_bytes(raw)
+    index["cells"][0]["trace"] = _file_claim(claim["path"], raw)
+    index["execution_log_sha256"] = _digest(_bytes(log))
+
+    receipt = _audit(fixture)
+    for contrast, earlier, later in (
+        ("D6 - D3", "D3", "D6"),
+        ("P6 - D6", "D6", "P6"),
+        ("P6V - P6", "P6", "P6V"),
+    ):
+        data = receipt["self_reported_primary_pair_source_overlap_by_contrast"][contrast]
+        both_completed = int(failed_variant not in (earlier, later))
+        assert data["both_attempted_tasks"] == 1
+        assert data["both_completed_tasks"] == both_completed
+        for metric in ("scheduled", "successful"):
+            assert data["all_attempted_pairs"][metric] == {
+                "shared": 1, "earlier_only": 0, "later_only": 0,
+            }
+            assert data["both_completed_pairs_only"][metric] == {
+                "shared": both_completed, "earlier_only": 0, "later_only": 0,
+            }
+
 def test_paired_source_exposure_zero_is_not_assumed_to_be_full_budget(tmp_path):
     receipt = _audit(_fixture(tmp_path))
     for contrast in ("D6 - D3", "P6 - D6", "P6V - P6"):
