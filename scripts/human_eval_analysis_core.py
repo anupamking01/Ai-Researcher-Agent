@@ -321,7 +321,9 @@ def _require_snapshot_tree_depth(depth, *, label):
         )
 
 
-def _bounded_snapshot_names(descriptor, *, maximum, label, checking_stability=False):
+def _bounded_snapshot_names(
+    descriptor, *, maximum, label, checking_stability=False, overflow_error=None
+):
     """Enumerate at most one name over the limit before sorting a bounded set.
 
     Rechecks use the original entry count as the bound, so a changed directory
@@ -337,7 +339,8 @@ def _bounded_snapshot_names(descriptor, *, maximum, label, checking_stability=Fa
                             f"{label} changed while it was being snapshotted"
                         )
                     raise ValueError(
-                        f"{label} exceeds human-analysis freeze snapshot entry limit"
+                        overflow_error
+                        or f"{label} exceeds human-analysis freeze snapshot entry limit"
                     )
                 names.append(entry.name)
     except OSError as exc:
@@ -580,6 +583,7 @@ def _reject_undeclared_freeze_sidecars(
                 )
             names_before = _bounded_snapshot_names(
                 provenance_descriptor, maximum=2, label="freeze provenance",
+                overflow_error="provenance archive contents mismatch: too many entries",
             )
             provenance_extra_names = set(names_before) - {
                 "freeze_human_eval_ratings.py",

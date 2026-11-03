@@ -99,28 +99,36 @@ def test_freeze_snapshot_rejects_root_replacement_across_all_artifacts(
     held_root = tmp_path / "frozen-v1-held"
 
     original_identity = (freeze_root.stat().st_dev, freeze_root.stat().st_ino)
-    real_listdir = core.os.listdir
+    real_names = core._bounded_snapshot_names
     root_reads = 0
 
-    def swap_path_between_bound_root_inventory_reads(path_or_descriptor):
+    def swap_path_between_bound_root_inventory_reads(
+        path_or_descriptor, *, maximum, label, checking_stability=False
+    ):
         nonlocal root_reads
         if isinstance(path_or_descriptor, int):
             current = os.fstat(path_or_descriptor)
             if (current.st_dev, current.st_ino) == original_identity:
                 root_reads += 1
                 if root_reads == 1:
-                    names = real_listdir(path_or_descriptor)
+                    names = real_names(
+            path_or_descriptor, maximum=maximum, label=label,
+            checking_stability=checking_stability,
+        )
                     freeze_root.rename(held_root)
                     replacement_root.rename(freeze_root)
                     return names
                 if root_reads == 2:
                     freeze_root.rename(replacement_root)
                     held_root.rename(freeze_root)
-        return real_listdir(path_or_descriptor)
+        return real_names(
+            path_or_descriptor, maximum=maximum, label=label,
+            checking_stability=checking_stability,
+        )
 
     monkeypatch.setattr(
-        core.os,
-        "listdir",
+        core,
+        "_bounded_snapshot_names",
         swap_path_between_bound_root_inventory_reads,
     )
 
@@ -579,16 +587,21 @@ def test_analysis_rejects_freeze_root_path_aba(
     (replacement_archive / "preflight_receipt.json").write_bytes(replacement_bytes)
 
     original_identity = (freeze_root.stat().st_dev, freeze_root.stat().st_ino)
-    real_listdir = core.os.listdir
+    real_names = core._bounded_snapshot_names
     swapped = []
     restored = []
 
-    def swap_root_between_inventory_reads(path_or_descriptor):
+    def swap_root_between_inventory_reads(
+        path_or_descriptor, *, maximum, label, checking_stability=False
+    ):
         if isinstance(path_or_descriptor, int):
             current = os.fstat(path_or_descriptor)
             if (current.st_dev, current.st_ino) == original_identity:
                 if not swapped:
-                    names = real_listdir(path_or_descriptor)
+                    names = real_names(
+            path_or_descriptor, maximum=maximum, label=label,
+            checking_stability=checking_stability,
+        )
                     freeze_root.rename(held_root)
                     replacement_root.rename(freeze_root)
                     swapped.append(True)
@@ -597,9 +610,12 @@ def test_analysis_rejects_freeze_root_path_aba(
                     freeze_root.rename(replacement_root)
                     held_root.rename(freeze_root)
                     restored.append(True)
-        return real_listdir(path_or_descriptor)
+        return real_names(
+            path_or_descriptor, maximum=maximum, label=label,
+            checking_stability=checking_stability,
+        )
 
-    monkeypatch.setattr(core.os, "listdir", swap_root_between_inventory_reads)
+    monkeypatch.setattr(core, "_bounded_snapshot_names", swap_root_between_inventory_reads)
 
     with pytest.raises(
         ValueError,
@@ -632,16 +648,21 @@ def test_analysis_checks_provenance_sidecars_from_bound_root_during_path_aba(
         (clean_provenance / filename).write_text("# synthetic\n", encoding="utf-8")
 
     original_identity = (freeze_root.stat().st_dev, freeze_root.stat().st_ino)
-    real_listdir = core.os.listdir
+    real_names = core._bounded_snapshot_names
     swapped = []
     restored = []
 
-    def swap_root_between_inventory_reads(path_or_descriptor):
+    def swap_root_between_inventory_reads(
+        path_or_descriptor, *, maximum, label, checking_stability=False
+    ):
         if isinstance(path_or_descriptor, int):
             current = os.fstat(path_or_descriptor)
             if (current.st_dev, current.st_ino) == original_identity:
                 if not swapped:
-                    names = real_listdir(path_or_descriptor)
+                    names = real_names(
+            path_or_descriptor, maximum=maximum, label=label,
+            checking_stability=checking_stability,
+        )
                     freeze_root.rename(held_root)
                     replacement_root.rename(freeze_root)
                     swapped.append(True)
@@ -650,7 +671,10 @@ def test_analysis_checks_provenance_sidecars_from_bound_root_during_path_aba(
                     freeze_root.rename(replacement_root)
                     held_root.rename(freeze_root)
                     restored.append(True)
-        return real_listdir(path_or_descriptor)
+        return real_names(
+            path_or_descriptor, maximum=maximum, label=label,
+            checking_stability=checking_stability,
+        )
 
     snapshot_file = core._snapshot_file
 
@@ -659,7 +683,7 @@ def test_analysis_checks_provenance_sidecars_from_bound_root_during_path_aba(
             raise AssertionError("treatment mapping opened with an undeclared sidecar")
         return snapshot_file(source, destination, label=label)
 
-    monkeypatch.setattr(core.os, "listdir", swap_root_between_inventory_reads)
+    monkeypatch.setattr(core, "_bounded_snapshot_names", swap_root_between_inventory_reads)
     monkeypatch.setattr(core, "_snapshot_file", forbid_mapping_snapshot)
 
     with pytest.raises(ValueError, match="provenance archive contents mismatch"):
@@ -688,16 +712,21 @@ def test_analysis_rejects_same_name_preflight_archive_aba(
     )
 
     root_identity = (freeze_root.stat().st_dev, freeze_root.stat().st_ino)
-    real_listdir = core.os.listdir
+    real_names = core._bounded_snapshot_names
     swapped = []
     restored = []
 
-    def swap_archive_between_root_inventory_reads(path_or_descriptor):
+    def swap_archive_between_root_inventory_reads(
+        path_or_descriptor, *, maximum, label, checking_stability=False
+    ):
         if isinstance(path_or_descriptor, int):
             current = os.fstat(path_or_descriptor)
             if (current.st_dev, current.st_ino) == root_identity:
                 if not swapped:
-                    names = real_listdir(path_or_descriptor)
+                    names = real_names(
+            path_or_descriptor, maximum=maximum, label=label,
+            checking_stability=checking_stability,
+        )
                     archive.rename(held_archive)
                     replacement_archive.rename(archive)
                     swapped.append(True)
@@ -706,7 +735,10 @@ def test_analysis_rejects_same_name_preflight_archive_aba(
                     archive.rename(replacement_archive)
                     held_archive.rename(archive)
                     restored.append(True)
-        return real_listdir(path_or_descriptor)
+        return real_names(
+            path_or_descriptor, maximum=maximum, label=label,
+            checking_stability=checking_stability,
+        )
 
     snapshot_file = core._snapshot_file
 
@@ -716,8 +748,8 @@ def test_analysis_rejects_same_name_preflight_archive_aba(
         return snapshot_file(source, destination, label=label)
 
     monkeypatch.setattr(
-        core.os,
-        "listdir",
+        core,
+        "_bounded_snapshot_names",
         swap_archive_between_root_inventory_reads,
     )
     monkeypatch.setattr(core, "_snapshot_file", forbid_mapping_snapshot)
@@ -749,17 +781,22 @@ def test_analysis_rejects_observed_provenance_disappearance(
         return real_stat(path, *args, **kwargs)
 
     root_identity = (freeze_root.stat().st_dev, freeze_root.stat().st_ino)
-    real_listdir = core.os.listdir
+    real_names = core._bounded_snapshot_names
     root_reads = []
 
-    def restore_before_final_root_inventory(path_or_descriptor):
+    def restore_before_final_root_inventory(
+        path_or_descriptor, *, maximum, label, checking_stability=False
+    ):
         if isinstance(path_or_descriptor, int):
             current = os.fstat(path_or_descriptor)
             if (current.st_dev, current.st_ino) == root_identity:
                 root_reads.append(True)
                 if len(root_reads) == 2 and removed:
                     held_provenance.rename(provenance)
-        return real_listdir(path_or_descriptor)
+        return real_names(
+            path_or_descriptor, maximum=maximum, label=label,
+            checking_stability=checking_stability,
+        )
 
     snapshot_file = core._snapshot_file
 
@@ -769,7 +806,7 @@ def test_analysis_rejects_observed_provenance_disappearance(
         return snapshot_file(source, destination, label=label)
 
     monkeypatch.setattr(core.os, "stat", remove_provenance_before_bound_stat)
-    monkeypatch.setattr(core.os, "listdir", restore_before_final_root_inventory)
+    monkeypatch.setattr(core, "_bounded_snapshot_names", restore_before_final_root_inventory)
     monkeypatch.setattr(core, "_snapshot_file", forbid_mapping_snapshot)
 
     with pytest.raises(

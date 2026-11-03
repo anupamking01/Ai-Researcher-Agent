@@ -250,6 +250,6 @@ def test_provenance_scan_rejects_sidecars_before_copy(tmp_path, monkeypatch):
             core.os, "listdir",
             lambda *args, **kwargs: pytest.fail("unbounded listdir called"),
         )
-        with pytest.raises(ValueError, match="freeze snapshot entry limit"):
+        with pytest.raises(ValueError, match="provenance archive contents mismatch"):
             core._snapshot_freeze_tree(root, destination)
     assert not destination.exists()
