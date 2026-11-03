@@ -280,6 +280,20 @@ per-task IDs, source URLs, generated text or individual outcome scores are
 emitted. All completed forty-cell matrices have ten task pairs per contrast,
 but this should never be inferred for an interrupted replication.
 
+Under attrition, the attempted-only signed sums must not be interpreted
+using the smaller completed-pair denominator. A separate additive receipt,
+`self_reported_completed_paired_source_exposure_by_contrast`, reports
+`both_completed_tasks` plus the same signed `scheduled` and `successful`
+delta sums and direction counts, **restricted to pairs where both recorded
+statuses are completed**. A failed, timed-out or cancelled arm with nonzero
+recorded retrieval remains counted in the original all-attempted receipt,
+but cannot silently contribute to the completed-pair-only deltas. An
+interrupted, unattempted arm contributes to neither. Within each metric, the
+three completed-only direction counts must sum to `both_completed_tasks`.
+This is a descriptive denominator safeguard, **not** a post-hoc exclusion
+rule for confirmatory outcomes, a manipulation-success test, or evidence
+that completed execution actually occurred.
+
 These are **self-reported, within-task exposure descriptions**, not
 independent proof of requests or evidence quality, a manipulation-success
 test, a new preregistered endpoint, or a reason to rerun/omit a task.

@@ -738,6 +738,7 @@ def audit_run_artifacts(
     # missing arm as zero exposure. Failed attempts remain in this denominator,
     # with complete pairs disclosed separately. No scientific effect is tested.
     paired_source_exposure_by_contrast = {}
+    completed_paired_source_exposure_by_contrast = {}
     paired_source_overlap_by_contrast = {}
     for earlier, later in (("D3", "D6"), ("D6", "P6"), ("P6", "P6V")):
         # Source identity overlap is a separate descriptive measure from
@@ -768,6 +769,16 @@ def audit_run_artifacts(
             "successful_delta_negative": 0,
             "successful_delta_sum": 0,
         }
+        # Preserve the original all-attempted exposure totals, while making
+        # completed-pair-only exposure independently identifiable under attrition.
+        completed_counts = {
+            "both_completed_tasks": 0,
+            **{
+                f"{metric}_delta_{key}": 0
+                for metric in ("scheduled", "successful")
+                for key in ("positive", "zero", "negative", "sum")
+            },
+        }
         for per_arm in paired_exposure_by_task.values():
             if earlier not in per_arm or later not in per_arm:
                 continue
@@ -781,6 +792,7 @@ def audit_run_artifacts(
             if completed_pair:
                 counts["both_completed_tasks"] += 1
                 overlap["both_completed_tasks"] += 1
+                completed_counts["both_completed_tasks"] += 1
             for metric in ("scheduled", "successful"):
                 earlier_sources = earlier_cell["source_identities"][metric]
                 later_sources = later_cell["source_identities"][metric]
@@ -798,7 +810,11 @@ def audit_run_artifacts(
                 counts[f"{metric}_delta_sum"] += delta
                 direction = "positive" if delta > 0 else "negative" if delta < 0 else "zero"
                 counts[f"{metric}_delta_{direction}"] += 1
+                if completed_pair:
+                    completed_counts[f"{metric}_delta_sum"] += delta
+                    completed_counts[f"{metric}_delta_{direction}"] += 1
         paired_source_exposure_by_contrast[f"{later} - {earlier}"] = counts
+        completed_paired_source_exposure_by_contrast[f"{later} - {earlier}"] = completed_counts
         paired_source_overlap_by_contrast[f"{later} - {earlier}"] = overlap
 
 
@@ -879,6 +895,9 @@ def audit_run_artifacts(
         "self_reported_source_ledgers_within_frozen_budgets": True,
         "self_reported_source_usage_by_variant": source_usage_by_variant,
         "self_reported_paired_source_exposure_by_contrast": paired_source_exposure_by_contrast,
+        "self_reported_completed_paired_source_exposure_by_contrast": (
+            completed_paired_source_exposure_by_contrast
+        ),
         "self_reported_primary_pair_source_overlap_by_contrast": (
             paired_source_overlap_by_contrast
         ),

@@ -1732,6 +1732,86 @@ def test_paired_source_exposure_keeps_partial_and_failed_attempts(tmp_path):
         assert counts["successful_delta_sum"] == 0
 
 
+
+def test_completed_pair_exposure_matches_attempted_when_every_arm_completed(tmp_path):
+    receipt = _audit(_fixture(tmp_path))
+    attempted = receipt["self_reported_paired_source_exposure_by_contrast"]
+    completed = receipt["self_reported_completed_paired_source_exposure_by_contrast"]
+    for contrast in ("D6 - D3", "P6 - D6", "P6V - P6"):
+        assert completed[contrast]["both_completed_tasks"] == 10
+        for metric in ("scheduled", "successful"):
+            assert completed[contrast][f"{metric}_delta_sum"] == attempted[contrast][
+                f"{metric}_delta_sum"
+            ]
+            for direction in ("positive", "zero", "negative"):
+                assert completed[contrast][f"{metric}_delta_{direction}"] == attempted[
+                    contrast
+                ][f"{metric}_delta_{direction}"]
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_completed_pair_exposure_excludes_failed_nonzero_arm_without_erasing_attempt(
+    tmp_path, interrupted
+):
+    fixture = _fixture(tmp_path)
+    _, _, log, index, root = fixture
+    task_ids = [log["events"][0]["task_id"], log["events"][4]["task_id"]]
+    for task_id, scheduled in zip(task_ids, (1, 2), strict=True):
+        position = next(
+            n for n, cell in enumerate(index["cells"])
+            if cell["task_id"] == task_id and cell["variant"] == "D6"
+        )
+        urls = [f"https://synthetic.invalid/{task_id}/{i}" for i in range(scheduled)]
+
+        def set_ledger(trace):
+            trace.update(
+                source_count=scheduled, successful_source_count=scheduled,
+                failed_source_count=0, scheduled_urls=urls,
+                successful_urls=urls, failed_urls=[],
+            )
+
+        _rewrite_synthetic_source_ledger(fixture, cell_number=position, change=set_ledger)
+
+    failed_position = next(
+        n for n, cell in enumerate(index["cells"])
+        if cell["task_id"] == task_ids[0] and cell["variant"] == "D6"
+    )
+    log["events"][failed_position]["status"] = "failed"
+    index["cells"][failed_position]["status"] = "failed"
+    claim = index["cells"][failed_position]["trace"]
+    trace_path = root / claim["path"]
+    trace = json.loads(trace_path.read_bytes())
+    trace["status"] = "failed"
+    raw = _bytes(trace)
+    trace_path.write_bytes(raw)
+    index["cells"][failed_position]["trace"] = _file_claim(claim["path"], raw)
+    if interrupted:
+        _mark_unattempted(fixture, 8)
+    else:
+        index["execution_log_sha256"] = _digest(_bytes(log))
+
+    receipt = _audit(fixture)
+    attempted = receipt["self_reported_paired_source_exposure_by_contrast"]["D6 - D3"]
+    completed = receipt["self_reported_completed_paired_source_exposure_by_contrast"][
+        "D6 - D3"
+    ]
+    paired_tasks = 2 if interrupted else 10
+    assert attempted["both_attempted_tasks"] == paired_tasks
+    assert attempted["both_completed_tasks"] == paired_tasks - 1
+    assert completed["both_completed_tasks"] == paired_tasks - 1
+    for metric in ("scheduled", "successful"):
+        assert attempted[f"{metric}_delta_sum"] == 3
+        assert attempted[f"{metric}_delta_positive"] == 2
+        assert completed[f"{metric}_delta_sum"] == 2
+        assert completed[f"{metric}_delta_positive"] == 1
+        assert completed[f"{metric}_delta_zero"] == paired_tasks - 2
+        assert sum(completed[f"{metric}_delta_{direction}"]
+                   for direction in ("negative", "zero", "positive")) == (
+                       completed["both_completed_tasks"]
+                   )
+    assert receipt["model_or_retrieval_calls_verified"] is False
+
+
 def _set_synthetic_one_source(fixture, index, url):
     """Keep the test trace, source partition, and file claim in agreement."""
     def change(trace):
