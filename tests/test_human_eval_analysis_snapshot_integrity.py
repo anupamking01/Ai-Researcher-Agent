@@ -103,7 +103,8 @@ def test_freeze_snapshot_rejects_root_replacement_across_all_artifacts(
     root_reads = 0
 
     def swap_path_between_bound_root_inventory_reads(
-        path_or_descriptor, *, maximum, label, checking_stability=False
+        path_or_descriptor, *, maximum, label, checking_stability=False,
+        overflow_error=None
     ):
         nonlocal root_reads
         if isinstance(path_or_descriptor, int):
@@ -112,9 +113,10 @@ def test_freeze_snapshot_rejects_root_replacement_across_all_artifacts(
                 root_reads += 1
                 if root_reads == 1:
                     names = real_names(
-            path_or_descriptor, maximum=maximum, label=label,
-            checking_stability=checking_stability,
-        )
+                        path_or_descriptor, maximum=maximum, label=label,
+                        checking_stability=checking_stability,
+                        overflow_error=overflow_error,
+                    )
                     freeze_root.rename(held_root)
                     replacement_root.rename(freeze_root)
                     return names
@@ -123,7 +125,7 @@ def test_freeze_snapshot_rejects_root_replacement_across_all_artifacts(
                     held_root.rename(freeze_root)
         return real_names(
             path_or_descriptor, maximum=maximum, label=label,
-            checking_stability=checking_stability,
+            checking_stability=checking_stability, overflow_error=overflow_error,
         )
 
     monkeypatch.setattr(
@@ -592,16 +594,18 @@ def test_analysis_rejects_freeze_root_path_aba(
     restored = []
 
     def swap_root_between_inventory_reads(
-        path_or_descriptor, *, maximum, label, checking_stability=False
+        path_or_descriptor, *, maximum, label, checking_stability=False,
+        overflow_error=None
     ):
         if isinstance(path_or_descriptor, int):
             current = os.fstat(path_or_descriptor)
             if (current.st_dev, current.st_ino) == original_identity:
                 if not swapped:
                     names = real_names(
-            path_or_descriptor, maximum=maximum, label=label,
-            checking_stability=checking_stability,
-        )
+                        path_or_descriptor, maximum=maximum, label=label,
+                        checking_stability=checking_stability,
+                        overflow_error=overflow_error,
+                    )
                     freeze_root.rename(held_root)
                     replacement_root.rename(freeze_root)
                     swapped.append(True)
@@ -612,7 +616,7 @@ def test_analysis_rejects_freeze_root_path_aba(
                     restored.append(True)
         return real_names(
             path_or_descriptor, maximum=maximum, label=label,
-            checking_stability=checking_stability,
+            checking_stability=checking_stability, overflow_error=overflow_error,
         )
 
     monkeypatch.setattr(core, "_bounded_snapshot_names", swap_root_between_inventory_reads)
@@ -653,16 +657,18 @@ def test_analysis_checks_provenance_sidecars_from_bound_root_during_path_aba(
     restored = []
 
     def swap_root_between_inventory_reads(
-        path_or_descriptor, *, maximum, label, checking_stability=False
+        path_or_descriptor, *, maximum, label, checking_stability=False,
+        overflow_error=None
     ):
         if isinstance(path_or_descriptor, int):
             current = os.fstat(path_or_descriptor)
             if (current.st_dev, current.st_ino) == original_identity:
                 if not swapped:
                     names = real_names(
-            path_or_descriptor, maximum=maximum, label=label,
-            checking_stability=checking_stability,
-        )
+                        path_or_descriptor, maximum=maximum, label=label,
+                        checking_stability=checking_stability,
+                        overflow_error=overflow_error,
+                    )
                     freeze_root.rename(held_root)
                     replacement_root.rename(freeze_root)
                     swapped.append(True)
@@ -673,7 +679,7 @@ def test_analysis_checks_provenance_sidecars_from_bound_root_during_path_aba(
                     restored.append(True)
         return real_names(
             path_or_descriptor, maximum=maximum, label=label,
-            checking_stability=checking_stability,
+            checking_stability=checking_stability, overflow_error=overflow_error,
         )
 
     snapshot_file = core._snapshot_file
@@ -717,16 +723,18 @@ def test_analysis_rejects_same_name_preflight_archive_aba(
     restored = []
 
     def swap_archive_between_root_inventory_reads(
-        path_or_descriptor, *, maximum, label, checking_stability=False
+        path_or_descriptor, *, maximum, label, checking_stability=False,
+        overflow_error=None
     ):
         if isinstance(path_or_descriptor, int):
             current = os.fstat(path_or_descriptor)
             if (current.st_dev, current.st_ino) == root_identity:
                 if not swapped:
                     names = real_names(
-            path_or_descriptor, maximum=maximum, label=label,
-            checking_stability=checking_stability,
-        )
+                        path_or_descriptor, maximum=maximum, label=label,
+                        checking_stability=checking_stability,
+                        overflow_error=overflow_error,
+                    )
                     archive.rename(held_archive)
                     replacement_archive.rename(archive)
                     swapped.append(True)
@@ -737,7 +745,7 @@ def test_analysis_rejects_same_name_preflight_archive_aba(
                     restored.append(True)
         return real_names(
             path_or_descriptor, maximum=maximum, label=label,
-            checking_stability=checking_stability,
+            checking_stability=checking_stability, overflow_error=overflow_error,
         )
 
     snapshot_file = core._snapshot_file
@@ -785,7 +793,8 @@ def test_analysis_rejects_observed_provenance_disappearance(
     root_reads = []
 
     def restore_before_final_root_inventory(
-        path_or_descriptor, *, maximum, label, checking_stability=False
+        path_or_descriptor, *, maximum, label, checking_stability=False,
+        overflow_error=None
     ):
         if isinstance(path_or_descriptor, int):
             current = os.fstat(path_or_descriptor)
@@ -795,7 +804,7 @@ def test_analysis_rejects_observed_provenance_disappearance(
                     held_provenance.rename(provenance)
         return real_names(
             path_or_descriptor, maximum=maximum, label=label,
-            checking_stability=checking_stability,
+            checking_stability=checking_stability, overflow_error=overflow_error,
         )
 
     snapshot_file = core._snapshot_file

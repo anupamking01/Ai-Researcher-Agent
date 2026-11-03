@@ -563,7 +563,7 @@ aborts at its first excess entry, and post-capture rescans stop at the first
 addition beyond the original cardinality. This limits malicious or damaged
 freeze-tree resource exhaustion without changing ratings, analysis outcomes,
 or the predeclared statistical plan. These controls
-record reproducibility metadata; it does not create ratings or convert pending
+record reproducibility metadata; they do not create ratings or convert pending
 human validation into a result.
 
 The downstream descriptive reconciliation bundle applies the same fail-closed
