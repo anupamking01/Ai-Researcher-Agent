@@ -418,3 +418,114 @@ def test_interrupted_log_exposes_variant_skew_and_missing_paired_tasks():
     }
     assert result["all_recorded_cells_completed"] is False
     assert result["scientific_outcomes_validated"] is False
+
+
+def test_complete_log_retains_planned_position_and_pair_order_balance():
+    """Full Williams design has 2/3 slot exposures and 5:5 precedence."""
+    source, receipt, log = _fixture()
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    attempted = result["recorded_attempted_position_counts_by_variant"]
+    completed = result["recorded_completed_position_counts_by_variant"]
+    assert attempted == completed
+    for arm in design.VARIANTS:
+        assert set(completed[arm]) == {"1", "2", "3", "4"}
+        assert sorted(completed[arm].values()) == [2, 2, 3, 3]
+        assert sum(completed[arm].values()) == 10
+    for contrast, counts in result[
+        "recorded_completed_primary_pair_order_counts"
+    ].items():
+        assert counts == {"left_before_right": 5, "right_before_left": 5}
+        assert sum(counts.values()) == result[
+            "recorded_completed_primary_pair_task_counts"
+        ][contrast]
+
+
+def test_failed_arm_removes_one_realized_exposure_and_precedence_not_attempt():
+    source, receipt, log = _fixture()
+    schedule = design.build_plan(source)["schedule"]
+    row = next(
+        row for row in schedule
+        if row["arm_order"].index("D3") < row["arm_order"].index("D6")
+    )
+    event = next(
+        event for event in log["events"]
+        if event["task_id"] == row["task_id"] and event["variant"] == "D6"
+    )
+    event["status"] = "timeout"
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    slot = str(row["arm_order"].index("D6") + 1)
+    attempted = result["recorded_attempted_position_counts_by_variant"]["D6"]
+    completed = result["recorded_completed_position_counts_by_variant"]["D6"]
+    assert attempted[slot] == completed[slot] + 1
+    assert sum(attempted.values()) == 10
+    assert sum(completed.values()) == 9
+    assert result["recorded_completed_primary_pair_order_counts"]["D6_minus_D3"] == {
+        "left_before_right": 4, "right_before_left": 5,
+    }
+    assert result["recorded_completed_primary_pair_order_counts"]["P6V_minus_P6"] == {
+        "left_before_right": 5, "right_before_left": 5,
+    }
+    for contrast, counts in result[
+        "recorded_completed_primary_pair_order_counts"
+    ].items():
+        assert sum(counts.values()) == result[
+            "recorded_completed_primary_pair_task_counts"
+        ][contrast]
+
+
+def test_interruption_exposes_surviving_position_and_order_imbalance():
+    source, receipt, log = _fixture()
+    schedule = design.build_plan(source)["schedule"]
+    _mark_unattempted_suffix(log, 5)
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    first_order = schedule[0]["arm_order"]
+    second_first = schedule[1]["arm_order"][0]
+    for arm in design.VARIANTS:
+        expected = {str(position): int(first_order[position - 1] == arm)
+                    for position in range(1, 5)}
+        if second_first == arm:
+            expected["1"] += 1
+        assert result["recorded_attempted_position_counts_by_variant"][arm] == expected
+        assert result["recorded_completed_position_counts_by_variant"][arm] == expected
+    assert result["unattempted_cells"] == 35
+    assert result["recorded_fully_completed_task_count"] == 1
+    for contrast, (right, left) in {
+        "D6_minus_D3": ("D6", "D3"),
+        "P6_minus_D6": ("P6", "D6"),
+        "P6V_minus_P6": ("P6V", "P6"),
+    }.items():
+        direction = (
+            "left_before_right"
+            if first_order.index(left) < first_order.index(right)
+            else "right_before_left"
+        )
+        counts = result["recorded_completed_primary_pair_order_counts"][contrast]
+        assert counts[direction] == 1
+        assert sum(counts.values()) == 1
+
+
+def test_missingness_cannot_be_hidden_by_aggregate_completed_count():
+    source, receipt, log = _fixture()
+    schedule = design.build_plan(source)["schedule"]
+    # Different completed-cell patterns can share the same overall 38/40.
+    # Realized pairwise precedence discloses *which* order was lost.
+    first = schedule[0]
+    second = schedule[1]
+    for row in (first, second):
+        event = next(
+            event for event in log["events"]
+            if event["task_id"] == row["task_id"]
+            and event["variant"] == "P6"
+        )
+        event["status"] = "failed"
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    assert result["recorded_status_counts"]["completed"] == 38
+    assert result["recorded_fully_completed_task_count"] == 8
+    assert sum(result["recorded_completed_position_counts_by_variant"]["P6"].values()) == 8
+    assert sum(result["recorded_attempted_position_counts_by_variant"]["P6"].values()) == 10
+    for contrast, counts in result[
+        "recorded_completed_primary_pair_order_counts"
+    ].items():
+        assert sum(counts.values()) == result[
+            "recorded_completed_primary_pair_task_counts"
+        ][contrast]

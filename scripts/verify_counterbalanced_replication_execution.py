@@ -139,6 +139,17 @@ def audit_execution_log(
     completed_variants_by_task = {
         row["task_id"]: set() for row in plan["schedule"]
     }
+    # A balanced *planned* Williams schedule need not remain balanced among
+    # actually attempted or completed cells after interruption/attrition.
+    slot_keys = ("1", "2", "3", "4")
+    attempted_position_counts_by_variant = {
+        arm: {position: 0 for position in slot_keys}
+        for arm in design.VARIANTS
+    }
+    completed_position_counts_by_variant = {
+        arm: {position: 0 for position in slot_keys}
+        for arm in design.VARIANTS
+    }
     unstarted_suffix = False
     for index, (event, (task_id, variant)) in enumerate(
         zip(events, expected_cells, strict=True), start=1
@@ -175,12 +186,15 @@ def audit_execution_log(
                 run_id in run_ids):
             raise design.DesignError(f"event {index} has an unsafe or duplicate run ID")
         run_ids.add(run_id)
+        slot = str((index - 1) % len(design.VARIANTS) + 1)
+        attempted_position_counts_by_variant[variant][slot] += 1
         # Attempted failures/timeouts/cancellations remain visible. Never
         # conceal them as unattempted work or cherry-pick favorable reruns.
         counts[status] += 1
         status_counts_by_variant[variant][status] += 1
         if status == "completed":
             completed_variants_by_task[task_id].add(variant)
+            completed_position_counts_by_variant[variant][slot] += 1
         started = _timestamp(event["started_at_utc"], f"event {index} start")
         finished = _timestamp(event["finished_at_utc"], f"event {index} finish")
         if started < previous_finish or finished <= started:
@@ -211,6 +225,24 @@ def audit_execution_log(
         )
         for name, pair in primary_pairs.items()
     }
+    # The 5:5 pairwise-precedence balance is a property of the full design,
+    # not necessarily of the actually completed pairs. Report both directions
+    # only for jointly completed task pairs; no outcome values are consulted.
+    completed_pair_order_counts = {
+        name: {"left_before_right": 0, "right_before_left": 0}
+        for name in primary_pairs
+    }
+    for row in plan["schedule"]:
+        completed = completed_variants_by_task[row["task_id"]]
+        for name, (right, left) in primary_pairs.items():
+            if left not in completed or right not in completed:
+                continue
+            direction = (
+                "left_before_right"
+                if row["arm_order"].index(left) < row["arm_order"].index(right)
+                else "right_before_left"
+            )
+            completed_pair_order_counts[name][direction] += 1
 
     return {
         "status": "pass_recorded_chronology_only",
@@ -228,6 +260,9 @@ def audit_execution_log(
         "all_planned_cells_attempted": counts["not_started"] == 0,
         "recorded_status_counts": counts,
         "recorded_status_counts_by_variant": status_counts_by_variant,
+        "recorded_attempted_position_counts_by_variant": attempted_position_counts_by_variant,
+        "recorded_completed_position_counts_by_variant": completed_position_counts_by_variant,
+        "recorded_completed_primary_pair_order_counts": completed_pair_order_counts,
         "recorded_fully_completed_task_count": sum(
             len(completed) == len(design.VARIANTS)
             for completed in completed_variants_by_task.values()
