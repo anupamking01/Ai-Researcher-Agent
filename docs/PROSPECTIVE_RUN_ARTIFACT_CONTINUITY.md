@@ -128,7 +128,15 @@ DNS aliases and empty interior labels are rejected as noncanonical rather
 than guessed to be equivalent across varying HTTP Host-header behavior.
 Standard IDN domains remain valid and their Punycode spellings reconcile as
 one fetch identity. IPv6 literals are handled separately; URL queries and
-ordinary fragment references remain eligible.
+ordinary fragment references remain eligible. Empty explicitly written
+network ports (for DNS or bracketed IPv6 authorities) are rejected even
+though Python's URL parser treats them as an omitted port. All-numeric
+hostname forms are accepted only as canonical four-octet dotted-decimal
+IPv4 literals (e.g. 127.0.0.1). Leading-zero, abbreviated, integer-only
+and invalid dotted-numeric spellings fail closed, since HTTP clients can
+interpret such spellings differently and they could inflate unique
+retrieval-source counts. Ordinary DNS names and canonical IPv4/IPv6 with
+valid ports are unaffected. Do not silently repair a rejected recorded URL.
 
 **One fetchable HTTP resource cannot count multiple times** within an
 individual scheduled/successful/failed URL list simply through spelling

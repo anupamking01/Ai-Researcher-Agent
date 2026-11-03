@@ -265,6 +265,10 @@ def _source_fetch_identity(url: object, *, number: int) -> str:
             or port == 0
         ):
             raise ValueError("not an absolute unauthenticated HTTP(S) resource")
+        # urlsplit treats an empty explicit port as if no port were given.
+        # It is not a canonical HTTP authority and can vary by client.
+        if parsed.netloc.endswith(":"):
+            raise ValueError("empty explicit network port")
         # A bracketed IP literal is an address, not a DNS name. Different
         # compressed/expanded IPv6 spellings identify the *same* fetch target;
         # do not let them inflate a claimed source count or break outcome
@@ -289,6 +293,17 @@ def _source_fetch_identity(url: object, *, number: int) -> str:
                 for label in normalized_host.split(".")
             )):
                 raise ValueError("source DNS host labels are not canonical")
+        # Some HTTP clients interpret all-numeric host spellings as IPv4,
+        # including abbreviated, decimal-integer and leading-zero forms.
+        # Reject ambiguous spellings instead of counting aliases as new
+        # sources or guessing which client interpretation was used.
+        if ":" not in normalized_host and re.fullmatch(r"[0-9.]+", normalized_host):
+            try:
+                ipv4 = ipaddress.IPv4Address(normalized_host)
+            except ValueError as exc:
+                raise ValueError("noncanonical numeric IPv4-style host") from exc
+            if normalized_host != str(ipv4):
+                raise ValueError("noncanonical IPv4 source host")
         if not normalized_host or "%" in normalized_host:
             raise ValueError("invalid source host")
     except (UnicodeError, ValueError) as exc:

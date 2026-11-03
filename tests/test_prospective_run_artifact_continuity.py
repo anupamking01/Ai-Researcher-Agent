@@ -1233,6 +1233,52 @@ def test_noncanonical_dns_source_host_fails_even_with_rehashed_evidence(
         _audit(fixture)
 
 
+
+# Synthetic URL-authority identity regression: HTTP clients can interpret
+# shorthand or decimal-integer host spellings as IPv4 addresses. Accept only
+# canonical dotted-decimal literals and reject empty explicitly written ports.
+@pytest.mark.parametrize("ambiguous_url", [
+    "https://synthetic.invalid:/source",  # urlsplit otherwise treats empty port as none
+    "https://[2001:db8::1]:/source",     # same ambiguity for IPv6 literals
+    "https://127.000.000.001/source",   # leading-zero octet
+    "https://127.1/source",             # abbreviated IPv4 interpretation
+    "https://999.999.999.999/source",   # numeric but invalid IPv4
+    "https://2130706433/source",        # decimal-integer localhost alias
+])
+def test_ambiguous_http_authority_rejected_despite_rehashed_index(tmp_path, ambiguous_url):
+    fixture = _fixture(tmp_path)
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[ambiguous_url],
+            successful_urls=[ambiguous_url], failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    with pytest.raises(design.DesignError, match="source ledger.*invalid HTTP"):
+        _audit(fixture)
+
+
+@pytest.mark.parametrize("scheduled,outcome", [
+    ("https://127.0.0.1/source#part", "https://127.0.0.1:443/source"),
+    ("http://127.0.0.1:80/source", "http://127.0.0.1/source#part"),
+    ("https://[2001:db8::1]:443/source", "https://[2001:db8::1]/source"),
+])
+def test_canonical_ip_literal_authorities_still_reconcile_outcomes(tmp_path, scheduled, outcome):
+    fixture = _fixture(tmp_path)
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[scheduled], successful_urls=[outcome],
+            failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    assert _audit(fixture)["self_reported_source_ledgers_within_frozen_budgets"] is True
+
+
 def test_idn_punycode_aliases_cannot_double_count_one_scheduled_source(tmp_path):
     fixture = _fixture(tmp_path)
     urls = [
