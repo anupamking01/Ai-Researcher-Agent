@@ -668,7 +668,9 @@ def test_early_report_mode_change_without_byte_change_rejected(tmp_path, monkeyp
     def chmod_after_first(*args, **kwargs):
         nonlocal changed
         result = original(*args, **kwargs)
-        if not changed:
+        # Mutate only after this report has been captured, rather than
+        # before the initial report-generation metadata is recorded.
+        if not changed and kwargs.get("description") == "report 1":
             before = path.stat()
             os.chmod(path, before.st_mode ^ 0o100)
             assert path.read_bytes()
