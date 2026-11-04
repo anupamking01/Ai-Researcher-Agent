@@ -22,6 +22,23 @@ Never derive a new hash from a suspect candidate and represent it as a historica
 
 This structural test **cannot** independently authenticate the historical log, its timekeeping, external archive custody, or stable live-web conditions. Matching a supplied SHA-256 alone establishes file-byte consistency, not trustworthiness of the source of that pin. Original treatment Actions run 34620917346 and evaluator-recovery Actions run 34783525480 exposed no downloadable artifacts when checked October 31, 2026. **No authentic recovered log has passed this audit**. The published frozen treatment and evaluator CSVs omit event timestamps, and their row order must not be treated as chronological evidence.
 
+## Single-link source custody for offline chronology inputs
+
+The read-only chronology auditor requires **one regular filesystem link**
+for both the recovered progress JSON and the pinned, published 40-cell treatment
+CSV ledger. It checks link count at the initial pathname/open-file comparison
+and throughout descriptor-based capture, alongside file identity, size, mode,
+modification time, and filesystem change time. A preexisting external hardlink
+or a hardlink created during capture invalidates the local inspection even if
+bytes and timestamps remain unchanged. Synthetic tests cover both inputs and
+both link timings; no historical file is recovered or reinterpreted by this
+change.
+
+This reduces ambiguity about *local read-time custody*, not the origin of a
+candidate log, authenticity of recorded clocks, independent archive custody,
+or actual provider billing. It does not establish temporal randomization or
+unlock blinded human-evaluation distribution.
+
 ## Retrospective clock-exposure diagnostic (not observed web drift)
 
 The read-only receipt now also includes `recorded_clock_exposure`: the recorded

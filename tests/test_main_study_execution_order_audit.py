@@ -1,6 +1,8 @@
 """Synthetic-only tests for historical chronology auditing; no outcome reruns."""
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -171,6 +173,52 @@ def test_capture_rejects_overflow_and_unbounded_numbers_even_if_not_used(tmp_pat
     path.write_bytes(raw)
     with pytest.raises(order.ChronologyError, match="numeric bound|finite range"):
         order._capture_progress(path)
+
+
+@pytest.mark.skipif(not hasattr(os, "link"), reason="requires hardlink support")
+@pytest.mark.parametrize("source_kind", ("progress", "published_csv"))
+@pytest.mark.parametrize("alias_timing", ("preexisting", "during_capture"))
+def test_chronology_source_capture_rejects_hardlink_alias(
+    tmp_path, monkeypatch, source_kind, alias_timing
+):
+    """An alternative writable path must not pass local input custody checks."""
+    path = tmp_path / ("progress.json" if source_kind == "progress" else "costs.csv")
+    raw = (
+        json.dumps(_fixture()).encode("utf-8")
+        if source_kind == "progress" else _synthetic_published_cost_csv()
+    )
+    path.write_bytes(raw)
+    alias = tmp_path / "external-alias"
+    if source_kind == "progress":
+        capture = order._capture_progress
+    else:
+        monkeypatch.setattr(
+            order, "PUBLISHED_TREATMENT_CSV_SHA256", hashlib.sha256(raw).hexdigest()
+        )
+        capture = order._load_published_treatment_cost
+
+    if alias_timing == "preexisting":
+        os.link(path, alias)
+        expected_error = "single-link"
+    else:
+        # Link the file after the initial pathname/fd metadata comparison but
+        # before reading the same descriptor. Catch the changed link count
+        # even though the file bytes, digest, size, and timestamps still match.
+        real_fdopen = order.os.fdopen
+
+        def link_during_capture(fd, *args, **kwargs):
+            if not alias.exists():
+                os.link(path, alias)
+            return real_fdopen(fd, *args, **kwargs)
+
+        monkeypatch.setattr(order.os, "fdopen", link_during_capture)
+        expected_error = "changed during capture"
+
+    with pytest.raises(order.ChronologyError, match=expected_error):
+        capture(path)
+    assert alias.samefile(path)
+    assert path.read_bytes() == raw
+
 
 def _synthetic_published_cost_csv() -> bytes:
     """Invented uniform costs are test fixtures, never VERA results."""

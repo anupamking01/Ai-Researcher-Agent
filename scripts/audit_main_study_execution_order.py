@@ -106,8 +106,8 @@ def _capture_progress(path: Path) -> tuple[dict, str, int]:
     path = Path(path)
     try:
         named_before = path.stat(follow_symlinks=False)
-        if not stat.S_ISREG(named_before.st_mode):
-            raise ChronologyError("progress input must be a regular non-symlink file")
+        if not stat.S_ISREG(named_before.st_mode) or named_before.st_nlink != 1:
+            raise ChronologyError("progress input must be a single-link regular non-symlink file")
         if not 0 < named_before.st_size <= MAX_PROGRESS_BYTES:
             raise ChronologyError("progress input size outside bounded range")
         fd = os.open(
@@ -118,8 +118,8 @@ def _capture_progress(path: Path) -> tuple[dict, str, int]:
         raise ChronologyError("cannot safely open progress input") from exc
 
     def generation(entry):
-        return (entry.st_dev, entry.st_ino, entry.st_mode, entry.st_size,
-                entry.st_mtime_ns, entry.st_ctime_ns)
+        return (entry.st_dev, entry.st_ino, entry.st_mode, entry.st_nlink,
+                entry.st_size, entry.st_mtime_ns, entry.st_ctime_ns)
 
     try:
         opened_before = os.fstat(fd)
@@ -162,8 +162,9 @@ def _load_published_treatment_cost(path: Path, *, include_latencies: bool = Fals
     path = Path(path)
     try:
         before = path.stat(follow_symlinks=False)
-        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= MAX_PUBLISHED_CSV_BYTES:
-            raise ChronologyError("published treatment CSV must be a bounded regular file")
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                or not 0 < before.st_size <= MAX_PUBLISHED_CSV_BYTES):
+            raise ChronologyError("published treatment CSV must be a bounded single-link regular file")
         fd = os.open(
             path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
             | getattr(os, "O_NONBLOCK", 0),
@@ -172,7 +173,8 @@ def _load_published_treatment_cost(path: Path, *, include_latencies: bool = Fals
         raise ChronologyError("cannot safely open published treatment CSV") from exc
 
     def generation(s):
-        return (s.st_dev, s.st_ino, s.st_mode, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+        return (s.st_dev, s.st_ino, s.st_mode, s.st_nlink,
+                s.st_size, s.st_mtime_ns, s.st_ctime_ns)
 
     try:
         opened = os.fstat(fd)
