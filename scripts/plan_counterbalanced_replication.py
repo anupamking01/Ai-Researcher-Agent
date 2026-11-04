@@ -266,6 +266,11 @@ def build_plan(source: bytes) -> dict:
         raise DesignError("prospective design requires exactly 10 new tasks")
 
     task_ids = []
+    # Downstream artifact paths can be case-insensitive (e.g., on common
+    # Windows/macOS filesystems). Two differently cased task IDs must not
+    # silently refer to one persisted task unit. Keep original spellings in
+    # the manifest-bound receipt, but enforce portable identity here.
+    canonical_task_ids: set[str] = set()
     # Each row must be an independent question, not just a distinct task ID.
     # Reuse the historical-leakage normalization for within-set uniqueness.
     question_fingerprints = set()
@@ -278,7 +283,7 @@ def build_plan(source: bytes) -> dict:
         if (type(identifier) is not str
                 or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", identifier) is None):
             raise DesignError(f"task {index} has an unsafe identifier")
-        if identifier in ORIGINAL_2026_TASK_IDS:
+        if identifier.casefold() in ORIGINAL_2026_TASK_IDS:
             raise DesignError("prospective task reuses a reserved 2026 main-study ID")
         if type(category) is not str or not category.strip():
             raise DesignError(f"task {index} has no category")
@@ -300,11 +305,14 @@ def build_plan(source: bytes) -> dict:
             raise DesignError(
                 "prospective task repeats a frozen 2026 main-study question"
             )
-        if identifier in task_ids or question_fingerprint in question_fingerprints:
+        if (identifier.casefold() in canonical_task_ids
+                or question_fingerprint in question_fingerprints):
             raise DesignError(
-                "tasks have duplicate identifiers or normalized-equivalent questions"
+                "tasks have duplicate or case-insensitively colliding identifiers "
+                "or normalized-equivalent questions"
             )
         task_ids.append(identifier)
+        canonical_task_ids.add(identifier.casefold())
         question_fingerprints.add(question_fingerprint)
 
     source_sha256 = hashlib.sha256(source).hexdigest()

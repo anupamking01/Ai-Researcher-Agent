@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from scripts import plan_counterbalanced_replication as plan
+from scripts import verify_counterbalanced_replication_plan as plan_verify
 from scripts import verify_frozen_main_study_tasks as original_tasks
 
 
@@ -103,6 +104,40 @@ def test_reusing_original_task_id_with_new_question_is_rejected():
     candidate["tasks"][0]["id"] = "main-01"
     with pytest.raises(plan.DesignError, match="reserved 2026"):
         plan.build_plan(_raw(candidate))
+
+
+@pytest.mark.parametrize("alias", ["MAIN-01", "Main-01"])
+def test_historical_task_id_cannot_be_reused_under_different_case(alias):
+    candidate = _payload()
+    candidate["tasks"][0]["id"] = alias
+    with pytest.raises(plan.DesignError, match="reserved 2026"):
+        plan.build_plan(_raw(candidate))
+
+
+@pytest.mark.parametrize("alias", ["FRESH-01", "Fresh-01"])
+def test_distinct_future_tasks_cannot_share_casefolded_identity(alias):
+    candidate = _payload()
+    candidate["tasks"][1]["id"] = alias
+    assert candidate["tasks"][0]["id"] != candidate["tasks"][1]["id"]
+    with pytest.raises(plan.DesignError, match="case-insensitively colliding"):
+        plan.build_plan(_raw(candidate))
+
+
+def test_independent_plan_verifier_rejects_coherently_submitted_case_aliases():
+    receipt = _raw(plan.build_plan(_raw()))
+    candidate = _payload()
+    candidate["tasks"][1]["id"] = "FRESH-01"
+    with pytest.raises(plan.DesignError, match="case-insensitively colliding"):
+        plan_verify.verify_plan(_raw(candidate), receipt)
+
+
+def test_unrelated_mixed_case_future_ids_remain_valid():
+    candidate = _payload()
+    candidate["tasks"][1]["id"] = "FRESH-02"
+    result = plan.build_plan(_raw(candidate))
+    assert [row["task_id"] for row in result["schedule"]][:2] == [
+        "fresh-01", "FRESH-02"
+    ]
 
 
 def test_schedule_balances_every_position_and_every_pair_without_outcomes():

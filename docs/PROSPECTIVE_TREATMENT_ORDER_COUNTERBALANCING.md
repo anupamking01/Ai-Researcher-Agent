@@ -96,6 +96,20 @@ manifest rather than accepting a self-consistent schedule. Offline synthetic
 tests cover case, whitespace, Unicode-width, and casefold-equivalent duplicates.
 Task IDs must separately remain unique.
 
+**Portable task-ID identity:** Prospective task IDs use ASCII slugs, but an
+otherwise valid manifest previously accepted `fresh-01` and `FRESH-01` as
+two different task units. Filesystem paths on case-insensitive Windows/macOS
+volumes can alias those names, risking trace/report collisions and spurious
+paired-task independence. The planner now rejects casefold-equivalent task IDs
+within the ten-task manifest and case variants of the historically reserved
+`main-01`–`main-10` identifiers. It preserves the exact spelling of
+noncolliding IDs in the frozen schedule, and the independent plan verifier
+inherits the same fail-closed check. Synthetic regressions cover both classes
+of alias, receipt verification, and legitimate mixed-case unique IDs.
+This is a portable **identifier-collision** check, not evidence of task
+novelty, external preregistration, or independent report custody. Existing
+valid design receipts and all historical measurements remain unchanged.
+
 This is a **normalized-exact duplication check**, not a semantic-overlap test:
 paraphrases, closely related tasks, and shared source dependencies can still
 reduce effective task independence. An independent coordinator must review and
