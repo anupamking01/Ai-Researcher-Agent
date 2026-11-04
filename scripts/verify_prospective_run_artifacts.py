@@ -72,6 +72,16 @@ _UNRESERVED_URI_OCTETS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
 )
 
+# RFC 3986 3.3–3.5 permits Unicode IRI path/query text but not arbitrary
+# literal ASCII punctuation. urlsplit accepts such punctuation unchanged;
+# different clients can encode or reject it, obscuring URL source identity.
+_URI_PCHAR_ASCII = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+    "!$&'()*+,;=:@%"
+)
+_URI_PATH_ASCII = _URI_PCHAR_ASCII | frozenset("/")
+_URI_QUERY_FRAGMENT_ASCII = _URI_PATH_ASCII | frozenset("?")
+
 
 def _canonical_percent_triplet(match: re.Match[str]) -> str:
     """Normalize only RFC 3986 unreserved percent-encoded ASCII octets.
@@ -428,6 +438,19 @@ def _source_fetch_identity(url: object, *, number: int) -> str:
         )
     try:
         parsed = urlsplit(url)
+        # Do not accept raw characters outside RFC 3986's path, query and
+        # fragment grammar. urllib accepts brackets, braces, pipes, quotes,
+        # etc. that clients may differently percent-encode or reject.
+        if any(
+            ord(character) < 128 and character not in allowed
+            for component, allowed in (
+                (parsed.path, _URI_PATH_ASCII),
+                (parsed.query, _URI_QUERY_FRAGMENT_ASCII),
+                (parsed.fragment, _URI_QUERY_FRAGMENT_ASCII),
+            )
+            for character in component
+        ):
+            raise ValueError("noncanonical literal ASCII in HTTP URI component")
         host = parsed.hostname
         port = parsed.port
         if (

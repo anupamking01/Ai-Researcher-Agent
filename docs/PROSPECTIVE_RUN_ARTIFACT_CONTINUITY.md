@@ -170,6 +170,18 @@ paths, queries, or fragments, since an apparently printable URL may be
 rejected, truncated, or differently interpreted by HTTP clients. This audit
 never repairs submitted evidence; encoded ordinary space (`%20`), legitimate
 UTF-8 octets and encoded reserved delimiters remain permitted.
+**Raw ASCII component grammar (RFC 3986 Sections 3.3–3.5):** Python's
+`urlsplit` accepts unescaped ASCII such as `|`, `^`, `{`, `}`,
+`[`, `]`, or quotes inside paths/queries, and accepts an additional
+`#` within fragments. Those spellings lie outside the URI component
+grammar; different clients may reject or percent-encode them before
+retrieval. The prospective ledger now rejects such raw ASCII instead of
+counting ambiguous request spellings as unique fetch identities. Valid
+`pchar` punctuation, the additional `/` and `?` permitted in queries
+and fragments, proper percent escapes (such as `%5B`), and ordinary
+non-ASCII IRI text remain valid. Original traces are never rewritten.
+This does not independently authenticate actual HTTP requests.
+
 DNS hosts must
 have valid, nonempty ASCII/IDNA labels (at most 63 characters each and 253
 characters overall, with no leading/trailing label hyphen); terminal-dot

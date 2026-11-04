@@ -1172,6 +1172,57 @@ def test_nonweb_or_unsafe_source_url_rejected_with_consistent_hashes(
         _audit(fixture)
 
 
+# urlsplit accepts unescaped ASCII punctuation outside the RFC 3986
+# path, query and fragment grammar. Rehashing the trace/index cannot
+# turn ambiguous request targets into reproducible source claims.
+@pytest.mark.parametrize("bad_url", [
+    "https://synthetic.invalid/item|version",
+    "https://synthetic.invalid/item^version",
+    "https://synthetic.invalid/file[1]",
+    "https://synthetic.invalid/item\"bad",
+    "https://synthetic.invalid/search?q={term}",
+    "https://synthetic.invalid/search?filter=a|b",
+    "https://synthetic.invalid/item#note#extra",
+    "https://synthetic.invalid/item#section[1]",
+])
+def test_non_rfc_ascii_source_components_fail_with_rehashed_claims(
+    tmp_path, bad_url
+):
+    fixture = _fixture(tmp_path)
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[bad_url], successful_urls=[bad_url], failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    with pytest.raises(design.DesignError, match="source ledger.*invalid HTTP"):
+        _audit(fixture)
+
+
+@pytest.mark.parametrize("allowed_url", [
+    "https://synthetic.invalid/a(b);c=d:@+$,!",
+    "https://synthetic.invalid/item?q=a/b?c&x=%5Bencoded%5D",
+    "https://synthetic.invalid/item#section?anchor/path",
+    "https://synthetic.invalid/item?q=literal%7Cpipe",
+])
+def test_portable_reserved_and_percent_encoded_source_components_remain_valid(
+    tmp_path, allowed_url
+):
+    fixture = _fixture(tmp_path)
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[allowed_url], successful_urls=[allowed_url],
+            failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    assert _audit(fixture)["self_reported_source_ledgers_within_frozen_budgets"] is True
+
+
 @pytest.mark.parametrize("equivalent_urls", [
     ("https://synthetic.invalid/a#first", "https://synthetic.invalid/a#second"),
     ("https://synthetic.invalid", "https://synthetic.invalid/"),
