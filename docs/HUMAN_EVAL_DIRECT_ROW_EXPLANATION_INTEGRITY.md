@@ -37,3 +37,24 @@ The helper still does not establish eligible human identity, full 40-item
 coverage, actual independence, consent, or input provenance. The full
 pre-unblinding freeze and independent verification remain mandatory before
 any actual treatment-level human analysis.
+
+## Minimum rendered-language explanation check (prospective gate)
+
+A rendered Unicode numeral or symbol is not, on its own, a written reason
+for an endpoint (1/5) or missing rating. Previously the shared
+`_note_has_visible_explanation` predicate accepted rendered Unicode
+categories **L**, **N**, or **S**. That let bare entries such as `5/5`,
+`12345`, or `★` satisfy the *explanation* requirement while adding no
+linguistic rationale. The predicate now requires **at least one rendered
+Unicode letter** (category L), including letters from non-Latin scripts;
+numbers and symbols can still appear alongside actual words. It continues
+to reject Markdown-only or invisible explanations without rewriting
+annotator text. The change propagates to CSV freeze, direct blinded
+agreement, and direct analysis through their shared validator. Synthetic
+regressions test both rejection and multilingual acceptance.
+
+This is a *minimum syntactic gate*, not an NLP assessment that notes are
+factually correct, sufficiently specific, independently produced, or genuine
+human testimony. It does not revise the frozen rubric/estimand, authenticate
+original treatment reports, generate ratings, or authorize unblinding.
+Human collection and the source-to-report custody gate remain pending.
