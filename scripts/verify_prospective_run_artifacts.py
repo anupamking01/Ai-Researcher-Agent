@@ -39,6 +39,23 @@ _CELL_FIELDS = frozenset({
 })
 _FILE_FIELDS = frozenset({"path", "size_bytes", "sha256"})
 _PATH_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_WINDOWS_DEVICE_COMPONENT = re.compile(
+    r"(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])", re.IGNORECASE
+)
+
+
+def _portable_artifact_component(name: str) -> bool:
+    """Reject filesystem aliases before accepting separately claimed evidence.
+
+    Windows device basenames remain reserved with extensions; trailing dots
+    disappear on some filesystems. Case-only sibling aliases are checked
+    independently while enumerating each directory.
+    """
+    return (
+        _PATH_COMPONENT.fullmatch(name) is not None
+        and not name.endswith(".")
+        and _WINDOWS_DEVICE_COMPONENT.fullmatch(name.split(".", 1)[0]) is None
+    )
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _GIT_SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _RUNTIME_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
@@ -99,7 +116,7 @@ def _read_regular_under(root_fd: int, relative: str) -> tuple[bytes, tuple[int, 
     cannot silently use the same underlying evidence as two distinct files.
     """
     if (type(relative) is not str or not 0 < len(relative) <= 384
-            or not all(_PATH_COMPONENT.fullmatch(part) for part in relative.split("/"))):
+            or not all(_portable_artifact_component(part) for part in relative.split("/"))):
         raise design.DesignError("artifact path is not a safe relative path")
     if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
         raise design.DesignError("platform lacks safe descriptor-relative artifact reads")
@@ -144,6 +161,10 @@ def _validate_file_claim(claim: object, *, description: str,
         raise design.DesignError(f"{description} has invalid file fingerprint types")
     if path in seen_paths:
         raise design.DesignError(f"{description} reuses an artifact path")
+    if any(path.casefold() == earlier.casefold() for earlier in seen_paths):
+        raise design.DesignError(
+            f"{description} reuses a case-insensitive artifact path"
+        )
     raw, inode, generation = _read_regular_under(root_fd, path)
     if inode in seen_inodes:
         raise design.DesignError(f"{description} reuses an artifact inode")
@@ -173,6 +194,7 @@ def _inventory_artifact_paths(root_fd: int) -> set[str]:
             pending = [(opened_root, "", 0)]
             while pending:
                 parent, prefix, depth = pending.pop()
+                sibling_keys: set[str] = set()
                 with os.scandir(parent) as entries:
                     for entry in entries:
                         entries_seen += 1
@@ -181,10 +203,16 @@ def _inventory_artifact_paths(root_fd: int) -> set[str]:
                                 "artifact root has too many directory entries"
                             )
                         name = entry.name
-                        if _PATH_COMPONENT.fullmatch(name) is None:
+                        if not _portable_artifact_component(name):
                             raise design.DesignError(
-                                "artifact root contains an unsafe path component"
+                                "artifact root contains a nonportable path component"
                             )
+                        portable_key = name.casefold()
+                        if portable_key in sibling_keys:
+                            raise design.DesignError(
+                                "artifact root contains case-insensitive filename aliases"
+                            )
+                        sibling_keys.add(portable_key)
                         relative = prefix + name
                         if len(relative) > 384:
                             raise design.DesignError(

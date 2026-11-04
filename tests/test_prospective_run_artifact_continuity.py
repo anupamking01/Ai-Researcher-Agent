@@ -323,6 +323,63 @@ def test_duplicate_path_is_rejected_as_reused_source(tmp_path):
         _audit(fixture)
 
 
+def test_case_insensitive_sibling_artifact_names_cannot_double_count_reports(tmp_path):
+    """Two distinct Linux inodes must not become one report on another host."""
+    fixture = _fixture(tmp_path)
+    _, _, _, index, root = fixture
+    previous = root / index["cells"][1]["report"]["path"]
+    alias = root / "reports" / "TRIAL-00.md"
+    if alias.exists():
+        pytest.skip("case-insensitive filesystem cannot represent both candidates")
+    previous.rename(alias)
+    index["cells"][1]["report"]["path"] = "reports/TRIAL-00.md"
+    with pytest.raises(design.DesignError, match="case-insensitive filename aliases"):
+        _audit(fixture)
+
+
+def test_case_insensitive_sibling_directories_cannot_alias_retained_roots(tmp_path):
+    """Distinct directory names can still select one subtree on other hosts."""
+    fixture = _fixture(tmp_path)
+    _, _, _, index, root = fixture
+    alternative = root / "REPORTS"
+    if alternative.exists():
+        pytest.skip("case-insensitive filesystem cannot represent both directories")
+    alternative.mkdir()
+    previous = root / index["cells"][1]["report"]["path"]
+    renamed = alternative / previous.name
+    previous.rename(renamed)
+    index["cells"][1]["report"]["path"] = f"REPORTS/{renamed.name}"
+    with pytest.raises(design.DesignError, match="case-insensitive filename aliases"):
+        _audit(fixture)
+
+
+@pytest.mark.parametrize("basename", [
+    "CON.md", "prn.md", "AUX.md", "nul.md", "COM1.md", "lpt9.md",
+    "report.md.",
+])
+def test_windows_reserved_or_trailing_dot_artifact_names_rejected(tmp_path, basename):
+    fixture = _fixture(tmp_path)
+    _, _, _, index, root = fixture
+    previous = root / index["cells"][0]["report"]["path"]
+    renamed = root / "reports" / basename
+    if renamed.exists():
+        pytest.skip("filesystem cannot represent this filename independently")
+    previous.rename(renamed)
+    index["cells"][0]["report"]["path"] = f"reports/{basename}"
+    with pytest.raises(design.DesignError, match="nonportable path component"):
+        _audit(fixture)
+
+
+def test_distinct_mixed_case_artifact_name_remains_valid(tmp_path):
+    fixture = _fixture(tmp_path)
+    _, _, _, index, root = fixture
+    previous = root / index["cells"][0]["report"]["path"]
+    renamed = root / "reports" / "Synthetic-Report-A.md"
+    previous.rename(renamed)
+    index["cells"][0]["report"]["path"] = "reports/Synthetic-Report-A.md"
+    assert _audit(fixture)["artifact_root_inventory_matches_index"] is True
+
+
 def test_hardlink_and_symlink_artifact_aliases_are_rejected(tmp_path):
     fixture = _fixture(tmp_path)
     _, _, _, index, root = fixture

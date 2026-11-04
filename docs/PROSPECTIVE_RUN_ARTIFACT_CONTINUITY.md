@@ -45,6 +45,22 @@ Each inventory row has exactly task_id, variant, run_id, status, trace, report. 
 
 **Exclusive evidence-root inventory and nonselection gate:** The nominated artifact root is now a **dedicated directory containing only the referenced prospective trace and report files** and any necessary parent directories. In addition to validating every submitted cell, the verifier enumerates the local directory tree both before and after inspecting all indexed evidence. Every retained regular file must be referenced exactly once by an attempted treatment cell; an extra trace, report, nested alternative attempt, or leftover file for an `not_started` cell causes failure. The bounded inventory rejects symlinks, hardlinks, device files, unsafe names, excessive nesting (more than 16 levels) or more than 256 entries. All files must fit the same safe relative path limit (384 characters). This is a *local completeness/anti-selection check*, not a proof of all historical attempts: it cannot detect evidence removed before inventory, files kept outside the nominated root, or transient changes missed by two non-atomic scans. To avoid false claims, the receipt explicitly reports inventory agreement as **local only**. Store manifests, execution logs, receipts, and unrelated working files **outside** the dedicated evidence root. Do not copy an unattempted cell's placeholder files into the root. If an extra genuine attempt is found, preserve it separately for investigation and document the protocol deviation rather than deleting it to obtain a passing receipt.
 
+**Portable artifact-path identity (prospective only):** A separate relative
+file path is not necessarily a separate portable artifact identity. The
+dedicated-root inventory now rejects sibling files **and sibling directories**
+whose names differ only by case, even if a case-sensitive host presents them
+as different inodes. It also rejects Windows-reserved device basenames
+(including names such as `CON.md` and `LPT9.md`) and trailing-dot components,
+both in indexed paths and the complete retained directory inventory. Every
+claimed artifact path is checked against earlier claims under casefolding as a
+second, bounded guard. Distinct safe mixed-case names remain valid. This
+prevents a locally PASSing forty-cell inventory from collapsing or losing
+reports/traces when moved to an ordinary case-insensitive filesystem. It
+does **not** prove that two traces represent independent executions, and a
+local inventory still cannot detect evidence omitted before capture. Do not
+rename or remove genuine evidence to obtain a PASS: preserve the candidate
+and document deviations before blinded human handoff.
+
 **Human-readable report envelope:** Every indexed report, including an optional report from a failed, timed-out or cancelled attempt, must use a relative path ending in `.md`, decode as strict UTF-8, contain non-whitespace text after an optional leading UTF-8 byte-order mark, and contain no NUL characters. Merely providing a matching SHA-256 and a nonzero byte length is insufficient: a PDF, arbitrary binary, empty/BOM-only or whitespace-only file cannot serve as Markdown evidence for later blinded human review. These checks apply to synthetic prospective v1 artifacts only and never reinterpret or overwrite the historical 2026 reports. They establish textual inspectability, **not** research correctness, source authenticity, Markdown safety for distribution, or human-validation eligibility; the separate content-leakage and original-evidence gates remain mandatory.
 
 **Rendered-text integrity for future blinded review:** The report envelope also rejects nonprinting C0 characters (except tab, line feed, and carriage return), DEL/C1 controls (U+007F–U+009F), and Unicode bidirectional marks/controls (U+061C, U+200E–U+200F, U+202A–U+202E, U+2066–U+206F), including deprecated directional controls. These can manipulate terminal, Markdown, or text-review presentation without changing the visible prose. Ordinary Unicode text, including non-Latin scripts, and normal line formatting remain allowed. This is an intentionally narrow **prospective-only display-integrity check**, not a guarantee of safe Markdown rendering, absence of treatment-label leakage, content authenticity, or human-review eligibility. Preserve any rejected original unchanged and document a protocol deviation; do not silently sanitize or rewrite research reports to obtain a passing audit.
