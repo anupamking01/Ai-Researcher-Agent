@@ -49,6 +49,21 @@ ORIGINAL_2026_QUESTION_SHA256 = frozenset({
 })
 ORIGINAL_2026_TASK_IDS = frozenset(f"main-{index:02d}" for index in range(1, 11))
 
+# Future research identities may be used as filesystem path components.
+# Windows device basenames and trailing-dot aliases cannot identify distinct files.
+_PORTABLE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_WINDOWS_DEVICE_NAME = re.compile(r"(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])", re.I)
+
+
+def _is_portable_identifier(value: object) -> bool:
+    """Reject ambiguous prospective task and task-set path identifiers."""
+    return (
+        type(value) is str
+        and _PORTABLE_IDENTIFIER.fullmatch(value) is not None
+        and not value.endswith(".")
+        and _WINDOWS_DEVICE_NAME.fullmatch(value.split(".", 1)[0]) is None
+    )
+
 
 
 def _contains_hidden_task_control(text: str) -> bool:
@@ -265,9 +280,8 @@ def build_plan(source: bytes) -> dict:
     if set(payload) != {"schema_version", "task_set_id", "frozen_before_execution", "tasks"} or type(payload.get("schema_version")) is not int or payload["schema_version"] != 1:
         raise DesignError("new task manifest must use exact design-only schema v1")
     task_set_id = payload.get("task_set_id")
-    if (type(task_set_id) is not str
-            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", task_set_id) is None
-            or task_set_id == ORIGINAL_TASK_SET_ID):
+    if (not _is_portable_identifier(task_set_id)
+            or task_set_id.casefold() == ORIGINAL_TASK_SET_ID.casefold()):
         raise DesignError("a distinct, safe NEW task_set_id is required")
     if payload.get("frozen_before_execution") is not True:
         raise DesignError("new task manifest must explicitly declare frozen_before_execution")
@@ -290,8 +304,7 @@ def build_plan(source: bytes) -> dict:
         identifier, category, question = (
             task.get("id"), task.get("category"), task.get("question")
         )
-        if (type(identifier) is not str
-                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", identifier) is None):
+        if not _is_portable_identifier(identifier):
             raise DesignError(f"task {index} has an unsafe identifier")
         if identifier.casefold() in ORIGINAL_2026_TASK_IDS:
             raise DesignError("prospective task reuses a reserved 2026 main-study ID")

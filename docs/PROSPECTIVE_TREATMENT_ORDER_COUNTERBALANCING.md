@@ -125,6 +125,15 @@ This is a portable **identifier-collision** check, not evidence of task
 novelty, external preregistration, or independent report custody. Existing
 valid design receipts and all historical measurements remain unchanged.
 
+**Additional pre-execution namespace guard:** Prospective task IDs and task-set
+IDs now reject reserved Windows device basenames (including extensions such
+as `con.notes`) and trailing-dot aliases. Case-only variants of the original
+2026 task-set ID are not accepted as an independent task set. Ordinary
+mixed-case slugs and nonreserved names such as `COM10` remain allowed.
+This prevents portability/identity ambiguity before a future plan is frozen;
+it does not authenticate archived evidence, change the historical results,
+or authorize any prospective execution or human-evaluation distribution.
+
 This is a **normalized-exact duplication check**, not a semantic-overlap test:
 paraphrases, closely related tasks, and shared source dependencies can still
 reduce effective task independence. An independent coordinator must review and

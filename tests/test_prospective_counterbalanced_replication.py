@@ -131,6 +131,52 @@ def test_independent_plan_verifier_rejects_coherently_submitted_case_aliases():
         plan_verify.verify_plan(_raw(candidate), receipt)
 
 
+@pytest.mark.parametrize("unsafe_id", [
+    "CON", "con.notes", "NUL", "AUX.txt", "COM1", "lpt9.log", "future-task.",
+])
+def test_prospective_task_ids_reject_nonportable_filesystem_names(unsafe_id):
+    candidate = _payload()
+    candidate["tasks"][0]["id"] = unsafe_id
+    with pytest.raises(plan.DesignError, match="unsafe identifier"):
+        plan.build_plan(_raw(candidate))
+
+
+@pytest.mark.parametrize("unsafe_set_id", [
+    "PRN", "aux.data", "COM9", "LPT1.tmp", "new-task-set.",
+])
+def test_prospective_task_set_ids_reject_nonportable_names(unsafe_set_id):
+    candidate = _payload()
+    candidate["task_set_id"] = unsafe_set_id
+    with pytest.raises(plan.DesignError, match="NEW task_set_id"):
+        plan.build_plan(_raw(candidate))
+
+
+def test_historical_task_set_case_alias_is_not_new():
+    candidate = _payload()
+    candidate["task_set_id"] = plan.ORIGINAL_TASK_SET_ID.upper()
+    with pytest.raises(plan.DesignError, match="NEW task_set_id"):
+        plan.build_plan(_raw(candidate))
+
+
+def test_portable_similar_names_remain_valid():
+    candidate = _payload()
+    candidate["task_set_id"] = "New-Study.COM10"
+    candidate["tasks"][0]["id"] = "Consolidated.Review"
+    candidate["tasks"][1]["id"] = "COM10"
+    result = plan.build_plan(_raw(candidate))
+    assert result["task_set_id"] == "New-Study.COM10"
+    assert [row["task_id"] for row in result["schedule"]][:2] == [
+        "Consolidated.Review", "COM10",
+    ]
+
+
+def test_independent_receipt_verifier_rejects_nonportable_task_path():
+    receipt = _raw(plan.build_plan(_raw()))
+    candidate = _payload()
+    candidate["tasks"][0]["id"] = "NUL"
+    with pytest.raises(plan.DesignError, match="unsafe identifier"):
+        plan_verify.verify_plan(_raw(candidate), receipt)
+
 def test_unrelated_mixed_case_future_ids_remain_valid():
     candidate = _payload()
     candidate["tasks"][1]["id"] = "FRESH-02"
