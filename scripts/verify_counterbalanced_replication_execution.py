@@ -167,6 +167,11 @@ def audit_execution_log(
     # timeouts, cancellations, or failed treatment runs.
     attempted_durations_by_variant = {arm: [] for arm in design.VARIANTS}
     completed_durations_by_variant = {arm: [] for arm in design.VARIANTS}
+    # Within-task paired durations are needed to distinguish a treatment
+    # difference from task mix when a sequential study is interrupted.
+    attempted_durations_by_task = {
+        row["task_id"]: {} for row in plan["schedule"]
+    }
     # A balanced *planned* Williams schedule need not remain balanced among
     # actually attempted or completed cells after interruption/attrition.
     slot_keys = ("1", "2", "3", "4")
@@ -241,6 +246,7 @@ def audit_execution_log(
             + elapsed.microseconds
         )
         attempted_durations_by_variant[variant].append(elapsed_us)
+        attempted_durations_by_task[task_id][variant] = elapsed_us
         if status == "completed":
             completed_durations_by_variant[variant].append(elapsed_us)
         previous_finish = finished
@@ -426,6 +432,37 @@ def audit_execution_log(
         for arm, values in cross_task_gaps_by_successor_us.items()
     }
 
+    def paired_duration_deltas(*, completed_only: bool) -> dict:
+        """Signed within-task duration differences in named contrast direction.
+
+        Failed attempts stay in the attempted denominator, never the completed
+        one. No absent arm is treated as a zero-duration execution.
+        """
+        result = {}
+        for name, (left, right) in primary_pairs.items():
+            differences = []
+            for task_id, durations in attempted_durations_by_task.items():
+                if left not in durations or right not in durations:
+                    continue
+                if completed_only and not {
+                    left, right
+                }.issubset(completed_variants_by_task[task_id]):
+                    continue
+                differences.append(durations[left] - durations[right])
+            result[name] = {
+                "count": len(differences),
+                "positive": sum(value > 0 for value in differences),
+                "zero": sum(value == 0 for value in differences),
+                "negative": sum(value < 0 for value in differences),
+                "minimum_microseconds": min(differences, default=None),
+                "maximum_microseconds": max(differences, default=None),
+                "signed_total_microseconds": sum(differences),
+            }
+        return result
+
+    attempted_paired_duration_deltas = paired_duration_deltas(completed_only=False)
+    completed_paired_duration_deltas = paired_duration_deltas(completed_only=True)
+
     return {
         "status": "pass_recorded_chronology_only",
         "classification": LOG_CLASSIFICATION,
@@ -444,6 +481,12 @@ def audit_execution_log(
         "recorded_status_counts_by_variant": status_counts_by_variant,
         "recorded_attempted_duration_us_by_variant": attempted_duration_summary,
         "recorded_completed_duration_us_by_variant": completed_duration_summary,
+        "recorded_attempted_primary_pair_duration_delta_us": (
+            attempted_paired_duration_deltas
+        ),
+        "recorded_completed_primary_pair_duration_delta_us": (
+            completed_paired_duration_deltas
+        ),
         "recorded_attempted_position_counts_by_variant": attempted_position_counts_by_variant,
         "recorded_completed_position_counts_by_variant": completed_position_counts_by_variant,
         "recorded_completed_primary_pair_order_counts": completed_pair_order_counts,

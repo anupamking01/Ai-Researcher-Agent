@@ -138,6 +138,25 @@ automatic exclusions, or a new confirmatory analysis. They cannot establish
 drift/carryover, repair fixed-order historical confounding, or justify
 outcome-selective reruns. The 2026 data and frozen inference are unchanged.
 
+**Within-task paired execution-duration contrast (prospective, descriptive only):**
+Arm-wide durations can conceal a task-mix imbalance after a failed or
+interrupted sequential execution. The receipt now also reports
+`recorded_attempted_primary_pair_duration_delta_us` and
+`recorded_completed_primary_pair_duration_delta_us` for the three named
+primary pairs. Each signed delta is the first arm **minus** the second arm
+(e.g. D6 minus D3) on the **same task**, computed from logged finish minus
+start timestamps in exact integer microseconds. Both receipts include counts,
+positive/zero/negative counts, minimum and maximum (null when empty), and
+`signed_total_microseconds`. Attempted-pair results retain failed, timed-out,
+and cancelled intervals; completed-pair results require both arms completed.
+Missing or unstarted arms never contribute fabricated zeros. Completed-pair
+counts must reconcile to the existing completed primary-pair task counts.
+These are outcome-blind recorded-clock **descriptives**, not paired treatment
+effects, objective runtime authentication, cost/compute benchmarks, significance
+tests, new exclusions, corrections for actual environmental drift, or changes
+to the frozen 2026 confirmatory analysis. Retain all recorded attempts;
+never select replications based on the sign of these differences.
+
 This is a **prospective sequential-execution convention** for a future study. It is not evidence that the historical study used the convention, and it must not be retroactively applied to historical logs. If the future research protocol predeclares parallel or interleaved execution, it requires a separately versioned auditor rather than silently weakening this one.
 
 ## Offline verification

@@ -1089,3 +1089,84 @@ def test_subsecond_treatment_duration_shift_changes_only_correct_arm():
     assert changed["recorded_completed_primary_pair_task_counts"] == (
         baseline["recorded_completed_primary_pair_task_counts"]
     )
+
+def test_paired_execution_durations_have_complete_zero_deltas_on_equal_fixture():
+    """Task-matched duration is not the same as pooled arm means."""
+    source, receipt, log = _fixture()
+    observed = audit.audit_execution_log(source, receipt, _bytes(log))
+    attempted = observed["recorded_attempted_primary_pair_duration_delta_us"]
+    completed = observed["recorded_completed_primary_pair_duration_delta_us"]
+    assert attempted == completed
+    expected = {
+        "count": 10, "positive": 0, "zero": 10, "negative": 0,
+        "minimum_microseconds": 0, "maximum_microseconds": 0,
+        "signed_total_microseconds": 0,
+    }
+    for contrast in ("D6_minus_D3", "P6_minus_D6", "P6V_minus_P6"):
+        assert attempted[contrast] == expected
+        assert attempted[contrast]["count"] == (
+            observed["recorded_completed_primary_pair_task_counts"][contrast]
+        )
+
+
+def test_paired_duration_deltas_use_signed_contrast_orientation_and_microseconds():
+    source, receipt, log = _fixture()
+    event = next(e for e in log["events"] if e["variant"] == "D6")
+    finish = datetime.fromisoformat(event["finished_at_utc"].replace("Z", "+00:00"))
+    event["finished_at_utc"] = _utc(finish - timedelta(microseconds=500_000))
+    observed = audit.audit_execution_log(source, receipt, _bytes(log))
+    paired = observed["recorded_completed_primary_pair_duration_delta_us"]
+    assert paired["D6_minus_D3"] == {
+        "count": 10, "positive": 0, "zero": 9, "negative": 1,
+        "minimum_microseconds": -500_000, "maximum_microseconds": 0,
+        "signed_total_microseconds": -500_000,
+    }
+    assert paired["P6_minus_D6"] == {
+        "count": 10, "positive": 1, "zero": 9, "negative": 0,
+        "minimum_microseconds": 0, "maximum_microseconds": 500_000,
+        "signed_total_microseconds": 500_000,
+    }
+    assert paired["P6V_minus_P6"]["signed_total_microseconds"] == 0
+    assert observed["recorded_attempted_primary_pair_duration_delta_us"] == paired
+    assert observed["scientific_outcomes_validated"] is False
+
+
+@pytest.mark.parametrize("status", ["failed", "timeout", "cancelled"])
+def test_paired_duration_attempted_denominator_preserves_unsuccessful_runs(status):
+    source, receipt, log = _fixture()
+    event = next(e for e in log["events"] if e["variant"] == "D6")
+    event["status"] = status
+    finish = datetime.fromisoformat(event["finished_at_utc"].replace("Z", "+00:00"))
+    event["finished_at_utc"] = _utc(finish - timedelta(microseconds=250_000))
+    observed = audit.audit_execution_log(source, receipt, _bytes(log))
+    attempted = observed["recorded_attempted_primary_pair_duration_delta_us"]
+    completed = observed["recorded_completed_primary_pair_duration_delta_us"]
+    for contrast, expected in (("D6_minus_D3", -250_000),
+                               ("P6_minus_D6", 250_000)):
+        assert attempted[contrast]["count"] == 10
+        assert attempted[contrast]["signed_total_microseconds"] == expected
+        assert completed[contrast] == {
+            "count": 9, "positive": 0, "zero": 9, "negative": 0,
+            "minimum_microseconds": 0, "maximum_microseconds": 0,
+            "signed_total_microseconds": 0,
+        }
+        assert completed[contrast]["count"] == (
+            observed["recorded_completed_primary_pair_task_counts"][contrast]
+        )
+    assert completed["P6V_minus_P6"]["count"] == 10
+
+
+def test_interrupted_paired_duration_does_not_invent_missing_arm_intervals():
+    source, receipt, log = _fixture()
+    _mark_unattempted_suffix(log, 1)
+    observed = audit.audit_execution_log(source, receipt, _bytes(log))
+    for field in ("recorded_attempted_primary_pair_duration_delta_us",
+                  "recorded_completed_primary_pair_duration_delta_us"):
+        for record in observed[field].values():
+            assert record == {
+                "count": 0, "positive": 0, "zero": 0, "negative": 0,
+                "minimum_microseconds": None, "maximum_microseconds": None,
+                "signed_total_microseconds": 0,
+            }
+    assert observed["attempted_cells"] == 1
+    assert observed["human_validation_performed"] is False
