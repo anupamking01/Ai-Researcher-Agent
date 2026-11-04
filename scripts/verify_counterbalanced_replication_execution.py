@@ -162,6 +162,11 @@ def audit_execution_log(
     completed_starts_by_task = {
         row["task_id"]: {} for row in plan["schedule"]
     }
+    # Record elapsed wall-clock intervals for every attempted arm, even when
+    # the attempt fails. Completed-only summaries must not silently include
+    # timeouts, cancellations, or failed treatment runs.
+    attempted_durations_by_variant = {arm: [] for arm in design.VARIANTS}
+    completed_durations_by_variant = {arm: [] for arm in design.VARIANTS}
     # A balanced *planned* Williams schedule need not remain balanced among
     # actually attempted or completed cells after interruption/attrition.
     slot_keys = ("1", "2", "3", "4")
@@ -230,6 +235,14 @@ def audit_execution_log(
             )
         if finished > study_finish:
             raise design.DesignError(f"event {index} finishes outside study window")
+        elapsed = finished - started
+        elapsed_us = (
+            (elapsed.days * 86400 + elapsed.seconds) * 1_000_000
+            + elapsed.microseconds
+        )
+        attempted_durations_by_variant[variant].append(elapsed_us)
+        if status == "completed":
+            completed_durations_by_variant[variant].append(elapsed_us)
         previous_finish = finished
         if status == "completed":
             completed_starts_by_task[task_id][variant] = started
@@ -397,6 +410,16 @@ def audit_execution_log(
             "total_microseconds": sum(values),
         }
 
+    # Arm-specific elapsed-time summaries expose differential recorded runtime
+    # after attrition. They are not measured provider compute or per-run costs.
+    attempted_duration_summary = {
+        arm: gap_summary(values)
+        for arm, values in attempted_durations_by_variant.items()
+    }
+    completed_duration_summary = {
+        arm: gap_summary(values)
+        for arm, values in completed_durations_by_variant.items()
+    }
     cross_task_gap_summary = gap_summary(cross_task_attempted_gaps_us)
     cross_task_gap_by_successor = {
         arm: gap_summary(values)
@@ -419,6 +442,8 @@ def audit_execution_log(
         "all_planned_cells_attempted": counts["not_started"] == 0,
         "recorded_status_counts": counts,
         "recorded_status_counts_by_variant": status_counts_by_variant,
+        "recorded_attempted_duration_us_by_variant": attempted_duration_summary,
+        "recorded_completed_duration_us_by_variant": completed_duration_summary,
         "recorded_attempted_position_counts_by_variant": attempted_position_counts_by_variant,
         "recorded_completed_position_counts_by_variant": completed_position_counts_by_variant,
         "recorded_completed_primary_pair_order_counts": completed_pair_order_counts,

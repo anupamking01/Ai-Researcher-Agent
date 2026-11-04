@@ -1008,3 +1008,84 @@ def test_failed_boundary_predecessor_does_not_remove_recorded_pause():
         baseline["recorded_completed_cross_task_transition_counts_by_variant"]
     )
     assert changed["actual_execution_independently_authenticated"] is False
+
+
+def test_recorded_treatment_durations_reconcile_by_arm_on_full_synthetic_log():
+    """Elapsed time is not just the idle interval between runs."""
+    source, receipt, log = _fixture()
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    attempted = result["recorded_attempted_duration_us_by_variant"]
+    completed = result["recorded_completed_duration_us_by_variant"]
+    assert attempted == completed
+    for arm in design.VARIANTS:
+        assert attempted[arm] == {
+            "count": 10,
+            "minimum_microseconds": 11_000_000,
+            "maximum_microseconds": 11_000_000,
+            "total_microseconds": 110_000_000,
+        }
+    assert sum(x["count"] for x in attempted.values()) == result["attempted_cells"]
+    assert sum(x["total_microseconds"] for x in attempted.values()) == 440_000_000
+    assert result["actual_execution_independently_authenticated"] is False
+
+
+@pytest.mark.parametrize("status", ["failed", "timeout", "cancelled"])
+def test_unsuccessful_attempt_elapsed_time_retained_but_not_called_completed(status):
+    source, receipt, log = _fixture()
+    affected_arm = log["events"][0]["variant"]
+    log["events"][0]["status"] = status
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    attempted = result["recorded_attempted_duration_us_by_variant"]
+    completed = result["recorded_completed_duration_us_by_variant"]
+    assert attempted[affected_arm]["count"] == 10
+    assert attempted[affected_arm]["total_microseconds"] == 110_000_000
+    assert completed[affected_arm]["count"] == 9
+    assert completed[affected_arm]["total_microseconds"] == 99_000_000
+    for arm in set(design.VARIANTS) - {affected_arm}:
+        assert completed[arm] == attempted[arm]
+    assert sum(x["count"] for x in completed.values()) == 39
+
+
+def test_unattempted_suffix_does_not_invent_elapsed_time_or_completed_runs():
+    source, receipt, log = _fixture()
+    _mark_unattempted_suffix(log, 1)
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    first_arm = log["events"][0]["variant"]
+    for arm in design.VARIANTS:
+        expected_count = 1 if arm == first_arm else 0
+        expected = {
+            "count": expected_count,
+            "minimum_microseconds": 11_000_000 if expected_count else None,
+            "maximum_microseconds": 11_000_000 if expected_count else None,
+            "total_microseconds": expected_count * 11_000_000,
+        }
+        assert result["recorded_attempted_duration_us_by_variant"][arm] == expected
+        assert result["recorded_completed_duration_us_by_variant"][arm] == expected
+    assert result["attempted_cells"] == 1
+    assert result["unattempted_cells"] == 39
+
+
+def test_subsecond_treatment_duration_shift_changes_only_correct_arm():
+    source, receipt, log = _fixture()
+    baseline = audit.audit_execution_log(source, receipt, _bytes(log))
+    event = log["events"][1]
+    arm = event["variant"]
+    # The prior run ends one second before this start. Shift the start
+    # forward by 500 ms without changing any later events or outcomes.
+    event["started_at_utc"] = _utc(
+        datetime.fromisoformat(event["started_at_utc"].replace("Z", "+00:00"))
+        + timedelta(microseconds=500_000)
+    )
+    changed = audit.audit_execution_log(source, receipt, _bytes(log))
+    field = "recorded_attempted_duration_us_by_variant"
+    for variant in design.VARIANTS:
+        assert changed[field][variant]["count"] == baseline[field][variant]["count"]
+        assert (changed[field][variant]["total_microseconds"]
+                - baseline[field][variant]["total_microseconds"]) == (
+                    -500_000 if variant == arm else 0
+                )
+    assert changed[field][arm]["minimum_microseconds"] == 10_500_000
+    assert changed["recorded_completed_duration_us_by_variant"] == changed[field]
+    assert changed["recorded_completed_primary_pair_task_counts"] == (
+        baseline["recorded_completed_primary_pair_task_counts"]
+    )

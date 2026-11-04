@@ -120,6 +120,24 @@ provider/web drift, prove carryover, identify a treatment effect, authenticate
 the timestamps, change exclusions or justify outcome-guided reruns. The frozen
 2026 experiment and prospective treatment schedule are unchanged.
 
+
+**Per-arm recorded execution duration (prospective, descriptive only):**
+A complete chronology can have balanced *scheduled positions* and nearly
+identical cross-task pauses while still recording much longer treatment
+intervals for one arm. The receipt therefore includes
+`recorded_attempted_duration_us_by_variant` and
+`recorded_completed_duration_us_by_variant`, each with count, minimum,
+maximum and total wall-clock microseconds per D3/D6/P6/P6V arm. Attempted
+durations include failures, timeouts and cancellations; completed-only
+durations explicitly exclude them. Unstarted cells contribute no invented
+duration (zero count and total, null extrema). The counts should reconcile
+to the attempted and completed status counts, respectively. These diagnostics
+use the supplied start/finish timestamps only: they are **not** token counts,
+compute metering, externally authenticated latency, treatment scores,
+automatic exclusions, or a new confirmatory analysis. They cannot establish
+drift/carryover, repair fixed-order historical confounding, or justify
+outcome-selective reruns. The 2026 data and frozen inference are unchanged.
+
 This is a **prospective sequential-execution convention** for a future study. It is not evidence that the historical study used the convention, and it must not be retroactively applied to historical logs. If the future research protocol predeclares parallel or interleaved execution, it requires a separately versioned auditor rather than silently weakening this one.
 
 ## Offline verification
