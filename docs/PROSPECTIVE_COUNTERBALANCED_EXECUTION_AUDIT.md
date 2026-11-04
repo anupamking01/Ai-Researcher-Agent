@@ -105,6 +105,21 @@ carryover, environmental drift, causal effects, or external execution
 authenticity. They do not alter the frozen schedule, scores, paired inference,
 historical fixed-order experiment, or any future prespecified exclusion rule.
 
+**Successor-arm pause exposure (prospective, descriptive only):** The aggregate
+`recorded_attempted_cross_task_boundary_gap_us` can conceal whether most of
+the recorded idle time occurs immediately before one treatment. The additional
+`recorded_attempted_cross_task_boundary_gap_by_successor_us` breaks the same
+nonnegative finish-to-start gaps down by the **first arm of the following
+task**, including after a failed/timeout/cancelled predecessor. Each arm's
+summary contains a count, minimum, maximum and total in integer microseconds;
+zero-boundary arms have null extrema and a zero sum. Counts and totals across
+arms must reconcile to the existing aggregate. An interrupted study invents no
+unattempted boundary gaps. This exposes arm-correlated **recorded pause**
+imbalance that a pooled mean or maximum could hide, but it does not measure
+provider/web drift, prove carryover, identify a treatment effect, authenticate
+the timestamps, change exclusions or justify outcome-guided reruns. The frozen
+2026 experiment and prospective treatment schedule are unchanged.
+
 This is a **prospective sequential-execution convention** for a future study. It is not evidence that the historical study used the convention, and it must not be retroactively applied to historical logs. If the future research protocol predeclares parallel or interleaved execution, it requires a separately versioned auditor rather than silently weakening this one.
 
 ## Offline verification

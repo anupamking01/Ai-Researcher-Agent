@@ -348,6 +348,12 @@ def audit_execution_log(
         arm: 0 for arm in design.VARIANTS
     }
     cross_task_attempted_gaps_us: list[int] = []
+    # Preserve timing by the arm that resumes execution after each task boundary.
+    # An aggregate maximum alone cannot disclose which treatment followed a
+    # long pause; these are recorded-clock diagnostics, not causal effects.
+    cross_task_gaps_by_successor_us: dict[str, list[int]] = {
+        arm: [] for arm in design.VARIANTS
+    }
     for task_index, (preceding_row, following_row) in enumerate(
         zip(plan["schedule"], plan["schedule"][1:]), start=1
     ):
@@ -379,14 +385,22 @@ def audit_execution_log(
             "cross-task successor start",
         )
         gap = following_start - preceding_finish
-        cross_task_attempted_gaps_us.append(
-            (gap.days * 86400 + gap.seconds) * 1_000_000 + gap.microseconds
-        )
-    cross_task_gap_summary = {
-        "count": len(cross_task_attempted_gaps_us),
-        "minimum_microseconds": min(cross_task_attempted_gaps_us, default=None),
-        "maximum_microseconds": max(cross_task_attempted_gaps_us, default=None),
-        "total_microseconds": sum(cross_task_attempted_gaps_us),
+        gap_us = (gap.days * 86400 + gap.seconds) * 1_000_000 + gap.microseconds
+        cross_task_attempted_gaps_us.append(gap_us)
+        cross_task_gaps_by_successor_us[successor].append(gap_us)
+
+    def gap_summary(values: list[int]) -> dict[str, int | None]:
+        return {
+            "count": len(values),
+            "minimum_microseconds": min(values, default=None),
+            "maximum_microseconds": max(values, default=None),
+            "total_microseconds": sum(values),
+        }
+
+    cross_task_gap_summary = gap_summary(cross_task_attempted_gaps_us)
+    cross_task_gap_by_successor = {
+        arm: gap_summary(values)
+        for arm, values in cross_task_gaps_by_successor_us.items()
     }
 
     return {
@@ -424,6 +438,9 @@ def audit_execution_log(
             cross_task_completed_after_noncompleted
         ),
         "recorded_attempted_cross_task_boundary_gap_us": cross_task_gap_summary,
+        "recorded_attempted_cross_task_boundary_gap_by_successor_us": (
+            cross_task_gap_by_successor
+        ),
         "recorded_fully_completed_task_count": sum(
             len(completed) == len(design.VARIANTS)
             for completed in completed_variants_by_task.values()

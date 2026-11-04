@@ -925,3 +925,86 @@ def test_chronology_cli_rejects_hardlinked_input_at_each_boundary(
     assert exc.value.code == 2
     assert "exactly one filesystem link" in capsys.readouterr().err
     assert alias.exists()
+
+
+def test_cross_task_pause_exposure_is_disaggregated_by_successor_arm():
+    """Whole-study gap summaries can hide condition-specific time exposure."""
+    source, receipt, log = _fixture()
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    grouped = result["recorded_attempted_cross_task_boundary_gap_by_successor_us"]
+    expected_counts = {arm: 0 for arm in design.VARIANTS}
+    schedule = design.build_plan(source)["schedule"]
+    for row in schedule[1:]:
+        expected_counts[row["arm_order"][0]] += 1
+    assert set(grouped) == set(design.VARIANTS)
+    for arm in design.VARIANTS:
+        count = expected_counts[arm]
+        assert grouped[arm] == {
+            "count": count,
+            "minimum_microseconds": 1_000_000 if count else None,
+            "maximum_microseconds": 1_000_000 if count else None,
+            "total_microseconds": count * 1_000_000,
+        }
+    assert sum(item["count"] for item in grouped.values()) == 9
+    assert sum(item["total_microseconds"] for item in grouped.values()) == (
+        result["recorded_attempted_cross_task_boundary_gap_us"]["total_microseconds"]
+    )
+    assert result["actual_execution_independently_authenticated"] is False
+
+
+def test_interrupted_study_does_not_invent_arm_specific_cross_task_pauses():
+    source, receipt, log = _fixture()
+    _mark_unattempted_suffix(log, 4)
+    grouped = audit.audit_execution_log(source, receipt, _bytes(log))[
+        "recorded_attempted_cross_task_boundary_gap_by_successor_us"
+    ]
+    for arm in design.VARIANTS:
+        assert grouped[arm] == {
+            "count": 0, "minimum_microseconds": None,
+            "maximum_microseconds": None, "total_microseconds": 0,
+        }
+
+
+def test_long_cross_task_pause_is_attributed_to_the_actual_next_arm():
+    source, receipt, log = _fixture()
+    baseline = audit.audit_execution_log(source, receipt, _bytes(log))
+    next_arm = design.build_plan(source)["schedule"][1]["arm_order"][0]
+    # Delay all executions after the first task; just the first boundary
+    # gains the additional hour, and no completed pair is reclassified.
+    for event in log["events"][4:]:
+        for clock in ("started_at_utc", "finished_at_utc"):
+            event[clock] = _utc(
+                datetime.fromisoformat(event[clock].replace("Z", "+00:00"))
+                + timedelta(hours=1)
+            )
+    log["finished_at_utc"] = _utc(
+        datetime.fromisoformat(log["finished_at_utc"].replace("Z", "+00:00"))
+        + timedelta(hours=1)
+    )
+    changed = audit.audit_execution_log(source, receipt, _bytes(log))
+    field = "recorded_attempted_cross_task_boundary_gap_by_successor_us"
+    for arm in design.VARIANTS:
+        old, new = baseline[field][arm], changed[field][arm]
+        assert new["count"] == old["count"]
+        assert new["total_microseconds"] - old["total_microseconds"] == (
+            3_600_000_000 if arm == next_arm else 0
+        )
+        assert new["maximum_microseconds"] == (
+            3_601_000_000 if arm == next_arm else old["maximum_microseconds"]
+        )
+    assert changed["recorded_completed_cross_task_transition_counts_by_variant"] == (
+        baseline["recorded_completed_cross_task_transition_counts_by_variant"]
+    )
+
+
+def test_failed_boundary_predecessor_does_not_remove_recorded_pause():
+    source, receipt, log = _fixture()
+    baseline = audit.audit_execution_log(source, receipt, _bytes(log))
+    log["events"][3]["status"] = "timeout"
+    changed = audit.audit_execution_log(source, receipt, _bytes(log))
+    field = "recorded_attempted_cross_task_boundary_gap_by_successor_us"
+    assert changed[field] == baseline[field]
+    assert changed["recorded_completed_cross_task_transition_counts_by_variant"] != (
+        baseline["recorded_completed_cross_task_transition_counts_by_variant"]
+    )
+    assert changed["actual_execution_independently_authenticated"] is False
