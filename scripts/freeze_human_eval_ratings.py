@@ -269,15 +269,16 @@ def _reject_spreadsheet_active_text(
 
 
 def _note_has_visible_explanation(notes: str) -> bool:
-    """Require an actual rendered explanation, not just invisible or markup text.
+    """Require visible linguistic content, not just markup, digits, or symbols.
 
-    The frozen rubric requires a reason for endpoint scores or missing dimensions.
-    Raw nonempty CSV text does not establish that the note displays any rationale:
-    zero-width Unicode and Markdown-only syntax can otherwise satisfy the gate.
-    Existing renderer semantics are reused; ordinary international text remains valid.
+    The frozen rubric requests a *reason* for endpoint scores or missing
+    dimensions. An emoji, star, or bare numeric score is rendered but does
+    not explain a judgment. Reuse the established Markdown renderer and
+    accept Unicode letters from any script, without rewriting raw notes.
+    This is a minimum syntactic gate, not a semantic proof of an explanation.
     """
     rendered, _ = packet_build._rendered_markdown_parts(notes)
-    return any(unicodedata.category(character)[0] in {"L", "N", "S"} for character in rendered)
+    return any(unicodedata.category(character).startswith("L") for character in rendered)
 
 
 def _annotator_identity_key(annotator_id: str) -> str:
