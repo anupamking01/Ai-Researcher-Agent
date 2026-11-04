@@ -631,6 +631,56 @@ def test_identical_byte_inode_replacement_after_check_is_rejected(tmp_path, monk
     assert replaced
 
 
+def test_same_byte_in_place_rewrite_with_restored_mtime_rejected(tmp_path, monkeypatch):
+    """Rehashing alone misses a post-capture rewrite to identical trace bytes."""
+    fixture = _fixture(tmp_path)
+    path = fixture[4] / fixture[3]["cells"][0]["trace"]["path"]
+    original = evidence._validate_file_claim
+    changed = False
+
+    def rewrite_after_first(*args, **kwargs):
+        nonlocal changed
+        result = original(*args, **kwargs)
+        if not changed:
+            before = path.stat()
+            # Preserve all original trace bytes and size, as well as mtime.
+            raw = path.read_bytes()
+            path.write_bytes(raw)
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+            assert path.stat().st_mtime_ns == before.st_mtime_ns
+            assert path.stat().st_ctime_ns != before.st_ctime_ns
+            changed = True
+        return result
+
+    monkeypatch.setattr(evidence, "_validate_file_claim", rewrite_after_first)
+    with pytest.raises(design.DesignError, match="previously verified artifact changed"):
+        _audit(fixture)
+    assert changed
+
+
+def test_early_report_mode_change_without_byte_change_rejected(tmp_path, monkeypatch):
+    """A retained report's generation cannot drift while later cells are read."""
+    fixture = _fixture(tmp_path)
+    path = fixture[4] / fixture[3]["cells"][0]["report"]["path"]
+    original = evidence._validate_file_claim
+    changed = False
+
+    def chmod_after_first(*args, **kwargs):
+        nonlocal changed
+        result = original(*args, **kwargs)
+        if not changed:
+            before = path.stat()
+            os.chmod(path, before.st_mode ^ 0o100)
+            assert path.read_bytes()
+            changed = True
+        return result
+
+    monkeypatch.setattr(evidence, "_validate_file_claim", chmod_after_first)
+    with pytest.raises(design.DesignError, match="previously verified artifact changed"):
+        _audit(fixture)
+    assert changed
+
+
 def test_early_trace_removed_after_check_is_rejected_at_final_sweep(tmp_path, monkeypatch):
     fixture = _fixture(tmp_path)
     path = fixture[4] / fixture[3]["cells"][0]["trace"]["path"]

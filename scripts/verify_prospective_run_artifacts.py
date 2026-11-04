@@ -92,7 +92,7 @@ def _file_generation(st: os.stat_result) -> tuple:
     )
 
 
-def _read_regular_under(root_fd: int, relative: str) -> tuple[bytes, tuple[int, int]]:
+def _read_regular_under(root_fd: int, relative: str) -> tuple[bytes, tuple[int, int], tuple]:
     """Open each path segment relative to directory descriptors, without links.
 
     Reject hardlinks as well as repeated inode identities: a candidate index
@@ -126,7 +126,7 @@ def _read_regular_under(root_fd: int, relative: str) -> tuple[bytes, tuple[int, 
             if (len(raw) != before.st_size
                     or _file_generation(before) != _file_generation(after)):
                 raise design.DesignError("artifact changed during source capture")
-            return raw, (before.st_dev, before.st_ino)
+            return raw, (before.st_dev, before.st_ino), _file_generation(before)
     except OSError as exc:
         raise design.DesignError("artifact could not be safely opened") from exc
 
@@ -134,7 +134,7 @@ def _read_regular_under(root_fd: int, relative: str) -> tuple[bytes, tuple[int, 
 def _validate_file_claim(claim: object, *, description: str,
                          root_fd: int, seen_paths: set[str],
                          seen_inodes: set[tuple[int, int]],
-                         captured_claims: dict[str, tuple[tuple[int, int], int, str]]) -> tuple[bytes, int]:
+                         captured_claims: dict[str, tuple[tuple[int, int], int, str, tuple]]) -> tuple[bytes, int]:
     if type(claim) is not dict or set(claim) != _FILE_FIELDS:
         raise design.DesignError(f"{description} requires exact file fingerprint fields")
     path, length, digest = claim["path"], claim["size_bytes"], claim["sha256"]
@@ -144,14 +144,14 @@ def _validate_file_claim(claim: object, *, description: str,
         raise design.DesignError(f"{description} has invalid file fingerprint types")
     if path in seen_paths:
         raise design.DesignError(f"{description} reuses an artifact path")
-    raw, inode = _read_regular_under(root_fd, path)
+    raw, inode, generation = _read_regular_under(root_fd, path)
     if inode in seen_inodes:
         raise design.DesignError(f"{description} reuses an artifact inode")
     if len(raw) != length or hashlib.sha256(raw).hexdigest() != digest:
         raise design.DesignError(f"{description} differs from supplied artifact bytes")
     seen_paths.add(path)
     seen_inodes.add(inode)
-    captured_claims[path] = (inode, length, digest)
+    captured_claims[path] = (inode, length, digest, generation)
     return raw, len(raw)
 
 
@@ -569,7 +569,7 @@ def audit_run_artifacts(
     events = _json_bytes(execution_log, "verified execution log")["events"]
     seen_paths: set[str] = set()
     seen_inodes: set[tuple[int, int]] = set()
-    captured_claims: dict[str, tuple[tuple[int, int], int, str]] = {}
+    captured_claims: dict[str, tuple[tuple[int, int], int, str, tuple]] = {}
     total_bytes = trace_count = report_count = 0
     common_runtime_sha256: str | None = None
     runtime_context_external_pin_matched = False
@@ -760,16 +760,19 @@ def audit_run_artifacts(
 
         # Source bytes may be replaced or rewritten after an early cell passes.
         # Re-open every verified path beneath the original root descriptor;
-        # require both file identity and content to remain unchanged at the
-        # end of the bounded scan. This is not an atomic filesystem snapshot.
-        for path, (initial_inode, initial_size, initial_digest) in captured_claims.items():
+        # require inode, file generation (including ctime, mode and link count),
+        # and content to remain unchanged at the end of the bounded scan.
+        # A same-byte rewrite with restored mtime must not silently pass.
+        # This is not an atomic filesystem snapshot.
+        for path, (initial_inode, initial_size, initial_digest, initial_generation) in captured_claims.items():
             try:
-                current_raw, current_inode = _read_regular_under(root_fd, path)
+                current_raw, current_inode, current_generation = _read_regular_under(root_fd, path)
             except design.DesignError as exc:
                 raise design.DesignError(
                     "previously verified artifact became inaccessible during audit"
                 ) from exc
-            if (current_inode != initial_inode or len(current_raw) != initial_size
+            if (current_inode != initial_inode or current_generation != initial_generation
+                    or len(current_raw) != initial_size
                     or hashlib.sha256(current_raw).hexdigest() != initial_digest):
                 raise design.DesignError(
                     "previously verified artifact changed during audit"
