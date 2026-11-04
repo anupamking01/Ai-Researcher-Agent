@@ -121,7 +121,13 @@ source identifier to be an **absolute HTTP(S) URL**, at most 2,048 characters,
 with a nonempty host and an optional valid, nonzero network port. Non-web
 schemes, local paths, embedded credentials, whitespace, control/format
 characters, backslashes, malformed percent escapes (including in fragments),
-and malformed authorities fail closed. DNS hosts must
+and malformed authorities fail closed. **Percent-encoded C0 control bytes**
+(including NUL, CR, LF and tab) and encoded DEL (\`%7F\`) are also rejected in
+paths, queries, or fragments, since an apparently printable URL may be
+rejected, truncated, or differently interpreted by HTTP clients. This audit
+never repairs submitted evidence; encoded ordinary space (\`%20\`), legitimate
+UTF-8 octets and encoded reserved delimiters remain permitted.
+DNS hosts must
 have valid, nonempty ASCII/IDNA labels (at most 63 characters each and 253
 characters overall, with no leading/trailing label hyphen); terminal-dot
 DNS aliases and empty interior labels are rejected as noncanonical rather

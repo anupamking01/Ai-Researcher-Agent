@@ -273,6 +273,19 @@ def _source_fetch_identity(url: object, *, number: int) -> str:
         raise design.DesignError(
             f"trace {number} source ledger has malformed percent encoding"
         )
+    # A percent escape can conceal a control octet even when the raw URI
+    # contains only printable ASCII. Some HTTP clients reject, truncate or
+    # interpret encoded NUL/CR/LF differently. Reject rather than count
+    # such an ambiguous request target as a reproducible retrieval source.
+    # Apply this to fragments as well: submitted source URLs must be
+    # unambiguous even when a fragment is omitted from the HTTP request.
+    if any(
+        (octet := int(match.group()[1:], 16)) < 0x20 or octet == 0x7f
+        for match in _PERCENT_TRIPLET.finditer(url)
+    ):
+        raise design.DesignError(
+            f"trace {number} source ledger has percent-encoded HTTP control byte"
+        )
     try:
         parsed = urlsplit(url)
         host = parsed.hostname

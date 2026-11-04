@@ -1033,6 +1033,54 @@ def test_malformed_percent_escape_rejected_even_with_rehashed_trace(
         _audit(fixture)
 
 
+# Percent-encoded C0/DEL bytes are not portable HTTP request targets.
+# Altered synthetic trace/index fingerprints must not bypass the URL guard.
+@pytest.mark.parametrize("bad_url", [
+    "https://synthetic.invalid/doc%00suffix",
+    "https://synthetic.invalid/doc%0Asuffix",
+    "https://synthetic.invalid/doc%0dsuffix",
+    "https://synthetic.invalid/doc%1F",
+    "https://synthetic.invalid/doc%7f",
+    "https://synthetic.invalid/search?q=%09hidden",
+    "https://synthetic.invalid/source#ignored%0D",
+])
+def test_encoded_http_control_octet_rejected_with_rehashed_source_ledger(
+    tmp_path, bad_url
+):
+    fixture = _fixture(tmp_path)
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[bad_url], successful_urls=[bad_url], failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    with pytest.raises(design.DesignError, match="source ledger.*HTTP control"):
+        _audit(fixture)
+
+
+@pytest.mark.parametrize("allowed_url", [
+    "https://synthetic.invalid/word%20break",
+    "https://synthetic.invalid/caf%C3%A9",
+    "https://synthetic.invalid/doc%2Fpart",
+    "https://synthetic.invalid/search?q=%26",
+    "https://synthetic.invalid/search?q=%7E",
+])
+def test_safe_encoded_source_octets_remain_valid(tmp_path, allowed_url):
+    fixture = _fixture(tmp_path)
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[allowed_url], successful_urls=[allowed_url],
+            failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    assert _audit(fixture)["self_reported_source_ledgers_within_frozen_budgets"] is True
+
+
 @pytest.mark.parametrize("aliases", [
     ("https://synthetic.invalid/doc%2fpart", "https://synthetic.invalid/doc%2Fpart"),
     ("https://synthetic.invalid/search?q=%3a", "https://synthetic.invalid/search?q=%3A"),
