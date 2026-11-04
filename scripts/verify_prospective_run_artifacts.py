@@ -191,6 +191,72 @@ def _validate_file_claim(claim: object, *, description: str,
 
 
 
+def _artifact_root_directory_identity(metadata: os.stat_result) -> tuple[int, int, int]:
+    """Bind a directory to its object, not unrelated sibling directory edits."""
+    return (metadata.st_dev, metadata.st_ino, stat.S_IFMT(metadata.st_mode))
+
+
+def _open_bound_artifact_root(path: Path) -> tuple[int, ExitStack, list[tuple[int, str, int]]]:
+    """Open the entire evidence-root ancestry without following parent symlinks.
+
+    Holding each directory descriptor permits a final pathname-binding check.
+    An O_NOFOLLOW flag on the *root itself* does not protect its ancestors.
+    """
+    absolute = Path(path).absolute()
+    if ".." in absolute.parts:
+        raise design.DesignError("artifact root must not traverse parent directories")
+    directory_flags = (
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    resources = ExitStack()
+    try:
+        parent_fd = os.open(absolute.anchor, directory_flags)
+        resources.callback(os.close, parent_fd)
+        bindings: list[tuple[int, str, int]] = []
+        for component in absolute.parts[1:]:
+            child_fd = os.open(component, directory_flags, dir_fd=parent_fd)
+            resources.callback(os.close, child_fd)
+            entry = os.stat(component, dir_fd=parent_fd, follow_symlinks=False)
+            if (
+                not stat.S_ISDIR(entry.st_mode)
+                or _artifact_root_directory_identity(entry)
+                != _artifact_root_directory_identity(os.fstat(child_fd))
+            ):
+                raise design.DesignError(
+                    "artifact root ancestry changed before source capture"
+                )
+            bindings.append((parent_fd, component, child_fd))
+            parent_fd = child_fd
+        return parent_fd, resources, bindings
+    except (OSError, design.DesignError) as exc:
+        resources.close()
+        if isinstance(exc, design.DesignError):
+            raise
+        raise design.DesignError("artifact root could not be safely opened") from exc
+
+
+def _require_artifact_root_ancestry(
+    bindings: list[tuple[int, str, int]],
+) -> None:
+    """Fail if any held root ancestor was replaced or redirected during audit."""
+    try:
+        for parent_fd, component, child_fd in bindings:
+            entry = os.stat(component, dir_fd=parent_fd, follow_symlinks=False)
+            if (
+                not stat.S_ISDIR(entry.st_mode)
+                or _artifact_root_directory_identity(entry)
+                != _artifact_root_directory_identity(os.fstat(child_fd))
+            ):
+                raise design.DesignError(
+                    "artifact root ancestry changed during source verification"
+                )
+    except OSError as exc:
+        raise design.DesignError(
+            "artifact root ancestry became inaccessible during source verification"
+        ) from exc
+
+
 def _inventory_artifact_paths(root_fd: int) -> set[str]:
     """Enumerate a dedicated evidence root; reject unindexed retained artifacts.
 
@@ -631,18 +697,13 @@ def audit_run_artifacts(
     # Keep only bounded, task-paired source counts in memory for a prospective
     # exposure diagnostic; never use them to exclude or rerun treatment cells.
     paired_exposure_by_task: dict[str, dict[str, dict]] = {}
-    # Keep a single source-root inode pinned for the entire multi-file audit.
-    # Re-opening its path per file risks mixing independent directory trees.
+    # Pin the complete root ancestry, not just the leaf inode. Otherwise a
+    # parent can become a symlink during the audit while the final root lstat
+    # still resolves to the very same evidence inode through that redirect.
     if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
         raise design.DesignError('platform lacks safe descriptor-relative artifact reads')
     root_path = Path(artifact_root)
-    try:
-        root_fd = os.open(
-            root_path,
-            os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY | getattr(os, 'O_CLOEXEC', 0),
-        )
-    except OSError as exc:
-        raise design.DesignError('artifact root could not be safely opened') from exc
+    root_fd, root_resources, root_ancestry = _open_bound_artifact_root(root_path)
     try:
         root_before = os.fstat(root_fd)
         initial_paths = _inventory_artifact_paths(root_fd)
@@ -839,8 +900,9 @@ def audit_run_artifacts(
             or root_at_path.st_ino != root_after.st_ino
         ):
             raise design.DesignError('artifact root changed during verification')
+        _require_artifact_root_ancestry(root_ancestry)
     finally:
-        os.close(root_fd)
+        root_resources.close()
 
     # Arm-wide totals can conceal whether extra retrieval was used for the
     # *same task* in a paired primary contrast. Report descriptive, integer
