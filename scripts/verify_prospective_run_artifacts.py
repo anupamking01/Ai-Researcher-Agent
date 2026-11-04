@@ -257,7 +257,20 @@ def _require_artifact_root_ancestry(
         ) from exc
 
 
-def _inventory_artifact_paths(root_fd: int) -> set[str]:
+class _ArtifactInventory(set[str]):
+    """Preserve per-directory generations alongside the bounded file inventory.
+
+    Keeping set semantics lets existing callers compare accounted-for file paths
+    while also detecting a renamed/restored nested directory that retained the
+    same files and therefore did not alter any indexed file fingerprints.
+    """
+
+    def __init__(self, paths: set[str], generations: dict[str, tuple]):
+        super().__init__(paths)
+        self.directory_generations = generations
+
+
+def _inventory_artifact_paths(root_fd: int) -> _ArtifactInventory:
     """Enumerate a dedicated evidence root; reject unindexed retained artifacts.
 
     This is a bounded local custody check. It cannot detect traces deleted
@@ -267,6 +280,7 @@ def _inventory_artifact_paths(root_fd: int) -> set[str]:
                        | getattr(os, "O_CLOEXEC", 0))
     seen: set[str] = set()
     retained_directories: set[str] = set()
+    directory_generations: dict[str, tuple] = {}
     entries_seen = 0
     try:
         with ExitStack() as stack:
@@ -312,6 +326,9 @@ def _inventory_artifact_paths(root_fd: int) -> set[str]:
                                     "artifact directory changed during inventory"
                                 )
                             retained_directories.add(relative)
+                            directory_generations[relative] = _file_generation(
+                                os.fstat(child)
+                            )
                             pending.append((child, relative + "/", depth + 1))
                         elif stat.S_ISREG(before.st_mode) and before.st_nlink == 1:
                             seen.add(relative)
@@ -333,7 +350,7 @@ def _inventory_artifact_paths(root_fd: int) -> set[str]:
         raise design.DesignError(
             "artifact root contains unindexed empty or orphan directories"
         )
-    return seen
+    return _ArtifactInventory(seen, directory_generations)
 
 
 def _require_readable_markdown_report(raw: bytes, *, number: int) -> None:
@@ -905,6 +922,14 @@ def audit_run_artifacts(
         if initial_paths != seen_paths or final_paths != seen_paths:
             raise design.DesignError(
                 "artifact root contains unindexed or missing evidence files"
+            )
+        # File-only equality does not detect a nested directory renamed away
+        # and restored while all indexed file inodes and bytes remain intact.
+        # Bind every enumerated directory's generation across both inventories,
+        # without treating the inventory as an atomic filesystem snapshot.
+        if initial_paths.directory_generations != final_paths.directory_generations:
+            raise design.DesignError(
+                "artifact directory identity or generation changed during audit"
             )
 
         root_after = os.fstat(root_fd)

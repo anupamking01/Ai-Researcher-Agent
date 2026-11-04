@@ -58,6 +58,20 @@ root, and it is not independent authentication of historical execution.
 Do not delete an unexpected genuine directory to obtain a PASS; preserve it
 and document a deviation.
 
+**Nested directory generation continuity (prospective only):** A retained
+indexed directory can be renamed away and back during an audit without
+changing the root directory's metadata or the inodes, bytes or fingerprints of
+any indexed file. The verifier now preserves each enumerated relative
+directory's device, inode, mode, size, link count, modification time and change
+time in both bounded inventories. A changed directory identity or generation
+fails the local custody gate even if the path set and every indexed file are
+identical afterward. Synthetic regression coverage demonstrates an indexed
+nested trace directory renamed away and restored between the two scans;
+unchanged ordinary nested evidence still passes. This is a conservative
+filesystem-stability check, not proof of an atomic snapshot or independent
+authentication. Preserve the original artifacts and investigate a detected
+mutation rather than editing evidence to obtain a pass.
+
 **Portable artifact-path identity (prospective only):** A separate relative
 file path is not necessarily a separate portable artifact identity. The
 dedicated-root inventory now rejects sibling files **and sibling directories**

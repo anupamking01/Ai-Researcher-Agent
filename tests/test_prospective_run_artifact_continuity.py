@@ -476,6 +476,43 @@ def test_nested_directory_required_by_indexed_trace_is_still_allowed(tmp_path):
     assert _audit(fixture)["artifact_root_inventory_matches_index"] is True
 
 
+
+def test_nested_indexed_directory_rename_and_restore_during_audit_fails(
+    tmp_path, monkeypatch
+):
+    """Unchanged file inodes/hashes cannot conceal directory churn mid-audit."""
+    fixture = _fixture(tmp_path)
+    _, _, _, index, root = fixture
+    claim = index["cells"][0]["trace"]
+    original = root / claim["path"]
+    nested = root / "traces" / "synthetic-batch"
+    nested.mkdir()
+    original.rename(nested / original.name)
+    claim["path"] = f"traces/synthetic-batch/{original.name}"
+
+    original_validate = evidence._validate_file_claim
+    renamed = False
+
+    def rename_and_restore_after_first(*args, **kwargs):
+        nonlocal renamed
+        result = original_validate(*args, **kwargs)
+        if not renamed:
+            temporary = nested.with_name("temporarily-moved-batch")
+            nested.rename(temporary)
+            temporary.rename(nested)
+            renamed = True
+        return result
+
+    monkeypatch.setattr(
+        evidence, "_validate_file_claim", rename_and_restore_after_first
+    )
+    with pytest.raises(
+        design.DesignError, match="artifact directory identity or generation changed"
+    ):
+        _audit(fixture)
+    assert renamed
+    assert (nested / original.name).is_file()
+
 def test_unindexed_symlink_cannot_hide_candidate_evidence(tmp_path):
     fixture = _fixture(tmp_path)
     root = fixture[4]
