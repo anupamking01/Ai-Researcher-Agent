@@ -408,6 +408,46 @@ def audit_execution_log(
         cross_task_attempted_gaps_us.append(gap_us)
         cross_task_gaps_by_successor_us[successor].append(gap_us)
 
+    # The 30 within-task consecutive-arm boundaries are distinct from the
+    # nine cross-task boundaries and from run execution durations. A pause
+    # before one arm can be condition-correlated even when the assigned order
+    # and per-arm execution durations are balanced. Retain attempted links
+    # across unsuccessful attempts; classify completed links separately.
+    # These are candidate timestamps, NOT independently authenticated drift.
+    within_task_gaps_by_successor_us = {arm: [] for arm in design.VARIANTS}
+    completed_within_task_gaps_by_successor_us = {
+        arm: [] for arm in design.VARIANTS
+    }
+    for task_index, row in enumerate(plan["schedule"]):
+        offset = task_index * len(design.VARIANTS)
+        for slot in range(1, len(row["arm_order"])):
+            predecessor_event = events[offset + slot - 1]
+            successor_event = events[offset + slot]
+            if successor_event["status"] == "not_started":
+                # Chronology validation guarantees a contiguous unattempted
+                # suffix, so no predecessor finish should be invented.
+                continue
+            predecessor_finish = _timestamp(
+                predecessor_event["finished_at_utc"],
+                "within-task predecessor finish",
+            )
+            successor_start = _timestamp(
+                successor_event["started_at_utc"],
+                "within-task successor start",
+            )
+            gap = successor_start - predecessor_finish
+            gap_us = (
+                (gap.days * 86400 + gap.seconds) * 1_000_000
+                + gap.microseconds
+            )
+            successor = successor_event["variant"]
+            within_task_gaps_by_successor_us[successor].append(gap_us)
+            if (predecessor_event["status"] == "completed"
+                    and successor_event["status"] == "completed"):
+                completed_within_task_gaps_by_successor_us[successor].append(
+                    gap_us
+                )
+
     def gap_summary(values: list[int]) -> dict[str, int | None]:
         return {
             "count": len(values),
@@ -430,6 +470,14 @@ def audit_execution_log(
     cross_task_gap_by_successor = {
         arm: gap_summary(values)
         for arm, values in cross_task_gaps_by_successor_us.items()
+    }
+    within_task_gap_by_successor = {
+        arm: gap_summary(values)
+        for arm, values in within_task_gaps_by_successor_us.items()
+    }
+    completed_within_task_gap_by_successor = {
+        arm: gap_summary(values)
+        for arm, values in completed_within_task_gaps_by_successor_us.items()
     }
 
     def paired_duration_deltas(*, completed_only: bool) -> dict:
@@ -508,6 +556,12 @@ def audit_execution_log(
         "recorded_attempted_cross_task_boundary_gap_us": cross_task_gap_summary,
         "recorded_attempted_cross_task_boundary_gap_by_successor_us": (
             cross_task_gap_by_successor
+        ),
+        "recorded_attempted_within_task_boundary_gap_by_successor_us": (
+            within_task_gap_by_successor
+        ),
+        "recorded_completed_within_task_boundary_gap_by_successor_us": (
+            completed_within_task_gap_by_successor
         ),
         "recorded_fully_completed_task_count": sum(
             len(completed) == len(design.VARIANTS)

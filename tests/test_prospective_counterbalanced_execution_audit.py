@@ -1170,3 +1170,127 @@ def test_interrupted_paired_duration_does_not_invent_missing_arm_intervals():
             }
     assert observed["attempted_cells"] == 1
     assert observed["human_validation_performed"] is False
+
+
+def test_within_task_pause_by_successor_reconciles_to_thirty_links():
+    source, receipt, log = _fixture()
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    attempted = result["recorded_attempted_within_task_boundary_gap_by_successor_us"]
+    completed = result["recorded_completed_within_task_boundary_gap_by_successor_us"]
+    assert attempted == completed
+    schedule = design.build_plan(source)["schedule"]
+    counts = {arm: 0 for arm in design.VARIANTS}
+    for row in schedule:
+        for successor in row["arm_order"][1:]:
+            counts[successor] += 1
+    for arm, count in counts.items():
+        assert attempted[arm] == {
+            "count": count,
+            "minimum_microseconds": 1_000_000 if count else None,
+            "maximum_microseconds": 1_000_000 if count else None,
+            "total_microseconds": count * 1_000_000,
+        }
+    assert sum(record["count"] for record in attempted.values()) == 30
+    assert sum(record["total_microseconds"] for record in attempted.values()) == 30_000_000
+    assert result["actual_execution_independently_authenticated"] is False
+
+
+@pytest.mark.parametrize("status", ["failed", "timeout", "cancelled"])
+def test_within_task_failed_predecessor_keeps_attempted_pause_not_completed(status):
+    source, receipt, log = _fixture()
+    predecessor = log["events"][0]
+    successor = log["events"][1]["variant"]
+    predecessor["status"] = status
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    attempted = result["recorded_attempted_within_task_boundary_gap_by_successor_us"]
+    completed = result["recorded_completed_within_task_boundary_gap_by_successor_us"]
+    assert attempted[successor]["count"] == completed[successor]["count"] + 1
+    assert attempted[successor]["total_microseconds"] == (
+        completed[successor]["total_microseconds"] + 1_000_000
+    )
+    assert sum(row["count"] for row in attempted.values()) == 30
+    assert sum(row["count"] for row in completed.values()) == 29
+    assert result["all_recorded_cells_completed"] is False
+
+
+@pytest.mark.parametrize("attempted_count,expected_links", [(1, 0), (2, 1), (4, 3), (5, 3)])
+def test_unattempted_suffix_creates_no_within_task_boundary_pauses(
+    attempted_count, expected_links,
+):
+    source, receipt, log = _fixture()
+    _mark_unattempted_suffix(log, attempted_count)
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    for field in (
+        "recorded_attempted_within_task_boundary_gap_by_successor_us",
+        "recorded_completed_within_task_boundary_gap_by_successor_us",
+    ):
+        grouped = result[field]
+        assert sum(row["count"] for row in grouped.values()) == expected_links
+        assert sum(row["total_microseconds"] for row in grouped.values()) == (
+            expected_links * 1_000_000
+        )
+        for row in grouped.values():
+            if row["count"] == 0:
+                assert row["minimum_microseconds"] is None
+                assert row["maximum_microseconds"] is None
+
+
+def test_within_task_subsecond_pause_attributed_to_next_arm_without_outcome_change():
+    source, receipt, log = _fixture()
+    baseline = audit.audit_execution_log(source, receipt, _bytes(log))
+    successor = log["events"][1]["variant"]
+    previous = log["events"][1]["started_at_utc"]
+    log["events"][1]["started_at_utc"] = _utc(
+        datetime.fromisoformat(previous.replace("Z", "+00:00"))
+        + timedelta(microseconds=250_000)
+    )
+    changed = audit.audit_execution_log(source, receipt, _bytes(log))
+    field = "recorded_attempted_within_task_boundary_gap_by_successor_us"
+    for arm in design.VARIANTS:
+        assert changed[field][arm]["total_microseconds"] - baseline[field][arm]["total_microseconds"] == (
+            250_000 if arm == successor else 0
+        )
+    assert changed[field][successor]["maximum_microseconds"] == 1_250_000
+    assert changed["recorded_completed_within_task_boundary_gap_by_successor_us"] == (
+        changed[field]
+    )
+    assert changed["recorded_attempted_cross_task_boundary_gap_us"] == (
+        baseline["recorded_attempted_cross_task_boundary_gap_us"]
+    )
+    assert changed["recorded_completed_primary_pair_task_counts"] == (
+        baseline["recorded_completed_primary_pair_task_counts"]
+    )
+
+
+def test_long_within_task_pause_does_not_inflate_cross_task_boundary_clock():
+    source, receipt, log = _fixture()
+    baseline = audit.audit_execution_log(source, receipt, _bytes(log))
+    successor = log["events"][1]["variant"]
+    # Shift the remainder of the sequential study by one hour after the first
+    # within-task boundary. This isolates that pause rather than changing
+    # durations, order, or any experimental observation.
+    for event in log["events"][1:]:
+        for clock in ("started_at_utc", "finished_at_utc"):
+            event[clock] = _utc(
+                datetime.fromisoformat(event[clock].replace("Z", "+00:00"))
+                + timedelta(hours=1)
+            )
+    log["finished_at_utc"] = _utc(
+        datetime.fromisoformat(log["finished_at_utc"].replace("Z", "+00:00"))
+        + timedelta(hours=1)
+    )
+    changed = audit.audit_execution_log(source, receipt, _bytes(log))
+    field = "recorded_attempted_within_task_boundary_gap_by_successor_us"
+    for arm in design.VARIANTS:
+        assert changed[field][arm]["count"] == baseline[field][arm]["count"]
+        assert changed[field][arm]["total_microseconds"] - baseline[field][arm]["total_microseconds"] == (
+            3_600_000_000 if arm == successor else 0
+        )
+    assert changed[field][successor]["maximum_microseconds"] == 3_601_000_000
+    assert changed["recorded_attempted_cross_task_boundary_gap_us"] == (
+        baseline["recorded_attempted_cross_task_boundary_gap_us"]
+    )
+    assert changed["recorded_attempted_duration_us_by_variant"] == (
+        baseline["recorded_attempted_duration_us_by_variant"]
+    )
+    assert changed["historical_2026_study_validated"] is False

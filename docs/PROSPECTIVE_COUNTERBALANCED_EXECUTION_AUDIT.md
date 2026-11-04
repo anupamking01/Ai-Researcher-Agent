@@ -66,6 +66,23 @@ plan and execution-log bytes**, recording the verifier revision. This correction
 does not modify the frozen 2026 experiment, any treatment outcomes, or the
 confirmatory analysis.
 
+**Within-task idle-gap exposure (prospective; outcome-blind):** A planned
+Williams order and symmetric start-to-start separations can conceal unequal
+idle time *between* consecutive treatments inside the same research task.
+The receipt separately reports
+`recorded_attempted_within_task_boundary_gap_by_successor_us` and
+`recorded_completed_within_task_boundary_gap_by_successor_us`. Each is a
+per-successor-arm summary of the **predecessor finish to successor start**
+gap (count, minimum, maximum, total in integer microseconds). The complete
+sequential 10-task schedule has 30 such boundaries, versus nine cross-task
+boundaries. Attempted links retain pauses after failed, timed-out or cancelled
+predecessors; completed links require **both** adjacent arms completed.
+An interrupted study adds no gaps for an unattempted successor, and empty
+groups have null extrema. These are self-reported wall-clock pauses, not
+execution durations, drift measurements, causal adjustments, exclusion
+criteria, independently authenticated timestamps or evidence of treatments.
+They do not modify the frozen 2026 analysis or justify rerunning experiments.
+
 **Within-task primary-pair timing diagnostic:** The receipt additionally reports
 `recorded_completed_primary_pair_start_separation_us` for each primary contrast,
 stratified into `left_before_right` and `right_before_left`. Each stratum has
