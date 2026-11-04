@@ -126,6 +126,50 @@ def test_schedule_balances_every_position_and_every_pair_without_outcomes():
     assert result["independent_replication_or_human_validation_performed"] is False
 
 
+def test_future_williams_schedule_balances_directed_first_order_carryover():
+    # 10 rows x 3 neighbors = 30 transitions over 12 directed pairs.
+    schedule = plan.build_plan(_raw())["schedule"]
+    observed = plan._directed_carryover_counts(schedule)
+    assert len(observed) == 12
+    assert sum(observed.values()) == 30
+    assert sorted(observed.values()) == [2] * 6 + [3] * 6
+    plan._require_carryover_balance(schedule)
+
+
+def test_precedence_and_position_balance_do_not_guarantee_carryover():
+    # Five reversed pairs force perfect 5:5 precedence. This explicit
+    # counterexample also has 2/3 positional balance, yet some neighboring
+    # directed transitions occur only once and others five times.
+    seeds = (
+        ("P6", "D6", "D3", "P6V"),
+        ("P6V", "D3", "P6", "D6"),
+        ("D3", "P6V", "D6", "P6"),
+        ("D6", "P6", "P6V", "D3"),
+        ("P6", "D3", "P6V", "D6"),
+    )
+    orders = [order for seed in seeds for order in (seed, seed[::-1])]
+    schedule = [
+        {"task_id": f"fresh-{index:02d}", "arm_order": list(order)}
+        for index, order in enumerate(orders, start=1)
+    ]
+    assert len(schedule) == 10
+    for variant in plan.VARIANTS:
+        assert sorted(
+            sum(row["arm_order"][position] == variant for row in schedule)
+            for position in range(4)
+        ) == [2, 2, 3, 3]
+    for index, before in enumerate(plan.VARIANTS):
+        for after in plan.VARIANTS[index + 1:]:
+            assert sum(
+                row["arm_order"].index(before) < row["arm_order"].index(after)
+                for row in schedule
+            ) == 5
+    counts = plan._directed_carryover_counts(schedule)
+    assert sorted(counts.values()) == [1] * 4 + [2] * 4 + [4] * 2 + [5] * 2
+    with pytest.raises(plan.DesignError, match="first-order carryover"):
+        plan._require_carryover_balance(schedule)
+
+
 def test_design_receipt_and_order_are_byte_deterministic():
     source = _raw()
     first = plan.build_plan(source)

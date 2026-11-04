@@ -208,6 +208,34 @@ def read_manifest(path: Path) -> bytes:
     except OSError as exc:
         raise DesignError("cannot safely capture task manifest") from exc
 
+def _directed_carryover_counts(schedule: list[dict]) -> dict[tuple[str, str], int]:
+    """Count each directed within-task neighboring treatment transition.
+
+    These are schedule properties, not measured carryover effects. In the
+    ten-task design, 30 neighboring transitions span 12 directed arm pairs.
+    """
+    return {
+        (before, after): sum(
+            left == before and right == after
+            for row in schedule
+            for left, right in zip(row["arm_order"], row["arm_order"][1:])
+        )
+        for before in VARIANTS for after in VARIANTS if before != after
+    }
+
+
+def _require_carryover_balance(schedule: list[dict]) -> None:
+    """Reject a schedule balanced on position/precedence but not adjacency.
+
+    The Williams construction plus one reversed pair should produce six
+    directed transitions twice and six three times. Mere 5:5 precedence
+    and 2/3 position counts do not imply that first-order balance.
+    """
+    counts = _directed_carryover_counts(schedule)
+    if sorted(counts.values()) != [2] * 6 + [3] * 6:
+        raise DesignError("counterbalancing first-order carryover invariant failed")
+
+
 def build_plan(source: bytes) -> dict:
     """Bind a fixed outcome-blind schedule to exact new-manifest bytes."""
     if type(source) is not bytes or not 0 < len(source) <= MAX_MANIFEST_BYTES:
@@ -327,6 +355,10 @@ def build_plan(source: bytes) -> dict:
                    for counts in position_counts.values())
             or any(count != TASK_COUNT // 2 for count in precedence_counts.values())):
         raise DesignError("counterbalancing design invariant failed")
+    # Pairwise precedence/position balance alone can still leave a heavily
+    # unbalanced first-order transition (e.g., 1 vs 5 occurrences). Require
+    # the Williams carryover margin before freezing a prospective schedule.
+    _require_carryover_balance(schedule)
 
     plan = {
         "schema_version": 1,

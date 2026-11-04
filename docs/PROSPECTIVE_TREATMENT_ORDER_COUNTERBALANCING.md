@@ -61,6 +61,18 @@ Two copies cover eight tasks; the final two schedules are D3, D6, P6, P6V and it
 
 For **each** of the six unordered treatment pairs, each member precedes the other on exactly **5 of 10 tasks**. Each variant occurs at every within-task position either **2 or 3 times** across ten tasks—the mathematically closest possible balance because ten is not divisible by four. Every task receives all four conditions exactly once, for **40 planned cells**. Offline regression tests verify these invariants and the receipt digest.
 
+**First-order carryover balance is now an explicit design invariant.** Ten
+four-arm task schedules contain 30 directed, within-task adjacent transitions.
+Across the 12 possible distinct before→after arm pairs, this specific
+Williams-plus-reversal design must contain six directed pairs **twice** and six
+**three times** (the closest possible balance at ten tasks). A regression
+counterexample demonstrates that a schedule can still satisfy the existing
+5:5 pairwise-precedence and 2/3 positional margins while having some directed
+adjacencies only once and others five times. The planner now refuses that
+failure mode before emitting a future schedule. This is an additional internal
+check; it does not change the v1 receipt schema, assignment, or SHA-256 for
+valid manifests, and it does **not** measure or rule out actual carryover.
+
 This balances *position* and *pairwise ordering*, **not** total tokens, latency, dollar budget, or time-varying web content. It does not guarantee independence, remove across-task temporal drift, or imply random assignment in the original study. There is no claim of a causal effect or inference validity from a schedule alone. An actual future independent replication would need its own ethics/provenance, predeclared budget and inference decisions, clean source custody, and separate human validation.
 
 ## Historical task-set leakage guard (prospective only)
