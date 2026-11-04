@@ -464,3 +464,38 @@ def test_legitimate_multilingual_accents_and_linebreaks_remain_supported():
     assert result["task_count"] == 10
     assert result["classification"] == "prospective_design_only_no_executions"
 
+
+
+def test_future_manifest_reader_rejects_preexisting_hardlink_alias(tmp_path):
+    # Identical bytes and inode are insufficient when another pathname can
+    # modify the frozen prospective source without touching its given path.
+    source = tmp_path / "future_tasks.json"
+    source.write_bytes(_raw())
+    alias = tmp_path / "mutable_alias.json"
+    alias.hardlink_to(source)
+    assert source.stat().st_nlink == 2
+    for candidate in (source, alias):
+        with pytest.raises(plan.DesignError, match="exactly one filesystem link"):
+            plan.read_manifest(candidate)
+
+
+def test_future_manifest_reader_detects_hardlink_added_while_reading(
+    tmp_path, monkeypatch,
+):
+    source = tmp_path / "future_tasks.json"
+    source.write_bytes(_raw())
+    alias = tmp_path / "new_alias.json"
+    original_read = plan.os.read
+    inserted = False
+
+    def link_during_capture(fd, size):
+        nonlocal inserted
+        if not inserted:
+            alias.hardlink_to(source)
+            inserted = True
+        return original_read(fd, size)
+
+    monkeypatch.setattr(plan.os, "read", link_during_capture)
+    with pytest.raises(plan.DesignError, match="changed during capture"):
+        plan.read_manifest(source)
+    assert inserted and alias.exists()

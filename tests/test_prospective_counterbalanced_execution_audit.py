@@ -895,3 +895,33 @@ def test_cross_task_boundary_gap_captures_a_long_pause_without_changing_coverage
     assert after["total_microseconds"] - before["total_microseconds"] == 3_600_000_000
     assert after["maximum_microseconds"] == 3_601_000_000
     assert changed["scientific_outcomes_validated"] is False
+
+
+@pytest.mark.parametrize("source_kind", ("task_manifest", "plan_receipt", "execution_log"))
+def test_chronology_cli_rejects_hardlinked_input_at_each_boundary(
+    source_kind, tmp_path, monkeypatch, capsys,
+):
+    # All three candidate file types use the shared descriptor-held reader.
+    source, receipt, log = _fixture()
+    paths = {
+        "task_manifest": tmp_path / "tasks.json",
+        "plan_receipt": tmp_path / "plan.json",
+        "execution_log": tmp_path / "chronology.json",
+    }
+    for path, raw in zip(
+        paths.values(), (source, receipt, _bytes(log)), strict=True
+    ):
+        path.write_bytes(raw)
+    alias = tmp_path / "other_writable_path.json"
+    alias.hardlink_to(paths[source_kind])
+    monkeypatch.setattr(sys, "argv", [
+        "verify_counterbalanced_replication_execution.py",
+        "--task-manifest", str(paths["task_manifest"]),
+        "--plan-file", str(paths["plan_receipt"]),
+        "--execution-log", str(paths["execution_log"]),
+    ])
+    with pytest.raises(SystemExit) as exc:
+        audit.main()
+    assert exc.value.code == 2
+    assert "exactly one filesystem link" in capsys.readouterr().err
+    assert alias.exists()

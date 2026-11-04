@@ -44,6 +44,21 @@ between checks, or a claim that any replication has run. Offline synthetic
 tests cover valid nested directories, symlinked ancestors, an in-flight
 parent replacement, and receipt-CLI enforcement.
 
+**Single-link source custody (prospective only):** The same bounded reader
+now refuses an input file with more than one filesystem hardlink, and checks
+link count along with device, inode, size, mode, modification time and change
+time before and after descriptor-held capture. This applies to the new task
+manifest, frozen schedule receipt and prospective execution chronology log.
+A hardlink can provide a second writable path to the same bytes even when the
+submitted pathname is not a symlink; accepting it would weaken source isolation
+during a local audit. Synthetic tests reject pre-existing aliases, an alias
+introduced during capture, and hardlinked inputs at all three chronology-CLI
+boundaries. The gate does **not** establish an independent archive,
+pre-execution timestamp, genuine execution or protection against a transient
+alias created and removed entirely between observations. Normal single-link
+regular-file inputs remain supported; parent directory link counts are not
+constrained.
+
 The helper itself writes **only to stdout**. It refuses the original historical task-set ID, the ten reserved original task IDs (`main-01` through `main-10`), verbatim reuse of any of the ten frozen original questions even under case changes, Unicode NFKC variants, or whitespace-only changes, unknown or outcome-bearing JSON fields, duplicate keys, IDs or questions, non-finite JSON, missing freeze flag, ambiguous source types, symlinks, oversized inputs (>256 KiB), and an incomplete matrix. These historical-question fingerprints are checked against the byte-pinned September 2026 original source manifest (`experiments/main_budget_tasks.json`) by offline regression tests; they are not derived from measured outcomes or from recovered report artifacts. This **does not** detect paraphrases, substantial rewrites, near-duplicate tasks, conceptual overlap, or deliberate evasions. A coordinator must still independently document task selection, genuine independence, pre-execution timestamp, and integrity, and ensure there is no treatment outcome feedback into selecting or rewording tasks.
 
 The printed receipt includes both the exact SHA-256 of the source manifest bytes and a separate canonical-semantic task-manifest SHA-256 used to assign slots, plus a deterministic design-version identifier, ordered treatment IDs by task, positional counts, pairwise precedence counts, and a SHA-256 of the canonical receipt fields. Reformatting JSON or changing key order does **not** change arm assignment, but does change the source-byte custody hash and full receipt hash. The receipt hash is **not** an external timestamp or independent pre-registration attestation. Preserve the actual manifest and the receipt in a separately reviewable pre-execution location before authorizing future work.

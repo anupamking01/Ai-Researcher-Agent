@@ -117,6 +117,12 @@ def _source_generation(st) -> tuple:
             st.st_mtime_ns, st.st_ctime_ns)
 
 
+def _file_generation(st) -> tuple:
+    # Directory link counts can change with ordinary subdirectory updates.
+    # Only the captured input file must have a unique filesystem link.
+    return (*_source_generation(st), st.st_nlink)
+
+
 def read_manifest(path: Path) -> bytes:
     """Capture a bounded file through no-follow, descriptor-held ancestry.
 
@@ -146,6 +152,8 @@ def read_manifest(path: Path) -> bytes:
             0 < named_before.st_size <= MAX_MANIFEST_BYTES
         ):
             raise DesignError("task manifest must be a bounded regular non-symlink file")
+        if named_before.st_nlink != 1:
+            raise DesignError("task manifest must have exactly one filesystem link")
         with ExitStack() as stack:
             parent_fd = os.open(absolute.anchor, ancestor_flags)
             stack.callback(os.close, parent_fd)
@@ -173,8 +181,9 @@ def read_manifest(path: Path) -> bytes:
                 absolute.name, dir_fd=parent_fd, follow_symlinks=False
             )
             if (not stat.S_ISREG(opened.st_mode)
-                    or _source_generation(opened) != _source_generation(named_before)
-                    or _source_generation(opened) != _source_generation(linked_before)):
+                    or opened.st_nlink != 1 or linked_before.st_nlink != 1
+                    or _file_generation(opened) != _file_generation(named_before)
+                    or _file_generation(opened) != _file_generation(linked_before)):
                 raise DesignError("task manifest changed before capture")
 
             captured = bytearray()
@@ -191,8 +200,9 @@ def read_manifest(path: Path) -> bytes:
             )
             if (len(captured) != opened.st_size
                     or len(captured) > MAX_MANIFEST_BYTES
-                    or _source_generation(opened) != _source_generation(after)
-                    or _source_generation(after) != _source_generation(linked_after)):
+                    or after.st_nlink != 1 or linked_after.st_nlink != 1
+                    or _file_generation(opened) != _file_generation(after)
+                    or _file_generation(after) != _file_generation(linked_after)):
                 raise DesignError("task manifest changed during capture")
 
             # A replacement parent can leave the original file descriptor and
