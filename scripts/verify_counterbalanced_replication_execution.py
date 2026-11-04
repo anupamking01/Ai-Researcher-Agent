@@ -186,6 +186,30 @@ def audit_execution_log(
     # Keep every status (including an unstarted suffix) so immediate-predecessor
     # exposure can be distinguished from successful adjacent pairs.
     status_by_task = {row["task_id"]: {} for row in plan["schedule"]}
+    # The manifest has already passed strict validation in build_plan. Its
+    # frozen category labels can reveal order/attrition imbalance within
+    # a topic even when the pooled Williams position counts are balanced.
+    # Preserve the exact coordinator-supplied labels; never recategorize
+    # tasks after seeing treatment outcomes.
+    frozen_category_by_task = {
+        task["id"]: task["category"]
+        for task in json.loads(task_manifest.decode("utf-8"))["tasks"]
+    }
+    category_position_exposure = {
+        category: {
+            "task_count": sum(
+                value == category for value in frozen_category_by_task.values()
+            ),
+            **{
+                scope: {
+                    arm: {str(slot): 0 for slot in range(1, 5)}
+                    for arm in design.VARIANTS
+                }
+                for scope in ("planned", "attempted", "completed")
+            },
+        }
+        for category in sorted(set(frozen_category_by_task.values()))
+    }
     unstarted_suffix = False
     for index, (event, (task_id, variant)) in enumerate(
         zip(events, expected_cells, strict=True), start=1
@@ -201,6 +225,13 @@ def audit_execution_log(
         if type(status) is not str or status not in counts:
             raise design.DesignError(f"event {index} has an unknown status")
         status_by_task[task_id][variant] = status
+        slot = str((index - 1) % len(design.VARIANTS) + 1)
+        category_exposure = category_position_exposure[frozen_category_by_task[task_id]]
+        category_exposure["planned"][variant][slot] += 1
+        if status != "not_started":
+            category_exposure["attempted"][variant][slot] += 1
+        if status == "completed":
+            category_exposure["completed"][variant][slot] += 1
         if status == "not_started":
             # A halted sequential study retains every unattempted planned
             # cell without inventing a run identifier or execution interval.
@@ -223,7 +254,6 @@ def audit_execution_log(
         if portable_run_key is None or portable_run_key in run_ids:
             raise design.DesignError(f"event {index} has an unsafe or duplicate run ID")
         run_ids.add(portable_run_key)
-        slot = str((index - 1) % len(design.VARIANTS) + 1)
         attempted_position_counts_by_variant[variant][slot] += 1
         # Attempted failures/timeouts/cancellations remain visible. Never
         # conceal them as unattempted work or cherry-pick favorable reruns.
@@ -537,6 +567,7 @@ def audit_execution_log(
         ),
         "recorded_attempted_position_counts_by_variant": attempted_position_counts_by_variant,
         "recorded_completed_position_counts_by_variant": completed_position_counts_by_variant,
+        "recorded_position_exposure_by_frozen_task_category": category_position_exposure,
         "recorded_completed_primary_pair_order_counts": completed_pair_order_counts,
         "recorded_completed_primary_pair_start_separation_us": (
             completed_pair_start_separation_us

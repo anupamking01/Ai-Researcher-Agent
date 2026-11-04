@@ -51,6 +51,25 @@ archived report bytes, or historical evidence.
 
 The audit receipt separately reports 40 `recorded_cells` (planned ledger entries), `attempted_cells`, `unattempted_cells`, `all_planned_cells_attempted`, and counts by status. It also records `recorded_status_counts_by_variant` (five status counts for each of D3/D6/P6/P6V), `recorded_fully_completed_task_count` (tasks with all four arms logged as completed), and `recorded_completed_primary_pair_task_counts` (per-task jointly completed D6–D3, P6–D6, and P6V–P6 pairs). These diagnostics expose arm-specific missingness that a single aggregate completed count can conceal after failures or a sequential interruption. They are **self-reported chronology counts**, not verified report/trace completeness, validated scores, or proof of execution. A passing chronology audit is **not a pass of full execution or of paired-inference completeness**. The receipt additionally distinguishes the **realized** treatment-order exposures from the planned Williams balance: `recorded_attempted_position_counts_by_variant` and `recorded_completed_position_counts_by_variant` show each arm at within-task positions 1–4, while `recorded_completed_primary_pair_order_counts` splits each logged completed primary contrast into `left_before_right` and `right_before_left`. Fully completed synthetic schedules retain two or three occurrences of each arm per position and 5:5 precedence per contrast; interruption or failed treatments can break that balance even though the frozen *plan* stays balanced. Completed-pair direction counts always sum to the previously reported completed-pair task count. These are **self-reported exposure/missingness diagnostics only**, not observed web/model drift, source authentication, an adjusted estimator, proof of randomization, or a reason to select favorable observations. The original 2026 fixed-order findings remain unchanged. Do not compute a full 40-cell confirmatory analysis from a partial ledger or use missingness to select favorable results. A new design that permits skipping a planned cell and later continuing execution requires a separately defined protocol and auditor; this sequential fail-closed convention does not authorize such gaps.
 
+**Frozen task-category position and attrition diagnostic (prospective; outcome-blind):**
+The chronology receipt also reports
+`recorded_position_exposure_by_frozen_task_category`. Each exact category
+label from the **pre-execution task manifest** has a task count and three
+arm-by-position (slots 1–4) matrices: `planned`, `attempted`, and
+`completed`. Unlike pooled Williams balance, these matrices expose unequal
+within-category order exposure and category-specific attrition: failed,
+timed-out, or cancelled cells remain attempted but not completed, and a
+`not_started` suffix remains planned only. Full 40-cell plans retain exactly
+one scheduled occurrence of each arm per task, but **do not guarantee** equal
+positions within each coordinator-assigned category. Categories are copied
+verbatim from the originally frozen source; the auditor neither validates
+the scientific meaning of those labels nor changes assignments, outcome
+values, the prespecified analysis, or inclusion rules. These are self-reported,
+descriptive exposure/coverage checks, not stratified treatment effects,
+independent evidence of execution, a post-hoc reclassification license, or
+a correction to historical fixed-order confounding. Do not use them to
+exclude inconvenient tasks or to rerun treatments for a preferred result.
+
 **Direction-label interpretation and correction (November 3, 2026):**
 For a contrast named `A_minus_B`, `left_before_right` means **A was
 recorded before B**, and `right_before_left` means **B was recorded before A**.

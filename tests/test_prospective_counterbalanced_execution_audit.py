@@ -1294,3 +1294,87 @@ def test_long_within_task_pause_does_not_inflate_cross_task_boundary_clock():
         baseline["recorded_attempted_duration_us_by_variant"]
     )
     assert changed["historical_2026_study_validated"] is False
+
+
+
+def _two_category_chronology_fixture():
+    """Outcome-free task categories are retained exactly from the new manifest."""
+    task_set = json.loads(_manifest())
+    for index, task in enumerate(task_set["tasks"]):
+        task["category"] = "technical" if index < 4 else "policy"
+    source = _bytes(task_set)
+    receipt = _plan(source)
+    return source, receipt, _log(source, receipt)
+
+
+def test_frozen_task_categories_expose_within_category_order_imbalance():
+    source, receipt, log = _two_category_chronology_fixture()
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    exposure = result["recorded_position_exposure_by_frozen_task_category"]
+    assert set(exposure) == {"technical", "policy"}
+    assert exposure["technical"]["task_count"] == 4
+    assert exposure["policy"]["task_count"] == 6
+
+    by_task = {
+        task["id"]: task["category"] for task in json.loads(source)["tasks"]
+    }
+    for category in exposure:
+        for arm in design.VARIANTS:
+            expected = {str(slot): 0 for slot in range(1, 5)}
+            for row in design.build_plan(source)["schedule"]:
+                if by_task[row["task_id"]] == category:
+                    expected[str(row["arm_order"].index(arm) + 1)] += 1
+            for scope in ("planned", "attempted", "completed"):
+                assert exposure[category][scope][arm] == expected
+            assert sum(expected.values()) == exposure[category]["task_count"]
+
+    # Whole-study balance can hide unequal treatment positions within topics.
+    for arm in design.VARIANTS:
+        for slot in ("1", "2", "3", "4"):
+            assert sum(
+                exposure[category]["planned"][arm][slot]
+                for category in exposure
+            ) == result["recorded_attempted_position_counts_by_variant"][arm][slot]
+    assert result["scientific_outcomes_validated"] is False
+
+
+def test_category_exposure_does_not_impute_unstarted_or_failed_runs():
+    source, receipt, log = _two_category_chronology_fixture()
+    log["events"][1]["status"] = "timeout"
+    _mark_unattempted_suffix(log, 5)
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    exposure = result["recorded_position_exposure_by_frozen_task_category"]
+    assert sum(
+        exposure[category]["task_count"] for category in exposure
+    ) == 10
+
+    totals = {}
+    for scope in ("planned", "attempted", "completed"):
+        totals[scope] = sum(
+            sum(sum(slots.values()) for slots in exposure[category][scope].values())
+            for category in exposure
+        )
+    assert totals == {"planned": 40, "attempted": 5, "completed": 4}
+
+    by_task = {
+        task["id"]: task["category"] for task in json.loads(source)["tasks"]
+    }
+    expected_attempted = {category: 0 for category in exposure}
+    expected_completed = {category: 0 for category in exposure}
+    for event in log["events"]:
+        category = by_task[event["task_id"]]
+        if event["status"] != "not_started":
+            expected_attempted[category] += 1
+        if event["status"] == "completed":
+            expected_completed[category] += 1
+    for category in exposure:
+        for scope, expected in (
+            ("attempted", expected_attempted),
+            ("completed", expected_completed),
+        ):
+            assert sum(
+                sum(slots.values())
+                for slots in exposure[category][scope].values()
+            ) == expected[category]
+    assert result["all_recorded_cells_completed"] is False
+    assert result["actual_execution_independently_authenticated"] is False
