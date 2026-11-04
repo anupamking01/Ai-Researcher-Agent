@@ -193,6 +193,16 @@ and `A`, count as the same recorded fetch identity. This applies to outcome
 partitioning, within-cell distinct-source budgets, paired source overlap and
 cross-task source-reuse diagnostics. All remaining percent triplets are
 normalized only for hexadecimal letter case (so `%2f` and `%2F` reconcile).
+Literal non-ASCII Unicode scalar values in paths and queries are compared
+as UTF-8 percent octets: `/café` and `/caf%C3%A9` name one synthetic
+fetch identity, as do a literal emoji query and its UTF-8 escape sequence.
+This also prevents disguised duplication in within-arm source budgets,
+scheduled/outcome partitions, paired overlap and cross-task reuse. Input
+trace strings remain byte-for-byte unchanged. Lone surrogate code points
+are rejected; canonical Unicode normalization (NFC/NFD) is deliberately
+**not** imposed because it can change transmitted request bytes. This is a
+conservative comparison under common UTF-8 IRI-to-URI conversion, not
+independent knowledge of an HTTP client's actual wire request.
 Encoded **reserved** characters (such as `%2F` or `%26`) remain distinct from
 literal delimiters (such as `/` or `&`); arbitrary decoding would merge
 potentially different HTTP request targets. Dot segments are still rejected

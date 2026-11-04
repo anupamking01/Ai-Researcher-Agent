@@ -2352,3 +2352,98 @@ def test_ordinary_dots_and_dot_like_query_remain_valid_http_sources(
 
     _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=change)
     assert _audit(fixture)["self_reported_source_ledgers_within_frozen_budgets"] is True
+
+
+# Prospective-only IRI/URI source identity (synthetic 40-cell fixtures).
+@pytest.mark.parametrize("iri,escaped", [
+    ("https://synthetic.invalid/café", "https://synthetic.invalid/caf%C3%A9"),
+    ("https://synthetic.invalid/search?q=🍵",
+     "https://synthetic.invalid/search?q=%F0%9F%8D%B5"),
+    ("https://synthetic.invalid/über?q=naïve",
+     "https://synthetic.invalid/%C3%BCber?q=na%C3%AFve"),
+])
+def test_literal_iri_and_utf8_encoded_source_cannot_double_count(
+    tmp_path, iri, escaped
+):
+    fixture = _fixture(tmp_path)
+    def change(trace):
+        trace.update(
+            source_count=2, successful_source_count=2, failed_source_count=0,
+            scheduled_urls=[iri, escaped],
+            successful_urls=[iri, escaped], failed_urls=[],
+        )
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=change)
+    with pytest.raises(design.DesignError, match="counts one HTTP resource repeatedly"):
+        _audit(fixture)
+
+
+@pytest.mark.parametrize("iri,escaped", [
+    ("https://synthetic.invalid/café", "https://synthetic.invalid/caf%c3%a9"),
+    ("https://synthetic.invalid/search?q=🍵",
+     "https://synthetic.invalid/search?q=%f0%9f%8d%b5"),
+    ("https://synthetic.invalid/über?q=naïve",
+     "https://synthetic.invalid/%c3%bcber?q=na%c3%afve"),
+])
+@pytest.mark.parametrize("outcome_field", ["successful_urls", "failed_urls"])
+def test_literal_iri_matches_encoded_scheduled_outcome(
+    tmp_path, iri, escaped, outcome_field
+):
+    fixture = _fixture(tmp_path)
+    def change(trace):
+        trace.update(
+            source_count=1,
+            successful_source_count=int(outcome_field == "successful_urls"),
+            failed_source_count=int(outcome_field == "failed_urls"),
+            scheduled_urls=[iri],
+            successful_urls=[escaped] if outcome_field == "successful_urls" else [],
+            failed_urls=[escaped] if outcome_field == "failed_urls" else [],
+        )
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=change)
+    receipt = _audit(fixture)
+    assert receipt["self_reported_source_ledgers_within_frozen_budgets"] is True
+    assert receipt["model_or_retrieval_calls_verified"] is False
+
+
+def test_utf8_iri_alias_is_reported_as_cross_task_source_reuse(tmp_path):
+    fixture = _fixture(tmp_path)
+    _set_synthetic_one_source(fixture, 0, "https://synthetic.invalid/café")
+    _set_synthetic_one_source(fixture, 4, "https://synthetic.invalid/caf%C3%A9")
+    reuse = _audit(fixture)["self_reported_cross_task_source_reuse_by_scope"][
+        "all_attempted_cells"]["pooled_across_arms_by_task"]["scheduled"]
+    assert reuse["task_source_incidences"] == 2
+    assert reuse["distinct_source_identities"] == 1
+    assert reuse["source_identities_reused_across_tasks"] == 1
+    assert reuse["tasks_with_reused_source"] == 2
+
+
+@pytest.mark.parametrize("urls", [
+    ("https://synthetic.invalid/café", "https://synthetic.invalid/caf%C3%A8"),
+    ("https://synthetic.invalid/café%2Fpart",
+     "https://synthetic.invalid/caf%C3%A9/part"),
+    ("https://synthetic.invalid/café", "https://synthetic.invalid/cafe%CC%81"),
+])
+def test_distinct_utf8_bytes_and_reserved_delimiters_remain_distinct(tmp_path, urls):
+    fixture = _fixture(tmp_path)
+    def change(trace):
+        trace.update(
+            source_count=2, successful_source_count=2, failed_source_count=0,
+            scheduled_urls=list(urls), successful_urls=list(urls), failed_urls=[],
+        )
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=change)
+    assert _audit(fixture)["self_reported_source_ledgers_within_frozen_budgets"] is True
+
+
+@pytest.mark.parametrize("bad_url", [
+    "https://synthetic.invalid/\ud800",
+    "https://synthetic.invalid/search?q=\udfff",
+])
+def test_unpaired_surrogates_do_not_form_portable_source_iris(tmp_path, bad_url):
+    fixture = _fixture(tmp_path)
+    def change(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[bad_url], successful_urls=[bad_url], failed_urls=[],
+        )
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=change)
+    with pytest.raises(design.DesignError, match="source ledger"):
+        _audit(fixture)

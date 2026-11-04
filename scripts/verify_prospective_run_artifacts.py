@@ -87,6 +87,20 @@ def _canonical_percent_triplet(match: re.Match[str]) -> str:
     )
 
 
+def _canonical_http_component(value: str) -> str:
+    """Compare literal non-ASCII IRI characters by their UTF-8 request octets.
+
+    Preserve encoded reserved delimiters and existing percent escapes.
+    Raw source evidence is never rewritten by this identity helper.
+    """
+    uri = "".join(
+        "".join(f"%{octet:02X}" for octet in character.encode("utf-8"))
+        if ord(character) > 127 else character
+        for character in value
+    )
+    return _PERCENT_TRIPLET.sub(_canonical_percent_triplet, uri)
+
+
 def _json_bytes(raw: bytes, description: str) -> object:
     try:
         return json.loads(
@@ -287,7 +301,7 @@ def _source_fetch_identity(url: object, *, number: int) -> str:
         or url != url.strip() or "\\" in url
         or any(
             character.isspace() or unicodedata.category(character) in {
-                "Cc", "Cf", "Zl", "Zp"
+                "Cc", "Cf", "Cs", "Zl", "Zp"
             }
             for character in url
         )
@@ -401,13 +415,9 @@ def _source_fetch_identity(url: object, *, number: int) -> str:
     # RFC 3986 unreserved ASCII octets denote the same URI characters whether
     # literal or percent-encoded; do not count those spellings as new sources.
     # Reserved percent-encoded delimiters stay distinct from literal syntax.
-    path = _PERCENT_TRIPLET.sub(
-        _canonical_percent_triplet, parsed.path or "/"
-    )
+    path = _canonical_http_component(parsed.path or "/")
     query = (
-        "?" + _PERCENT_TRIPLET.sub(
-            _canonical_percent_triplet, parsed.query
-        )
+        "?" + _canonical_http_component(parsed.query)
         if parsed.query else ""
     )
     return f"{parsed.scheme}://{authority}{path}{query}"
