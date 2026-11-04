@@ -2447,3 +2447,47 @@ def test_unpaired_surrogates_do_not_form_portable_source_iris(tmp_path, bad_url)
     _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=change)
     with pytest.raises(design.DesignError, match="source ledger"):
         _audit(fixture)
+
+
+def test_outer_symlinked_ancestor_of_artifact_root_is_not_accepted(tmp_path):
+    """A no-follow leaf open alone would previously follow this parent link."""
+    physical = tmp_path / "physical"
+    physical.mkdir()
+    fixture = _fixture(physical)
+    alias = tmp_path / "alias"
+    alias.symlink_to(physical, target_is_directory=True)
+    source, plan, log, index, _ = fixture
+    with pytest.raises(design.DesignError, match="artifact root could not be safely opened"):
+        evidence.audit_run_artifacts(
+            source, plan, _bytes(log), _bytes(index), alias / "evidence"
+        )
+    # The legitimate unaliased directory must still pass.
+    assert _audit(fixture)["verified_attempted_traces"] == 40
+
+
+def test_outer_ancestor_symlink_swap_during_artifact_scan_fails(tmp_path, monkeypatch):
+    """A stable leaf inode is not proof its original parent path stayed bound."""
+    physical = tmp_path / "physical"
+    physical.mkdir()
+    fixture = _fixture(physical)
+    real_inventory = evidence._inventory_artifact_paths
+    inventory_calls = 0
+
+    def switch_parent_after_initial_inventory(root_fd):
+        nonlocal inventory_calls
+        result = real_inventory(root_fd)
+        inventory_calls += 1
+        if inventory_calls == 1:
+            relocated = tmp_path / "relocated"
+            physical.rename(relocated)
+            physical.symlink_to(relocated, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(
+        evidence, "_inventory_artifact_paths", switch_parent_after_initial_inventory
+    )
+    with pytest.raises(
+        design.DesignError, match="artifact root ancestry changed during source verification"
+    ):
+        _audit(fixture)
+    assert inventory_calls == 2
