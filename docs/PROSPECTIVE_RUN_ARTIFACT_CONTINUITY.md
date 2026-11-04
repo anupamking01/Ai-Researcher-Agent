@@ -45,6 +45,19 @@ Each inventory row has exactly task_id, variant, run_id, status, trace, report. 
 
 **Exclusive evidence-root inventory and nonselection gate:** The nominated artifact root is now a **dedicated directory containing only the referenced prospective trace and report files** and any necessary parent directories. In addition to validating every submitted cell, the verifier enumerates the local directory tree both before and after inspecting all indexed evidence. Every retained regular file must be referenced exactly once by an attempted treatment cell; an extra trace, report, nested alternative attempt, or leftover file for an `not_started` cell causes failure. The bounded inventory rejects symlinks, hardlinks, device files, unsafe names, excessive nesting (more than 16 levels) or more than 256 entries. All files must fit the same safe relative path limit (384 characters). This is a *local completeness/anti-selection check*, not a proof of all historical attempts: it cannot detect evidence removed before inventory, files kept outside the nominated root, or transient changes missed by two non-atomic scans. To avoid false claims, the receipt explicitly reports inventory agreement as **local only**. Store manifests, execution logs, receipts, and unrelated working files **outside** the dedicated evidence root. Do not copy an unattempted cell's placeholder files into the root. If an extra genuine attempt is found, preserve it separately for investigation and document the protocol deviation rather than deleting it to obtain a passing receipt.
 
+**Orphan-directory anti-selection gate (prospective only):** An
+exclusive evidence root cannot silently retain empty extra directories, such
+as an abandoned attempt or a discarded report candidate. The inventory now
+requires **every directory** beneath the nominated root to be an ancestor
+of at least one retained file; it enforces this in both the initial and final
+scans. Unindexed empty/nested branches fail even if the indexed forty-cell
+file set and fingerprints match. Directories legitimately containing indexed
+files remain valid. This closes a local directory-metadata omission, not the
+possibility that evidence was deleted before scanning or stored outside this
+root, and it is not independent authentication of historical execution.
+Do not delete an unexpected genuine directory to obtain a PASS; preserve it
+and document a deviation.
+
 **Portable artifact-path identity (prospective only):** A separate relative
 file path is not necessarily a separate portable artifact identity. The
 dedicated-root inventory now rejects sibling files **and sibling directories**

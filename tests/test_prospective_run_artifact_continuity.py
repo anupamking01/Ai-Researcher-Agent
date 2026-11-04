@@ -430,6 +430,52 @@ def test_retained_unindexed_attempt_or_report_cannot_be_silently_omitted(
         _audit(fixture)
 
 
+@pytest.mark.parametrize("relative", [
+    "abandoned-attempt",
+    "traces/abandoned-attempt",
+    "reports/rejected-attempt/empty-nested",
+])
+def test_unindexed_empty_evidence_directories_cannot_be_omitted(tmp_path, relative):
+    """An empty retained attempt directory still belongs to the local inventory."""
+    fixture = _fixture(tmp_path)
+    (fixture[4] / relative).mkdir(parents=True)
+    with pytest.raises(design.DesignError, match="unindexed empty or orphan directories"):
+        _audit(fixture)
+
+
+def test_empty_evidence_directory_appearing_during_audit_fails(tmp_path, monkeypatch):
+    """The final inventory must not ignore new unindexed directory metadata."""
+    fixture = _fixture(tmp_path)
+    original = evidence._validate_file_claim
+    inserted = False
+
+    def insert_after_first(*args, **kwargs):
+        nonlocal inserted
+        result = original(*args, **kwargs)
+        if not inserted:
+            (fixture[4] / "traces" / "late-abandoned-attempt").mkdir()
+            inserted = True
+        return result
+
+    monkeypatch.setattr(evidence, "_validate_file_claim", insert_after_first)
+    with pytest.raises(design.DesignError, match="unindexed empty or orphan directories"):
+        _audit(fixture)
+    assert inserted
+
+
+def test_nested_directory_required_by_indexed_trace_is_still_allowed(tmp_path):
+    """Do not reject real indexed evidence merely because it is nested."""
+    fixture = _fixture(tmp_path)
+    _, _, _, index, root = fixture
+    first_trace = index["cells"][0]["trace"]
+    previous = root / first_trace["path"]
+    destination = root / "traces" / "synthetic-batch"
+    destination.mkdir()
+    previous.rename(destination / previous.name)
+    first_trace["path"] = f"traces/synthetic-batch/{previous.name}"
+    assert _audit(fixture)["artifact_root_inventory_matches_index"] is True
+
+
 def test_unindexed_symlink_cannot_hide_candidate_evidence(tmp_path):
     fixture = _fixture(tmp_path)
     root = fixture[4]

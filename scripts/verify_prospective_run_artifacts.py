@@ -266,6 +266,7 @@ def _inventory_artifact_paths(root_fd: int) -> set[str]:
     directory_flags = (os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY
                        | getattr(os, "O_CLOEXEC", 0))
     seen: set[str] = set()
+    retained_directories: set[str] = set()
     entries_seen = 0
     try:
         with ExitStack() as stack:
@@ -310,6 +311,7 @@ def _inventory_artifact_paths(root_fd: int) -> set[str]:
                                 raise design.DesignError(
                                     "artifact directory changed during inventory"
                                 )
+                            retained_directories.add(relative)
                             pending.append((child, relative + "/", depth + 1))
                         elif stat.S_ISREG(before.st_mode) and before.st_nlink == 1:
                             seen.add(relative)
@@ -319,6 +321,18 @@ def _inventory_artifact_paths(root_fd: int) -> set[str]:
                             )
     except OSError as exc:
         raise design.DesignError("artifact root could not be safely inventoried") from exc
+    # File-only inventory misses extra empty/orphan directories. Those names
+    # are retained local provenance, potentially marking excluded attempts.
+    # A dedicated evidence root may contain only ancestors of indexed files.
+    required_directories: set[str] = set()
+    for relative in seen:
+        parts = relative.split("/")
+        for count in range(1, len(parts)):
+            required_directories.add("/".join(parts[:count]))
+    if retained_directories != required_directories:
+        raise design.DesignError(
+            "artifact root contains unindexed empty or orphan directories"
+        )
     return seen
 
 
