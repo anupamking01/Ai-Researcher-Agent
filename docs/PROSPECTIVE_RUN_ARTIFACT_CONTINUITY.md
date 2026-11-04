@@ -444,3 +444,21 @@ ordinary Markdown whitespace remain valid. This only checks prospective
 report presentation; it does not authenticate retrieval, report quality,
 source custody, the frozen 2026 study, or future human ratings. Preserve any
 rejected source unchanged and document a deviation before a blinded handoff.
+
+## Evidence-root ancestor binding during a future local audit
+
+The prospective verifier now opens every directory from the filesystem root
+through the supplied evidence root with descriptor-relative, no-follow opens,
+retains those descriptors during its scan, and verifies that each pathname
+still refers to the same directory object before returning a passing receipt.
+The preexisting leaf-root inode/generation and content rechecks remain in
+force. A symlinked outer parent is rejected even when the evidence directory
+itself is ordinary; a parent replaced by a symlink to the *same* retained
+evidence directory during the scan is also rejected. The prior leaf-only root
+check could accept that redirect because its final leaf inode still matched.
+
+This is a fail-closed **local path custody** constraint, not a transactional
+filesystem snapshot or an independently authenticated archival chain. It
+does not recover the missing 2026 source reports/traces, attest external
+execution, alter frozen automated inference, or authorize blinded human
+evaluation. The tests use synthetic local files only.
