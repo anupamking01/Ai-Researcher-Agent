@@ -103,6 +103,34 @@ def test_failed_and_incomplete_attempts_retained_without_positive_outcome_claim(
     assert result["all_recorded_cells_completed"] is False
 
 
+def test_case_only_run_id_alias_cannot_claim_two_independent_runs():
+    source, receipt, log = _fixture()
+    log["events"][0]["run_id"] = "Future-Run-A"
+    log["events"][1]["run_id"] = "future-run-a"
+    with pytest.raises(design.DesignError, match="duplicate run ID"):
+        audit.audit_execution_log(source, receipt, _bytes(log))
+
+
+@pytest.mark.parametrize("unsafe_id", [
+    "CON", "con.notes", "PRN", "AUX.json", "NUL", "COM1", "lpt9",
+    "future-run-00.",
+])
+def test_windows_device_names_and_trailing_dots_are_not_portable_runs(unsafe_id):
+    source, receipt, log = _fixture()
+    log["events"][0]["run_id"] = unsafe_id
+    with pytest.raises(design.DesignError, match="unsafe or duplicate run ID"):
+        audit.audit_execution_log(source, receipt, _bytes(log))
+
+
+def test_distinct_mixed_case_run_ids_still_pass_recorded_chronology():
+    source, receipt, log = _fixture()
+    log["events"][0]["run_id"] = "Future-Run-A"
+    log["events"][1]["run_id"] = "future-run-b"
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    assert result["status"] == "pass_recorded_chronology_only"
+    assert result["recorded_cells"] == 40
+
+
 @pytest.mark.parametrize("mutate,pattern", [
     (lambda l: l["events"][0].update(variant="NOT_A_PLANNED_ARM"), "frozen task-major"),
     (lambda l: l["events"][0].update(task_id="unseen-08"), "frozen task-major"),

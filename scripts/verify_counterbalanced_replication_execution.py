@@ -33,6 +33,9 @@ _UTC_PATTERN = re.compile(
     r"(?:\.\d{1,6})?(?:Z|\+00:00)"
 )
 _SAFE_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+# Run IDs become report/trace path components. Reject aliases that collide on
+# ordinary case-insensitive filesystems or are reserved as Windows devices.
+_WINDOWS_DEVICE_NAME = re.compile(r"(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])", re.I)
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -47,6 +50,21 @@ def _timestamp(value: object, description: str) -> datetime:
     if parsed.utcoffset() != timedelta(0):
         raise design.DesignError(f"{description} must use UTC")
     return parsed
+
+
+def _portable_run_id_key(value: object) -> str | None:
+    """Return a portable filesystem identity, or reject an unsafe run path.
+
+    On Windows, CON.json and CON.txt are both reserved device names, and
+    trailing dots disappear from directory names. On common Windows/macOS
+    volumes, case-only differences can select the same report/trace path.
+    This is identifier validation, not proof that a run actually occurred.
+    """
+    if type(value) is not str or _SAFE_RUN_ID.fullmatch(value) is None:
+        return None
+    if value.endswith(".") or _WINDOWS_DEVICE_NAME.fullmatch(value.split(".", 1)[0]):
+        return None
+    return value.casefold()
 
 
 def _check_pin(pin: str | None, *, label: str, actual: str) -> bool:
@@ -191,10 +209,10 @@ def audit_execution_log(
                 f"event {index} records an attempt after a not_started suffix"
             )
         run_id = event["run_id"]
-        if (type(run_id) is not str or _SAFE_RUN_ID.fullmatch(run_id) is None or
-                run_id in run_ids):
+        portable_run_key = _portable_run_id_key(run_id)
+        if portable_run_key is None or portable_run_key in run_ids:
             raise design.DesignError(f"event {index} has an unsafe or duplicate run ID")
-        run_ids.add(run_id)
+        run_ids.add(portable_run_key)
         slot = str((index - 1) % len(design.VARIANTS) + 1)
         attempted_position_counts_by_variant[variant][slot] += 1
         # Attempted failures/timeouts/cancellations remain visible. Never
