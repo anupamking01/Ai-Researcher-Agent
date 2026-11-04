@@ -11,6 +11,7 @@ import argparse
 from contextlib import ExitStack
 import hashlib
 import ipaddress
+import idna
 import json
 import math
 import os
@@ -310,7 +311,13 @@ def _source_fetch_identity(url: object, *, number: int) -> str:
                 raise ValueError("scoped IPv6 addresses are not portable sources")
             normalized_host = ipaddress.IPv6Address(host).compressed
         else:
-            normalized_host = host.encode("idna").decode("ascii").lower()
+            # Python's built-in IDNA codec implements IDNA2003, which
+            # folds distinct IDNA2008 hostnames (e.g. straße -> strasse,
+            # Greek final sigma -> sigma). Preserve distinct HTTP source
+            # identities under non-transitional UTS #46 processing.
+            normalized_host = idna.encode(
+                host, uts46=True, transitional=False
+            ).decode("ascii").lower()
             # A recorded portable HTTP source needs valid DNS host labels.
             # Empty or invalid labels (including a terminal DNS root dot)
             # introduce noncanonical authorities and can inflate the

@@ -133,7 +133,14 @@ characters overall, with no leading/trailing label hyphen); terminal-dot
 DNS aliases and empty interior labels are rejected as noncanonical rather
 than guessed to be equivalent across varying HTTP Host-header behavior.
 Standard IDN domains remain valid and their Punycode spellings reconcile as
-one fetch identity. IPv6 literals are handled separately; URL queries and
+one fetch identity. IDN comparison uses pinned `idna` (IDNA2008 with UTS #46
+non-transitional processing), rather than Python's IDNA2003 codec: deviation
+characters such as German sharp S (`ß`) and Greek final sigma (`ς`) must
+not collapse two distinct DNS names into one recorded retrieval identity.
+Synthetic regression tests cover both distinct domains and their corresponding
+Punycode aliases. This strengthens prospective, *self-reported* URL accounting;
+it is not proof of actual HTTP retrieval or DNS resolution. IPv6 literals are
+handled separately; URL queries and
 ordinary fragment references remain eligible. Empty explicitly written
 network ports (for DNS or bracketed IPv6 authorities) are rejected even
 though Python's URL parser treats them as an omitted port. Numeric-style

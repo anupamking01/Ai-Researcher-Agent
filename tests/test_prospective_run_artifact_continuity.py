@@ -1389,6 +1389,49 @@ def test_idn_punycode_aliases_cannot_double_count_one_scheduled_source(tmp_path)
         _audit(fixture)
 
 
+# IDNA2003 maps deviation code points to different existing hostnames.
+# IDNA2008/UTS #46 non-transitional processing must not merge these distinct
+# prospective fetch targets, even when the trace/index hashes are consistent.
+@pytest.mark.parametrize("urls", [
+    ("https://straße.example/paper", "https://strasse.example/paper"),
+    ("https://ς.example/paper", "https://σ.example/paper"),
+])
+def test_idna2008_distinct_dns_sources_not_silently_merged(tmp_path, urls):
+    fixture = _fixture(tmp_path)
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=2, successful_source_count=2, failed_source_count=0,
+            scheduled_urls=list(urls), successful_urls=list(urls), failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    receipt = _audit(fixture)
+    assert receipt["self_reported_source_urls_http_and_fetch_distinct"] is True
+    assert receipt["model_or_retrieval_calls_verified"] is False
+
+
+@pytest.mark.parametrize("scheduled,outcome", [
+    ("https://straße.example/paper", "https://xn--strae-oqa.example/paper"),
+    ("https://ς.example/paper", "https://xn--3xa.example/paper"),
+])
+def test_idna2008_deviation_host_reconciles_punycode_outcome(
+    tmp_path, scheduled, outcome
+):
+    fixture = _fixture(tmp_path)
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[scheduled], successful_urls=[outcome], failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    receipt = _audit(fixture)
+    assert receipt["self_reported_source_ledgers_within_frozen_budgets"] is True
+    assert receipt["model_or_retrieval_calls_verified"] is False
+
+
 def test_idn_punycode_alias_reconciles_one_scheduled_outcome(tmp_path):
     fixture = _fixture(tmp_path)
 
