@@ -1160,6 +1160,71 @@ def test_same_fetch_resource_cannot_inflate_scheduled_source_count(
         _audit(fixture)
 
 
+# RFC 3986 permits a present-but-empty query. It cannot be silently
+# merged with an absent query, even though urllib.parse.urlsplit reports
+# an empty .query for both. Fragments never form part of the fetch target.
+@pytest.mark.parametrize("distinct_targets", [
+    ("https://synthetic.invalid/record",
+     "https://synthetic.invalid/record?"),
+    ("https://synthetic.invalid/record#section?not-a-query",
+     "https://synthetic.invalid/record?#section"),
+])
+def test_empty_query_delimiter_keeps_distinct_scheduled_sources(
+    tmp_path, distinct_targets
+):
+    fixture = _fixture(tmp_path)
+    def set_ledger(trace):
+        trace.update(
+            source_count=2, successful_source_count=2, failed_source_count=0,
+            scheduled_urls=list(distinct_targets),
+            successful_urls=list(distinct_targets), failed_urls=[],
+        )
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    assert _audit(fixture)["self_reported_source_ledgers_within_frozen_budgets"] is True
+
+
+@pytest.mark.parametrize("same_target", [
+    ("https://synthetic.invalid/record?",
+     "https://synthetic.invalid/record?#first"),
+    ("https://synthetic.invalid/record?#first",
+     "https://synthetic.invalid/record?#second?fragment-only"),
+])
+def test_fragment_variation_cannot_duplicate_empty_query_source(tmp_path, same_target):
+    fixture = _fixture(tmp_path)
+    def set_ledger(trace):
+        trace.update(
+            source_count=2, successful_source_count=2, failed_source_count=0,
+            scheduled_urls=list(same_target),
+            successful_urls=list(same_target), failed_urls=[],
+        )
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    with pytest.raises(design.DesignError, match="source ledger.*resource"):
+        _audit(fixture)
+
+
+@pytest.mark.parametrize("scheduled, observed, matches", [
+    ("https://synthetic.invalid/record?",
+     "https://synthetic.invalid/record?#reference", True),
+    ("https://synthetic.invalid/record?",
+     "https://synthetic.invalid/record", False),
+])
+def test_empty_query_source_outcome_reconciliation(
+    tmp_path, scheduled, observed, matches
+):
+    fixture = _fixture(tmp_path)
+    def set_ledger(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[scheduled], successful_urls=[observed], failed_urls=[],
+        )
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    if matches:
+        assert _audit(fixture)["self_reported_source_ledgers_within_frozen_budgets"] is True
+    else:
+        with pytest.raises(design.DesignError, match="source ledger.*URL outcomes"):
+            _audit(fixture)
+
+
 # Synthetic prospective evidence only: source URL syntax and RFC 3986
 # percent-triplet case must not distort recorded retrieval-budget accounting.
 

@@ -192,7 +192,16 @@ IPv4-mapped IPv6 literal forms) are treated as one network address, not
 separate sources. Link-local interface-zone suffixes such as
 `[fe80::1%25eth0]` are rejected as nonportable source identifiers rather
 than silently folded into a different fetch target. Distinct IP addresses
-and distinct query strings remain distinct. Dot-segment path components (`/./`, `/../` and percent-encoded-dot
+and distinct query strings remain distinct. A present but empty query
+delimiter is likewise **not** normalized away: under RFC 3986 Section 6.2.3,
+`/record` and `/record?` cannot be presumed equivalent, although Python's
+`urlsplit` returns an empty query string for both. A question mark appearing
+only after the fragment delimiter (`#`) is not part of the HTTP query;
+`/record?#section` therefore matches `/record?`, not `/record`.
+This distinction protects self-reported unique-source counts and
+scheduled/outcome reconciliation without assuming that a server will return
+different content or authenticating any actual HTTP request.
+Dot-segment path components (`/./`, `/../` and percent-encoded-dot
 variants such as `/%2e/` and `/%2e%2e/`) are rejected rather than
 silently normalized. Standard HTTP clients can eliminate these before issuing
 a request, potentially inflating distinct recorded retrieval counts or

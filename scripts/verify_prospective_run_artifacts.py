@@ -496,9 +496,14 @@ def _source_fetch_identity(url: object, *, number: int) -> str:
     # literal or percent-encoded; do not count those spellings as new sources.
     # Reserved percent-encoded delimiters stay distinct from literal syntax.
     path = _canonical_http_component(parsed.path or "/")
+    # RFC 3986 does not equate an absent query with a present-but-empty
+    # one: /resource and /resource? may denote distinct HTTP request targets.
+    # urlsplit drops that distinction, so recover the delimiter from the
+    # pre-fragment spelling; a '?' only in a fragment is not a query.
+    query_present = "?" in url.partition("#")[0]
     query = (
         "?" + _canonical_http_component(parsed.query)
-        if parsed.query else ""
+        if query_present else ""
     )
     return f"{parsed.scheme}://{authority}{path}{query}"
 
