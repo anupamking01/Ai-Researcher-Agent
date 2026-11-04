@@ -797,3 +797,101 @@ def test_fractional_start_times_retain_microsecond_precision():
         old_total = sum(value["total_microseconds"] for value in old.values())
         new_total = sum(value["total_microseconds"] for value in new.values())
         assert new_total - old_total == (-123456 if first_arm in arms else 0)
+
+
+def test_full_recorded_chronology_exposes_cross_task_boundary_exposures():
+    """Nine task-to-task boundaries are distinct from thirty within-task pairs."""
+    source, receipt, log = _fixture()
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    schedule = design.build_plan(source)["schedule"]
+    expected = {
+        successor: {predecessor: 0 for predecessor in design.VARIANTS}
+        for successor in design.VARIANTS
+    }
+    for left, right in zip(schedule, schedule[1:]):
+        expected[right["arm_order"][0]][left["arm_order"][-1]] += 1
+    for key in (
+        "planned_cross_task_transition_counts_by_variant",
+        "recorded_attempted_cross_task_transition_counts_by_variant",
+        "recorded_completed_cross_task_transition_counts_by_variant",
+    ):
+        assert result[key] == expected
+        assert sum(map(sum, (row.values() for row in result[key].values()))) == 9
+    assert result[
+        "recorded_completed_after_noncompleted_cross_task_predecessor_counts_by_variant"
+    ] == {arm: 0 for arm in design.VARIANTS}
+    assert result["recorded_attempted_cross_task_boundary_gap_us"] == {
+        "count": 9,
+        "minimum_microseconds": 1_000_000,
+        "maximum_microseconds": 1_000_000,
+        "total_microseconds": 9_000_000,
+    }
+    assert result["actual_execution_independently_authenticated"] is False
+
+
+def test_interrupted_log_preserves_planned_but_not_attempted_cross_task_boundaries():
+    source, receipt, log = _fixture()
+    baseline = audit.audit_execution_log(source, receipt, _bytes(log))
+    _mark_unattempted_suffix(log, 4)
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    assert (result["planned_cross_task_transition_counts_by_variant"]
+            == baseline["planned_cross_task_transition_counts_by_variant"])
+    for key in (
+        "recorded_attempted_cross_task_transition_counts_by_variant",
+        "recorded_completed_cross_task_transition_counts_by_variant",
+    ):
+        assert sum(sum(row.values()) for row in result[key].values()) == 0
+    assert result["recorded_attempted_cross_task_boundary_gap_us"] == {
+        "count": 0,
+        "minimum_microseconds": None,
+        "maximum_microseconds": None,
+        "total_microseconds": 0,
+    }
+    assert result["all_recorded_cells_completed"] is False
+
+
+def test_failed_boundary_predecessor_does_not_count_as_completed_cross_task_pair():
+    source, receipt, log = _fixture()
+    baseline = audit.audit_execution_log(source, receipt, _bytes(log))
+    preceding_arm = log["events"][3]["variant"]
+    successor_arm = log["events"][4]["variant"]
+    log["events"][3]["status"] = "timeout"
+    changed = audit.audit_execution_log(source, receipt, _bytes(log))
+    key = "recorded_completed_cross_task_transition_counts_by_variant"
+    assert (changed[key][successor_arm][preceding_arm]
+            == baseline[key][successor_arm][preceding_arm] - 1)
+    assert sum(sum(row.values()) for row in changed[key].values()) == 8
+    assert sum(sum(row.values()) for row in changed[
+        "recorded_attempted_cross_task_transition_counts_by_variant"
+    ].values()) == 9
+    assert changed[
+        "recorded_completed_after_noncompleted_cross_task_predecessor_counts_by_variant"
+    ][successor_arm] == 1
+    assert (changed["recorded_attempted_cross_task_boundary_gap_us"]
+            == baseline["recorded_attempted_cross_task_boundary_gap_us"])
+
+
+def test_cross_task_boundary_gap_captures_a_long_pause_without_changing_coverage():
+    source, receipt, log = _fixture()
+    baseline = audit.audit_execution_log(source, receipt, _bytes(log))
+    # Delay task two and all later tasks by exactly one hour: the pause
+    # belongs only to the boundary between task one and task two.
+    for event in log["events"][4:]:
+        for key in ("started_at_utc", "finished_at_utc"):
+            event[key] = _utc(
+                datetime.fromisoformat(event[key].replace("Z", "+00:00"))
+                + timedelta(hours=1)
+            )
+    log["finished_at_utc"] = _utc(
+        datetime.fromisoformat(log["finished_at_utc"].replace("Z", "+00:00"))
+        + timedelta(hours=1)
+    )
+    changed = audit.audit_execution_log(source, receipt, _bytes(log))
+    assert (changed["recorded_completed_cross_task_transition_counts_by_variant"]
+            == baseline["recorded_completed_cross_task_transition_counts_by_variant"])
+    before = baseline["recorded_attempted_cross_task_boundary_gap_us"]
+    after = changed["recorded_attempted_cross_task_boundary_gap_us"]
+    assert before["count"] == after["count"] == 9
+    assert after["total_microseconds"] - before["total_microseconds"] == 3_600_000_000
+    assert after["maximum_microseconds"] == 3_601_000_000
+    assert changed["scientific_outcomes_validated"] is False

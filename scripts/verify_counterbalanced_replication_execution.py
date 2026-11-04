@@ -330,6 +330,65 @@ def audit_execution_log(
                 else:
                     completed_after_noncompleted_predecessor[successor] += 1
 
+    # Task-major execution also has one boundary between consecutive tasks.
+    # Within-task Williams balance says nothing about these nine transitions:
+    # a late arm of task N may immediately precede the first arm of task N+1.
+    # Report them separately, allowing same-arm boundaries (unlike within-task
+    # transitions); do not claim that these recorded adjacencies cause carryover.
+    def blank_cross_task_matrix() -> dict[str, dict[str, int]]:
+        return {
+            successor: {predecessor: 0 for predecessor in design.VARIANTS}
+            for successor in design.VARIANTS
+        }
+
+    cross_task_planned = blank_cross_task_matrix()
+    cross_task_attempted = blank_cross_task_matrix()
+    cross_task_completed = blank_cross_task_matrix()
+    cross_task_completed_after_noncompleted = {
+        arm: 0 for arm in design.VARIANTS
+    }
+    cross_task_attempted_gaps_us: list[int] = []
+    for task_index, (preceding_row, following_row) in enumerate(
+        zip(plan["schedule"], plan["schedule"][1:]), start=1
+    ):
+        predecessor = preceding_row["arm_order"][-1]
+        successor = following_row["arm_order"][0]
+        preceding_status = status_by_task[preceding_row["task_id"]][predecessor]
+        following_status = status_by_task[following_row["task_id"]][successor]
+        cross_task_planned[successor][predecessor] += 1
+        if following_status == "not_started":
+            continue
+        # The verified contiguous unstarted-suffix contract means a following
+        # attempt cannot exist without an attempted predecessor.
+        cross_task_attempted[successor][predecessor] += 1
+        if following_status == "completed":
+            if preceding_status == "completed":
+                cross_task_completed[successor][predecessor] += 1
+            else:
+                cross_task_completed_after_noncompleted[successor] += 1
+
+        # Events are already validated in four-cell task-major order; a
+        # boundary's elapsed gap is between the earlier finish and later start.
+        # This is a recorded pause, not an independently authenticated clock.
+        preceding_finish = _timestamp(
+            events[task_index * len(design.VARIANTS) - 1]["finished_at_utc"],
+            "cross-task predecessor finish",
+        )
+        following_start = _timestamp(
+            events[task_index * len(design.VARIANTS)]["started_at_utc"],
+            "cross-task successor start",
+        )
+        gap = following_start - preceding_finish
+        cross_task_attempted_gaps_us.append(
+            (gap.days * 86400 + gap.seconds) * 1_000_000 + gap.microseconds
+        )
+    cross_task_gap_summary = {
+        "count": len(cross_task_attempted_gaps_us),
+        "minimum_microseconds": min(cross_task_attempted_gaps_us, default=None),
+        "maximum_microseconds": max(cross_task_attempted_gaps_us, default=None),
+        "total_microseconds": sum(cross_task_attempted_gaps_us),
+    }
+
     return {
         "status": "pass_recorded_chronology_only",
         "classification": LOG_CLASSIFICATION,
@@ -358,6 +417,13 @@ def audit_execution_log(
         "recorded_completed_after_noncompleted_predecessor_counts_by_variant": (
             completed_after_noncompleted_predecessor
         ),
+        "planned_cross_task_transition_counts_by_variant": cross_task_planned,
+        "recorded_attempted_cross_task_transition_counts_by_variant": cross_task_attempted,
+        "recorded_completed_cross_task_transition_counts_by_variant": cross_task_completed,
+        "recorded_completed_after_noncompleted_cross_task_predecessor_counts_by_variant": (
+            cross_task_completed_after_noncompleted
+        ),
+        "recorded_attempted_cross_task_boundary_gap_us": cross_task_gap_summary,
         "recorded_fully_completed_task_count": sum(
             len(completed) == len(design.VARIANTS)
             for completed in completed_variants_by_task.values()

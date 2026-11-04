@@ -83,6 +83,28 @@ outcome-chasing reruns or post-hoc selection of favorable observations.
 
 **Immediate-predecessor / first-order exposure diagnostic:** Pairwise precedence does not tell reviewers which treatment **immediately preceded** an arm within the same task. For each successor arm, the new `planned_immediate_predecessor_counts_by_variant`, `recorded_attempted_immediate_predecessor_counts_by_variant`, and `recorded_completed_immediate_predecessor_counts_by_variant` matrices count each distinct preceding arm (no cross-task adjacency). An additional `recorded_completed_after_noncompleted_predecessor_counts_by_variant` count flags a completed successor following a failed, timed-out, or cancelled predecessor rather than silently treating it as an intact completed pair. The full ten-task plan contains 30 within-task adjacent links; after attrition, logged attempted and jointly completed links may differ. These are descriptive, outcome-blind, **self-reported first-order exposure** checks. They do not measure actual carryover, certify independence or randomization, authenticate execution, establish causal drift adjustment, or imply that a completed successor after a failed predecessor is invalid. No ratings or treatment results are used.
 
+**Cross-task boundary / possible carryover diagnostics:** A task-major
+sequential experiment also has nine boundaries between the last scheduled
+treatment of one task and the first treatment of the next. Williams balance
+within each task does **not** balance or erase these cross-task adjacencies.
+The chronology receipt now reports separate
+`planned_cross_task_transition_counts_by_variant`,
+`recorded_attempted_cross_task_transition_counts_by_variant`, and
+`recorded_completed_cross_task_transition_counts_by_variant` 4×4 matrices
+(indexed by successor and then predecessor, **including same-arm** boundaries).
+The first always totals nine; a stopped suffix reduces recorded attempted and
+jointly completed counts. The distinct
+`recorded_completed_after_noncompleted_cross_task_predecessor_counts_by_variant`
+counts completed first arms whose preceding task's last arm was logged failed,
+timed out, or cancelled rather than silently crediting a completed pair.
+`recorded_attempted_cross_task_boundary_gap_us` summarizes the nonnegative
+recorded predecessor-finish to successor-start pauses, with null extrema
+when no boundary was attempted. These are **outcome-blind, self-reported**
+exposure and clock diagnostics; they cannot measure actual psychological/model
+carryover, environmental drift, causal effects, or external execution
+authenticity. They do not alter the frozen schedule, scores, paired inference,
+historical fixed-order experiment, or any future prespecified exclusion rule.
+
 This is a **prospective sequential-execution convention** for a future study. It is not evidence that the historical study used the convention, and it must not be retroactively applied to historical logs. If the future research protocol predeclares parallel or interleaved execution, it requires a separately versioned auditor rather than silently weakening this one.
 
 ## Offline verification
