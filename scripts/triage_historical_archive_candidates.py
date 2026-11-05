@@ -255,11 +255,12 @@ def main() -> int:
     try:
         receipt = triage_candidates(args.assignments or [])
     except CandidateTriageError as exc:
-        parser.exit(2, f"VERA ARCHIVE CANDIDATE TRIAGE: FAIL: {exc}\\n")
+        parser.exit(2, f"VERA ARCHIVE CANDIDATE TRIAGE: FAIL: {exc}\n")
     print(json.dumps(receipt, sort_keys=True, indent=2))
     # Exit 0 means only that all *listed* candidates were inventoried.
     # Evidence authentication and human-evaluation readiness remain false.
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
