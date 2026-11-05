@@ -59,6 +59,27 @@ helps reject an unrelated ZIP presented under a plausible archive name:
 | 40 treatment reports/traces | `34620917346` | `10275100801` | 608355 bytes | `878205ff42267b85d71f478520a4a3ebe520915f22ae2d2307e930fa39545400` |
 | Evaluator-only recovered archive | `34783525480` | `10324954205` | 618586 bytes | `c357b068fa4c0b7e86f7c56cd1d3e346f6922106d7bde644db92feb7f8fc84cc` |
 
+For reproducible subsequent triage of this **alternate GitHub API access
+path**, run the following read-only metadata-only command (the connected
+account's access may differ from an unauthenticated request):
+
+```bash
+python -m scripts.audit_historical_direct_artifact_ids
+```
+
+The diagnostic makes **two metadata observations of each exact historical
+artifact ID** and fails closed if access/identity changes between them. It
+checks an accessible object's original upload-artifact name, ID, ZIP byte count,
+optional provider digest, repository, branch, run ID and head commit against the
+historical pins. Only HTTP 404 is reported as direct-ID inaccessibility; HTTP
+401/403/429, transport errors and malformed metadata are errors, not
+evidence of archive absence. It never downloads or extracts a ZIP. Even a
+matching provider digest is **same-provider job-log concordance**, not an
+independently archived report/trace fingerprint. Record each receipt's UTC
+observation time; do not present prior 404s as a permanent availability state.
+The original report/trace custody and independent human-evaluation gates remain
+mandatory.
+
 **Recovery order, without outcome reruns:** First locate original, unmodified
 ZIP bytes (or independently retained original directory trees) in an
 authorized backup. Record the backup's location, custody history and
