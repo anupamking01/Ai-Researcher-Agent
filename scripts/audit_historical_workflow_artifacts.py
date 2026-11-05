@@ -287,11 +287,20 @@ def _listed_artifacts(
                 raise ArtifactInventoryError("artifact expiry must follow creation")
             if type(artifact.get("size_in_bytes")) is not int or artifact["size_in_bytes"] <= 0:
                 raise ArtifactInventoryError("artifact ZIP has invalid or zero byte size")
-            expected_url = (
-                f"{API_BASE}/repos/{REPOSITORY}/actions/artifacts/{artifact_id}/zip"
+            # A correctly named artifact and ZIP link do not establish
+            # provenance if the provider's metadata self-link identifies a
+            # different artifact or repository. Check both endpoint identities.
+            expected_metadata_url = (
+                f"{API_BASE}/repos/{REPOSITORY}/actions/artifacts/{artifact_id}"
             )
-            if artifact.get("archive_download_url") != expected_url:
-                raise ArtifactInventoryError("artifact ZIP download URL is not run-repository scoped")
+            if artifact.get("url") != expected_metadata_url:
+                raise ArtifactInventoryError(
+                    "artifact metadata URL does not match its run-repository artifact ID"
+                )
+            if artifact.get("archive_download_url") != expected_metadata_url + "/zip":
+                raise ArtifactInventoryError(
+                    "artifact ZIP download URL is not run-repository scoped"
+                )
             digest = artifact.get("digest")
             if digest is not None and (
                 type(digest) is not str

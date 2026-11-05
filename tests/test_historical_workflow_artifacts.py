@@ -57,6 +57,10 @@ def _artifact(run_id, name, *, expired=False, ident=None):
         "expires_at": "2099-12-23T23:03:46Z",
         "size_in_bytes": pin["size_bytes"] if pin else 10270,
         "digest": "sha256:" + (pin["zip_sha256"] if pin else "a" * 64),
+        "url": (
+            f"https://api.github.com/repos/{audit.REPOSITORY}"
+            f"/actions/artifacts/{ident}"
+        ),
         "archive_download_url": (
             f"https://api.github.com/repos/{audit.REPOSITORY}"
             f"/actions/artifacts/{ident}/zip"
@@ -147,6 +151,36 @@ def test_historical_workflow_identity_mismatch_fails_closed(field, bad):
     responses[f"/repos/{audit.REPOSITORY}/actions/runs/{first}"][field] = bad
     with pytest.raises(audit.ArtifactInventoryError, match="identity/status"):
         audit.audit_historical_artifact_inventory(fetch_json=_client(responses))
+
+
+@pytest.mark.parametrize("metadata_url", [
+    None,
+    "https://api.github.com/repos/other-owner/other-repo/actions/artifacts/10275100801",
+    "https://api.github.com/repos/anupamking01/Ai-Researcher-Agent/actions/artifacts/999",
+    "https://api.github.com/repos/anupamking01/Ai-Researcher-Agent/actions/artifacts/10275100801?redirect=1",
+])
+def test_run_scoped_artifact_metadata_self_link_must_identify_pinned_source(metadata_url):
+    """A valid archive ZIP URL and source fields cannot hide a different metadata URL."""
+    original = audit.HISTORICAL_RUNS[0]
+    item = _artifact(original[1], original[5])
+    if metadata_url is None:
+        item.pop("url")
+    else:
+        item["url"] = metadata_url
+    responses = _responses({original[1]: [item]})
+    with pytest.raises(audit.ArtifactInventoryError, match="metadata URL"):
+        audit.audit_historical_artifact_inventory(fetch_json=_client(responses))
+
+
+def test_run_scoped_artifact_self_link_and_archive_link_both_match_original_id():
+    original = audit.HISTORICAL_RUNS[0]
+    item = _artifact(original[1], original[5])
+    receipt = audit.audit_historical_artifact_inventory(
+        fetch_json=_client(_responses({original[1]: [item]}))
+    )
+    assert receipt["historical_runs"]["original_treatment"]["expected_artifact"]["id"] == (
+        audit.HISTORICAL_UPLOAD_PINS["original_treatment"]["artifact_id"]
+    )
 
 
 def test_cross_run_artifact_association_is_rejected():

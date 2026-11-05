@@ -518,3 +518,22 @@ recovered, authenticate historical custody, establish source-to-evaluator
 continuity, or authorize human-evaluation distribution. The tests are entirely
 synthetic and do not change the frozen automated confirmatory results, the
 exploratory analyses, the human rubric, or the pending human-validation status.
+
+## Run-scoped artifact metadata self-link attribution (prospective audit guard)
+
+The read-only `audit_historical_workflow_artifacts` inventory now checks both
+`url` (the GitHub artifact **metadata** endpoint) and
+`archive_download_url` (the ZIP endpoint) against the same pinned
+repository and artifact ID. Previously it checked the ZIP link but could
+accept a missing, substituted, cross-repository, or wrong-ID metadata
+self-link even when a listing's name, `workflow_run` attribution, and ZIP
+link otherwise matched. The self-link check is required for each listed
+artifact, not only the named recovery candidates; ambiguous records fail
+closed instead of being called unavailable or recovered. Synthetic offline
+tests exercise the rejection cases and the unchanged canonical-link path.
+
+This is **only consistency checking of GitHub-reported metadata**. It does
+not authenticate original ZIP bytes, recover historical reports or traces,
+establish external archive custody, permit blinded packet distribution, or
+change pilot, frozen automated confirmatory, exploratory, or pending human
+validation results.
