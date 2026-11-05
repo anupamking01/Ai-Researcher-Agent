@@ -18,7 +18,7 @@ from typing import Callable
 
 from scripts import audit_historical_artifact_job_logs as historical_logs
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 REPOSITORY = "anupamking01/Ai-Researcher-Agent"
@@ -157,8 +157,20 @@ def _reject_constant(value: str):
     raise ArtifactInventoryError(f"non-finite API JSON constant: {value}")
 
 
+class _RejectInventoryRedirects(HTTPRedirectHandler):
+    """Keep run-scoped metadata reads on the pinned GitHub API endpoint."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ArtifactInventoryError("GitHub Actions metadata endpoint redirected")
+
+
+def _open_inventory_metadata(request: Request, *, timeout: int):
+    """Do not follow redirects carrying GitHub metadata or API credentials."""
+    return build_opener(_RejectInventoryRedirects()).open(request, timeout=timeout)
+
+
 def _fetch_json(path: str) -> object:
-    """Read bounded JSON from the fixed public GitHub API host, never download ZIPs."""
+    """Read bounded origin-bound JSON; never follow redirects or fetch ZIPs."""
     if not path.startswith(f"/repos/{REPOSITORY}/actions/runs/"):
         raise ArtifactInventoryError("API path is outside the pinned repository run endpoints")
     headers = {
@@ -169,12 +181,23 @@ def _fetch_json(path: str) -> object:
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    request = Request(API_BASE + path, headers=headers)
+    url = API_BASE + path
     try:
-        with urlopen(request, timeout=15) as response:
+        with _open_inventory_metadata(Request(url, headers=headers), timeout=15) as response:
+            if response.geturl() != url:
+                raise ArtifactInventoryError("GitHub Actions metadata endpoint redirected")
             raw = response.read(MAX_RESPONSE_BYTES + 1)
-    except (HTTPError, URLError, TimeoutError, OSError) as exc:
-        # Do not turn network/auth/rate-limit failures into "artifact absent".
+    except HTTPError as exc:
+        # A moved endpoint's HTTP error is not a response from this run.
+        if exc.geturl() != url:
+            raise ArtifactInventoryError(
+                "GitHub Actions metadata endpoint redirected"
+            ) from exc
+        raise ArtifactInventoryError(
+            f"GitHub Actions metadata query failed for {path}: HTTP {exc.code}"
+        ) from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        # Never turn network/auth/rate-limit failures into "artifact absent".
         raise ArtifactInventoryError(
             f"GitHub Actions metadata query failed for {path}: {type(exc).__name__}"
         ) from exc

@@ -3,6 +3,21 @@
 **Status (2026-11-05): blocked on original report and handoff custody.**
 This is an operational inventory and recovery plan, not an experiment or human-evaluation result.
 
+## Run-scoped GitHub metadata origin boundary
+
+The read-only historical **run-scoped** workflow/artifact inventory now rejects
+all HTTP 301/302/303/307/308 redirects rather than accepting a JSON response
+from a different endpoint, and checks the final response URL and HTTP-error
+origin against the exact pinned GitHub Actions API URL. This prevents a
+redirected response from being mistaken for an original-run inventory and
+prevents automatically forwarding authenticated requests to a redirect target.
+Actual original-endpoint HTTP 404/401/403 and transport failures remain hard
+errors, not evidence that an archive is missing. The inventory still checks
+historical execution metadata in two passes and makes no original-data custody
+or human-evaluation readiness claim. Offline synthetic tests exercise the
+redirect, relocated-404, valid-origin, and transport boundaries. This safeguard
+does not recover any original ZIP, alter automated results, or authorize rating.
+
 ## Direct-ID HTTP redirect custody boundary
 
 The read-only historical direct-ID auditor opens only the **two pinned GitHub
