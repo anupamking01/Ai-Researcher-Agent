@@ -457,3 +457,38 @@ def test_original_frozen_latency_ledger_is_pinned_and_complete():
     assert total > 0
     assert set(by_cell) == set(order.EXPECTED_ORDER)
     assert all(value > 0 for value in by_cell.values())
+
+
+@pytest.mark.parametrize("timestamp", [
+    "2026-09-12🦄00:01:00+00:00",    # Arbitrary Unicode separator accepted by Python
+    "20260912T000100+00:00",       # Basic ISO date/time, not runner output
+    "2026-09-12T00:01:00Z",        # Equivalent UTC suffix, not runner output
+    "2026-09-12T00:01:00+00:00:00", # Extended zero offset
+    "2026-09-12T00:01:00.123+00:00", # Truncated subsecond precision
+    "2026-09-12T00:01:00-00:00",    # Signed negative zero offset
+    "2026-09-12T00:01:00+0000",     # Colonless zero offset
+    "2026-09-12T00:01:00,123456+00:00", # Decimal comma
+])
+def test_original_progress_rejects_non_writer_utc_spellings(timestamp):
+    """Do not certify timestamps Python can parse but the original writer could not emit."""
+    progress = _fixture()
+    progress["events"][0]["started_at_utc"] = timestamp
+    with pytest.raises(order.ChronologyError, match="original runner ISO format"):
+        order.audit_progress(progress, sha256="a" * 64, byte_size=10)
+
+
+@pytest.mark.parametrize("field", ["started_at_utc", "finished_at_utc"])
+def test_original_progress_enclosing_window_requires_writer_utc_syntax(field):
+    progress = _fixture()
+    progress[field] = progress[field].replace("T", " ", 1)
+    with pytest.raises(order.ChronologyError, match="original runner ISO format"):
+        order.audit_progress(progress, sha256="a" * 64, byte_size=10)
+
+
+@pytest.mark.parametrize("timestamp", [
+    "2026-09-12T00:01:00+00:00",
+    "2026-09-12T00:01:00.123456+00:00",
+])
+def test_original_progress_accepts_exact_writer_utc_renderings(timestamp):
+    parsed = order._utc(timestamp, "synthetic timestamp")
+    assert parsed.isoformat() == timestamp

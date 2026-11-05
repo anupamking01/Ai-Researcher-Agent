@@ -254,3 +254,31 @@ or a mechanism to forbid executions from older commits, hand-written
 scripts, or deliberately modified code. It did not rerun treatments,
 recompute automated metrics, or generate human annotations. The original
 trace/report recovery and independent human validation gates remain open.
+
+
+## Exact original-writer UTC spelling for recovered chronology (5 November 2026)
+
+The historical treatment runner at immutable commit
+`c3c15e46a8eec3a8bbc24c968eedc0548172a897` serialized its UTC
+timestamps with `datetime.now(timezone.utc).isoformat()`. Therefore an
+original progress log can contain only
+`YYYY-MM-DDTHH:MM:SS+00:00` or
+`YYYY-MM-DDTHH:MM:SS.ffffff+00:00` (exactly six fractional digits).
+Python's permissive `datetime.fromisoformat` parser also accepts different
+strings denoting the same instant, such as basic dates, an arbitrary Unicode
+date/time separator, a `Z` suffix, signed negative-zero or colonless offsets,
+decimal commas, and shortened fractional precision. These are **not**
+timestamps the historical writer could emit.
+
+The read-only historical chronology auditor now validates the writer's exact
+timestamp grammar before converting or checking elapsed time, for both the
+study-level clock window and every treatment event. Impossible calendar dates
+still fail during datetime conversion; the existing event-order, immutable
+published-latency and GitHub Actions treatment-step window checks are
+unchanged. Synthetic-only regression tests verify rejection of parser-permitted
+aliases and acceptance of both exact writer representations. No progress
+artifact was recovered or modified, no treatments/evaluators were rerun, and
+no inferential or human-evaluation results changed. This gate can rule out a
+structurally impossible candidate; **matching syntax cannot authenticate
+historical source custody, validate recorded clocks, or correct fixed-order
+temporal confounding**.

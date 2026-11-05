@@ -244,13 +244,26 @@ def _load_published_treatment_cost(path: Path, *, include_latencies: bool = Fals
     return (total_cost, latencies) if include_latencies else total_cost
 
 
+# Historical runner c3c15e46 emitted datetime.now(timezone.utc).isoformat().
+# Python's fromisoformat() accepts many other spellings (Unicode separators,
+# basic dates, Z and zero-offset aliases). Those cannot be original writer
+# output, even when they describe the same instant.
+_ORIGINAL_WRITER_UTC_ISOFORMAT = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\\.[0-9]{6})?\\+00:00"
+)
+
+
 def _utc(value, label: str) -> datetime:
-    if type(value) is not str:
-        raise ChronologyError(f"{label} must be an ISO 8601 UTC timestamp")
+    if (type(value) is not str
+            or _ORIGINAL_WRITER_UTC_ISOFORMAT.fullmatch(value) is None):
+        raise ChronologyError(
+            f"{label} must be explicitly UTC in original runner ISO format"
+        )
     try:
         parsed = datetime.fromisoformat(value)
     except ValueError as exc:
-        raise ChronologyError(f"{label} is not an ISO 8601 timestamp") from exc
+        raise ChronologyError(f"{label} is not a real UTC timestamp") from exc
     if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
         raise ChronologyError(f"{label} must be explicitly UTC")
     return parsed
