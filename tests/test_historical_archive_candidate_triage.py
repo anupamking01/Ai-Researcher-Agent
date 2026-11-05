@@ -273,7 +273,7 @@ def test_repacked_zip_with_different_compression_is_same_regular_member_content(
     first = _zip(tmp_path / "deflated.zip")
     second = tmp_path / "stored.zip"
     with zipfile.ZipFile(second, "w", compression=zipfile.ZIP_STORED) as stream:
-        stream.writestr("synthetic/report.md", "# Not a historical result\\n")
+        stream.writestr("synthetic/report.md", "# Not a historical result\n")
     assert first.read_bytes() != second.read_bytes()
     receipt = triage.triage_candidates([
         ("original_treatment", first),
@@ -316,7 +316,7 @@ def test_changed_member_and_unsafe_candidate_never_claim_equal_content(tmp_path)
     a = _zip(tmp_path / "a.zip")
     b = tmp_path / "b.zip"
     with zipfile.ZipFile(b, "w", compression=zipfile.ZIP_DEFLATED) as stream:
-        stream.writestr("synthetic/report.md", "# Different synthetic content\\n")
+        stream.writestr("synthetic/report.md", "# Different synthetic content\n")
     broken = tmp_path / "bad.zip"
     broken.write_bytes(b"not zip content")
     receipt = triage.triage_candidates([
