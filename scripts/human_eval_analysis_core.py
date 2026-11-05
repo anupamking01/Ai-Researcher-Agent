@@ -165,7 +165,18 @@ def _snapshot_file(source, destination, *, label):
                 ) from exc
             if (
                 not stat.S_ISREG(current.st_mode)
-                or (current.st_dev, current.st_ino) != after_identity[:2]
+                # The final pathname check must bind the same file generation
+                # as the descriptor's final fstat. In-place edits can preserve
+                # device/inode (and even byte count) between those two checks.
+                or (
+                    current.st_dev,
+                    current.st_ino,
+                    current.st_size,
+                    current.st_mtime_ns,
+                    current.st_ctime_ns,
+                ) != after_identity
+                or current.st_mode != after.st_mode
+                or current.st_nlink != after.st_nlink
                 or not stat.S_ISDIR(current_parent.st_mode)
                 or (current_parent.st_dev, current_parent.st_ino)
                 != (parent.st_dev, parent.st_ino)

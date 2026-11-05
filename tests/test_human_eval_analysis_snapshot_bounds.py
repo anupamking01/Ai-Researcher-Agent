@@ -139,3 +139,49 @@ def test_bounded_reader_never_requests_unbounded_growth(tmp_path: Path, monkeypa
         core._snapshot_file(source, destination, label="synthetic ratings")
     assert requested == [(8, 0), (1, 8)]
     assert not destination.exists()
+
+@pytest.mark.parametrize("mutation", ("same_size_rewrite", "append", "chmod"))
+def test_regular_snapshot_rejects_in_place_edit_after_final_descriptor_check(
+    tmp_path: Path, monkeypatch, mutation
+):
+    """The visible source path must still identify the captured generation.
+
+    The synthetic editor acts exactly after the second fstat but before the
+    pathname stat. A device/inode-only comparison would accept all three.
+    """
+    import stat
+
+    source = tmp_path / "synthetic-ratings.csv"
+    source.write_bytes(b"original")
+    destination = tmp_path / "snapshot" / source.name
+    original_stat = os.stat
+    changed = []
+
+    def edit_before_visible_path_check(path, *args, **kwargs):
+        if (
+            path == source.name
+            and kwargs.get("dir_fd") is not None
+            and not changed
+        ):
+            before = original_stat(source)
+            if mutation == "same_size_rewrite":
+                source.write_bytes(b"revision")
+            elif mutation == "append":
+                with source.open("ab") as handle:
+                    handle.write(b"-later")
+            else:
+                source.chmod(stat.S_IMODE(before.st_mode) ^ stat.S_IXUSR)
+            if mutation != "chmod":
+                os.utime(
+                    source,
+                    ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000),
+                )
+            changed.append(True)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(core.os, "stat", edit_before_visible_path_check)
+    with pytest.raises(ValueError, match="changed while it was being snapshotted"):
+        core._snapshot_file(source, destination, label="synthetic human rating")
+    assert changed == [True]
+    assert not destination.exists()
+    assert not destination.parent.exists()

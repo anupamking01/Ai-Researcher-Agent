@@ -314,3 +314,21 @@ indexing to turn score 0 into rating category 5. Blank dimensions remain
 missing and are never imputed. This is an offline software-integrity boundary:
 the production CSV intake already checked these inputs; no human results,
 rater independence, or agreement outcomes are asserted.
+
+## Downstream human-analysis snapshot recheck
+
+The subsequent `scripts/human_eval_analysis_core.py` analysis preparation
+captures blinded ratings and governing evidence into an isolated scratch tree
+before any coordinator-only treatment mapping is examined. Its individual
+file-capture path now checks the visible source's device, inode, byte count,
+modification/change timestamps, mode and link count against the descriptor's
+final post-read state. This prevents an observable same-inode rewrite,
+append, or permission change in the narrow interval between that last
+post-read descriptor check and the final pathname check from being silently
+accepted as the same input generation. Synthetic deterministic interleaving
+regressions exercise all three cases; no real annotations are used.
+
+The check is a local snapshot consistency safeguard, not a filesystem lock,
+independent origin attestation, or proof that historical treatment data have
+been recovered. Captured bytes remain the analysis input, frozen rubric and
+confirmatory inference are unchanged, and human validation remains pending.
