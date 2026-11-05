@@ -165,6 +165,15 @@ custody or a reason to prefer a particular candidate.
 It invokes the existing bounded ZIP structural preflight on each input,
 records structural failures and same-provider size/digest mismatches as well
 as matches, and returns per-role counts without picking a favorable archive.
+The preflight also requires a single, parser-consistent ZIP end-of-central-directory
+(EOCD) record. Python's ZIP reader uses the last EOCD signature even when that
+signature is embedded in a ZIP comment; the bounded pre-parser previously could
+select an earlier valid terminal record instead. A second plausible terminal
+EOCD, or a later spurious EOCD signature in the comment, now fails **before**
+the standard reader opens the archive. Ordinary comments without the EOCD
+signature remain supported; deliberately rejecting ambiguous comments avoids
+different tools reporting different member inventories for the same backup.
+This is a structural-consistency check, not historical source authentication.
 To prevent a batch of up to 16 otherwise individually valid ZIPs from
 requiring up to 8 GiB of decompression, the triage also enforces a **1 GiB
 batch-wide declared-uncompressed-byte budget**. The structural preflight

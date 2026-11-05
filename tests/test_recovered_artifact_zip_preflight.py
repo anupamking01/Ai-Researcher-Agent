@@ -416,14 +416,39 @@ def test_unaccounted_trailing_bytes_rejected(tmp_path):
         audit.audit_recovered_zip(path)
 
 
-def test_ordinary_zip_comment_remains_supported(tmp_path):
+@pytest.mark.parametrize("comment", [
+    b"ordinary ZIP comment",
+    b"ordinary ZIP comment with PK\x05\x07 (not an EOCD marker)",
+])
+def test_ordinary_zip_comment_remains_supported(tmp_path, comment):
     path = tmp_path / "commented.zip"
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as out:
         out.writestr("reports/test.md", b"# Synthetic")
-        out.comment = b"ordinary ZIP comment"
+        out.comment = comment
     receipt = audit.audit_recovered_zip(path)
     assert receipt["file_count"] == 1
     assert receipt["files"][0]["path"] == "reports/test.md"
+
+
+@pytest.mark.parametrize("comment", [
+    b"note PK\x05\x06 is not a footer",
+    b"PK\x05\x06" + b"\x00" * 18,  # a second plausible terminal EOCD
+])
+def test_eocd_signature_in_comment_fails_before_zipfile(tmp_path, monkeypatch, comment):
+    """The bounded pre-parser and ZipFile must never pick different EOCDs."""
+    path = tmp_path / "ambiguous-comment.zip"
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as out:
+        out.writestr("reports/test.md", b"# Synthetic")
+        out.comment = comment
+    original = path.read_bytes()
+
+    def must_not_open(*args, **kwargs):
+        pytest.fail("ambiguous ZIP must fail before ZipFile parses the archive")
+
+    monkeypatch.setattr(audit.zipfile, "ZipFile", must_not_open)
+    with pytest.raises(audit.RecoveredArchiveError, match="ambiguous ZIP end-of-central-directory"):
+        audit.audit_recovered_zip(path)
+    assert path.read_bytes() == original
 
 @pytest.mark.parametrize(("offset", "width", "replacement"), [
     (8, 2, zipfile.ZIP_STORED),  # local method differs from DEFLATED central record

@@ -169,6 +169,13 @@ def _preflight_central_directory(handle, archive_bytes: int) -> int:
     tail = handle.read(tail_bytes)
     search_end = len(tail)
     record = None
+    selected_index = None
+    # Python's ZipFile chooses the *last* EOCD signature, without checking
+    # whether it terminates the archive. A signature embedded in the EOCD
+    # comment could make it parse a different directory from this bounded
+    # terminal-record preflight. Require exactly one terminal interpretation,
+    # and require that ZipFile would select that same EOCD marker.
+    last_signature_index = tail.rfind(b"PK\x05\x06")
     while True:
         index = tail.rfind(b"PK\x05\x06", 0, search_end)
         if index < 0:
@@ -176,13 +183,21 @@ def _preflight_central_directory(handle, archive_bytes: int) -> int:
         if index + EOCD_HEADER.size <= len(tail):
             candidate = EOCD_HEADER.unpack_from(tail, index)
             if index + EOCD_HEADER.size + candidate[-1] == len(tail):
+                if record is not None:
+                    raise RecoveredArchiveError(
+                        "ambiguous ZIP end-of-central-directory markers"
+                    )
                 record = candidate
+                selected_index = index
                 eocd_offset = archive_bytes - tail_bytes + index
-                break
         search_end = index
     if record is None:
         raise RecoveredArchiveError(
             "cannot safely inspect ZIP: no unambiguous terminal end-of-central-directory record"
+        )
+    if selected_index != last_signature_index:
+        raise RecoveredArchiveError(
+            "ambiguous ZIP end-of-central-directory markers"
         )
     _, disk, cd_disk, on_disk, count, size_cd, cd_offset, _ = record
     if disk or cd_disk or on_disk != count:
