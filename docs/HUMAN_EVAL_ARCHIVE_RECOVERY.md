@@ -149,6 +149,14 @@ python -m scripts.triage_historical_archive_candidates \
 It invokes the existing bounded ZIP structural preflight on each input,
 records structural failures and same-provider size/digest mismatches as well
 as matches, and returns per-role counts without picking a favorable archive.
+It also marks repeated **structurally verified ZIP byte identities** across
+candidate paths and declared roles using the first candidate index. Per-role
+raw candidate/concordance counts remain available; distinct verified-ZIP and
+distinct provider-concordant-ZIP counts avoid mistaking multiple filesystem
+copies of one archive for multiple independent sources. Unsafe/failed candidates
+remain in the inventory but are not deduplicated without a verified digest.
+Distinct ZIP bytes do **not** prove independent backup custody, and even
+matching historical GitHub-provider pins are not independent authentication.
 No files are extracted, renamed, copied, regenerated, or overwritten. The
 receipt does not name or attest to unsubmitted backup candidates, and CLI exit
 success means only that the specified inputs were inspected—not that any

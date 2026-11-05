@@ -117,3 +117,71 @@ def test_cli_has_no_side_effects_and_never_claims_custody(tmp_path, monkeypatch,
     assert result["human_evaluation_ready"] is False
     assert hashlib.sha256(path.read_bytes()).hexdigest() == digest_before
     assert list(tmp_path.iterdir()) == [path]
+
+
+def test_distinct_paths_with_identical_zip_bytes_are_one_unique_candidate(tmp_path):
+    first = _zip(tmp_path / "first.zip")
+    copy = tmp_path / "copy.zip"
+    copy.write_bytes(first.read_bytes())
+    different = tmp_path / "different.zip"
+    with zipfile.ZipFile(different, "w", compression=zipfile.ZIP_DEFLATED) as stream:
+        stream.writestr("synthetic/different-report.md", "# Another synthetic case\\n")
+
+    receipt = triage.triage_candidates([
+        ("original_treatment", first),
+        ("original_treatment", copy),
+        ("original_treatment", different),
+    ])
+    assert [row["duplicate_verified_zip_of_candidate_index"] for row in receipt["candidates"]] == [
+        None, 1, None,
+    ]
+    assert receipt["verified_zip_byte_duplicate_count"] == 1
+    assert receipt["by_role"]["original_treatment"]["candidate_count"] == 3
+    assert receipt["by_role"]["original_treatment"]["distinct_structurally_verified_zip_count"] == 2
+    assert receipt["by_role"]["original_treatment"]["distinct_provider_concordant_zip_count"] == 0
+    assert receipt["all_explicit_candidates_accounted_for"] is True
+    assert receipt["distinct_zip_bytes_establish_independent_custody"] is False
+
+
+def test_repeat_provider_concordance_does_not_count_same_bytes_twice(tmp_path, monkeypatch):
+    anchor = triage.zip_preflight.GITHUB_JOB_LOG_ARCHIVES["original_treatment"]
+    def mocked_preflight(path):
+        return {
+            "archive_bytes": anchor["size_bytes"],
+            "archive_sha256_observed_now": anchor["zip_sha256"],
+            "file_count": 40,
+        }
+    monkeypatch.setattr(triage.zip_preflight, "audit_recovered_zip", mocked_preflight)
+    receipt = triage.triage_candidates([
+        ("original_treatment", tmp_path / "copy-a.zip"),
+        ("original_treatment", tmp_path / "copy-b.zip"),
+    ])
+    summary = receipt["by_role"]["original_treatment"]
+    assert summary["candidate_count"] == 2
+    assert summary["provider_concordant_count"] == 2
+    assert summary["distinct_provider_concordant_zip_count"] == 1
+    assert receipt["candidates"][1]["duplicate_verified_zip_of_candidate_index"] == 1
+    assert receipt["original_treatment_evidence_authenticated"] is False
+    assert receipt["human_evaluation_ready"] is False
+
+
+def test_duplicate_identity_is_cross_role_and_failed_candidates_are_retained(tmp_path):
+    first = _zip(tmp_path / "source.zip")
+    second = tmp_path / "recovery.zip"
+    second.write_bytes(first.read_bytes())
+    unsafe = tmp_path / "invalid.zip"
+    unsafe.write_bytes(b"not-a-zip")
+    receipt = triage.triage_candidates([
+        ("original_treatment", first),
+        ("original_treatment", unsafe),
+        ("evaluator_recovery", second),
+    ])
+    assert [row["duplicate_verified_zip_of_candidate_index"] for row in receipt["candidates"]] == [
+        None, None, 1,
+    ]
+    assert receipt["candidates"][1]["status"] == "structural_preflight_failed"
+    assert "observed_zip_sha256" not in receipt["candidates"][1]
+    assert receipt["by_role"]["original_treatment"]["distinct_structurally_verified_zip_count"] == 1
+    assert receipt["by_role"]["evaluator_recovery"]["distinct_structurally_verified_zip_count"] == 1
+    assert receipt["verified_zip_byte_duplicate_count"] == 1
+    assert receipt["all_explicit_candidates_accounted_for"] is True

@@ -49,6 +49,7 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
         seen_paths.add(normalized)
 
     rows = []
+    first_verified_by_sha256: dict[str, int] = {}
     for index, (role, path) in enumerate(assignments, 1):
         anchor = zip_preflight.GITHUB_JOB_LOG_ARCHIVES[role]
         row = {
@@ -58,6 +59,7 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
             "status": None,
             "structural_preflight_succeeded": False,
             "github_provider_zip_digest_and_size_match": False,
+            "duplicate_verified_zip_of_candidate_index": None,
         }
         try:
             # Do not ask the preflight to fail early on a GitHub digest mismatch:
@@ -72,6 +74,15 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
             row["observed_zip_bytes"] = evidence["archive_bytes"]
             row["observed_zip_sha256"] = evidence["archive_sha256_observed_now"]
             row["file_count"] = evidence["file_count"]
+            # Different pathnames are not necessarily different backups. Keep
+            # every observation, but identify repeated verified ZIP bytes by
+            # the first candidate index, even across declared archive roles.
+            digest = evidence["archive_sha256_observed_now"]
+            first_index = first_verified_by_sha256.get(digest)
+            if first_index is None:
+                first_verified_by_sha256[digest] = index
+            else:
+                row["duplicate_verified_zip_of_candidate_index"] = first_index
             matched = (
                 evidence["archive_bytes"] == anchor["size_bytes"]
                 and evidence["archive_sha256_observed_now"] == anchor["zip_sha256"]
@@ -91,6 +102,14 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
                 and row["github_provider_zip_digest_and_size_match"]
                 for row in rows
             ),
+            "distinct_structurally_verified_zip_count": len({
+                row["observed_zip_sha256"] for row in rows
+                if row["role"] == role and row["structural_preflight_succeeded"]
+            }),
+            "distinct_provider_concordant_zip_count": len({
+                row["observed_zip_sha256"] for row in rows
+                if row["role"] == role and row["github_provider_zip_digest_and_size_match"]
+            }),
         }
         for role in ROLES
     }
@@ -100,6 +119,11 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
         "candidates": rows,
         "by_role": by_role,
         "all_explicit_candidates_accounted_for": len(rows) == len(assignments),
+        "verified_zip_byte_duplicate_count": sum(
+            row["duplicate_verified_zip_of_candidate_index"] is not None
+            for row in rows
+        ),
+        "distinct_zip_bytes_establish_independent_custody": False,
         "supplied_candidates_proven_exhaustive": False,
         "github_service_metadata_is_independent_custody": False,
         "original_treatment_evidence_authenticated": False,
@@ -111,7 +135,9 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
             "Matching both historical GitHub job-log ZIP byte count and SHA-256 "
             "is same-provider concordance, not independently authenticated "
             "original trace/report custody. Every caller-supplied candidate, "
-            "including mismatches and unsafe archives, is retained; unsubmitted "
+            "including mismatches and unsafe archives, is retained. Repeated "
+            "verified ZIP bytes are identified but not removed or treated as "
+            "independent backup custody; unsubmitted "
             "backups cannot be inventoried. Human distribution remains blocked "
             "until separate independent source and handoff checks pass."
         ),
