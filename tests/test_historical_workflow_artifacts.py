@@ -638,6 +638,10 @@ def test_named_historical_zip_must_match_contemporaneous_logged_upload(role, mut
     candidate = _artifact(pin["run_id"], pin["artifact_name"])
     if mutation == "artifact_id":
         candidate["id"] += 1
+        candidate["url"] = (
+            f"https://api.github.com/repos/{audit.REPOSITORY}"
+            f"/actions/artifacts/{candidate['id']}"
+        )
         candidate["archive_download_url"] = (
             f"https://api.github.com/repos/{audit.REPOSITORY}"
             f"/actions/artifacts/{candidate['id']}/zip"
@@ -656,6 +660,10 @@ def test_named_expired_zip_with_wrong_upload_id_is_not_accepted_as_original():
     pin = audit.HISTORICAL_UPLOAD_PINS["original_treatment"]
     candidate = _artifact(pin["run_id"], pin["artifact_name"], expired=True)
     candidate["id"] += 1
+    candidate["url"] = (
+        f"https://api.github.com/repos/{audit.REPOSITORY}"
+        f"/actions/artifacts/{candidate['id']}"
+    )
     candidate["archive_download_url"] = (
         f"https://api.github.com/repos/{audit.REPOSITORY}"
         f"/actions/artifacts/{candidate['id']}/zip"
@@ -685,6 +693,10 @@ def test_canonical_candidate_must_match_retained_provider_metadata(mutation):
     candidate = _artifact(run_id, expected)
     if mutation == "artifact_id":
         candidate["id"] += 1
+        candidate["url"] = (
+            f"https://api.github.com/repos/{audit.REPOSITORY}"
+            f"/actions/artifacts/{candidate['id']}"
+        )
         candidate["archive_download_url"] = (
             f"https://api.github.com/repos/{audit.REPOSITORY}"
             f"/actions/artifacts/{candidate['id']}/zip"
