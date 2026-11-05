@@ -239,7 +239,10 @@ def _regular_file_bytes(path, *, label):
             f"{label} exceeds {MAX_HUMAN_ANALYSIS_SOURCE_BYTES} bytes"
         )
     content = freeze._capture_regular_input(path, label=label)
-    _require_artifact_size(content, label=label)
+    if len(content) > MAX_HUMAN_ANALYSIS_SOURCE_BYTES:
+        raise ValueError(
+            f"{label} exceeds {MAX_HUMAN_ANALYSIS_SOURCE_BYTES} bytes"
+        )
     return content
 
 
