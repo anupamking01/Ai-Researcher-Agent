@@ -309,6 +309,23 @@ def audit_execution_log(
     # The 5:5 pairwise-precedence balance is a property of the full design,
     # not necessarily of the actually completed pairs. Report both directions
     # only for jointly completed task pairs; no outcome values are consulted.
+    # Category-level arm marginals do not show whether BOTH paired arms
+    # survived on the SAME task. Preserve joint coverage by frozen category
+    # and treatment-order direction without looking at outcome scores.
+    category_pair_coverage = {
+        category: {
+            "task_count": exposure["task_count"],
+            "contrasts": {
+                name: {
+                    "jointly_completed_tasks": 0,
+                    "left_before_right": 0,
+                    "right_before_left": 0,
+                }
+                for name in primary_pairs
+            },
+        }
+        for category, exposure in category_position_exposure.items()
+    }
     completed_pair_order_counts = {
         name: {"left_before_right": 0, "right_before_left": 0}
         for name in primary_pairs
@@ -328,6 +345,11 @@ def audit_execution_log(
                 else "right_before_left"
             )
             completed_pair_order_counts[name][direction] += 1
+            category_contrast = category_pair_coverage[
+                frozen_category_by_task[row["task_id"]]
+            ]["contrasts"][name]
+            category_contrast["jointly_completed_tasks"] += 1
+            category_contrast[direction] += 1
             starts = completed_starts_by_task[row["task_id"]]
             # Use integer microseconds rather than floating-point total_seconds()
             # so fractional UTC timestamps retain exact subsecond custody.
@@ -569,6 +591,9 @@ def audit_execution_log(
         "recorded_completed_position_counts_by_variant": completed_position_counts_by_variant,
         "recorded_position_exposure_by_frozen_task_category": category_position_exposure,
         "recorded_completed_primary_pair_order_counts": completed_pair_order_counts,
+        "recorded_completed_primary_pair_coverage_by_frozen_task_category": (
+            category_pair_coverage
+        ),
         "recorded_completed_primary_pair_start_separation_us": (
             completed_pair_start_separation_us
         ),

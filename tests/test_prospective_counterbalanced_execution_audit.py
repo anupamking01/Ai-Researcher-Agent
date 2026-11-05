@@ -1378,3 +1378,105 @@ def test_category_exposure_does_not_impute_unstarted_or_failed_runs():
             ) == expected[category]
     assert result["all_recorded_cells_completed"] is False
     assert result["actual_execution_independently_authenticated"] is False
+
+
+def test_frozen_category_joint_primary_pair_coverage_reconciles_to_global_pairs():
+    source, receipt, log = _two_category_chronology_fixture()
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    by_category = result[
+        "recorded_completed_primary_pair_coverage_by_frozen_task_category"
+    ]
+    assert {category: row["task_count"] for category, row in by_category.items()} == {
+        "technical": 4, "policy": 6,
+    }
+    for contrast, global_directions in result[
+        "recorded_completed_primary_pair_order_counts"
+    ].items():
+        assert sum(
+            row["contrasts"][contrast]["jointly_completed_tasks"]
+            for row in by_category.values()
+        ) == result["recorded_completed_primary_pair_task_counts"][contrast] == 10
+        for direction in ("left_before_right", "right_before_left"):
+            assert sum(
+                row["contrasts"][contrast][direction]
+                for row in by_category.values()
+            ) == global_directions[direction]
+        for row in by_category.values():
+            counts = row["contrasts"][contrast]
+            assert counts["jointly_completed_tasks"] == (
+                counts["left_before_right"] + counts["right_before_left"]
+            ) == row["task_count"]
+    assert result["actual_execution_independently_authenticated"] is False
+
+
+def test_category_arm_marginals_cannot_substitute_for_joint_pair_coverage():
+    source, receipt, _ = _two_category_chronology_fixture()
+    technical_ids = [
+        task["id"] for task in json.loads(source)["tasks"]
+        if task["category"] == "technical"
+    ][:2]
+
+    def scenario(completed):
+        log = _log(source, receipt)
+        for event in log["events"]:
+            if (event["task_id"] in technical_ids
+                    and event["variant"] in ("D3", "D6")):
+                if (event["task_id"], event["variant"]) not in completed:
+                    event["status"] = "failed"
+        return audit.audit_execution_log(source, receipt, _bytes(log))
+
+    together = scenario({
+        (technical_ids[0], "D3"), (technical_ids[0], "D6"),
+    })
+    split = scenario({
+        (technical_ids[0], "D3"), (technical_ids[1], "D6"),
+    })
+    category = "technical"
+    exposure_key = "recorded_position_exposure_by_frozen_task_category"
+    # Identical within-category completed-arm totals can conceal completely
+    # different numbers of task-matched pairs available for inference.
+    for arm in design.VARIANTS:
+        assert sum(
+            together[exposure_key][category]["completed"][arm].values()
+        ) == sum(split[exposure_key][category]["completed"][arm].values())
+    pair_key = "recorded_completed_primary_pair_coverage_by_frozen_task_category"
+    contrast = "D6_minus_D3"
+    assert together[pair_key][category]["contrasts"][contrast][
+        "jointly_completed_tasks"
+    ] == 3
+    assert split[pair_key][category]["contrasts"][contrast][
+        "jointly_completed_tasks"
+    ] == 2
+    assert together["scientific_outcomes_validated"] is False
+    assert split["scientific_outcomes_validated"] is False
+
+
+def test_category_pair_coverage_excludes_failed_and_unattempted_arms():
+    source, receipt, log = _two_category_chronology_fixture()
+    timed_out_arm = log["events"][1]["variant"]
+    log["events"][1]["status"] = "timeout"
+    _mark_unattempted_suffix(log, 5)
+    result = audit.audit_execution_log(source, receipt, _bytes(log))
+    by_category = result[
+        "recorded_completed_primary_pair_coverage_by_frozen_task_category"
+    ]
+    primary_pairs = {
+        "D6_minus_D3": ("D6", "D3"),
+        "P6_minus_D6": ("P6", "D6"),
+        "P6V_minus_P6": ("P6V", "P6"),
+    }
+    for contrast, pair in primary_pairs.items():
+        expected = int(timed_out_arm not in pair)
+        assert by_category["technical"]["contrasts"][contrast][
+            "jointly_completed_tasks"
+        ] == expected
+        assert by_category["policy"]["contrasts"][contrast][
+            "jointly_completed_tasks"
+        ] == 0
+        assert sum(
+            by_category[category]["contrasts"][contrast][direction]
+            for category in by_category
+            for direction in ("left_before_right", "right_before_left")
+        ) == expected
+    assert result["all_recorded_cells_completed"] is False
+    assert result["human_validation_performed"] is False

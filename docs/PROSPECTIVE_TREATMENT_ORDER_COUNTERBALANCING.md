@@ -165,6 +165,28 @@ require independent review and freezing before future execution. This does
 not alter historical automated findings, exploratory analyses, or pending
 human-validation claims.
 
+## Joint primary-pair coverage by frozen category (prospective only)
+
+The prospective chronology audit now emits
+`recorded_completed_primary_pair_coverage_by_frozen_task_category`: for every
+pre-execution category, the frozen task count and, for each named primary
+contrast (D6−D3, P6−D6, P6V−P6), its number of **jointly completed same-task
+pairs**, separated by the frozen treatment-order direction. A category-level
+completed-arm total cannot establish this denominator: if D3 survives on one
+task and D6 on another, there is no D6−D3 paired observation for either task.
+Two synthetic execution logs with equal within-category completed-arm totals
+but different matched-pair coverage exercise this distinction. Other offline
+cases reconcile the category counts to whole-study pair counts and exclude
+failed, timed-out, and unstarted treatment cells without inventing coverage.
+
+This is an outcome-blind, self-reported **descriptive coverage diagnostic**;
+it neither validates incomplete confirmatory inference nor proves independent
+execution, corrects historical temporal confounding, authenticates original
+traces/reports, or authorizes human-evaluation distribution. Category selection
+and handling of missing pairs must be independently frozen for a genuine new
+study. The diagnostic does not modify original pilot, frozen automated
+confirmatory, exploratory, or pending human-validation claims.
+
 ## Research claim separation
 
 - **Original pilot:** diagnostic operational evidence only.
