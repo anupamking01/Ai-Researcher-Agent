@@ -28,7 +28,7 @@ def test_oversized_producer_source_rejected_before_capture(tmp_path, monkeypatch
     path = tmp_path / "oversized.py"
     with path.open("wb") as stream:
         stream.truncate(33)
-    monkeypatch.setattr(producer, "MAX_HUMAN_ANALYSIS_ARTIFACT_BYTES", 32)
+    monkeypatch.setattr(producer, "MAX_HUMAN_ANALYSIS_SOURCE_BYTES", 32)
 
     def must_not_capture(*args, **kwargs):
         raise AssertionError("oversized source must be rejected before read")
@@ -55,7 +55,7 @@ def test_producer_source_append_during_descriptor_read_fails_closed(tmp_path, mo
         return data
 
     monkeypatch.setattr(freeze.os, "pread", append_after_first_read)
-    with pytest.raises(ValueError, match="changed while it was being read"):
+    with pytest.raises(ValueError, match="(grew|changed) while it was being read"):
         producer._implementation_fingerprint(
             path, logical_path="scripts/mutating_source.py"
         )

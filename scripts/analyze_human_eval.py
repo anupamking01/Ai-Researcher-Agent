@@ -28,6 +28,9 @@ ANALYSIS_MARKDOWN = "analysis.md"
 ANALYSIS_MANIFEST = "analysis_manifest.json"
 # Shared with the independent output verifier; limits published receipts only.
 MAX_HUMAN_ANALYSIS_ARTIFACT_BYTES = 16 * 1024 * 1024
+# Keep source provenance sizing independent from result-artifact sizing.
+# A deliberately small output test limit must not reject ordinary code files.
+MAX_HUMAN_ANALYSIS_SOURCE_BYTES = 16 * 1024 * 1024
 ANALYSIS_VERIFIER_SOURCE = Path(__file__).with_name(
     "verify_human_eval_analysis_outputs.py"
 )
@@ -231,9 +234,9 @@ def _regular_file_bytes(path, *, label):
     # Reject ordinary oversized sources before any read. The actual captured
     # generation is independently bounded by the shared descriptor reader;
     # check its length again in case the source grew after this preflight.
-    if observed.st_size > MAX_HUMAN_ANALYSIS_ARTIFACT_BYTES:
+    if observed.st_size > MAX_HUMAN_ANALYSIS_SOURCE_BYTES:
         raise ValueError(
-            f"{label} exceeds {MAX_HUMAN_ANALYSIS_ARTIFACT_BYTES} bytes"
+            f"{label} exceeds {MAX_HUMAN_ANALYSIS_SOURCE_BYTES} bytes"
         )
     content = freeze._capture_regular_input(path, label=label)
     _require_artifact_size(content, label=label)
