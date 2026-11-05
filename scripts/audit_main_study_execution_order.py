@@ -250,7 +250,7 @@ def _load_published_treatment_cost(path: Path, *, include_latencies: bool = Fals
 # output, even when they describe the same instant.
 _ORIGINAL_WRITER_UTC_ISOFORMAT = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
-    r"(?:\\.[0-9]{6})?\\+00:00"
+    r"(?:\.[0-9]{6})?\+00:00"
 )
 
 
