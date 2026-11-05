@@ -179,3 +179,21 @@ packet/freeze verification gates, or make multiple filesystem writes an atomic
 transaction. The upstream human-analysis code still verifies and snapshots the
 blinded and coordinator artifacts before treatment-level analysis. Real blinded
 ratings remain required before any human-quality finding can be reported.
+
+## Producer-side source fingerprint capture
+
+The analysis publisher now uses a bounded, descriptor-bound, path/parent-
+verified snapshot when computing the implementation and Python-environment
+file hashes recorded in `analysis_manifest.json`. A preliminary file-type
+and 16 MiB size check prevents normal oversized inputs from being read; the
+shared captured-byte reader also detects symlink substitution, concurrent
+append/truncation or rewrite, and source-path replacement. This closes the
+previous check-then-`read_bytes()` window at the producer's fingerprint
+boundary. The independent output verifier continues to hold and recheck its
+own provenance descriptors through recomputation. These are observational
+filesystem checks, not a global lock or historical archive custody proof.
+
+All synthetic tests use temporary source files; no treatments, automated
+support evaluations, or human scores are produced. Pilot results, frozen
+automated confirmatory inference, exploratory analyses, and pending human
+validation remain separate.

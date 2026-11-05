@@ -214,10 +214,30 @@ def _fingerprint_bytes(content):
 
 
 def _regular_file_bytes(path, *, label):
+    """Fingerprint one stable, bounded producer source generation.
+
+    A prior is_file()/is_symlink() check followed by read_bytes() could read
+    an unbounded or replaced source after the check. Reuse the blinded freeze
+    reader's descriptor-, parent- and pathname-bound capture contract before
+    publishing implementation or environment provenance to the manifest.
+    """
     path = Path(path)
-    if path.is_symlink() or not path.is_file():
+    try:
+        observed = path.lstat()
+    except OSError as exc:
+        raise ValueError(f"{label} must be a regular file: {path}") from exc
+    if not stat.S_ISREG(observed.st_mode):
         raise ValueError(f"{label} must be a regular file: {path}")
-    return path.read_bytes()
+    # Reject ordinary oversized sources before any read. The actual captured
+    # generation is independently bounded by the shared descriptor reader;
+    # check its length again in case the source grew after this preflight.
+    if observed.st_size > MAX_HUMAN_ANALYSIS_ARTIFACT_BYTES:
+        raise ValueError(
+            f"{label} exceeds {MAX_HUMAN_ANALYSIS_ARTIFACT_BYTES} bytes"
+        )
+    content = freeze._capture_regular_input(path, label=label)
+    _require_artifact_size(content, label=label)
+    return content
 
 
 def _implementation_fingerprint(path, *, logical_path):
