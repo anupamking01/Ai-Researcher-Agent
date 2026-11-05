@@ -115,6 +115,49 @@ def test_duplicate_or_invalid_candidate_inventory_rejected_before_io(tmp_path, m
         triage.triage_candidates([("original_treatment", Path(str(i))) for i in range(17)])
 
 
+@pytest.mark.parametrize(
+    "roles",
+    [
+        ("evaluator_recovery", "original_treatment", "evaluator_recovery"),
+        ("original_treatment", "evaluator_recovery", "original_treatment"),
+    ],
+)
+def test_cli_preserves_interleaved_roles_and_first_observed_duplicate_indices(
+    tmp_path, monkeypatch, capsys, roles,
+):
+    """Source-recovery receipt indices must follow argv, not grouped roles."""
+    first = _zip(tmp_path / "first.zip")
+    second = tmp_path / "same-content.zip"
+    second.write_bytes(first.read_bytes())
+    rejected = tmp_path / "broken.zip"
+    rejected.write_bytes(b"invalid ZIP bytes")
+    paths = (first, second, rejected)
+    before = [path.read_bytes() for path in paths]
+    switches = {
+        "original_treatment": "--original-treatment",
+        "evaluator_recovery": "--evaluator-recovery",
+    }
+    argv = ["triage"]
+    for role, path in zip(roles, paths):
+        argv.extend([switches[role], str(path)])
+    monkeypatch.setattr("sys.argv", argv)
+
+    assert triage.main() == 0
+    receipt = json.loads(capsys.readouterr().out)
+    rows = receipt["candidates"]
+    assert [row["candidate_index"] for row in rows] == [1, 2, 3]
+    assert [row["role"] for row in rows] == list(roles)
+    assert [row["supplied_filename"] for row in rows] == [path.name for path in paths]
+    assert rows[0]["duplicate_verified_zip_of_candidate_index"] is None
+    assert rows[1]["duplicate_verified_zip_of_candidate_index"] == 1
+    assert rows[1]["same_regular_members_as_candidate_index"] == 1
+    assert rows[2]["status"] == "structural_preflight_failed"
+    assert receipt["all_explicit_candidates_accounted_for"] is True
+    assert receipt["original_treatment_evidence_authenticated"] is False
+    assert receipt["human_evaluation_ready"] is False
+    assert [path.read_bytes() for path in paths] == before
+
+
 def test_cli_has_no_side_effects_and_never_claims_custody(tmp_path, monkeypatch, capsys):
     path = _zip(tmp_path / "candidate.zip")
     digest_before = hashlib.sha256(path.read_bytes()).hexdigest()

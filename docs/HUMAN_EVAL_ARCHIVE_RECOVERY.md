@@ -146,6 +146,15 @@ python -m scripts.triage_historical_archive_candidates \
 
 `scripts/triage_historical_archive_candidates.py` accepts at most 16
 **explicitly named** candidates, without recursively scanning backup locations.
+Arguments may be interleaved in any order: the receipt's candidate indices
+and `first-seen` duplicate pointers follow the **exact command-line order**
+of both role switches, instead of silently grouping all original-treatment
+candidates ahead of evaluator-recovery candidates. Keep the exact invocation
+with the receipt so each index can be traced back to its supplied backup path;
+the receipt deliberately records only filenames, not full local backup paths.
+This is an input-order provenance guarantee, not evidence of independent
+custody or a reason to prefer a particular candidate.
+
 It invokes the existing bounded ZIP structural preflight on each input,
 records structural failures and same-provider size/digest mismatches as well
 as matches, and returns per-role counts without picking a favorable archive.
@@ -171,7 +180,7 @@ copies of one archive for multiple independent sources. Unsafe/failed candidates
 remain in the inventory but are not deduplicated without a verified digest.
 Distinct ZIP bytes do **not** prove independent backup custody, and even
 matching historical GitHub-provider pins are not independent authentication.
-The schema-v2 receipt also detects a structurally valid ZIP whose byte count
+The schema-v3 receipt also detects a structurally valid ZIP whose byte count
 **and** SHA-256 match the *other* historical role's GitHub job-log pin.
 Such a candidate is marked `matches_other_historical_role_not_declared_role`,
 with `other_role_github_provider_zip_match` and separate per-role/global

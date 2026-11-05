@@ -223,30 +223,43 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
     }
 
 
+class _OrderedCandidate(argparse.Action):
+    """Keep caller-supplied ZIP roles and paths in the exact CLI sequence.
+
+    The row numbers and first-seen duplicate links in the recovery receipt
+    must refer to argv order, not an implicit grouping by treatment role.
+    """
+
+    def __init__(self, option_strings, dest, *, role: str, **kwargs):
+        super().__init__(option_strings, dest, **kwargs)
+        self.role = role
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        current = getattr(namespace, self.dest, None)
+        setattr(namespace, self.dest, [*(current or []), (self.role, values)])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--original-treatment", type=Path, action="append", default=[],
+        "--original-treatment", dest="assignments", type=Path,
+        action=_OrderedCandidate, role="original_treatment",
         metavar="ZIP", help="unchanged original-treatment backup candidate (repeatable)",
     )
     parser.add_argument(
-        "--evaluator-recovery", type=Path, action="append", default=[],
+        "--evaluator-recovery", dest="assignments", type=Path,
+        action=_OrderedCandidate, role="evaluator_recovery",
         metavar="ZIP", help="unchanged evaluator-recovery backup candidate (repeatable)",
     )
     args = parser.parse_args()
-    assignments = [
-        *(("original_treatment", path) for path in args.original_treatment),
-        *(("evaluator_recovery", path) for path in args.evaluator_recovery),
-    ]
     try:
-        receipt = triage_candidates(assignments)
+        receipt = triage_candidates(args.assignments or [])
     except CandidateTriageError as exc:
-        parser.exit(2, f"VERA ARCHIVE CANDIDATE TRIAGE: FAIL: {exc}\n")
+        parser.exit(2, f"VERA ARCHIVE CANDIDATE TRIAGE: FAIL: {exc}\\n")
     print(json.dumps(receipt, sort_keys=True, indent=2))
     # Exit 0 means only that all *listed* candidates were inventoried.
     # Evidence authentication and human-evaluation readiness remain false.
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
