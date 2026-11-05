@@ -670,3 +670,32 @@ not authenticate original ZIP bytes, recover historical reports or traces,
 establish external archive custody, permit blinded packet distribution, or
 change pilot, frozen automated confirmatory, exploratory, or pending human
 validation results.
+
+
+### Replay a saved recovery-triage receipt
+
+A saved JSON inventory can be altered or detached from the ZIPs originally
+inspected. The separate **read-only** replay tool recomputes all candidate rows,
+negative observations, candidate order, duplicate links, and batch resource
+budgets against the same explicit archive paths/roles in the same CLI order:
+
+```bash
+python -m scripts.triage_historical_archive_candidates \
+  --original-treatment /authorized/original.zip \
+  --evaluator-recovery /authorized/recovered.zip > triage-receipt.json
+python -m scripts.verify_historical_archive_triage_receipt \
+  --receipt triage-receipt.json \
+  --original-treatment /authorized/original.zip \
+  --evaluator-recovery /authorized/recovered.zip
+```
+
+A replay fails closed on a changed source, reordered or relabelled candidates,
+changed status/count/budget values, JSON type substitutions, duplicate JSON
+keys, or an oversized/linked/unstable receipt. Its success result fingerprints
+the exact saved receipt bytes; it does not modify or extract candidate ZIPs.
+It requires a new bounded scan, so budget for that I/O separately. The receipt
+contains only filenames, not backup-directory paths: preserve the original
+exact command and independent custody records separately. Success proves
+only present-day consistency with the recorded GitHub **same-provider** metadata,
+not independently authenticated historical reports/traces, a valid human
+evaluation handoff, or any human scores. No treatments/evaluators are rerun.
