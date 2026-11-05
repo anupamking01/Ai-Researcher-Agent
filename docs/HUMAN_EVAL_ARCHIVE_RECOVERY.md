@@ -157,6 +157,15 @@ copies of one archive for multiple independent sources. Unsafe/failed candidates
 remain in the inventory but are not deduplicated without a verified digest.
 Distinct ZIP bytes do **not** prove independent backup custody, and even
 matching historical GitHub-provider pins are not independent authentication.
+The schema-v2 receipt also detects a structurally valid ZIP whose byte count
+**and** SHA-256 match the *other* historical role's GitHub job-log pin.
+Such a candidate is marked `matches_other_historical_role_not_declared_role`,
+with `other_role_github_provider_zip_match` and separate per-role/global
+counts. The original caller-declared role is preserved; an other-role match is
+not counted as concordance for that declared role, does not authorize
+reassignment, and is not independent archive custody proof. If only one
+fingerprint field matches, no alternative-role match is recorded. Investigate
+backup custody without selecting candidates by experimental outcomes.
 No files are extracted, renamed, copied, regenerated, or overwritten. The
 receipt does not name or attest to unsubmitted backup candidates, and CLI exit
 success means only that the specified inputs were inspected—not that any

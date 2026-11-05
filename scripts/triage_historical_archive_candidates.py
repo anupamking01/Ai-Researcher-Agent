@@ -59,6 +59,7 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
             "status": None,
             "structural_preflight_succeeded": False,
             "github_provider_zip_digest_and_size_match": False,
+            "other_role_github_provider_zip_match": None,
             "duplicate_verified_zip_of_candidate_index": None,
         }
         try:
@@ -88,9 +89,23 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
                 and evidence["archive_sha256_observed_now"] == anchor["zip_sha256"]
             )
             row["github_provider_zip_digest_and_size_match"] = matched
+            # A sound ZIP may have been assigned the wrong historical role.
+            # This is an alternate recovery lead, not a source reassignment.
+            other_role = next(
+                (
+                    alternative for alternative in ROLES if alternative != role
+                    and evidence["archive_bytes"]
+                    == zip_preflight.GITHUB_JOB_LOG_ARCHIVES[alternative]["size_bytes"]
+                    and digest
+                    == zip_preflight.GITHUB_JOB_LOG_ARCHIVES[alternative]["zip_sha256"]
+                ),
+                None,
+            ) if not matched else None
+            row["other_role_github_provider_zip_match"] = other_role
             row["status"] = (
-                "github_provider_zip_concordant_not_authenticated"
-                if matched else "does_not_match_historical_github_provider_zip"
+                "github_provider_zip_concordant_not_authenticated" if matched
+                else "matches_other_historical_role_not_declared_role" if other_role
+                else "does_not_match_historical_github_provider_zip"
             )
         rows.append(row)
 
@@ -100,6 +115,11 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
             "provider_concordant_count": sum(
                 row["role"] == role
                 and row["github_provider_zip_digest_and_size_match"]
+                for row in rows
+            ),
+            "other_role_provider_concordant_count": sum(
+                row["role"] == role
+                and row["other_role_github_provider_zip_match"] is not None
                 for row in rows
             ),
             "distinct_structurally_verified_zip_count": len({
@@ -114,13 +134,17 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
         for role in ROLES
     }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "candidate_triage_only_no_historical_authentication",
         "candidates": rows,
         "by_role": by_role,
         "all_explicit_candidates_accounted_for": len(rows) == len(assignments),
         "verified_zip_byte_duplicate_count": sum(
             row["duplicate_verified_zip_of_candidate_index"] is not None
+            for row in rows
+        ),
+        "other_role_provider_concordant_candidate_count": sum(
+            row["other_role_github_provider_zip_match"] is not None
             for row in rows
         ),
         "distinct_zip_bytes_establish_independent_custody": False,
@@ -137,7 +161,9 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
             "original trace/report custody. Every caller-supplied candidate, "
             "including mismatches and unsafe archives, is retained. Repeated "
             "verified ZIP bytes are identified but not removed or treated as "
-            "independent backup custody; unsubmitted "
+            "independent backup custody. A candidate matching the other "
+            "historical role's provider pin is flagged without relabelling "
+            "the caller's declaration; unsubmitted "
             "backups cannot be inventoried. Human distribution remains blocked "
             "until separate independent source and handoff checks pass."
         ),

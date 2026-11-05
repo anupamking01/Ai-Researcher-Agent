@@ -185,3 +185,65 @@ def test_duplicate_identity_is_cross_role_and_failed_candidates_are_retained(tmp
     assert receipt["by_role"]["evaluator_recovery"]["distinct_structurally_verified_zip_count"] == 1
     assert receipt["verified_zip_byte_duplicate_count"] == 1
     assert receipt["all_explicit_candidates_accounted_for"] is True
+
+
+@pytest.mark.parametrize(
+    ("declared_role", "matched_role"),
+    [
+        ("original_treatment", "evaluator_recovery"),
+        ("evaluator_recovery", "original_treatment"),
+    ],
+)
+def test_other_role_pin_match_is_flagged_without_reassigning(
+    tmp_path, monkeypatch, declared_role, matched_role,
+):
+    anchor = triage.zip_preflight.GITHUB_JOB_LOG_ARCHIVES[matched_role]
+    examined = []
+    def inspect(path):
+        examined.append(path)
+        return {
+            "archive_bytes": anchor["size_bytes"],
+            "archive_sha256_observed_now": anchor["zip_sha256"],
+            "file_count": 40,
+        }
+    monkeypatch.setattr(triage.zip_preflight, "audit_recovered_zip", inspect)
+    candidate = tmp_path / "candidate.zip"
+    receipt = triage.triage_candidates([(declared_role, candidate)])
+    row = receipt["candidates"][0]
+    assert examined == [candidate]
+    assert receipt["schema_version"] == 2
+    assert row["role"] == declared_role
+    assert row["github_provider_zip_digest_and_size_match"] is False
+    assert row["other_role_github_provider_zip_match"] == matched_role
+    assert row["status"] == "matches_other_historical_role_not_declared_role"
+    assert receipt["by_role"][declared_role]["provider_concordant_count"] == 0
+    assert receipt["by_role"][declared_role]["other_role_provider_concordant_count"] == 1
+    assert receipt["by_role"][declared_role]["distinct_provider_concordant_zip_count"] == 0
+    assert receipt["other_role_provider_concordant_candidate_count"] == 1
+    assert receipt["original_treatment_evidence_authenticated"] is False
+    assert receipt["human_evaluation_ready"] is False
+
+
+@pytest.mark.parametrize("changed_field", ["archive_bytes", "archive_sha256_observed_now"])
+def test_partial_other_role_pin_never_counts_as_match(tmp_path, monkeypatch, changed_field):
+    anchor = triage.zip_preflight.GITHUB_JOB_LOG_ARCHIVES["evaluator_recovery"]
+    evidence = {
+        "archive_bytes": anchor["size_bytes"],
+        "archive_sha256_observed_now": anchor["zip_sha256"],
+        "file_count": 40,
+    }
+    evidence[changed_field] = (
+        anchor["size_bytes"] + 1 if changed_field == "archive_bytes" else "f" * 64
+    )
+    monkeypatch.setattr(
+        triage.zip_preflight, "audit_recovered_zip", lambda path: evidence
+    )
+    receipt = triage.triage_candidates([
+        ("original_treatment", tmp_path / "candidate.zip")
+    ])
+    row = receipt["candidates"][0]
+    assert row["other_role_github_provider_zip_match"] is None
+    assert row["status"] == "does_not_match_historical_github_provider_zip"
+    assert receipt["other_role_provider_concordant_candidate_count"] == 0
+    assert receipt["by_role"]["original_treatment"]["other_role_provider_concordant_count"] == 0
+    assert receipt["human_evaluation_ready"] is False
