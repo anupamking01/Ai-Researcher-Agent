@@ -152,6 +152,13 @@ of both role switches, instead of silently grouping all original-treatment
 candidates ahead of evaluator-recovery candidates. Keep the exact invocation
 with the receipt so each index can be traced back to its supplied backup path;
 the receipt deliberately records only filenames, not full local backup paths.
+For unreadable or absent backup files, filesystem exceptions are reduced to
+stable errno categories (for example, `ENOENT` or `EACCES`) instead of
+embedding absolute backup paths in the receipt's diagnostic field. Ordinary
+structural ZIP errors retain their bounded explanatory diagnostics. This is a
+local-path disclosure safeguard, **not** anonymization of archive filenames,
+ZIP member names, or anything written to shell history; treat receipts and
+original command lines as coordinator-only recovery records.
 This is an input-order provenance guarantee, not evidence of independent
 custody or a reason to prefer a particular candidate.
 

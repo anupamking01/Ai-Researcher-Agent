@@ -47,6 +47,53 @@ def test_every_supplied_candidate_is_reported_without_modification(tmp_path):
     assert sorted(path.name for path in tmp_path.iterdir()) == sorted(before)
 
 
+def test_failed_filesystem_lookup_does_not_disclose_backup_directories(tmp_path):
+    """Real preflight OS errors contain full paths; public JSON receipts must not."""
+    secret_root = tmp_path / "confidential-backup-location"
+    absent = secret_root / "candidate.zip"
+    receipt = triage.triage_candidates([("original_treatment", absent)])
+    row = receipt["candidates"][0]
+    serialized = json.dumps(receipt, sort_keys=True)
+    assert row["status"] == "structural_preflight_failed"
+    assert row["supplied_filename"] == "candidate.zip"
+    assert row["diagnostic"] == "cannot safely inspect ZIP: filesystem error (ENOENT)"
+    assert "confidential-backup-location" not in serialized
+    assert str(tmp_path) not in serialized
+    assert receipt["all_explicit_candidates_accounted_for"] is True
+    assert receipt["human_evaluation_ready"] is False
+
+
+def test_wrapped_permission_error_is_sanitized_without_masking_other_failures(
+    tmp_path, monkeypatch,
+):
+    """OSError cause chains retain the category without leaking file paths."""
+    secret = tmp_path / "private-custody-directory" / "evidence.zip"
+
+    def reject(_path):
+        try:
+            raise PermissionError(13, "Permission denied", str(secret))
+        except PermissionError as cause:
+            raise triage.zip_preflight.RecoveredArchiveError(
+                f"cannot safely inspect ZIP: {cause}"
+            ) from cause
+
+    monkeypatch.setattr(triage.zip_preflight, "audit_recovered_zip", reject)
+    receipt = triage.triage_candidates([("evaluator_recovery", secret)])
+    row = receipt["candidates"][0]
+    assert row["diagnostic"] == "cannot safely inspect ZIP: filesystem error (EACCES)"
+    assert "private-custody-directory" not in json.dumps(receipt)
+    assert row["status"] == "structural_preflight_failed"
+    assert row["observed_regular_member_content_sha256"] is None
+
+    malformed = tmp_path / "broken.zip"
+    malformed.write_bytes(b"not a ZIP")
+    monkeypatch.undo()
+    other = triage.triage_candidates([("original_treatment", malformed)])
+    assert other["candidates"][0]["status"] == "structural_preflight_failed"
+    assert "cannot safely inspect ZIP" in other["candidates"][0]["diagnostic"]
+    assert other["original_treatment_evidence_authenticated"] is False
+
+
 @pytest.mark.parametrize("role", triage.ROLES)
 def test_matching_provider_zip_is_not_authentication(tmp_path, monkeypatch, role):
     anchor = triage.zip_preflight.GITHUB_JOB_LOG_ARCHIVES[role]

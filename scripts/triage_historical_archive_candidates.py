@@ -7,6 +7,7 @@ candidate by experimental results, or claim independent archive custody.
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -48,6 +49,25 @@ def _regular_member_content_sha256(evidence: dict) -> str:
         ensure_ascii=False, sort_keys=True, separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+def _failure_diagnostic(exc: BaseException) -> str:
+    """Keep local backup paths out of the otherwise filename-only receipt.
+
+    The ZIP preflight wraps OS errors with their original exception as
+    __cause__. Its default string includes absolute backup paths, even though
+    this recovery receipt deliberately discloses only candidate basenames.
+    Retain a stable, actionable errno category, not OS exception filenames.
+    Structural ZIP failures still include their bounded preflight message.
+    """
+    current: BaseException | None = exc
+    while current is not None:
+        if isinstance(current, OSError):
+            return (
+                "cannot safely inspect ZIP: filesystem error "
+                f"({errno.errorcode.get(current.errno, 'UNKNOWN')})"
+            )
+        current = current.__cause__
+    return str(exc)[:300]
 
 
 def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
@@ -100,7 +120,7 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
             evidence = zip_preflight.audit_recovered_zip(path)
         except (zip_preflight.RecoveredArchiveError, OSError, ValueError) as exc:
             row["status"] = "structural_preflight_failed"
-            row["diagnostic"] = str(exc)[:300]
+            row["diagnostic"] = _failure_diagnostic(exc)
         else:
             row["structural_preflight_succeeded"] = True
             row["observed_zip_bytes"] = evidence["archive_bytes"]
