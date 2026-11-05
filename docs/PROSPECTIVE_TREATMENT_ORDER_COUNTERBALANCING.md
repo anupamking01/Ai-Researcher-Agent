@@ -141,6 +141,30 @@ document those risks *before* freezing any future manifest. No historical
 tasks, automated measurements, confirmatory results, exploratory findings, or
 human-evaluation outcomes are changed by this prospective-only guard.
 
+## Frozen category-stratum identity (prospective only)
+
+Category labels are a **pre-execution task stratum**, not an observed outcome.
+The prospective chronology auditor reports planned, attempted, and completed
+arm-position exposure separately by the exact frozen category label. Without a
+category identity guard, a ten-task manifest could label the same stratum
+`research` and `Research` or `ｒｅｓｅａｒｃｈ`; the audit would silently split
+one intended category into separate denominators and obscure differential
+position exposure or attrition.
+
+The planner now fails closed when two **different raw category spellings**
+collide after Unicode NFKC, whitespace collapsing, and casefolding. Repeated
+identical labels remain valid, as do genuinely different categories. Neither
+the original manifest bytes nor any accepted category spelling is rewritten;
+the independent plan verifier applies the same pre-execution rule. Offline
+synthetic regressions exercise case, leading/trailing/internal whitespace,
+Unicode compatibility and composed/decomposed aliases, verifier rejection,
+and legitimate category labels. This only prevents **normalized-exact** label
+fragmentation: it cannot detect synonyms, semantic overlap, outcome-driven
+category selection, or guarantee balanced strata. Category definitions still
+require independent review and freezing before future execution. This does
+not alter historical automated findings, exploratory analyses, or pending
+human-validation claims.
+
 ## Research claim separation
 
 - **Original pilot:** diagnostic operational evidence only.

@@ -298,6 +298,10 @@ def build_plan(source: bytes) -> dict:
     # Each row must be an independent question, not just a distinct task ID.
     # Reuse the historical-leakage normalization for within-set uniqueness.
     question_fingerprints = set()
+    # Frozen category strata must not fragment because of casing, Unicode
+    # compatibility forms, or whitespace variants. Preserve submitted labels
+    # verbatim; reject ambiguous spellings before producing a plan receipt.
+    category_spellings: dict[str, str] = {}
     for index, task in enumerate(tasks, start=1):
         if type(task) is not dict or set(task) != {"id", "category", "question"}:
             raise DesignError(f"task {index} must contain only id/category/question")
@@ -322,6 +326,13 @@ def build_plan(source: bytes) -> dict:
         if _contains_hidden_task_control(question):
             raise DesignError(
                 f"task {index} question contains invisible/control Unicode"
+            )
+        category_key = " ".join(unicodedata.normalize("NFKC", category).split()).casefold()
+        existing_spelling = category_spellings.setdefault(category_key, category)
+        if existing_spelling != category:
+            raise DesignError(
+                f"task {index} category label collides with a differently spelled "
+                "normalized-equivalent category"
             )
         question_fingerprint = _normalized_question_sha256(question)
         if question_fingerprint in ORIGINAL_2026_QUESTION_SHA256:

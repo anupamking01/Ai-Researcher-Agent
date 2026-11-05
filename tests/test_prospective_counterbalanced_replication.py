@@ -186,6 +186,56 @@ def test_unrelated_mixed_case_future_ids_remain_valid():
     ]
 
 
+@pytest.mark.parametrize("alias", [
+    "Research", "RESEARCH", " research", "research  ",
+    "ｒｅｓｅａｒｃｈ",
+])
+def test_future_category_strata_reject_case_space_and_nfkc_aliases(alias):
+    candidate = _payload()
+    candidate["tasks"][1]["category"] = alias
+    with pytest.raises(plan.DesignError, match="category label collides"):
+        plan.build_plan(_raw(candidate))
+
+
+def test_future_category_strata_reject_collapsed_internal_whitespace_alias():
+    candidate = _payload()
+    candidate["tasks"][0]["category"] = "source quality"
+    candidate["tasks"][1]["category"] = "source   quality"
+    with pytest.raises(plan.DesignError, match="category label collides"):
+        plan.build_plan(_raw(candidate))
+
+
+def test_future_category_strata_reject_unicode_composed_decomposed_alias():
+    candidate = _payload()
+    candidate["tasks"][0]["category"] = "résumé"
+    candidate["tasks"][1]["category"] = "re\u0301sume\u0301"
+    with pytest.raises(plan.DesignError, match="category label collides"):
+        plan.build_plan(_raw(candidate))
+
+
+def test_independent_plan_verification_refuses_aliased_category_strata():
+    original = _raw()
+    receipt = json.dumps(plan.build_plan(original), sort_keys=True).encode("utf-8")
+    candidate = _payload()
+    candidate["tasks"][1]["category"] = "RESEARCH"
+    with pytest.raises(plan.DesignError, match="category label collides"):
+        plan_verify.verify_plan(_raw(candidate), receipt)
+
+
+def test_exact_repeated_and_genuinely_distinct_categories_are_permitted():
+    candidate = _payload()
+    candidate["tasks"][0]["category"] = "source quality"
+    candidate["tasks"][1]["category"] = "source quality"
+    candidate["tasks"][2]["category"] = "source evaluation"
+    candidate["tasks"][3]["category"] = "résumé"
+    candidate["tasks"][4]["category"] = "resume"
+    result = plan.build_plan(_raw(candidate))
+    assert result["task_count"] == 10
+    assert [row["task_id"] for row in result["schedule"]] == [
+        task["id"] for task in candidate["tasks"]
+    ]
+
+
 def test_schedule_balances_every_position_and_every_pair_without_outcomes():
     result = plan.build_plan(_raw())
     assert result["classification"] == "prospective_design_only_no_executions"
