@@ -3,6 +3,19 @@
 **Status (2026-11-05): blocked on original report and handoff custody.**
 This is an operational inventory and recovery plan, not an experiment or human-evaluation result.
 
+## Direct-ID HTTP redirect custody boundary
+
+The read-only historical direct-ID auditor opens only the **two pinned GitHub
+artifact metadata endpoints** with HTTP redirect following disabled. Redirects
+(including redirects whose destination returns HTTP 404) fail closed rather
+than being mistaken for a genuine 404 from the original GitHub artifact ID.
+The transport additionally checks the response URL and any HTTP-error URL
+against the pinned endpoint. Synthetic offline regressions cover standard
+redirect status codes and an indirect 404. A genuine 404 is still only an
+access observation; it does **not** prove destruction or exclude authorized
+offline backups. This diagnostic neither downloads original archives nor
+authenticates original experimental traces, reports, or human ratings.
+
 ## Blinded packet physical-record integrity across handoffs
 
 The coordinator packet verifier requires the packet builder's exact canonical

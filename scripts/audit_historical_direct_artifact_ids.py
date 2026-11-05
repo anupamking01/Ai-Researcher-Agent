@@ -13,7 +13,7 @@ import os
 import re
 from typing import Callable
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from scripts import audit_historical_artifact_job_logs as logs
 from scripts import audit_historical_workflow_artifacts as inventory
@@ -28,6 +28,18 @@ RUN_SOURCES = {role: (run_id, sha) for role, run_id, _, sha, _, _ in inventory.H
 
 class DirectArtifactAuditError(ValueError):
     """A lookup could not support a stable, correctly attributed observation."""
+
+
+class _RejectMetadataRedirects(HTTPRedirectHandler):
+    """Never follow a redirect whose final 404 could masquerade as an origin 404."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise DirectArtifactAuditError("GitHub artifact metadata endpoint redirected")
+
+
+def _open_direct_metadata(request: Request, *, timeout: int):
+    """Request the pinned metadata endpoint without following HTTP redirects."""
+    return build_opener(_RejectMetadataRedirects()).open(request, timeout=timeout)
 
 
 def _unique_keys(pairs: list[tuple[str, object]]) -> dict:
@@ -63,11 +75,17 @@ def fetch_direct_metadata(artifact_id: int) -> dict | None:
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:
-        with urlopen(Request(url, headers=headers), timeout=15) as response:
+        with _open_direct_metadata(Request(url, headers=headers), timeout=15) as response:
             if response.geturl() != url:
                 raise DirectArtifactAuditError("GitHub artifact metadata endpoint redirected")
             raw = response.read(MAX_METADATA_BYTES + 1)
     except HTTPError as exc:
+        # Defense in depth: never classify a 404 from another URL as the
+        # original historical GitHub artifact endpoint's own 404.
+        if exc.geturl() != url:
+            raise DirectArtifactAuditError(
+                "GitHub artifact metadata endpoint redirected"
+            ) from exc
         if exc.code == 404:
             return None
         raise DirectArtifactAuditError(

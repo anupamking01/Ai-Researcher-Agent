@@ -121,7 +121,7 @@ def test_expired_and_elapsed_expiry_are_distinct_from_missing():
 def test_unauthorized_or_rate_limited_is_not_an_absence_observation(monkeypatch):
     def forbidden(request, timeout):
         raise HTTPError(request.full_url, 403, "Forbidden", {}, BytesIO())
-    monkeypatch.setattr(audit, "urlopen", forbidden)
+    monkeypatch.setattr(audit, "_open_direct_metadata", forbidden)
     with pytest.raises(audit.DirectArtifactAuditError, match="HTTP 403"):
         audit.fetch_direct_metadata(audit.ORIGINAL_PINS[0]["artifact_id"])
 
@@ -129,7 +129,7 @@ def test_unauthorized_or_rate_limited_is_not_an_absence_observation(monkeypatch)
 def test_only_true_http_404_is_recorded_as_inaccessible(monkeypatch):
     def missing(request, timeout):
         raise HTTPError(request.full_url, 404, "Not Found", {}, BytesIO())
-    monkeypatch.setattr(audit, "urlopen", missing)
+    monkeypatch.setattr(audit, "_open_direct_metadata", missing)
     assert audit.fetch_direct_metadata(audit.ORIGINAL_PINS[0]["artifact_id"]) is None
 
 
@@ -151,18 +151,39 @@ class _Response:
     bytes([255]), b'x' * (audit.MAX_METADATA_BYTES + 1),
 ])
 def test_bad_metadata_body_is_rejected_before_any_custody_claim(monkeypatch, raw):
-    monkeypatch.setattr(audit, "urlopen", lambda request, timeout: _Response(request.full_url, raw))
+    monkeypatch.setattr(audit, "_open_direct_metadata", lambda request, timeout: _Response(request.full_url, raw))
     with pytest.raises(audit.DirectArtifactAuditError):
         audit.fetch_direct_metadata(audit.ORIGINAL_PINS[0]["artifact_id"])
 
 
 def test_redirected_metadata_endpoint_is_not_accepted(monkeypatch):
-    monkeypatch.setattr(audit, "urlopen", lambda request, timeout: _Response("https://other.example/", b'{}'))
+    monkeypatch.setattr(audit, "_open_direct_metadata", lambda request, timeout: _Response("https://other.example/", b'{}'))
     with pytest.raises(audit.DirectArtifactAuditError, match="redirected"):
         audit.fetch_direct_metadata(audit.ORIGINAL_PINS[0]["artifact_id"])
 
 
 def test_unknown_id_rejected_without_network(monkeypatch):
-    monkeypatch.setattr(audit, "urlopen", lambda *args, **kwargs: pytest.fail("unexpected network request"))
+    monkeypatch.setattr(audit, "_open_direct_metadata", lambda *args, **kwargs: pytest.fail("unexpected network request"))
     with pytest.raises(audit.DirectArtifactAuditError, match="unrecognized"):
         audit.fetch_direct_metadata(999)
+
+
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_metadata_redirect_is_refused_before_destination_request(status):
+    """A later 404 must never be attributed to the pinned original ID."""
+    handler = audit._RejectMetadataRedirects()
+    with pytest.raises(audit.DirectArtifactAuditError, match="redirected"):
+        handler.redirect_request(
+            None, None, status, "Redirect", {"Location": "https://elsewhere.invalid/"},
+            "https://elsewhere.invalid/not-found",
+        )
+
+
+def test_redirect_destination_404_cannot_masquerade_as_original_404(monkeypatch):
+    def redirected_404(request, *, timeout):
+        raise HTTPError(
+            "https://elsewhere.invalid/not-found", 404, "Not Found", {}, BytesIO()
+        )
+    monkeypatch.setattr(audit, "_open_direct_metadata", redirected_404)
+    with pytest.raises(audit.DirectArtifactAuditError, match="redirected"):
+        audit.fetch_direct_metadata(audit.ORIGINAL_PINS[0]["artifact_id"])
