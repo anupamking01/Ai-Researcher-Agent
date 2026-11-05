@@ -131,6 +131,38 @@ observation time; do not present prior 404s as a permanent availability state.
 The original report/trace custody and independent human-evaluation gates remain
 mandatory.
 
+### Account for every explicitly located offline ZIP candidate
+
+When one or more unchanged ZIPs are found in authorized backups, a bounded
+read-only batch diagnostic now compares **every supplied candidate** against
+the two historical GitHub upload-artifact job-log ZIP byte-count/SHA-256 pins:
+
+```bash
+python -m scripts.triage_historical_archive_candidates \
+  --original-treatment /path/to/original-a.zip \
+  --original-treatment /path/to/original-b.zip \
+  --evaluator-recovery /path/to/recovered.zip
+```
+
+`scripts/triage_historical_archive_candidates.py` accepts at most 16
+**explicitly named** candidates, without recursively scanning backup locations.
+It invokes the existing bounded ZIP structural preflight on each input,
+records structural failures and same-provider size/digest mismatches as well
+as matches, and returns per-role counts without picking a favorable archive.
+No files are extracted, renamed, copied, regenerated, or overwritten. The
+receipt does not name or attest to unsubmitted backup candidates, and CLI exit
+success means only that the specified inputs were inspected—not that any
+artifact is historically authentic.
+
+An observed matching ZIP would corroborate **GitHub-provider upload metadata**
+only. It cannot establish a separately retained custody chain, independently
+authenticate any original report/trace, validate 40 run IDs, or unblock human
+packet distribution. Archive candidate checks are offline; no experimental or
+evaluator treatment is rerun and no human rating is created. Preserve each
+candidate and record where it was originally found, including any mismatch.
+If only a directory tree exists, use the original-tree inventory instead;
+do not repackage it simply to obtain a ZIP match.
+
 **Recovery order, without outcome reruns:** First locate original, unmodified
 ZIP bytes (or independently retained original directory trees) in an
 authorized backup. Record the backup's location, custody history and
