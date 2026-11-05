@@ -1,6 +1,6 @@
 # Recover the original automated-to-human VERA evidence (no outcome reruns)
 
-**Status (2026-10-27): blocked on original report and handoff custody.**
+**Status (2026-11-05): blocked on original report and handoff custody.**
 This is an operational inventory and recovery plan, not an experiment or human-evaluation result.
 
 ## Blinded packet physical-record integrity across handoffs
@@ -36,6 +36,52 @@ run 34783525480. The canonical-analysis run 36070798723 still exposed its
 2026-12-23). This is an observation about artifact availability at that time,
 not proof that the original reports are destroyed: local, restricted, offline
 or institutional backups may exist.
+
+## Original ZIP recovery triage by immutable GitHub upload identity (2026-11-05)
+
+The ordinary run-scoped Actions artifact listings are empty for both historical
+source-bearing runs. A separate read-only **direct lookup by their exact
+historical artifact IDs** was also attempted on 2026-11-05 using the connected
+GitHub repository access. Both returned GitHub API **404 Not Found**. This is a
+second access path, not another test of whether the original research succeeded.
+A 404 can reflect expiration/removal **or** access constraints; it is neither
+proof that no offline backup exists nor evidence that the original reports
+have been recovered. Do not retry model treatments or re-create missing reports
+to make an artifact-availability check pass.
+
+The following **GitHub upload-artifact@v4 job-log metadata** is pinned in
+`scripts/audit_historical_artifact_job_logs.py`. It provides concrete
+candidates to search for in authorized organizational/offline backups and
+helps reject an unrelated ZIP presented under a plausible archive name:
+
+| Original role | Historical Actions run | Artifact ID | Recorded ZIP size | Recorded ZIP SHA-256 |
+| --- | --- | --- | ---: | --- |
+| 40 treatment reports/traces | `34620917346` | `10275100801` | 608355 bytes | `878205ff42267b85d71f478520a4a3ebe520915f22ae2d2307e930fa39545400` |
+| Evaluator-only recovered archive | `34783525480` | `10324954205` | 618586 bytes | `c357b068fa4c0b7e86f7c56cd1d3e346f6922106d7bde644db92feb7f8fc84cc` |
+
+**Recovery order, without outcome reruns:** First locate original, unmodified
+ZIP bytes (or independently retained original directory trees) in an
+authorized backup. Record the backup's location, custody history and
+pre-existing independent checksums *before* manipulating a working copy.
+If intact ZIP bytes are available, compare their byte count and SHA-256
+against the table as a preliminary **GitHub-service log concordance** check.
+If they differ, preserve both original files and document the discrepancy;
+do **not** repack/rename/rewrite evidence or select whichever candidate
+produces favorable research results. If only unpacked directories exist, ZIP
+byte hashes do not apply to those files: keep the original directory tree and
+its independently retained file/manifest pins, and use the documented
+read-only structural inventory and source-bound handoff verifiers.
+
+Even a byte-for-byte ZIP match establishes concordance with **recorded GitHub
+upload metadata**, not independent authentication of historical execution.
+Original trace/report content, all 40 published treatment/run IDs,
+coordinator/annotator handoff fingerprints, and independent archival custody
+must still pass the downstream research gates **before** blinded packet
+distribution. The still-listed, smaller canonical automated-analysis ZIP
+(`10837878458`) is an analysis snapshot and cannot substitute for either
+missing source-bearing archive. Pilot diagnostics, frozen automated
+confirmatory results, exploratory material, prospective verification
+procedures, and pending human validation remain separate.
 
 For a current, read-only GitHub Actions artifact inventory that pins the three
 historical run identities and distinguishes absent, expired, and merely listed
