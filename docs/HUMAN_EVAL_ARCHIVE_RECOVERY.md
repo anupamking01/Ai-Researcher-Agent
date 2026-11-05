@@ -149,6 +149,20 @@ python -m scripts.triage_historical_archive_candidates \
 It invokes the existing bounded ZIP structural preflight on each input,
 records structural failures and same-provider size/digest mismatches as well
 as matches, and returns per-role counts without picking a favorable archive.
+A structurally valid ZIP can have **different ZIP bytes** (for example, a
+different compression method or member order) while containing **the same
+regular-file paths and decompressed bytes**. The batch receipt now records a
+canonical SHA-256 over the sorted regular-member path, uncompressed byte count,
+and per-file SHA-256 tuples. It flags
+`same_regular_members_as_candidate_index` across *all* submitted candidates
+and reports `distinct_regular_member_content_count` independently of distinct
+ZIP-byte count. Empty directory entries and ZIP-only metadata intentionally
+do not affect this content identity. A failed ZIP preflight gets no content
+identity; every supplied row is still retained. These are **content-equivalence
+diagnostics**, not a proof of historical execution, independent backup custody,
+source/report authenticity, or readiness to distribute human-evaluation packets.
+Do not select a candidate according to support scores or reported outcomes.
+
 It also marks repeated **structurally verified ZIP byte identities** across
 candidate paths and declared roles using the first candidate index. Per-role
 raw candidate/concordance counts remain available; distinct verified-ZIP and

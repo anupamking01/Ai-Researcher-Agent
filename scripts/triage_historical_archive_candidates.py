@@ -7,6 +7,7 @@ candidate by experimental results, or claim independent archive custody.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,33 @@ MAX_CANDIDATES = 16
 
 class CandidateTriageError(ValueError):
     """The candidate inventory is ambiguous or exceeds safe input bounds."""
+
+
+def _regular_member_content_sha256(evidence: dict) -> str:
+    """Canonical identity of the ZIP's *decompressed regular files*, not its ZIP bytes.
+
+    ZIP compression, member order, timestamps, and empty directory records do
+    not contribute; file paths, uncompressed lengths, and SHA-256s do. Inputs
+    have already passed the bounded structural ZIP preflight, including its
+    unique-path, member-hash, and stable-source checks. This identifies
+    content-equivalent backups, not independent custody or historical origin.
+    """
+    members = sorted(
+        (
+            {
+                "path": item["path"],
+                "uncompressed_bytes": item["uncompressed_bytes"],
+                "sha256": item["sha256"],
+            }
+            for item in evidence["files"]
+        ),
+        key=lambda item: item["path"],
+    )
+    encoded = json.dumps(
+        {"schema": "vera_zip_regular_members_v1", "members": members},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
@@ -50,6 +78,7 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
 
     rows = []
     first_verified_by_sha256: dict[str, int] = {}
+    first_regular_member_content_by_sha256: dict[str, int] = {}
     for index, (role, path) in enumerate(assignments, 1):
         anchor = zip_preflight.GITHUB_JOB_LOG_ARCHIVES[role]
         row = {
@@ -61,6 +90,8 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
             "github_provider_zip_digest_and_size_match": False,
             "other_role_github_provider_zip_match": None,
             "duplicate_verified_zip_of_candidate_index": None,
+            "observed_regular_member_content_sha256": None,
+            "same_regular_members_as_candidate_index": None,
         }
         try:
             # Do not ask the preflight to fail early on a GitHub digest mismatch:
@@ -75,6 +106,17 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
             row["observed_zip_bytes"] = evidence["archive_bytes"]
             row["observed_zip_sha256"] = evidence["archive_sha256_observed_now"]
             row["file_count"] = evidence["file_count"]
+            # Two structurally sound ZIPs can carry the exact same research
+            # files under different compression/order metadata. Keep both
+            # candidates and their distinct container digests, but do not
+            # mistake their equal extracted regular members for new evidence.
+            content_sha = _regular_member_content_sha256(evidence)
+            row["observed_regular_member_content_sha256"] = content_sha
+            first_content_index = first_regular_member_content_by_sha256.get(content_sha)
+            if first_content_index is None:
+                first_regular_member_content_by_sha256[content_sha] = index
+            else:
+                row["same_regular_members_as_candidate_index"] = first_content_index
             # Different pathnames are not necessarily different backups. Keep
             # every observation, but identify repeated verified ZIP bytes by
             # the first candidate index, even across declared archive roles.
@@ -122,6 +164,10 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
                 and row["other_role_github_provider_zip_match"] is not None
                 for row in rows
             ),
+            "distinct_regular_member_content_count": len({
+                row["observed_regular_member_content_sha256"] for row in rows
+                if row["role"] == role and row["structural_preflight_succeeded"]
+            }),
             "distinct_structurally_verified_zip_count": len({
                 row["observed_zip_sha256"] for row in rows
                 if row["role"] == role and row["structural_preflight_succeeded"]
@@ -134,11 +180,15 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
         for role in ROLES
     }
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "candidate_triage_only_no_historical_authentication",
         "candidates": rows,
         "by_role": by_role,
         "all_explicit_candidates_accounted_for": len(rows) == len(assignments),
+        "same_regular_members_duplicate_count": sum(
+            row["same_regular_members_as_candidate_index"] is not None
+            for row in rows
+        ),
         "verified_zip_byte_duplicate_count": sum(
             row["duplicate_verified_zip_of_candidate_index"] is not None
             for row in rows
@@ -161,7 +211,10 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
             "original trace/report custody. Every caller-supplied candidate, "
             "including mismatches and unsafe archives, is retained. Repeated "
             "verified ZIP bytes are identified but not removed or treated as "
-            "independent backup custody. A candidate matching the other "
+            "independent backup custody. Decompressed regular-file content "
+            "equivalence is separately flagged even for different ZIP bytes; "
+            "it ignores ZIP-only metadata and proves neither historical "
+            "origin nor independent custody. A candidate matching the other "
             "historical role's provider pin is flagged without relabelling "
             "the caller's declaration; unsubmitted "
             "backups cannot be inventoried. Human distribution remains blocked "

@@ -58,6 +58,10 @@ def test_matching_provider_zip_is_not_authentication(tmp_path, monkeypatch, role
             "archive_bytes": anchor["size_bytes"],
             "archive_sha256_observed_now": anchor["zip_sha256"],
             "file_count": 40,
+            "files": [
+                {"path": "synthetic/report.md", "uncompressed_bytes": 12,
+                 "sha256": "a" * 64},
+            ],
         }
 
     monkeypatch.setattr(triage.zip_preflight, "audit_recovered_zip", mocked_structural_inspection)
@@ -78,6 +82,10 @@ def test_both_historical_byte_size_and_digest_required(tmp_path, monkeypatch, fi
         "archive_bytes": anchor["size_bytes"],
         "archive_sha256_observed_now": anchor["zip_sha256"],
         "file_count": 40,
+            "files": [
+                {"path": "synthetic/report.md", "uncompressed_bytes": 12,
+                 "sha256": "a" * 64},
+            ],
     }
     observed[field] = 123 if field == "archive_bytes" else "0" * 64
     monkeypatch.setattr(
@@ -150,6 +158,10 @@ def test_repeat_provider_concordance_does_not_count_same_bytes_twice(tmp_path, m
             "archive_bytes": anchor["size_bytes"],
             "archive_sha256_observed_now": anchor["zip_sha256"],
             "file_count": 40,
+            "files": [
+                {"path": "synthetic/report.md", "uncompressed_bytes": 12,
+                 "sha256": "a" * 64},
+            ],
         }
     monkeypatch.setattr(triage.zip_preflight, "audit_recovered_zip", mocked_preflight)
     receipt = triage.triage_candidates([
@@ -205,13 +217,17 @@ def test_other_role_pin_match_is_flagged_without_reassigning(
             "archive_bytes": anchor["size_bytes"],
             "archive_sha256_observed_now": anchor["zip_sha256"],
             "file_count": 40,
+            "files": [
+                {"path": "synthetic/report.md", "uncompressed_bytes": 12,
+                 "sha256": "a" * 64},
+            ],
         }
     monkeypatch.setattr(triage.zip_preflight, "audit_recovered_zip", inspect)
     candidate = tmp_path / "candidate.zip"
     receipt = triage.triage_candidates([(declared_role, candidate)])
     row = receipt["candidates"][0]
     assert examined == [candidate]
-    assert receipt["schema_version"] == 2
+    assert receipt["schema_version"] == 3
     assert row["role"] == declared_role
     assert row["github_provider_zip_digest_and_size_match"] is False
     assert row["other_role_github_provider_zip_match"] == matched_role
@@ -231,6 +247,10 @@ def test_partial_other_role_pin_never_counts_as_match(tmp_path, monkeypatch, cha
         "archive_bytes": anchor["size_bytes"],
         "archive_sha256_observed_now": anchor["zip_sha256"],
         "file_count": 40,
+            "files": [
+                {"path": "synthetic/report.md", "uncompressed_bytes": 12,
+                 "sha256": "a" * 64},
+            ],
     }
     evidence[changed_field] = (
         anchor["size_bytes"] + 1 if changed_field == "archive_bytes" else "f" * 64
@@ -247,3 +267,69 @@ def test_partial_other_role_pin_never_counts_as_match(tmp_path, monkeypatch, cha
     assert receipt["other_role_provider_concordant_candidate_count"] == 0
     assert receipt["by_role"]["original_treatment"]["other_role_provider_concordant_count"] == 0
     assert receipt["human_evaluation_ready"] is False
+
+
+def test_repacked_zip_with_different_compression_is_same_regular_member_content(tmp_path):
+    first = _zip(tmp_path / "deflated.zip")
+    second = tmp_path / "stored.zip"
+    with zipfile.ZipFile(second, "w", compression=zipfile.ZIP_STORED) as stream:
+        stream.writestr("synthetic/report.md", "# Not a historical result\\n")
+    assert first.read_bytes() != second.read_bytes()
+    receipt = triage.triage_candidates([
+        ("original_treatment", first),
+        ("evaluator_recovery", second),
+    ])
+    a, b = receipt["candidates"]
+    assert a["observed_zip_sha256"] != b["observed_zip_sha256"]
+    assert a["duplicate_verified_zip_of_candidate_index"] is None
+    assert b["duplicate_verified_zip_of_candidate_index"] is None
+    assert a["observed_regular_member_content_sha256"] == b["observed_regular_member_content_sha256"]
+    assert a["same_regular_members_as_candidate_index"] is None
+    assert b["same_regular_members_as_candidate_index"] == 1
+    assert receipt["verified_zip_byte_duplicate_count"] == 0
+    assert receipt["same_regular_members_duplicate_count"] == 1
+    assert receipt["by_role"]["original_treatment"]["distinct_regular_member_content_count"] == 1
+    assert receipt["by_role"]["evaluator_recovery"]["distinct_regular_member_content_count"] == 1
+    assert receipt["original_treatment_evidence_authenticated"] is False
+    assert receipt["human_evaluation_ready"] is False
+
+
+def test_member_order_does_not_create_distinct_regular_content(tmp_path):
+    a = tmp_path / "a.zip"
+    b = tmp_path / "b.zip"
+    files = [("sources/a.md", "one"), ("sources/b.md", "two")]
+    for path, pairs in ((a, files), (b, list(reversed(files)))):
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as stream:
+            for filename, content in pairs:
+                stream.writestr(filename, content)
+    assert a.read_bytes() != b.read_bytes()
+    receipt = triage.triage_candidates([
+        ("original_treatment", a), ("original_treatment", b),
+    ])
+    assert receipt["candidates"][1]["same_regular_members_as_candidate_index"] == 1
+    assert receipt["candidates"][1]["duplicate_verified_zip_of_candidate_index"] is None
+    assert receipt["by_role"]["original_treatment"]["distinct_structurally_verified_zip_count"] == 2
+    assert receipt["by_role"]["original_treatment"]["distinct_regular_member_content_count"] == 1
+
+
+def test_changed_member_and_unsafe_candidate_never_claim_equal_content(tmp_path):
+    a = _zip(tmp_path / "a.zip")
+    b = tmp_path / "b.zip"
+    with zipfile.ZipFile(b, "w", compression=zipfile.ZIP_DEFLATED) as stream:
+        stream.writestr("synthetic/report.md", "# Different synthetic content\\n")
+    broken = tmp_path / "bad.zip"
+    broken.write_bytes(b"not zip content")
+    receipt = triage.triage_candidates([
+        ("original_treatment", a),
+        ("evaluator_recovery", b),
+        ("evaluator_recovery", broken),
+    ])
+    first, second, invalid = receipt["candidates"]
+    assert first["observed_regular_member_content_sha256"] != second["observed_regular_member_content_sha256"]
+    assert second["same_regular_members_as_candidate_index"] is None
+    assert invalid["status"] == "structural_preflight_failed"
+    assert invalid["observed_regular_member_content_sha256"] is None
+    assert invalid["same_regular_members_as_candidate_index"] is None
+    assert receipt["same_regular_members_duplicate_count"] == 0
+    assert receipt["by_role"]["evaluator_recovery"]["distinct_regular_member_content_count"] == 1
+    assert receipt["all_explicit_candidates_accounted_for"] is True
