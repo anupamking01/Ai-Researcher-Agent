@@ -509,3 +509,98 @@ def test_preflight_reservation_rejects_before_any_member_stream_is_opened(
             path, reserve_uncompressed_bytes=reject
         )
     assert reserved == [len("# Not a historical result\n")]
+
+
+def test_batch_archive_byte_budget_skips_hashing_and_preserves_later_small_sources(
+    tmp_path, monkeypatch,
+):
+    """All input rows survive; a rejected large ZIP is never scanned."""
+    def source(name, length):
+        path = tmp_path / name
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as stream:
+            stream.writestr("synthetic/evidence.md", "x" * length)
+        return path
+
+    first = source("first.zip", 25)
+    oversized_for_remaining = source("middle.zip", 250)
+    last = source("last.zip", 8)
+    before = [path.read_bytes() for path in (first, oversized_for_remaining, last)]
+    assert oversized_for_remaining.stat().st_size > last.stat().st_size
+    allowed = first.stat().st_size + last.stat().st_size
+    monkeypatch.setattr(triage, "MAX_BATCH_ARCHIVE_BYTES", allowed)
+
+    original_fingerprint = triage.zip_preflight._fingerprint
+    hashed = []
+    def record_fingerprint(handle):
+        hashed.append(handle.fileno())
+        return original_fingerprint(handle)
+    monkeypatch.setattr(triage.zip_preflight, "_fingerprint", record_fingerprint)
+
+    receipt = triage.triage_candidates([
+        ("original_treatment", first),
+        ("evaluator_recovery", oversized_for_remaining),
+        ("original_treatment", last),
+    ])
+    rows = receipt["candidates"]
+    assert [row["candidate_index"] for row in rows] == [1, 2, 3]
+    assert [row["status"] for row in rows] == [
+        "does_not_match_historical_github_provider_zip",
+        "not_inspected_batch_archive_byte_budget_exceeded",
+        "does_not_match_historical_github_provider_zip",
+    ]
+    assert rows[1]["structural_preflight_succeeded"] is False
+    assert rows[1]["observed_regular_member_content_sha256"] is None
+    assert "observed_zip_sha256" not in rows[1]
+    assert len(hashed) == 4  # two passes each, first and last only
+    assert receipt["batch_archive_byte_budget"] == allowed
+    assert receipt["batch_archive_bytes_reserved"] == allowed
+    assert receipt["batch_candidates_not_inspected_due_to_archive_budget"] == 1
+    assert receipt["all_explicit_candidates_accounted_for"] is True
+    assert receipt["original_treatment_evidence_authenticated"] is False
+    assert receipt["human_evaluation_ready"] is False
+    assert [path.read_bytes() for path in (first, oversized_for_remaining, last)] == before
+
+
+def test_invalid_zip_does_not_refund_prior_raw_archive_byte_reservation(
+    tmp_path, monkeypatch,
+):
+    """An unsuccessful scan must not enable unlimited repeated raw ZIP reads."""
+    broken = tmp_path / "broken.zip"
+    broken.write_bytes(b"not a ZIP" * 20)
+    valid = _zip(tmp_path / "valid.zip")
+    monkeypatch.setattr(
+        triage, "MAX_BATCH_ARCHIVE_BYTES",
+        broken.stat().st_size + valid.stat().st_size - 1,
+    )
+    receipt = triage.triage_candidates([
+        ("original_treatment", broken),
+        ("evaluator_recovery", valid),
+    ])
+    assert [row["status"] for row in receipt["candidates"]] == [
+        "structural_preflight_failed",
+        "not_inspected_batch_archive_byte_budget_exceeded",
+    ]
+    assert receipt["batch_archive_bytes_reserved"] == broken.stat().st_size
+    assert receipt["batch_candidates_not_inspected_due_to_archive_budget"] == 1
+    assert receipt["batch_declared_uncompressed_bytes_reserved"] == 0
+    assert receipt["human_evaluation_ready"] is False
+
+
+def test_preflight_archive_byte_reservation_precedes_any_archive_fingerprint(
+    tmp_path, monkeypatch,
+):
+    """No ZIP byte may be hashed when the raw input budget is exhausted."""
+    path = _zip(tmp_path / "synthetic.zip")
+    recorded = []
+
+    def reject(declared_bytes):
+        recorded.append(declared_bytes)
+        raise triage.BatchArchiveBudgetExceeded("synthetic raw budget exhausted")
+
+    def fail_if_hashed(_handle):
+        pytest.fail("must not read/hash a ZIP after the raw-byte budget rejects it")
+
+    monkeypatch.setattr(triage.zip_preflight, "_fingerprint", fail_if_hashed)
+    with pytest.raises(triage.BatchArchiveBudgetExceeded):
+        triage.zip_preflight.audit_recovered_zip(path, reserve_archive_bytes=reject)
+    assert recorded == [path.stat().st_size]

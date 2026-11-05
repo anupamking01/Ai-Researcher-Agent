@@ -21,6 +21,13 @@ MAX_CANDIDATES = 16
 # Cap cumulative declared decompressed bytes across attempted members, including
 # archives that fail CRC after inspection starts. Individual ZIP limits still apply.
 MAX_BATCH_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
+# In addition to decompression, bound aggregate raw ZIP read/hash I/O.
+# A batch of 16 individually permitted 256-MiB inputs could scan 4 GiB.
+MAX_BATCH_ARCHIVE_BYTES = 1024 * 1024 * 1024
+
+
+class BatchArchiveBudgetExceeded(zip_preflight.RecoveredArchiveError):
+    """A ZIP cannot be scanned within the remaining batch raw-byte allowance."""
 
 
 class BatchUncompressedBudgetExceeded(zip_preflight.RecoveredArchiveError):
@@ -104,6 +111,17 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
         seen_paths.add(normalized)
 
     remaining_uncompressed_budget = MAX_BATCH_UNCOMPRESSED_BYTES
+    remaining_archive_budget = MAX_BATCH_ARCHIVE_BYTES
+
+    def reserve_batch_archive_bytes(declared_bytes: int) -> None:
+        nonlocal remaining_archive_budget
+        if declared_bytes > remaining_archive_budget:
+            raise BatchArchiveBudgetExceeded(
+                "candidate exceeds remaining batch archive-byte budget"
+            )
+        # Every attempted raw ZIP scan consumes the allowance, even if later
+        # parsing, CRC or final consistency verification rejects the source.
+        remaining_archive_budget -= declared_bytes
 
     def reserve_batch_uncompressed_bytes(declared_bytes: int) -> None:
         nonlocal remaining_uncompressed_budget
@@ -136,8 +154,12 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
             # all structurally valid candidates must be inventoried, including
             # mismatches. No candidate is silently discarded as "unfavorable".
             evidence = zip_preflight.audit_recovered_zip(
-                path, reserve_uncompressed_bytes=reserve_batch_uncompressed_bytes
+                path, reserve_uncompressed_bytes=reserve_batch_uncompressed_bytes,
+                reserve_archive_bytes=reserve_batch_archive_bytes,
             )
+        except BatchArchiveBudgetExceeded:
+            row["status"] = "not_inspected_batch_archive_byte_budget_exceeded"
+            row["diagnostic"] = "candidate exceeds remaining batch archive-byte budget"
         except BatchUncompressedBudgetExceeded:
             row["status"] = "not_inspected_batch_decompression_budget_exceeded"
             row["diagnostic"] = "candidate exceeds remaining batch decompression budget"
@@ -228,6 +250,14 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
         "candidates": rows,
         "by_role": by_role,
         "all_explicit_candidates_accounted_for": len(rows) == len(assignments),
+        "batch_archive_byte_budget": MAX_BATCH_ARCHIVE_BYTES,
+        "batch_archive_bytes_reserved": (
+            MAX_BATCH_ARCHIVE_BYTES - remaining_archive_budget
+        ),
+        "batch_candidates_not_inspected_due_to_archive_budget": sum(
+            row["status"] == "not_inspected_batch_archive_byte_budget_exceeded"
+            for row in rows
+        ),
         "batch_declared_uncompressed_byte_budget": MAX_BATCH_UNCOMPRESSED_BYTES,
         "batch_declared_uncompressed_bytes_reserved": (
             MAX_BATCH_UNCOMPRESSED_BYTES - remaining_uncompressed_budget
@@ -261,6 +291,9 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
             "is same-provider concordance, not independently authenticated "
             "original trace/report custody. Every caller-supplied candidate, "
             "including mismatches and unsafe archives, is retained. A bounded "
+            "batch-wide raw ZIP byte budget is reserved BEFORE any file read or "
+            "hash, including inputs whose parse later fails; raw-byte-budget "
+            "exhaustion leaves an explicit uninspected row. A separate bounded "
             "batch-wide declared decompression budget is reserved BEFORE ZIP "
             "member reads, including candidates that later fail integrity; "
             "budget-exceeded inputs are explicitly not inspected, not "

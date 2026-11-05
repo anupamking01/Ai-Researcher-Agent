@@ -311,6 +311,7 @@ def audit_recovered_zip(
     path: Path, *, expected_archive_sha256: str | None = None,
     github_job_log_artifact: str | None = None,
     reserve_uncompressed_bytes: Callable[[int], None] | None = None,
+    reserve_archive_bytes: Callable[[int], None] | None = None,
 ) -> dict:
     """Inspect one ZIP without extraction, model calls, or archive modifications.
 
@@ -323,6 +324,10 @@ def audit_recovered_zip(
     have passed structural bounds, but BEFORE any ZIP member is decompressed.
     Callers may reserve a batch-wide budget; the reservation is not refunded
     if a later CRC/decompression failure invalidates the archive.
+
+    An optional archive-byte reservation is applied after safe source-size
+    checks but BEFORE reading or hashing any archive bytes. A failed ZIP still
+    consumes its reserved raw-byte budget, preventing repeated costly scans.
     """
     path = Path(path)
     if expected_archive_sha256 is not None and not HEX_SHA256.fullmatch(expected_archive_sha256):
@@ -354,6 +359,10 @@ def audit_recovered_zip(
                 raise RecoveredArchiveError("archive file exceeds the bounded ZIP size range")
             if github_log_anchor is not None and before.st_size != github_log_anchor["size_bytes"]:
                 raise RecoveredArchiveError("archive byte size differs from historical GitHub job-log ZIP")
+            # Reserve the raw ZIP read/hash load before the first archive read.
+            # Reservations remain spent even if the ZIP later fails integrity.
+            if reserve_archive_bytes is not None:
+                reserve_archive_bytes(before.st_size)
             archive_sha256 = _fingerprint(handle)
             if expected_archive_sha256 and archive_sha256 != expected_archive_sha256:
                 raise RecoveredArchiveError("archive SHA-256 differs from supplied independent pin")

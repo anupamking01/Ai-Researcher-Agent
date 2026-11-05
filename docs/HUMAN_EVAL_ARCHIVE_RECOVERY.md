@@ -177,7 +177,21 @@ remaining allowance is retained as
 structurally invalid or matching ZIP). Later smaller candidates may still be
 inspected in original CLI order. The receipt records the total budget,
 reserved bytes and number of candidates not inspected due to this limit.
-These are inspection-resource limits, **not** evidence of treatment failure,
+A separate **1 GiB batch-wide raw ZIP-byte budget** also bounds the I/O cost
+of initial/final SHA-256 passes and structural reads across as many as 16
+individual input ZIPs (which can otherwise total 4 GiB of compressed input).
+The preflight reserves each candidate's full on-disk ZIP size **after validating
+its stable file metadata and before hashing or reading ZIP contents**. This
+reservation is never refunded after later parsing, CRC or consistency failure.
+If the next candidate will exceed the remaining raw-byte allowance, its row
+is retained as `not_inspected_batch_archive_byte_budget_exceeded`; it has
+**not** been inspected or found historically mismatched. The original
+argument order and subsequent smaller candidates remain eligible for inspection.
+The receipt separately reports `batch_archive_byte_budget`,
+`batch_archive_bytes_reserved`, and
+`batch_candidates_not_inspected_due_to_archive_budget`.
+This raw-input limit and the distinct declared-uncompressed-byte limit are
+inspection-resource constraints, **not** evidence of treatment failure,
 archive unavailability, independent provenance, or human readiness.
 A structurally valid ZIP can have **different ZIP bytes** (for example, a
 different compression method or member order) while containing **the same
