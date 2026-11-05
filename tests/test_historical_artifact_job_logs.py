@@ -140,7 +140,8 @@ def test_recovery_download_reordered_timestamps_fail_closed():
 def test_original_archive_cannot_be_logged_as_uploaded_after_recovery_download():
     original, recovery = _logs()
     original = original.replace("2026-09-11T", "2026-09-14T")
-    with pytest.raises(audit.HistoricalLogError, match="chronology contradicts archive lineage"):
+    # The stronger original-workflow gate rejects this before cross-run order.
+    with pytest.raises(audit.HistoricalLogError, match="outside pinned workflow window"):
         audit.audit_historical_job_logs(original, recovery)
 
 
@@ -149,6 +150,38 @@ def test_recovery_archive_cannot_be_logged_as_uploaded_before_source_download():
     recovery = recovery.replace("2026-09-13T21:21:3", "2026-09-13T21:20:3")
     with pytest.raises(audit.HistoricalLogError, match="chronology contradicts archive lineage"):
         audit.audit_historical_job_logs(original, recovery)
+
+
+@pytest.mark.parametrize(("source", "before", "after"), [
+    ("original", "2026-09-11T", "2026-09-10T"),
+    ("original", "2026-09-11T", "2026-09-12T"),
+    ("recovery", "2026-09-13T", "2026-09-12T"),
+    ("recovery", "2026-09-13T", "2026-09-14T"),
+])
+def test_historical_job_log_events_must_be_inside_their_original_workflow_window(
+    source, before, after
+):
+    """Whole-step date shifts retain ordering/digests but cannot be historical."""
+    original, recovery = _logs()
+    if source == "original":
+        assert before in original
+        original = original.replace(before, after)
+    else:
+        assert before in recovery
+        recovery = recovery.replace(before, after)
+    with pytest.raises(audit.HistoricalLogError, match="outside pinned workflow window"):
+        audit.audit_historical_job_logs(original, recovery)
+
+
+def test_workflow_window_allows_last_reported_second_fraction():
+    """GitHub workflow timestamps have second precision, logs subsecond."""
+    original, recovery = _logs()
+    original = original.replace(
+        "2026-09-11T17:22:40.6903482Z",
+        "2026-09-11T17:22:43.999999999Z",
+    )
+    receipt = audit.audit_historical_job_logs(original, recovery)
+    assert receipt["historical_treatment_evidence_authenticated"] is False
 
 
 def test_impossible_calendar_date_in_expected_event_fails_closed():

@@ -47,6 +47,21 @@ _LOG_LINE = re.compile(
 )
 _HEX = r"[0-9a-f]{64}"
 
+# Pinned, second-precision run_started_at / updated_at values from GitHub
+# Actions workflow metadata, not independently archived execution evidence.
+# The end-of-second ceiling avoids rejecting a legitimate log event only
+# because GitHub's workflow timestamp omits fractional seconds.
+HISTORICAL_WORKFLOW_WINDOWS = {
+    ORIGINAL["run_id"]: (
+        "2026-09-11T16:15:15.000000000Z",
+        "2026-09-11T17:22:43.999999999Z",
+    ),
+    RECOVERED["run_id"]: (
+        "2026-09-13T21:20:32.000000000Z",
+        "2026-09-13T21:21:40.999999999Z",
+    ),
+}
+
 
 class HistoricalLogError(ValueError):
     """Logs cannot support the claimed historical GitHub ZIP metadata."""
@@ -67,6 +82,18 @@ def _require_event_chronology(events: list[tuple[int, str, re.Match]], label: st
     instants = [_event_time_ns(event[1]) for event in events]
     if any(later < earlier for earlier, later in zip(instants, instants[1:])):
         raise HistoricalLogError(f"{label}: GitHub event timestamps are out of order")
+
+
+def _require_workflow_window(
+    events: list[tuple[int, str, re.Match]], *, run_id: int,
+) -> None:
+    """Bind claimed job-log events to their recorded Actions workflow window."""
+    start, end = HISTORICAL_WORKFLOW_WINDOWS[run_id]
+    minimum, maximum = _event_time_ns(start), _event_time_ns(end)
+    if any(not minimum <= _event_time_ns(event[1]) <= maximum for event in events):
+        raise HistoricalLogError(
+            f"GitHub job-log event outside pinned workflow window for run {run_id}"
+        )
 
 
 def _bounded_lines(content: str, label: str) -> list[tuple[str, str]]:
@@ -134,6 +161,7 @@ def _upload(step: list[tuple[str, str]], expected: dict) -> dict:
     if not digest[0] < finalized[0] < success[0] < url[0]:
         raise HistoricalLogError("artifact upload events occur in unexpected order")
     _require_event_chronology([digest, finalized, success, url], "artifact upload")
+    _require_workflow_window([digest, finalized, success, url], run_id=expected["run_id"])
     if (
         digest[2]["sha"] != expected["zip_sha256"]
         or any(int(event[2]["id"]) != expected["artifact_id"] for event in (finalized, success, url))
@@ -174,6 +202,7 @@ def _download(step: list[tuple[str, str]]) -> dict:
     if not announced[0] < source[0] < observed[0] < complete[0] < count[0]:
         raise HistoricalLogError("recovery download events occur in unexpected order")
     _require_event_chronology([announced, source, observed, complete, count], "recovery download")
+    _require_workflow_window([announced, source, observed, complete, count], run_id=RECOVERED["run_id"])
     if (
         int(announced[2]["id"]) != expected["artifact_id"]
         or int(source[2]["id"]) != expected["artifact_id"]

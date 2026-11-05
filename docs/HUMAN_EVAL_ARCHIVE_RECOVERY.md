@@ -18,6 +18,22 @@ or human-evaluation readiness claim. Offline synthetic tests exercise the
 redirect, relocated-404, valid-origin, and transport boundaries. This safeguard
 does not recover any original ZIP, alter automated results, or authorize rating.
 
+## Historical job-log workflow-clock attribution
+
+The read-only `scripts/audit_historical_artifact_job_logs.py` auditor now
+requires each selected original-upload, recovery-download, and recovered-upload
+job-log event to fall within its **own** original GitHub Actions workflow's
+recorded `run_started_at`–`updated_at` window. The pinned UTC windows are
+2026-09-11 16:15:15–17:22:43 for original run `34620917346` and
+2026-09-13 21:20:32–21:21:40 for recovery run `34783525480`; the end
+second includes subsecond log timestamps because the workflow API reports
+only whole seconds. Previously a synthetic transcript with matching IDs,
+ZIP digests, event order, and shifted dates could pass the log audit despite
+falling outside the original workflows. Offline tests exercise date shifts
+on both logs and a valid end-of-second boundary. This is a **same-provider
+chronology consistency check**, not independent log authentication, ZIP
+recovery, proof of report/trace custody, or permission to begin annotation.
+
 ## Direct-ID HTTP redirect custody boundary
 
 The read-only historical direct-ID auditor opens only the **two pinned GitHub
