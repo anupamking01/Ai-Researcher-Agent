@@ -11,7 +11,14 @@ artifact metadata endpoints** with HTTP redirect following disabled. Redirects
 than being mistaken for a genuine 404 from the original GitHub artifact ID.
 The transport additionally checks the response URL and any HTTP-error URL
 against the pinned endpoint. Synthetic offline regressions cover standard
-redirect status codes and an indirect 404. A genuine 404 is still only an
+redirect status codes and an indirect 404. For available direct-ID metadata,
+creation must also fall within the **original GitHub Actions run's** pinned
+start-to-last-update window: treatment run 34620917346 (2026-09-11
+16:15:15–17:22:43 UTC) or evaluator-recovery run 34783525480 (2026-09-13
+21:20:32–21:21:40 UTC). Synthetic tests reject pre/post-run creation dates
+while admitting exact endpoints. These GitHub-provider chronology pins only
+reject inconsistent upload metadata; they do **not** authenticate report or
+trace contents. A genuine 404 is still only an
 access observation; it does **not** prove destruction or exclude authorized
 offline backups. This diagnostic neither downloads original archives nor
 authenticates original experimental traces, reports, or human ratings.

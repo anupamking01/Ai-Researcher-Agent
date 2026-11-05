@@ -16,6 +16,12 @@ NOW = datetime(2026, 11, 5, 7, 0, tzinfo=timezone.utc)
 def _candidate(pin):
     run_id, head_sha = audit.RUN_SOURCES[pin["role"]]
     url = f"{audit.API_BASE}/repos/{audit.REPOSITORY}/actions/artifacts/{pin['artifact_id']}"
+    # Synthetic metadata represents a creation inside each original run's
+    # pinned GitHub Actions start-to-last-update window.
+    created_at, updated_at = {
+        "original_treatment": ("2026-09-11T17:21:00Z", "2026-09-11T17:21:01Z"),
+        "evaluator_recovery": ("2026-09-13T21:21:00Z", "2026-09-13T21:21:01Z"),
+    }[pin["role"]]
     return {
         "id": pin["artifact_id"],
         "name": pin["artifact_name"],
@@ -24,8 +30,8 @@ def _candidate(pin):
         "size_in_bytes": pin["size_bytes"],
         "digest": "sha256:" + pin["zip_sha256"],
         "expired": False,
-        "created_at": "2026-09-11T12:00:00Z",
-        "updated_at": "2026-09-11T12:01:00Z",
+        "created_at": created_at,
+        "updated_at": updated_at,
         "expires_at": "2026-12-23T23:03:46Z",
         "workflow_run": {
             "id": run_id,
@@ -187,3 +193,33 @@ def test_redirect_destination_404_cannot_masquerade_as_original_404(monkeypatch)
     monkeypatch.setattr(audit, "_open_direct_metadata", redirected_404)
     with pytest.raises(audit.DirectArtifactAuditError, match="redirected"):
         audit.fetch_direct_metadata(audit.ORIGINAL_PINS[0]["artifact_id"])
+
+
+@pytest.mark.parametrize("role", ["original_treatment", "evaluator_recovery"])
+@pytest.mark.parametrize("direction", ["before", "after"])
+def test_creation_outside_original_workflow_window_fails_closed(role, direction):
+    """A same-ID, same-digest ZIP cannot predate or postdate its source run."""
+    originals = {p["artifact_id"]: _candidate(p) for p in audit.ORIGINAL_PINS}
+    target = next(p for p in audit.ORIGINAL_PINS if p["role"] == role)
+    # Keep lifecycle dates internally valid to isolate the workflow-window gate.
+    if direction == "before":
+        created_at, updated_at = "2026-09-01T00:00:00Z", "2026-09-01T00:00:01Z"
+    else:
+        created_at, updated_at = "2026-09-14T00:00:00Z", "2026-09-14T00:00:01Z"
+    originals[target["artifact_id"]]["created_at"] = created_at
+    originals[target["artifact_id"]]["updated_at"] = updated_at
+    with pytest.raises(audit.DirectArtifactAuditError, match="outside pinned original workflow window"):
+        audit.audit_direct_artifact_ids(fetch_artifact=_client(originals), checked_at=NOW)
+
+
+@pytest.mark.parametrize("role", ["original_treatment", "evaluator_recovery"])
+@pytest.mark.parametrize("boundary_index", [0, 1])
+def test_creation_at_original_workflow_boundary_is_allowed(role, boundary_index):
+    """The original run window is inclusive, without a guessed grace period."""
+    originals = {p["artifact_id"]: _candidate(p) for p in audit.ORIGINAL_PINS}
+    target = next(p for p in audit.ORIGINAL_PINS if p["role"] == role)
+    stamp = audit.RUN_CREATION_WINDOWS_UTC[role][boundary_index]
+    originals[target["artifact_id"]]["created_at"] = stamp
+    originals[target["artifact_id"]]["updated_at"] = stamp
+    result = audit.audit_direct_artifact_ids(fetch_artifact=_client(originals), checked_at=NOW)
+    assert result["historical_artifacts"][role]["github_upload_log_id_size_concordance"] is True

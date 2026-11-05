@@ -24,6 +24,13 @@ MAX_METADATA_BYTES = 64 * 1024
 # Same-provider upload pins, not independent source/report custody fingerprints.
 ORIGINAL_PINS = (logs.ORIGINAL, logs.RECOVERED)
 RUN_SOURCES = {role: (run_id, sha) for role, run_id, _, sha, _, _ in inventory.HISTORICAL_RUNS}
+# Pinned GitHub Actions run_started_at/updated_at observed for the original
+# workflow attempts. Same-provider chronology, NOT independent archive custody.
+# A direct-ID ZIP cannot have been created outside its own historical run.
+RUN_CREATION_WINDOWS_UTC = {
+    "original_treatment": ("2026-09-11T16:15:15Z", "2026-09-11T17:22:43Z"),
+    "evaluator_recovery": ("2026-09-13T21:20:32Z", "2026-09-13T21:21:40Z"),
+}
 
 
 class DirectArtifactAuditError(ValueError):
@@ -154,6 +161,18 @@ def _validate_metadata(value: object, pin: dict) -> tuple:
         raise DirectArtifactAuditError(f"{role}: invalid artifact timestamps: {exc}") from exc
     if not created <= updated or not created < expires:
         raise DirectArtifactAuditError(f"{role}: artifact lifecycle timestamps disagree")
+    # The run-scoped inventory already enforces this original-run chronology.
+    # Apply the same source-bound interval to the alternate direct-ID path:
+    # otherwise a correctly named/hashed ZIP with an impossible creation date
+    # could be accepted as historical GitHub upload metadata.
+    earliest, latest = (
+        inventory._parse_utc_timestamp(stamp, label=f"{role} pinned run boundary")
+        for stamp in RUN_CREATION_WINDOWS_UTC[role]
+    )
+    if not earliest <= created <= latest:
+        raise DirectArtifactAuditError(
+            f"{role}: artifact creation outside pinned original workflow window"
+        )
     # Ignore only volatile fields (e.g. download_count). Reconcile every field
     # material to original ZIP attribution, including explicit missing digest.
     return (
