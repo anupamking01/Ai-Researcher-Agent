@@ -165,6 +165,20 @@ custody or a reason to prefer a particular candidate.
 It invokes the existing bounded ZIP structural preflight on each input,
 records structural failures and same-provider size/digest mismatches as well
 as matches, and returns per-role counts without picking a favorable archive.
+To prevent a batch of up to 16 otherwise individually valid ZIPs from
+requiring up to 8 GiB of decompression, the triage also enforces a **1 GiB
+batch-wide declared-uncompressed-byte budget**. The structural preflight
+reserves each candidate's full declared regular-member byte total **before
+opening any ZIP member stream**. Reservations are deliberately not refunded
+on later CRC/decompression failures: unsafe sources cannot exhaust resources
+through repeated unsuccessful inspection attempts. A candidate larger than the
+remaining allowance is retained as
+`not_inspected_batch_decompression_budget_exceeded` (not misreported as a
+structurally invalid or matching ZIP). Later smaller candidates may still be
+inspected in original CLI order. The receipt records the total budget,
+reserved bytes and number of candidates not inspected due to this limit.
+These are inspection-resource limits, **not** evidence of treatment failure,
+archive unavailability, independent provenance, or human readiness.
 A structurally valid ZIP can have **different ZIP bytes** (for example, a
 different compression method or member order) while containing **the same
 regular-file paths and decompressed bytes**. The batch receipt now records a
@@ -198,8 +212,9 @@ fingerprint field matches, no alternative-role match is recorded. Investigate
 backup custody without selecting candidates by experimental outcomes.
 No files are extracted, renamed, copied, regenerated, or overwritten. The
 receipt does not name or attest to unsubmitted backup candidates, and CLI exit
-success means only that the specified inputs were inspected—not that any
-artifact is historically authentic.
+success means only that every specified input was **accounted for**, not
+necessarily inspected (budget-exceeded rows are explicit), and **never** that
+any artifact is historically authentic.
 
 An observed matching ZIP would corroborate **GitHub-provider upload metadata**
 only. It cannot establish a separately retained custody chain, independently

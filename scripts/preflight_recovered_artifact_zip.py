@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from typing import Callable
 import re
 import stat
 import struct
@@ -309,6 +310,7 @@ def _unchanged(original: os.stat_result, current: os.stat_result) -> bool:
 def audit_recovered_zip(
     path: Path, *, expected_archive_sha256: str | None = None,
     github_job_log_artifact: str | None = None,
+    reserve_uncompressed_bytes: Callable[[int], None] | None = None,
 ) -> dict:
     """Inspect one ZIP without extraction, model calls, or archive modifications.
 
@@ -316,6 +318,11 @@ def audit_recovered_zip(
     before inspection. The separate GitHub job-log selector compares against
     *same-provider* historical metadata and never establishes independent
     custody, even if both bytes and digest match.
+
+    An optional reservation callback runs after all declared uncompressed sizes
+    have passed structural bounds, but BEFORE any ZIP member is decompressed.
+    Callers may reserve a batch-wide budget; the reservation is not refunded
+    if a later CRC/decompression failure invalidates the archive.
     """
     path = Path(path)
     if expected_archive_sha256 is not None and not HEX_SHA256.fullmatch(expected_archive_sha256):
@@ -412,6 +419,10 @@ def audit_recovered_zip(
                     ancestors = key.split("/")
                     if any("/".join(ancestors[:n]) in file_keys for n in range(1, len(ancestors))):
                         raise RecoveredArchiveError("ZIP file conflicts with a nested member path")
+                # Reserve the full declared decompression load before opening
+                # even one member. A failed CRC must not refund CPU/IO budget.
+                if reserve_uncompressed_bytes is not None:
+                    reserve_uncompressed_bytes(total)
                 for info in entries:
                     if info.is_dir():
                         # ZIP directory members are real entries with local headers,

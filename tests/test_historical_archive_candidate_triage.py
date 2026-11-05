@@ -69,7 +69,7 @@ def test_wrapped_permission_error_is_sanitized_without_masking_other_failures(
     """OSError cause chains retain the category without leaking file paths."""
     secret = tmp_path / "private-custody-directory" / "evidence.zip"
 
-    def reject(_path):
+    def reject(_path, **_kwargs):
         try:
             raise PermissionError(13, "Permission denied", str(secret))
         except PermissionError as cause:
@@ -99,7 +99,7 @@ def test_matching_provider_zip_is_not_authentication(tmp_path, monkeypatch, role
     anchor = triage.zip_preflight.GITHUB_JOB_LOG_ARCHIVES[role]
     path = _zip(tmp_path / "synthetic.zip")
 
-    def mocked_structural_inspection(path_arg):
+    def mocked_structural_inspection(path_arg, **_kwargs):
         assert path_arg == path
         return {
             "archive_bytes": anchor["size_bytes"],
@@ -136,7 +136,7 @@ def test_both_historical_byte_size_and_digest_required(tmp_path, monkeypatch, fi
     }
     observed[field] = 123 if field == "archive_bytes" else "0" * 64
     monkeypatch.setattr(
-        triage.zip_preflight, "audit_recovered_zip", lambda path: observed
+        triage.zip_preflight, "audit_recovered_zip", lambda path, **_kwargs: observed
     )
     receipt = triage.triage_candidates([(role, tmp_path / "synthetic.zip")])
     assert receipt["candidates"][0]["github_provider_zip_digest_and_size_match"] is False
@@ -147,7 +147,7 @@ def test_duplicate_or_invalid_candidate_inventory_rejected_before_io(tmp_path, m
     path = tmp_path / "candidate.zip"
     monkeypatch.setattr(
         triage.zip_preflight, "audit_recovered_zip",
-        lambda path: pytest.fail("should not inspect an invalid inventory"),
+        lambda path, **_kwargs: pytest.fail("should not inspect an invalid inventory"),
     )
     with pytest.raises(triage.CandidateTriageError, match="same candidate path"):
         triage.triage_candidates([
@@ -243,7 +243,7 @@ def test_distinct_paths_with_identical_zip_bytes_are_one_unique_candidate(tmp_pa
 
 def test_repeat_provider_concordance_does_not_count_same_bytes_twice(tmp_path, monkeypatch):
     anchor = triage.zip_preflight.GITHUB_JOB_LOG_ARCHIVES["original_treatment"]
-    def mocked_preflight(path):
+    def mocked_preflight(path, **_kwargs):
         return {
             "archive_bytes": anchor["size_bytes"],
             "archive_sha256_observed_now": anchor["zip_sha256"],
@@ -301,7 +301,7 @@ def test_other_role_pin_match_is_flagged_without_reassigning(
 ):
     anchor = triage.zip_preflight.GITHUB_JOB_LOG_ARCHIVES[matched_role]
     examined = []
-    def inspect(path):
+    def inspect(path, **_kwargs):
         examined.append(path)
         return {
             "archive_bytes": anchor["size_bytes"],
@@ -346,7 +346,7 @@ def test_partial_other_role_pin_never_counts_as_match(tmp_path, monkeypatch, cha
         anchor["size_bytes"] + 1 if changed_field == "archive_bytes" else "f" * 64
     )
     monkeypatch.setattr(
-        triage.zip_preflight, "audit_recovered_zip", lambda path: evidence
+        triage.zip_preflight, "audit_recovered_zip", lambda path, **_kwargs: evidence
     )
     receipt = triage.triage_candidates([
         ("original_treatment", tmp_path / "candidate.zip")
@@ -423,3 +423,89 @@ def test_changed_member_and_unsafe_candidate_never_claim_equal_content(tmp_path)
     assert receipt["same_regular_members_duplicate_count"] == 0
     assert receipt["by_role"]["evaluator_recovery"]["distinct_regular_member_content_count"] == 1
     assert receipt["all_explicit_candidates_accounted_for"] is True
+
+
+def test_batch_decompression_budget_accounts_for_all_candidates_without_preferring_outcomes(
+    tmp_path, monkeypatch,
+):
+    """Earlier inspected sources reserve bytes; later oversized ones stay visible."""
+    def source(name, count):
+        path = tmp_path / name
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as stream:
+            stream.writestr("synthetic/evidence.md", "x" * count)
+        return path
+
+    first = source("first.zip", 25)
+    too_large_for_remaining = source("second.zip", 25)
+    later_small = source("third.zip", 8)
+    before = [path.read_bytes() for path in (first, too_large_for_remaining, later_small)]
+    monkeypatch.setattr(triage, "MAX_BATCH_UNCOMPRESSED_BYTES", 35)
+
+    receipt = triage.triage_candidates([
+        ("original_treatment", first),
+        ("evaluator_recovery", too_large_for_remaining),
+        ("original_treatment", later_small),
+    ])
+    rows = receipt["candidates"]
+    assert [row["candidate_index"] for row in rows] == [1, 2, 3]
+    assert [row["status"] for row in rows] == [
+        "does_not_match_historical_github_provider_zip",
+        "not_inspected_batch_decompression_budget_exceeded",
+        "does_not_match_historical_github_provider_zip",
+    ]
+    assert rows[1]["structural_preflight_succeeded"] is False
+    assert rows[1]["observed_regular_member_content_sha256"] is None
+    assert "observed_zip_sha256" not in rows[1]
+    assert receipt["batch_declared_uncompressed_byte_budget"] == 35
+    assert receipt["batch_declared_uncompressed_bytes_reserved"] == 33
+    assert receipt["batch_candidates_not_inspected_due_to_budget"] == 1
+    assert receipt["all_explicit_candidates_accounted_for"] is True
+    assert receipt["human_evaluation_ready"] is False
+    assert [path.read_bytes() for path in (first, too_large_for_remaining, later_small)] == before
+
+
+def test_invalid_stream_after_reservation_does_not_refund_batch_budget(
+    tmp_path, monkeypatch,
+):
+    """A failed archive cannot force repeated expensive decompression attempts."""
+    first = _zip(tmp_path / "first.zip")
+    second = _zip(tmp_path / "second.zip")
+    declared = len("# Not a historical result\n")
+    monkeypatch.setattr(triage, "MAX_BATCH_UNCOMPRESSED_BYTES", declared + 1)
+
+    def fail_member_stream(_self, *_args, **_kwargs):
+        raise zipfile.BadZipFile("synthetic stream integrity failure")
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", fail_member_stream)
+    receipt = triage.triage_candidates([
+        ("original_treatment", first),
+        ("original_treatment", second),
+    ])
+    rows = receipt["candidates"]
+    assert rows[0]["status"] == "structural_preflight_failed"
+    assert rows[1]["status"] == "not_inspected_batch_decompression_budget_exceeded"
+    assert receipt["batch_declared_uncompressed_bytes_reserved"] == declared
+    assert receipt["batch_candidates_not_inspected_due_to_budget"] == 1
+    assert receipt["human_evaluation_ready"] is False
+
+
+def test_preflight_reservation_rejects_before_any_member_stream_is_opened(
+    tmp_path, monkeypatch,
+):
+    """Even a structurally valid ZIP is not decompressed if the ledger rejects."""
+    path = _zip(tmp_path / "evidence.zip")
+    reserved = []
+
+    def reject(count):
+        reserved.append(count)
+        raise triage.BatchUncompressedBudgetExceeded("synthetic budget exhausted")
+
+    def fail_if_opened(_self, *_args, **_kwargs):
+        pytest.fail("member decompression must not begin after budget rejection")
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", fail_if_opened)
+    with pytest.raises(triage.BatchUncompressedBudgetExceeded):
+        triage.zip_preflight.audit_recovered_zip(
+            path, reserve_uncompressed_bytes=reject
+        )
+    assert reserved == [len("# Not a historical result\n")]
