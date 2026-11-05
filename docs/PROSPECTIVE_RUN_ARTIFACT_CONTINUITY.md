@@ -194,8 +194,15 @@ characters such as German sharp S (`ß`) and Greek final sigma (`ς`) must
 not collapse two distinct DNS names into one recorded retrieval identity.
 Synthetic regression tests cover both distinct domains and their corresponding
 Punycode aliases. This strengthens prospective, *self-reported* URL accounting;
-it is not proof of actual HTTP retrieval or DNS resolution. IPv6 literals are
-handled separately; URL queries and
+it is not proof of actual HTTP retrieval or DNS resolution. Bracketed RFC 3986
+**IPvFuture** authorities (for example, `https://[v1.fe]/source`) are
+rejected as unsupported HTTP source identifiers: Python's `urlsplit`
+strips their brackets from `.hostname`, which otherwise silently
+conflates the unknown-address-family literal `[v1.fe]` with the separate
+ordinary DNS authority `v1.fe`. Canonical bracketed IPv6 and regular
+DNS-host URLs remain accepted; the verifier neither rewrites original
+evidence nor claims support for unimplemented future transport semantics.
+IPv6 literals are handled separately; URL queries and
 ordinary fragment references remain eligible. Empty explicitly written
 network ports (for DNS or bracketed IPv6 authorities) are rejected even
 though Python's URL parser treats them as an omitted port. Numeric-style

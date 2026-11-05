@@ -1545,6 +1545,47 @@ def test_distinct_ipv6_addresses_and_query_strings_remain_distinct(tmp_path):
     assert _audit(fixture)["self_reported_source_ledgers_within_frozen_budgets"] is True
 
 
+# urllib.parse.urlsplit accepts an RFC 3986 IPvFuture literal such as
+# [v1.fe] but removes the brackets from .hostname. The former cannot be
+# treated as the DNS host v1.fe in a reproducible HTTP source ledger.
+@pytest.mark.parametrize("unsupported_url", [
+    "https://[v1.fe]/source",
+    "https://[v1.fe]:443/source",
+    "http://[vF.ab]/source",
+])
+def test_ipvfuture_authority_cannot_masquerade_as_dns_source(
+    tmp_path, unsupported_url
+):
+    fixture = _fixture(tmp_path)
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[unsupported_url],
+            successful_urls=[unsupported_url], failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    with pytest.raises(design.DesignError, match="source ledger.*invalid HTTP"):
+        _audit(fixture)
+
+
+def test_dns_host_resembling_ipvfuture_literal_remains_valid(tmp_path):
+    fixture = _fixture(tmp_path)
+    url = "https://v1.fe/source"
+
+    def set_ledger(trace):
+        trace.update(
+            source_count=1, successful_source_count=1, failed_source_count=0,
+            scheduled_urls=[url], successful_urls=[url], failed_urls=[],
+        )
+
+    _rewrite_synthetic_source_ledger(fixture, cell_number=0, change=set_ledger)
+    receipt = _audit(fixture)
+    assert receipt["self_reported_source_ledgers_within_frozen_budgets"] is True
+    assert receipt["model_or_retrieval_calls_verified"] is False
+
+
 @pytest.mark.parametrize("nonportable_url", [
     "https://[fe80::1%25eth0]/study",
     "https://[fe80::1%eth0]/study",

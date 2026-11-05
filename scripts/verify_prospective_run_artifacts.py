@@ -463,6 +463,13 @@ def _source_fetch_identity(url: object, *, number: int) -> str:
         # It is not a canonical HTTP authority and can vary by client.
         if parsed.netloc.endswith(":"):
             raise ValueError("empty explicit network port")
+        # urlsplit accepts bracketed IPvFuture authorities such as [v1.fe],
+        # but strips the brackets from .hostname. Without a guard, that
+        # unsupported literal and the ordinary DNS name v1.fe receive the
+        # same normalized fetch identity. Do not conflate these authorities
+        # or claim a portable HTTP retrieval for an unknown address family.
+        if parsed.netloc.startswith("[") and ":" not in host:
+            raise ValueError("IPvFuture HTTP source authorities are unsupported")
         # A bracketed IP literal is an address, not a DNS name. Different
         # compressed/expanded IPv6 spellings identify the *same* fetch target;
         # do not let them inflate a claimed source count or break outcome
