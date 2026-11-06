@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from decimal import Decimal
 import hashlib
 import io
 import json
@@ -61,6 +62,54 @@ def _matrix(rows, *, label, expected_cells, run_identity):
     if set(by_cell) != expected_cells:
         raise ValueError(f"{label} frozen cell coverage differs")
     return by_cell
+
+
+
+def _verify_evaluator_measurement_mirrors(main: dict, evaluator: dict, *, cell: tuple[str, str]) -> None:
+    """Bind the blinded handoff to the *same* recorded automated measurement.
+
+    Historical preserved CSVs can predate prospective pricing metadata. This
+    checks only the four mirrored measurement fields that those exports carry;
+    it does not re-evaluate claims or alter the frozen confirmatory analysis.
+    """
+    label = f"{cell[0]}/{cell[1]}"
+    checked = inputs.require_nonnegative_integer(
+        evaluator.get("claims_checked"), f"evaluator {label} claims_checked"
+    )
+    supported = inputs.require_nonnegative_integer(
+        evaluator.get("supported"), f"evaluator {label} supported"
+    )
+    if checked == 0 or checked > inputs.FROZEN_POSTHOC_CLAIM_CAP:
+        raise ValueError(f"evaluator claim count outside frozen cap for {label}")
+    inputs.require_unit_interval(
+        evaluator.get("strict_support_rate"),
+        f"evaluator {label} strict_support_rate",
+    )
+    inputs.require_unit_interval(
+        main.get("posthoc_strict_support_rate"),
+        f"treatment {label} posthoc_strict_support_rate",
+    )
+    evaluator_rate = Decimal(str(evaluator["strict_support_rate"]).strip())
+    treatment_rate = Decimal(str(main["posthoc_strict_support_rate"]).strip())
+    # The preserved evaluator exports repr(supported / checked), not a
+    # rounded decimal estimate; compare the encoded number exactly.
+    expected_rate = Decimal(str(supported / checked))
+    if evaluator_rate != expected_rate:
+        raise ValueError(f"evaluator strict support rate contradicts counts for {label}")
+    if treatment_rate != evaluator_rate:
+        raise ValueError(f"automated strict support rate mirror mismatch for {label}")
+
+    inputs.require_nonnegative(
+        evaluator.get("estimated_cost_usd"), f"evaluator {label} estimated_cost_usd"
+    )
+    inputs.require_nonnegative(
+        main.get("posthoc_evaluator_cost_usd"),
+        f"treatment {label} posthoc_evaluator_cost_usd",
+    )
+    if Decimal(str(evaluator["estimated_cost_usd"]).strip()) != Decimal(
+        str(main["posthoc_evaluator_cost_usd"]).strip()
+    ):
+        raise ValueError(f"automated evaluator cost mirror mismatch for {label}")
 
 
 def compare_run_lineage(
@@ -115,6 +164,7 @@ def compare_run_lineage(
                 raise ValueError(
                     f"automated treatment/evaluator count mirror mismatch for {cell}"
                 )
+        _verify_evaluator_measurement_mirrors(main[cell], evaluated[cell], cell=cell)
     return {
         "schema_version": 1,
         "study_id": "budget-main-v1",
@@ -212,6 +262,8 @@ def audit_files(
     support_rows = _read_study_csv(initial["evaluator"], path=support_path)
     # Historical canonical analysis CSVs predate stricter prospective pricing
     # metadata. Enforce scientific row domains here, not modern pricing schema.
+    # compare_run_lineage separately checks the preserved evaluator-rate and
+    # evaluator-cost mirrors even when prospective pricing fields are absent.
     inputs.validate_rows(main_rows, support_rows, require_canonical_matrix=False)
     checked = compare_run_lineage(
         key_rows, main_rows, support_rows, expected_tasks=expected_tasks

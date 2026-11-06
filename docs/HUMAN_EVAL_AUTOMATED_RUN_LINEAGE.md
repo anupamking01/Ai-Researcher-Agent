@@ -19,7 +19,10 @@ defensible automated–human reconciliation. This independent optional audit
 binds all **40 cell-specific run IDs** in the coordinator's blinding key to the
 corresponding **40 run IDs** in the preserved common-evaluator CSV. It also
 requires the same exact matrix in the preserved main treatment CSV and checks
-the available treatment/evaluator claims-checked mirror.
+the mirrored evaluator claim count, strict-support rate, and estimated evaluator
+cost. The rate must also agree with the evaluator's supported/checked counts,
+under the frozen 12-claim cap. Matching run IDs alone must not make contradictory
+automated measurements look ready for human-to-automated comparison.
 
 ## Run the check before annotator distribution
 
@@ -54,7 +57,9 @@ The command requires:
 - distinct, well-formed run IDs in the key and evaluator CSV, matched for
   **each** treatment/task cell (not merely as a set);
 - the existing scientific row-domain checks and the historical treatment
-  CSV's available claims-checked mirror;
+  CSV's claims-checked mirror, as well as exact decimal agreement of both
+  strict-support-rate and evaluator-cost mirrors (including a rate-to-count
+  consistency check and frozen per-report claim cap);
 - the existing packet verification against persisted traces, reports, task
   manifest, source fingerprints, and seeded blind-ID mapping;
 - optional independently pinned archival manifest binding both canonical CSVs.
@@ -67,7 +72,9 @@ exist for this check.
 ## Interpretation and limitations
 
 A pass establishes an observed chain from a blinded packet item to its
-persisted report run and the common evaluator's run ID for the same cell.
+persisted report run, the common evaluator's run ID for the same cell, and
+the recorded mirrored automated measurements. It does not independently
+re-evaluate claims or prove that the reported scores or costs are true.
 It **does not** prove that an annotator is human, independent, or remained
 blind; does not authenticate original treatment generation or report quality;
 and is not an atomic snapshot across separate mutable filesystems. The

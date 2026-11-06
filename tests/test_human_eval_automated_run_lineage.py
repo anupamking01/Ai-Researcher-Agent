@@ -36,12 +36,16 @@ def _rows(tasks=TEST_TASKS):
                 "model_calls": "1", "report_words": "10",
                 "treatment_cost_usd": "0.01", "latency_seconds": "1.0",
                 "posthoc_claims_checked": "2",
+                "posthoc_strict_support_rate": "0.5",
+                "posthoc_evaluator_cost_usd": "0.0125",
             })
             support.append({
                 "variant_id": variant, "task_id": task, "run_id": run,
                 "claims_checked": "2", "supported": "1",
                 "partially_supported": "0", "unsupported": "1",
                 "contradicted": "0",
+                "strict_support_rate": "0.5",
+                "estimated_cost_usd": "0.0125",
             })
     return key, main, support
 
@@ -72,6 +76,13 @@ def test_fixture_run_identity_matches_and_remains_blinded():
     ("missing_treatment", "exactly 8 cells"),
     ("changed_treatment_mirror", "count mirror mismatch"),
     ("whitespace_run", "invalid run ID"),
+    ("wrong_treatment_rate", "strict support rate mirror mismatch"),
+    ("wrong_evaluator_rate", "strict support rate contradicts counts"),
+    ("missing_treatment_rate", "missing numeric field"),
+    ("missing_evaluator_rate", "missing numeric field"),
+    ("wrong_treatment_cost", "evaluator cost mirror mismatch"),
+    ("missing_evaluator_cost", "missing numeric field"),
+    ("excess_claim_cap", "outside frozen cap"),
 ])
 def test_rejects_false_run_lineage(mutation, expected):
     key, main, support = _rows()
@@ -95,7 +106,47 @@ def test_rejects_false_run_lineage(mutation, expected):
         main[0]["posthoc_claims_checked"] = "1"
     elif mutation == "whitespace_run":
         key[0]["run_id"] += " "
+    elif mutation == "wrong_treatment_rate":
+        main[0]["posthoc_strict_support_rate"] = "0.75"
+    elif mutation == "wrong_evaluator_rate":
+        support[0]["strict_support_rate"] = "0.75"
+    elif mutation == "missing_treatment_rate":
+        del main[0]["posthoc_strict_support_rate"]
+    elif mutation == "missing_evaluator_rate":
+        del support[0]["strict_support_rate"]
+    elif mutation == "wrong_treatment_cost":
+        main[0]["posthoc_evaluator_cost_usd"] = "0.025"
+    elif mutation == "missing_evaluator_cost":
+        del support[0]["estimated_cost_usd"]
+    elif mutation == "excess_claim_cap":
+        # Even two individually consistent archived mirror counts are invalid
+        # when they contradict the evaluator's frozen per-report claim cap.
+        main[0]["posthoc_claims_checked"] = "13"
+        support[0].update(
+            claims_checked="13", supported="1", unsupported="12"
+        )
     with pytest.raises(ValueError, match=expected):
+        lineage.compare_run_lineage(
+            key, main, support, expected_tasks=TEST_TASKS
+        )
+
+
+
+def test_measurement_mirrors_accept_equal_decimal_values_in_different_notation():
+    """Text representation differences cannot masquerade as outcome drift."""
+    key, main, support = _rows()
+    main[0]["posthoc_strict_support_rate"] = "0.50"
+    main[0]["posthoc_evaluator_cost_usd"] = "0.012500"
+    assert lineage.compare_run_lineage(
+        key, main, support, expected_tasks=TEST_TASKS
+    )["run_ids_matched"] == 8
+
+
+@pytest.mark.parametrize("bad", ["nan", "inf", "-0.01", "1.0000000000000001"])
+def test_measurement_mirrors_reject_invalid_automated_rates(bad):
+    key, main, support = _rows()
+    main[0]["posthoc_strict_support_rate"] = bad
+    with pytest.raises(ValueError, match="non-finite|negative|outside"):
         lineage.compare_run_lineage(
             key, main, support, expected_tasks=TEST_TASKS
         )
