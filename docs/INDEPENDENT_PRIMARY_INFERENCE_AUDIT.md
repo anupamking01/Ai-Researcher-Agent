@@ -46,6 +46,19 @@ custody or detection of unobserved changes after a successful read. The summary
 CSV reader remains shared with the existing independent CSV preflight; only
 the *statistical arithmetic* here is separately implemented.
 
+**Three-source observation window (6 November 2026):** The independent
+auditor now retains the initially captured inference-JSON and two CSV byte
+sequences and a filesystem generation identity for each source, completes the
+statistical arithmetic, and then recaptures all three paths using their
+existing bounded descriptor readers. A modified file, an observed same-byte
+pathname replacement, or a failed final capture aborts the audit instead of
+returning a successful receipt based on inputs that have changed during the
+arithmetic. Synthetic regression fixtures exercise changes to all three
+sources, same-byte replacement, and an unchanged read-only case. This check
+does not lock the files, establish archival custody, guarantee detection of
+unobserved transient mutations, or turn the independent arithmetic check into
+a new statistical analysis.
+
 It checks: frozen task order and configuration, report-level strict-support
 fractions, four variant mean strict-support rates, the three preregistered
 left/right paired means and mean/median contrasts, all ten task differences per
