@@ -221,7 +221,7 @@ def _simulated_source_git(monkeypatch, *, head=SHA, root=None, status="", fails=
             output = status
         else:
             raise AssertionError(f"unexpected Git command: {command}")
-        return subprocess.CompletedProcess(command, 0, stdout=output + "\\n", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout=output + "\n", stderr="")
 
     monkeypatch.setattr(bundle.subprocess, "run", execute)
 
