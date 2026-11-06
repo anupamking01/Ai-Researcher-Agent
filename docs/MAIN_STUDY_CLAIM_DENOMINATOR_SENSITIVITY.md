@@ -63,3 +63,36 @@ and two-independent-annotator gates. Diagnostic pilot findings, frozen
 automated confirmatory analysis, this exploratory denominator sensitivity,
 and prospective human validation remain separate. This command performs no
 treatment/evaluator reruns, no model calls and no artifact writes.
+
+
+## Independent saved-report verification
+
+A saved exploratory JSON report can be checked **without trusting the producing
+diagnostic's arithmetic**:
+
+    python -m scripts.analyze_main_study_claim_denominators > /tmp/vera_denominators.json
+    python -m scripts.verify_main_study_claim_denominator_artifact \
+      --artifact /tmp/vera_denominators.json
+
+The second command does not import the first. It recalculates all 40
+task-level checked/supported counts, four 1–12 histograms, macro-versus-micro
+rates, and all 30 paired task differences. It verifies every numerical field,
+the published evaluator/treatment source hashes, and declarations that no
+confirmatory inference, p-values, human ratings, or original execution
+authentication were added. It rejects an edited report even if its own
+fingerprint is recomputed.
+
+This read-only verification also independently checks the frozen source
+summary CSV fingerprints and task identities before and after replay. The
+saved JSON is captured with bounded no-follow directory/file descriptors;
+duplicate keys, nonfinite values, oversized inputs, deep nesting, and invalid
+types fail closed. A PASS returns the exact saved report SHA-256 and the
+numbers of checked cells and pairs.
+
+**Scope:** This is local arithmetic/byte reproducibility of an explicitly
+post-hoc sensitivity diagnostic, not independent authentication of missing
+treatment reports or original evaluator execution. The two calculations share
+the established frozen-CSV input audit; the result does not replace the
+preregistered task-macro estimand or change the historical custody and blinded
+human-evaluation blockers. External publication custody of the saved JSON
+would require a separately retained trusted fingerprint of that saved file.
