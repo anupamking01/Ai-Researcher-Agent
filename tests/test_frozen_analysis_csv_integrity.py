@@ -481,7 +481,7 @@ def test_audit_accepts_unredirected_nested_csv_capture(tmp_path):
     nested = tmp_path / "archive" / "frozen" / "summaries"
     nested.mkdir(parents=True)
     path = nested / "checks.csv"
-    original = b"variant_id,task_id\\nD3,synthetic-01\\n"
+    original = b"variant_id,task_id\nD3,synthetic-01\n"
     path.write_bytes(original)
     captured, rows = audit._read_csv(path, label="nested synthetic")
     assert captured == original
@@ -528,7 +528,7 @@ def test_audit_prevents_parent_symlink_injected_between_stat_and_open(
     active.mkdir()
     target = tmp_path / "other-source"
     target.mkdir()
-    original = b"variant_id,task_id\\nD3,synthetic-01\\n"
+    original = b"variant_id,task_id\nD3,synthetic-01\n"
     (active / "checks.csv").write_bytes(original)
     (target / "checks.csv").write_bytes(original)
     archived = tmp_path / "old-source"
