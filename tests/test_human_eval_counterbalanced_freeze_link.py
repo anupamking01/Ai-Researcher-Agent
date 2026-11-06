@@ -189,3 +189,41 @@ def test_capture_rejects_invalid_caller_specific_resource_limits(tmp_path, inval
     source.write_bytes(b"{}")
     with pytest.raises(ValueError, match="capture limit"):
         freeze._capture_regular_input(source, label="pair receipt", max_bytes=invalid_limit)
+
+
+def test_recheck_rejects_receipt_expanded_above_limit_before_read(frozen_case, monkeypatch):
+    """The end-of-audit recheck must not fall back to the 64-MiB CSV limit."""
+    original_verify = link.freeze_verify.verify_frozen_snapshot
+    real_pread = freeze.os.pread
+
+    def expand_after_archive_verification(*args, **kwargs):
+        result = original_verify(*args, **kwargs)
+        frozen_case["pair_receipt_path"].write_bytes(
+            b" " * (link.MAX_RECEIPT_BYTES + 1)
+        )
+
+        def assert_no_oversized_read(fd, size, offset):
+            if freeze.os.fstat(fd).st_size > link.MAX_RECEIPT_BYTES:
+                raise AssertionError("oversized recheck read receipt payload")
+            return real_pread(fd, size, offset)
+
+        monkeypatch.setattr(freeze.os, "pread", assert_no_oversized_read)
+        return result
+
+    monkeypatch.setattr(
+        link.freeze_verify, "verify_frozen_snapshot", expand_after_archive_verification
+    )
+    with pytest.raises(
+        ValueError,
+        match=f"pair receipt recheck exceeds {link.MAX_RECEIPT_BYTES} byte",
+    ):
+        link.verify_counterbalanced_freeze_link(**frozen_case)
+
+
+def test_deeply_nested_pinned_receipt_fails_with_controlled_error(tmp_path):
+    """An independently pinned but malformed JSON receipt must not crash the CLI."""
+    source = tmp_path / "nested-pair-receipt.json"
+    source.write_bytes(b"[" * 2000 + b"0" + b"]" * 2000)
+    pinned = hashlib.sha256(source.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match="pair receipt JSON nesting"):
+        link._pinned_pair(source, pinned)

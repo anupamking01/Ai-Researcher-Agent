@@ -34,6 +34,8 @@ def _unique(pairs):
 def _object(data: bytes, label: str) -> dict:
     try:
         parsed = json.loads(data.decode("utf-8"), object_pairs_hook=_unique)
+    except RecursionError as exc:
+        raise ValueError(f"{label} JSON nesting exceeds parser limit") from exc
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"{label} must be UTF-8 JSON") from exc
     _require(type(parsed) is dict, f"{label} must be an object")
@@ -173,7 +175,8 @@ def verify_counterbalanced_freeze_link(
     _require(packet.get("sha256") == canonical_packet,
              "frozen governing packet differs from canonical distribution")
     _require(freeze._capture_regular_input(
-        pair_receipt_path, label="pair receipt recheck"
+        pair_receipt_path, label="pair receipt recheck",
+        max_bytes=MAX_RECEIPT_BYTES,
     ) == prior_bytes, "pair receipt changed during verification")
     _require(freeze_verify._capture_freeze_inventory(freeze_root) == initial,
              "freeze archive changed during verification")

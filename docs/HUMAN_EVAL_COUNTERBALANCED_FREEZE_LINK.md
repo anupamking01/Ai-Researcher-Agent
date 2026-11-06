@@ -32,6 +32,12 @@ provenance receipt, not a full annotation CSV. That receipt has a **64-KiB**
 limit. Its source capture enforces this limit **at the opened file descriptor,
 before reading any payload**, rather than first allowing the shared 64-MiB
 human-rating input limit and only rejecting the oversized bytes afterward.
+Both the initial independently pinned read **and the final end-of-audit
+recheck** enforce the same 64-KiB bound before consuming the receipt. This
+prevents a replaced or expanded receipt from reverting to the broader CSV input
+limit during the final continuity check. Excessive JSON nesting in an otherwise
+size-bounded, independently pinned receipt also fails with a controlled
+verification error instead of an uncaught parser recursion exception.
 The same file-identity, append-growth, symlink and replacement checks remain in
 force. The default source-capture contract for genuine rating/packet inputs
 is unchanged. Synthetic regression coverage checks oversized pre-read refusal,
