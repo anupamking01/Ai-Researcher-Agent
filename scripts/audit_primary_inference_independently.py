@@ -619,13 +619,56 @@ def audit_primary(treatment_rows, evaluator_rows, inference):
 
 
 def audit_files(main_csv: Path, support_csv: Path, inference_json: Path):
-    # Read and parse *the same captured bytes* for each input. Prior to this
-    # change CSV parsing could reread a mutable path in two passes, while JSON
-    # performed a separate stat check followed by an unbounded pathname read.
-    inference = _decode_inference_json(_capture_inference_bytes(inference_json))
-    _, main_rows = _read_captured_csv(Path(main_csv), label="treatment CSV")
-    _, support_rows = _read_captured_csv(Path(support_csv), label="evaluator CSV")
-    return audit_primary(main_rows, support_rows, inference)
+    """Audit one stable triple of input generations, not three unrelated reads.
+
+    The independent bootstrap audit can run for seconds after all three inputs
+    have been captured. Recheck both descriptor-bounded bytes and pathname
+    identities after the arithmetic so a changed source cannot be silently
+    reported as an audit of the presently supplied files. This is a local
+    observation window, not independent authentication of historical evidence.
+    """
+    main_csv, support_csv, inference_json = (
+        Path(main_csv), Path(support_csv), Path(inference_json)
+    )
+    inference_raw = _capture_inference_bytes(inference_json)
+    inference = _decode_inference_json(inference_raw)
+    main_raw, main_rows = _read_captured_csv(main_csv, label="treatment CSV")
+    support_raw, support_rows = _read_captured_csv(
+        support_csv, label="evaluator CSV"
+    )
+    sources = (
+        ("inference JSON", inference_json, inference_raw, _capture_inference_bytes),
+        ("treatment CSV", main_csv, main_raw, _capture_csv_bytes_for_audit),
+        ("evaluator CSV", support_csv, support_raw, _capture_csv_bytes_for_audit),
+    )
+    # The original capture functions verify each opened descriptor and its
+    # visible pathname. Keep a generation fingerprint across the *whole*
+    # arithmetic window as well, to detect replacement with identical bytes.
+    generations = tuple(
+        _source_identity(os.stat(path, follow_symlinks=False))
+        for _, path, _, _ in sources
+    )
+    result = audit_primary(main_rows, support_rows, inference)
+    for (label, path, original, capture), generation in zip(sources, generations):
+        try:
+            if (
+                _source_identity(os.stat(path, follow_symlinks=False)) != generation
+                or capture(path) != original
+            ):
+                raise ValueError(
+                    f"{label} changed during independent inference audit"
+                )
+        except OSError as exc:
+            raise ValueError(
+                f"{label} became unavailable during independent inference audit"
+            ) from exc
+    return result
+
+
+def _capture_csv_bytes_for_audit(path: Path) -> bytes:
+    """Reuse the bounded CSV capture without parsing a second time."""
+    from scripts.audit_frozen_analysis_csv_inputs import _capture_csv_bytes
+    return _capture_csv_bytes(path, label="independent inference CSV recheck")
 
 
 def main():
