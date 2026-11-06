@@ -115,12 +115,27 @@ def verify_receipt(
         raise ReceiptVerificationError(
             "recorded candidate inventory differs from replayed inspection"
         )
+    # An invalid, missing or budget-skipped candidate has no successfully
+    # verified source-byte digest in the original triage receipt. Two different
+    # bad archives can produce an identical diagnostic. Replaying that text
+    # must not masquerade as verifying continuity of the candidate's bytes.
+    unverified_indexes = [
+        row["candidate_index"] for row in replayed["candidates"]
+        if not row["structural_preflight_succeeded"]
+    ]
+    full_replay = not unverified_indexes
     return {
         "schema_version": 1,
-        "status": "triage_receipt_replayed_not_historically_authenticated",
+        "status": (
+            "triage_receipt_replayed_not_historically_authenticated"
+            if full_replay else
+            "triage_receipt_diagnostics_replayed_with_unverified_candidate_sources"
+        ),
         "recorded_receipt_sha256": hashlib.sha256(raw).hexdigest(),
         "candidate_count": len(assignments),
-        "full_recorded_inventory_replayed": True,
+        "diagnostic_inventory_replayed": True,
+        "full_recorded_inventory_replayed": full_replay,
+        "unverified_candidate_indexes": unverified_indexes,
         "github_provider_metadata_is_independent_custody": False,
         "historical_evidence_authenticated": False,
         "human_evaluation_ready": False,
@@ -147,7 +162,9 @@ def main() -> int:
     except (ReceiptVerificationError, triage.CandidateTriageError) as exc:
         parser.exit(1, f"VERA ARCHIVE TRIAGE RECEIPT REPLAY: FAIL: {exc}\n")
     print(json.dumps(result, sort_keys=True, indent=2))
-    return 0
+    # Preserve the replayed negative observations for diagnosis, but do not
+    # signal successful source continuity when those sources were not hashed.
+    return 0 if result["full_recorded_inventory_replayed"] else 1
 
 
 if __name__ == "__main__":

@@ -93,10 +93,51 @@ def test_replay_rejects_unbounded_receipt_before_scanning_archives(tmp_path, mon
         verify.verify_receipt(receipt, [("original_treatment", candidate)])
 
 
-def test_failed_candidate_inventory_is_replayable_without_custody_claim(tmp_path):
+def test_failed_candidate_inventory_is_diagnostic_only_without_source_digest(tmp_path):
     candidate = tmp_path / "missing.zip"
     assignments = [("original_treatment", candidate)]
     receipt = _receipt(tmp_path / "receipt.json", assignments)
     result = verify.verify_receipt(receipt, assignments)
-    assert result["full_recorded_inventory_replayed"] is True
+    assert result["diagnostic_inventory_replayed"] is True
+    assert result["full_recorded_inventory_replayed"] is False
+    assert result["unverified_candidate_indexes"] == [1]
+    assert result["status"].endswith("unverified_candidate_sources")
+    assert result["human_evaluation_ready"] is False
+
+
+def test_different_invalid_zip_bytes_cannot_yield_full_source_replay(tmp_path):
+    candidate = tmp_path / "corrupt.zip"
+    candidate.write_bytes(b"invalid-A")
+    assignments = [("original_treatment", candidate)]
+    original = triage.triage_candidates(assignments)
+    assert original["candidates"][0]["status"] == "structural_preflight_failed"
+    receipt = _receipt(tmp_path / "receipt.json", assignments)
+    # Both source generations produce exactly the same negative diagnostic.
+    # A row-only comparison would incorrectly assert full replay success.
+    candidate.write_bytes(b"invalid-B")
+    assert triage.triage_candidates(assignments) == original
+    result = verify.verify_receipt(receipt, assignments)
+    assert result["diagnostic_inventory_replayed"] is True
+    assert result["full_recorded_inventory_replayed"] is False
+    assert result["unverified_candidate_indexes"] == [1]
+
+
+def test_partial_replay_prints_diagnostic_but_cli_exits_nonzero(tmp_path, monkeypatch, capsys):
+    import sys
+
+    valid = _zip(tmp_path / "valid.zip", b"present")
+    invalid = tmp_path / "missing.zip"
+    assignments = [("original_treatment", valid), ("evaluator_recovery", invalid)]
+    receipt = _receipt(tmp_path / "receipt.json", assignments)
+    monkeypatch.setattr(sys, "argv", [
+        "verify_historical_archive_triage_receipt.py",
+        "--receipt", str(receipt),
+        "--original-treatment", str(valid),
+        "--evaluator-recovery", str(invalid),
+    ])
+    assert verify.main() == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["diagnostic_inventory_replayed"] is True
+    assert result["full_recorded_inventory_replayed"] is False
+    assert result["unverified_candidate_indexes"] == [2]
     assert result["human_evaluation_ready"] is False

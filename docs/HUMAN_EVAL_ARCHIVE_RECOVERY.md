@@ -695,10 +695,24 @@ python -m scripts.verify_historical_archive_triage_receipt \
   --evaluator-recovery /authorized/recovered.zip
 ```
 
-A replay fails closed on a changed source, reordered or relabelled candidates,
-changed status/count/budget values, JSON type substitutions, duplicate JSON
-keys, or an oversized/linked/unstable receipt. Its success result fingerprints
-the exact saved receipt bytes; it does not modify or extract candidate ZIPs.
+For **structurally verified ZIPs**, replay compares their present-day
+SHA-256/size and content inventory, so a changed candidate cannot silently
+satisfy the saved receipt. For **missing, corrupt, rejected, or budget-skipped
+candidates**, the triage receipt contains no verified source-byte digest:
+different invalid byte streams can produce the *same* failure diagnostic.
+The replay tool therefore returns a diagnostic-only partial result
+(`diagnostic_inventory_replayed=true`,
+`full_recorded_inventory_replayed=false`, with 1-based
+`unverified_candidate_indexes`) and exits **nonzero** after printing it.
+A repeated failure message is never treated as proof that the failed source
+bytes were unchanged. Preserve negative observations for investigation, but
+do not use a partial receipt replay as an affirmative source-continuity gate.
+
+A complete replay fails closed on changed verified source bytes, reordered or
+relabelled candidates, changed status/count/budget values, JSON type
+substitutions, duplicate JSON keys, or an oversized/linked/unstable receipt.
+Its complete success result fingerprints the exact saved receipt bytes; it
+does not modify or extract candidate ZIPs.
 It requires a new bounded scan, so budget for that I/O separately. The receipt
 contains only filenames, not backup-directory paths: preserve the original
 exact command and independent custody records separately. Success proves
