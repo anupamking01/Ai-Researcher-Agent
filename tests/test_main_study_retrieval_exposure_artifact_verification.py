@@ -74,7 +74,7 @@ def test_independent_receipt_recomputation_checks_all_40_cells_and_30_pairs():
 @pytest.mark.parametrize("path,value", [
     (("variant_summaries", "D3", "totals", "successful_sources"), 888),
     (("variant_summaries", "D6", "means_per_report", "total_tokens"), 0.0),
-    (("variant_summaries", "P6", "reports_with_capacity_not_accounted_for"), 10),
+    (("variant_summaries", "P6", "reports_with_capacity_not_accounted_for"), 0),
     (("variant_summaries", "P6V", "all_task_exposures", 0, "failed_sources"), 0),
     (("frozen_contrast_exposure_comparisons", "D6_minus_D3_retrieval_depth",
       "all_task_exposure_differences", 0, "successful_source_delta"), 99),
