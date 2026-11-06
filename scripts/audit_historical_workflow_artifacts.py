@@ -26,6 +26,8 @@ API_BASE = "https://api.github.com"
 PAGE_SIZE = 100
 MAX_PAGES = 20
 MAX_RESPONSE_BYTES = 512 * 1024
+MAX_API_JSON_DEPTH = 64
+MAX_API_INTEGER_DIGITS = 20
 # Immutable GitHub repository ID, captured from the original historical runs.
 HISTORICAL_REPOSITORY_ID = 812439224
 HISTORICAL_BRANCH = "research-paper-eval-2027"
@@ -157,6 +159,48 @@ def _reject_constant(value: str):
     raise ArtifactInventoryError(f"non-finite API JSON constant: {value}")
 
 
+def _bounded_api_integer(token: str) -> int:
+    # GitHub's historical artifact/run identifiers and byte counts are integers.
+    # Reject oversized values before invoking Python's integer conversion.
+    if len(token.lstrip("-")) > MAX_API_INTEGER_DIGITS:
+        raise ArtifactInventoryError("GitHub Actions metadata integer exceeds digit limit")
+    return int(token)
+
+
+def _reject_api_float(token: str):
+    # Workflow and artifact metadata have no float-valued source fields.
+    raise ArtifactInventoryError("GitHub Actions metadata floating-point token is invalid")
+
+
+def _require_bounded_api_json_depth(raw: bytes) -> None:
+    """Bound container nesting without treating quoted brackets as structure."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for octet in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif octet == 92:  # backslash
+                escaped = True
+            elif octet == 34:  # quote
+                in_string = False
+        elif octet == 34:
+            in_string = True
+        elif octet in (91, 123):  # open array or object
+            depth += 1
+            if depth > MAX_API_JSON_DEPTH:
+                raise ArtifactInventoryError(
+                    "GitHub Actions metadata exceeds JSON nesting limit"
+                )
+        elif octet in (93, 125):
+            depth -= 1
+            if depth < 0:
+                raise ArtifactInventoryError(
+                    "GitHub Actions metadata has unmatched JSON closing delimiter"
+                )
+
+
 class _RejectInventoryRedirects(HTTPRedirectHandler):
     """Keep run-scoped metadata reads on the pinned GitHub API endpoint."""
 
@@ -203,13 +247,20 @@ def _fetch_json(path: str) -> object:
         ) from exc
     if len(raw) > MAX_RESPONSE_BYTES:
         raise ArtifactInventoryError("GitHub Actions metadata response exceeds size limit")
+    _require_bounded_api_json_depth(raw)
     try:
         return json.loads(
             raw.decode("utf-8"), object_pairs_hook=_unique_object,
             parse_constant=_reject_constant,
+            parse_int=_bounded_api_integer,
+            parse_float=_reject_api_float,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ArtifactInventoryError("GitHub Actions response is not valid UTF-8 JSON") from exc
+    except ArtifactInventoryError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as exc:
+        raise ArtifactInventoryError(
+            "GitHub Actions response is not bounded valid UTF-8 JSON"
+        ) from exc
 
 
 def _require_object(value: object, *, label: str) -> dict:

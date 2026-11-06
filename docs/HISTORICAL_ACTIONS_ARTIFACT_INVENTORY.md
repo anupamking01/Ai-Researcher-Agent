@@ -1004,3 +1004,18 @@ retained record require an explicit, reviewable re-anchoring decision; ordinary
 reformatting will not silently change historical provenance. Offline synthetic
 tests exercise modification, deletion, link substitution and resource bounds.
 No model or human-study reruns are involved.
+
+## Bounded JSON parsing for the primary run-scoped inventory
+
+The primary workflow-run and paginated artifact-listing requests are capped at
+512 KiB of raw response bytes **each**. Their decoder additionally rejects
+JSON structures nested beyond 64 object/array levels, integer tokens longer
+than 20 digits, floating-point/nonfinite tokens, and duplicate object keys.
+Quoted/escaped bracket characters do not count as nested containers.
+Unparseable UTF-8, invalid JSON and parser recursion failures are reported as
+controlled `ArtifactInventoryError` failures rather than being mistaken for an
+empty artifact list. Synthetic regression cases cover hostile responses without
+making network requests. This strengthens the *run-scoped* recovery diagnostic;
+the separately implemented direct-artifact-ID lookup is not a substitute for
+it. Neither parser can authenticate or recover the historical ZIP contents,
+prove that offline source evidence is absent, or advance human validation.
