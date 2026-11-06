@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from contextlib import ExitStack
 from datetime import datetime, timedelta
 import hashlib
 import io
@@ -73,6 +74,71 @@ class ChronologyError(ValueError):
     """The observed file cannot establish a valid recorded schedule."""
 
 
+
+def _capture_chronology_source(path: Path, *, limit: int, label: str) -> bytes:
+    """Read a bounded leaf while holding no-follow ancestors across capture."""
+    path = Path(path)
+    if ".." in path.parts:
+        raise ChronologyError(f"{label} path contains parent traversal")
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise ChronologyError(f"{label} requires no-follow directory support")
+    absolute = path.absolute()
+    dflags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    fflags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
+
+    def file_generation(st):
+        return (st.st_dev, st.st_ino, st.st_mode, st.st_nlink, st.st_size,
+                st.st_mtime_ns, st.st_ctime_ns)
+
+    def directory_identity(st):
+        # Unrelated sibling writes may change directory mtime.
+        return (st.st_dev, st.st_ino, st.st_mode)
+
+    try:
+        with ExitStack() as stack:
+            parent = os.open(absolute.anchor, dflags)
+            stack.callback(os.close, parent)
+            ancestors = []
+            for name in absolute.parts[1:-1]:
+                child = os.open(name, dflags, dir_fd=parent)
+                stack.callback(os.close, child)
+                opened_dir = os.fstat(child)
+                linked_dir = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                if (not stat.S_ISDIR(opened_dir.st_mode)
+                        or directory_identity(opened_dir) != directory_identity(linked_dir)):
+                    raise ChronologyError(f"{label} parent directory changed before capture")
+                ancestors.append((parent, name, child))
+                parent = child
+            before = os.stat(absolute.name, dir_fd=parent, follow_symlinks=False)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                raise ChronologyError(f"{label} must be a single-link regular non-symlink file")
+            if not 0 < before.st_size <= limit:
+                raise ChronologyError(f"{label} input size outside bounded range")
+            fd = os.open(absolute.name, fflags, dir_fd=parent)
+            stack.callback(os.close, fd)
+            opened = os.fstat(fd)
+            linked = os.stat(absolute.name, dir_fd=parent, follow_symlinks=False)
+            if (not stat.S_ISREG(opened.st_mode)
+                    or file_generation(before) != file_generation(opened)
+                    or file_generation(opened) != file_generation(linked)):
+                raise ChronologyError(f"{label} source changed before capture")
+            with os.fdopen(fd, "rb", closefd=False) as handle:
+                raw = handle.read(limit + 1)
+            after = os.fstat(fd)
+            linked_after = os.stat(absolute.name, dir_fd=parent, follow_symlinks=False)
+            if (len(raw) != opened.st_size
+                    or file_generation(opened) != file_generation(after)
+                    or file_generation(after) != file_generation(linked_after)):
+                raise ChronologyError(f"{label} source changed during capture")
+            for holder, name, child in ancestors:
+                visible = os.stat(name, dir_fd=holder, follow_symlinks=False)
+                if directory_identity(visible) != directory_identity(os.fstat(child)):
+                    raise ChronologyError(f"{label} parent directory changed during capture")
+            return raw
+    except OSError as exc:
+        raise ChronologyError(f"cannot safely capture {label} input") from exc
+
+
 def _unique_pairs(pairs):
     result = {}
     for key, value in pairs:
@@ -102,43 +168,8 @@ def _finite_json_float(token: str) -> float:
 
 
 def _capture_progress(path: Path) -> tuple[dict, str, int]:
-    """Bound input bytes and prevent symlink, FIFO and observable file swaps."""
-    path = Path(path)
-    try:
-        named_before = path.stat(follow_symlinks=False)
-        if not stat.S_ISREG(named_before.st_mode) or named_before.st_nlink != 1:
-            raise ChronologyError("progress input must be a single-link regular non-symlink file")
-        if not 0 < named_before.st_size <= MAX_PROGRESS_BYTES:
-            raise ChronologyError("progress input size outside bounded range")
-        fd = os.open(
-            path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_NONBLOCK", 0),
-        )
-    except OSError as exc:
-        raise ChronologyError("cannot safely open progress input") from exc
-
-    def generation(entry):
-        return (entry.st_dev, entry.st_ino, entry.st_mode, entry.st_nlink,
-                entry.st_size, entry.st_mtime_ns, entry.st_ctime_ns)
-
-    try:
-        opened_before = os.fstat(fd)
-        if (not stat.S_ISREG(opened_before.st_mode)
-                or generation(named_before) != generation(opened_before)):
-            raise ChronologyError("progress source changed before capture")
-        with os.fdopen(fd, "rb", closefd=False) as handle:
-            raw = handle.read(MAX_PROGRESS_BYTES + 1)
-        opened_after = os.fstat(fd)
-        named_after = path.stat(follow_symlinks=False)
-        if (len(raw) != opened_before.st_size
-                or generation(opened_before) != generation(opened_after)
-                or generation(opened_after) != generation(named_after)):
-            raise ChronologyError("progress source changed during capture")
-    except OSError as exc:
-        raise ChronologyError("cannot safely capture progress input") from exc
-    finally:
-        os.close(fd)
-
+    """Capture bounded original progress through held no-follow ancestors."""
+    raw = _capture_chronology_source(path, limit=MAX_PROGRESS_BYTES, label="progress")
     try:
         payload = json.loads(
             raw.decode("utf-8"), object_pairs_hook=_unique_pairs,
@@ -154,44 +185,13 @@ def _capture_progress(path: Path) -> tuple[dict, str, int]:
 
 
 def _load_published_treatment_cost(path: Path, *, include_latencies: bool = False):
-    """Pin the 40-cell resource ledger; optionally capture trace latency by cell.
+    """Pin the frozen 40-cell resource ledger; optionally capture latency.
 
-    Verify capture stability, not historical source custody or provider bills.
-    The source digest is fixed in code; no new pin is derived from a candidate.
+    This is local source integrity, not authentication of provider billing.
     """
-    path = Path(path)
-    try:
-        before = path.stat(follow_symlinks=False)
-        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
-                or not 0 < before.st_size <= MAX_PUBLISHED_CSV_BYTES):
-            raise ChronologyError("published treatment CSV must be a bounded single-link regular file")
-        fd = os.open(
-            path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_NONBLOCK", 0),
-        )
-    except OSError as exc:
-        raise ChronologyError("cannot safely open published treatment CSV") from exc
-
-    def generation(s):
-        return (s.st_dev, s.st_ino, s.st_mode, s.st_nlink,
-                s.st_size, s.st_mtime_ns, s.st_ctime_ns)
-
-    try:
-        opened = os.fstat(fd)
-        if not stat.S_ISREG(opened.st_mode) or generation(opened) != generation(before):
-            raise ChronologyError("published treatment CSV changed before capture")
-        with os.fdopen(fd, "rb", closefd=False) as handle:
-            raw = handle.read(MAX_PUBLISHED_CSV_BYTES + 1)
-        after = os.fstat(fd)
-        named_after = path.stat(follow_symlinks=False)
-        if (len(raw) != opened.st_size or generation(opened) != generation(after)
-                or generation(after) != generation(named_after)):
-            raise ChronologyError("published treatment CSV changed during capture")
-    except OSError as exc:
-        raise ChronologyError("cannot safely capture published treatment CSV") from exc
-    finally:
-        os.close(fd)
-
+    raw = _capture_chronology_source(
+        path, limit=MAX_PUBLISHED_CSV_BYTES, label="published treatment CSV"
+    )
     if hashlib.sha256(raw).hexdigest() != PUBLISHED_TREATMENT_CSV_SHA256:
         raise ChronologyError(
             "published treatment CSV differs from frozen analysis input SHA-256"

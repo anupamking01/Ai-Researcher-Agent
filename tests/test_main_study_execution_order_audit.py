@@ -492,3 +492,77 @@ def test_original_progress_enclosing_window_requires_writer_utc_syntax(field):
 def test_original_progress_accepts_exact_writer_utc_renderings(timestamp):
     parsed = order._utc(timestamp, "synthetic timestamp")
     assert parsed.isoformat() == timestamp
+
+
+@pytest.mark.parametrize("kind", ("progress", "published_csv"))
+def test_historical_chronology_rejects_symlinked_ancestor(tmp_path, monkeypatch, kind):
+    real = tmp_path / "real"
+    real.mkdir()
+    raw = (json.dumps(_fixture()).encode() if kind == "progress"
+           else _synthetic_published_cost_csv())
+    name = "progress.json" if kind == "progress" else "costs.csv"
+    source = real / name
+    source.write_bytes(raw)
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+    if kind == "progress":
+        capture = order._capture_progress
+    else:
+        monkeypatch.setattr(order, "PUBLISHED_TREATMENT_CSV_SHA256",
+                            hashlib.sha256(raw).hexdigest())
+        capture = order._load_published_treatment_cost
+    with pytest.raises(order.ChronologyError):
+        capture(alias / name)
+    assert source.read_bytes() == raw
+
+
+@pytest.mark.parametrize("kind", ("progress", "published_csv"))
+def test_historical_chronology_detects_same_byte_ancestor_swap(tmp_path, monkeypatch, kind):
+    root, incoming = tmp_path / "evidence", tmp_path / "incoming"
+    root.mkdir()
+    incoming.mkdir()
+    raw = (json.dumps(_fixture()).encode() if kind == "progress"
+           else _synthetic_published_cost_csv())
+    name = "progress.json" if kind == "progress" else "costs.csv"
+    (root / name).write_bytes(raw)
+    (incoming / name).write_bytes(raw)
+    if kind == "progress":
+        capture = order._capture_progress
+    else:
+        monkeypatch.setattr(order, "PUBLISHED_TREATMENT_CSV_SHA256",
+                            hashlib.sha256(raw).hexdigest())
+        capture = order._load_published_treatment_cost
+    original_fdopen = order.os.fdopen
+    replaced = False
+
+    def swap_on_capture(fd, *args, **kwargs):
+        nonlocal replaced
+        if not replaced:
+            root.rename(tmp_path / "old_evidence")
+            incoming.rename(root)
+            replaced = True
+        return original_fdopen(fd, *args, **kwargs)
+
+    monkeypatch.setattr(order.os, "fdopen", swap_on_capture)
+    with pytest.raises(order.ChronologyError, match="parent directory changed during capture"):
+        capture(root / name)
+    assert replaced
+
+
+@pytest.mark.parametrize("kind", ("progress", "published_csv"))
+def test_historical_chronology_accepts_nested_ordinary_ancestors(tmp_path, monkeypatch, kind):
+    nested = tmp_path / "ordinary" / "nested"
+    nested.mkdir(parents=True)
+    raw = (json.dumps(_fixture()).encode() if kind == "progress"
+           else _synthetic_published_cost_csv())
+    path = nested / ("progress.json" if kind == "progress" else "costs.csv")
+    path.write_bytes(raw)
+    if kind == "progress":
+        payload, sha, size = order._capture_progress(path)
+        assert payload["completed_runs"] == 40
+        assert sha == hashlib.sha256(raw).hexdigest()
+        assert size == len(raw)
+    else:
+        monkeypatch.setattr(order, "PUBLISHED_TREATMENT_CSV_SHA256",
+                            hashlib.sha256(raw).hexdigest())
+        assert order._load_published_treatment_cost(path) == 0.625

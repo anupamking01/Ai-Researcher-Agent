@@ -282,3 +282,21 @@ no inferential or human-evaluation results changed. This gate can rule out a
 structurally impossible candidate; **matching syntax cannot authenticate
 historical source custody, validate recorded clocks, or correct fixed-order
 temporal confounding**.
+
+
+## Held no-follow ancestors for chronology source capture (6 November 2026)
+
+Both the recovered historical progress JSON and the immutable SHA-256-pinned
+40-cell treatment CSV are now captured through held directory descriptors,
+opened one ancestor at a time without following symlinks. The auditor
+rechecks the ancestor chain before accepting bytes. A symlinked parent or
+an observed same-byte ancestor rename/replacement during capture fails closed.
+The existing single-link leaf rule, byte limits, generation checks, JSON
+semantics, and canonical CSV SHA-256 remain enforced. Six synthetic regression
+cases cover redirected parents, parent swaps, and ordinary nested paths for
+both source types. No original experiment evidence has been recovered.
+
+This protects local source-path continuity during reading; it does not lock
+files, prove historical custody or detect every unobserved transient swap.
+Original reports and traces, fixed-order temporal confounding, genuine blinded
+human ratings, and independent archive authentication remain outstanding.
