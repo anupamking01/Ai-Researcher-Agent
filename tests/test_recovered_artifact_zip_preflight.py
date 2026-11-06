@@ -22,6 +22,55 @@ def _zip(path: Path, entries: dict[str, bytes]) -> Path:
     return path
 
 
+def test_bounded_fingerprint_accepts_exact_multichunk_bytes_and_rejects_truncation():
+    payload = b"z" * (audit.CHUNK_BYTES + 7)
+    assert audit._fingerprint(
+        io.BytesIO(payload), expected_bytes=len(payload),
+    ) == hashlib.sha256(payload).hexdigest()
+    with pytest.raises(audit.RecoveredArchiveError, match="bounded hashing: truncated"):
+        audit._fingerprint(
+            io.BytesIO(payload[:-1]), expected_bytes=len(payload),
+        )
+
+
+def test_bounded_fingerprint_stops_at_first_unreserved_byte():
+    class CountedStream(io.BytesIO):
+        def __init__(self, data):
+            super().__init__(data)
+            self.read_bytes = 0
+
+        def read(self, n=-1):
+            assert n > 0, "hashing must not use unbounded reads"
+            chunk = super().read(n)
+            self.read_bytes += len(chunk)
+            return chunk
+
+    stream = CountedStream(b"a" * 32 + b"b" * (audit.CHUNK_BYTES * 2))
+    with pytest.raises(audit.RecoveredArchiveError, match="bounded hashing: grew"):
+        audit._fingerprint(stream, expected_bytes=32)
+    assert stream.read_bytes == 33
+
+
+def test_growth_after_archive_budget_reservation_fails_before_zip_parse(
+    tmp_path, monkeypatch,
+):
+    path = _zip(tmp_path / "growing.zip", {"report.md": b"synthetic"})
+    original_size = path.stat().st_size
+    reserved = []
+    fingerprint = audit._fingerprint
+
+    def append_before_hash(handle, *, expected_bytes):
+        # Simulate a writer extending the original inode after byte reservation.
+        with path.open("ab") as stream:
+            stream.write(b"unreserved bytes " * 100)
+        return fingerprint(handle, expected_bytes=expected_bytes)
+
+    monkeypatch.setattr(audit, "_fingerprint", append_before_hash)
+    with pytest.raises(audit.RecoveredArchiveError, match="bounded hashing: grew"):
+        audit.audit_recovered_zip(path, reserve_archive_bytes=reserved.append)
+    assert reserved == [original_size]
+
+
 def test_valid_archive_is_inspected_without_extraction(tmp_path):
     path = _zip(tmp_path / "candidate.zip", {
         "outputs/experiment_traces/D3/sample.json": b'{"state":"synthetic"}',
@@ -166,9 +215,9 @@ def test_archive_link_created_during_final_digest_fails_closed(tmp_path, monkeyp
     original_fingerprint = audit._fingerprint
     calls = 0
 
-    def fingerprint_then_alias(handle):
+    def fingerprint_then_alias(handle, *, expected_bytes):
         nonlocal calls
-        digest = original_fingerprint(handle)
+        digest = original_fingerprint(handle, expected_bytes=expected_bytes)
         calls += 1
         if calls == 2:
             os.link(path, alias)

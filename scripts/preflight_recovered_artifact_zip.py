@@ -54,14 +54,25 @@ class RecoveredArchiveError(ValueError):
     """An archive cannot be trusted even for safe offline inspection."""
 
 
-def _fingerprint(handle) -> str:
+def _fingerprint(handle, *, expected_bytes: int) -> str:
+    """Hash only the size already validated and reserved by the caller.
+
+    A concurrently growing file must not make an EOF-driven hash scan read
+    arbitrarily more source bytes than the preflight's reserved allowance.
+    Reject early truncation and a trailing byte before ZIP parsing; the
+    caller still checks descriptor and pathname identity after inspection.
+    """
     handle.seek(0)
     digest = hashlib.sha256()
-    while True:
-        part = handle.read(CHUNK_BYTES)
+    remaining = expected_bytes
+    while remaining:
+        part = handle.read(min(CHUNK_BYTES, remaining))
         if not part:
-            break
+            raise RecoveredArchiveError("archive changed during bounded hashing: truncated")
         digest.update(part)
+        remaining -= len(part)
+    if handle.read(1):
+        raise RecoveredArchiveError("archive changed during bounded hashing: grew")
     return digest.hexdigest()
 
 
@@ -378,7 +389,7 @@ def audit_recovered_zip(
             # Reservations remain spent even if the ZIP later fails integrity.
             if reserve_archive_bytes is not None:
                 reserve_archive_bytes(before.st_size)
-            archive_sha256 = _fingerprint(handle)
+            archive_sha256 = _fingerprint(handle, expected_bytes=before.st_size)
             if expected_archive_sha256 and archive_sha256 != expected_archive_sha256:
                 raise RecoveredArchiveError("archive SHA-256 differs from supplied independent pin")
             if github_log_anchor is not None and archive_sha256 != github_log_anchor["zip_sha256"]:
@@ -485,7 +496,7 @@ def audit_recovered_zip(
             # Rehash first, then check both descriptor and directory entry.
             # Otherwise a hardlink alias created during this final read could
             # escape the earlier metadata checks with identical archive bytes.
-            final_archive_sha256 = _fingerprint(handle)
+            final_archive_sha256 = _fingerprint(handle, expected_bytes=before.st_size)
             if (
                 final_archive_sha256 != archive_sha256
                 or not _unchanged(before, os.fstat(handle.fileno()))

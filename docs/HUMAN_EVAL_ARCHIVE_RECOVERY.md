@@ -199,6 +199,12 @@ argument order and subsequent smaller candidates remain eligible for inspection.
 The receipt separately reports `batch_archive_byte_budget`,
 `batch_archive_bytes_reserved`, and
 `batch_candidates_not_inspected_due_to_archive_budget`.
+Both SHA-256 passes now read exactly the archive size already checked and
+reserved for that candidate, then probe at most one extra byte. If a source
+grows or truncates during hashing, preflight fails before ZIP parsing rather
+than scanning an unbounded appended tail or charging more bytes than reserved.
+Descriptor/path checks still reject visible in-place modification and
+replacement; these are bounded, observational checks, not filesystem locks.
 This raw-input limit and the distinct declared-uncompressed-byte limit are
 inspection-resource constraints, **not** evidence of treatment failure,
 archive unavailability, independent provenance, or human readiness.

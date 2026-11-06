@@ -531,9 +531,9 @@ def test_batch_archive_byte_budget_skips_hashing_and_preserves_later_small_sourc
 
     original_fingerprint = triage.zip_preflight._fingerprint
     hashed = []
-    def record_fingerprint(handle):
+    def record_fingerprint(handle, *, expected_bytes):
         hashed.append(handle.fileno())
-        return original_fingerprint(handle)
+        return original_fingerprint(handle, expected_bytes=expected_bytes)
     monkeypatch.setattr(triage.zip_preflight, "_fingerprint", record_fingerprint)
 
     receipt = triage.triage_candidates([
@@ -597,7 +597,7 @@ def test_preflight_archive_byte_reservation_precedes_any_archive_fingerprint(
         recorded.append(declared_bytes)
         raise triage.BatchArchiveBudgetExceeded("synthetic raw budget exhausted")
 
-    def fail_if_hashed(_handle):
+    def fail_if_hashed(_handle, *, expected_bytes):
         pytest.fail("must not read/hash a ZIP after the raw-byte budget rejects it")
 
     monkeypatch.setattr(triage.zip_preflight, "_fingerprint", fail_if_hashed)
