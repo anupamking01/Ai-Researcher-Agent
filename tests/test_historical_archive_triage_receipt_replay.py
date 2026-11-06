@@ -141,3 +141,72 @@ def test_partial_replay_prints_diagnostic_but_cli_exits_nonzero(tmp_path, monkey
     assert result["full_recorded_inventory_replayed"] is False
     assert result["unverified_candidate_indexes"] == [2]
     assert result["human_evaluation_ready"] is False
+
+
+@pytest.mark.parametrize("corruption", [
+    "missing_row", "reordered_rows", "wrong_role", "wrong_filename", "boolean_index",
+])
+def test_bad_receipt_roster_rejected_before_any_archive_scan(
+    tmp_path, monkeypatch, corruption,
+):
+    first = _zip(tmp_path / "treatment.zip", b"synthetic treatment")
+    second = _zip(tmp_path / "recovery.zip", b"synthetic evaluator")
+    assignments = [("original_treatment", first), ("evaluator_recovery", second)]
+    receipt = _receipt(tmp_path / "receipt.json", assignments)
+    doc = json.loads(receipt.read_text(encoding="utf-8"))
+    if corruption == "missing_row":
+        doc["candidates"].pop()
+    elif corruption == "reordered_rows":
+        doc["candidates"].reverse()
+    elif corruption == "wrong_role":
+        doc["candidates"][0]["role"] = "evaluator_recovery"
+    elif corruption == "wrong_filename":
+        doc["candidates"][0]["supplied_filename"] = "replacement.zip"
+    else:
+        doc["candidates"][0]["candidate_index"] = True  # True == 1 in Python
+    receipt.write_text(json.dumps(doc), encoding="utf-8")
+
+    def no_archive_scan(*args, **kwargs):
+        raise AssertionError("malformed receipt must fail before ZIP inspection")
+
+    monkeypatch.setattr(verify.triage, "triage_candidates", no_archive_scan)
+    with pytest.raises(verify.ReceiptVerificationError, match="differs"):
+        verify.verify_receipt(receipt, assignments)
+
+
+def test_deep_receipt_json_fails_closed_before_archive_scan(tmp_path, monkeypatch):
+    candidate = _zip(tmp_path / "candidate.zip", b"synthetic")
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(
+        '{"schema_version":3,"candidates":' + "[" * 1200 + "0"
+        + "]" * 1200 + "}", encoding="utf-8",
+    )
+
+    def no_archive_scan(*args, **kwargs):
+        raise AssertionError("unparseable receipt must fail before ZIP inspection")
+
+    monkeypatch.setattr(verify.triage, "triage_candidates", no_archive_scan)
+    with pytest.raises(verify.ReceiptVerificationError, match="valid UTF-8 JSON"):
+        verify.verify_receipt(receipt, [("original_treatment", candidate)])
+
+
+@pytest.mark.parametrize("number,diagnostic", [
+    ("9" * (verify.MAX_RECEIPT_NUMBER_TOKEN_CHARS + 1), "oversized JSON number"),
+    ("1e400", "nonfinite JSON number"),
+])
+def test_invalid_receipt_numeric_tokens_fail_before_archive_scan(
+    tmp_path, monkeypatch, number, diagnostic,
+):
+    candidate = _zip(tmp_path / "candidate.zip", b"synthetic")
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(
+        '{"schema_version":3,"candidates":[],"extra":' + number + "}",
+        encoding="utf-8",
+    )
+
+    def no_archive_scan(*args, **kwargs):
+        raise AssertionError("invalid JSON numeric token must fail before ZIP inspection")
+
+    monkeypatch.setattr(verify.triage, "triage_candidates", no_archive_scan)
+    with pytest.raises(verify.ReceiptVerificationError, match=diagnostic):
+        verify.verify_receipt(receipt, [("original_treatment", candidate)])

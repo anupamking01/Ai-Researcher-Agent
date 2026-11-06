@@ -711,6 +711,14 @@ do not use a partial receipt replay as an affirmative source-continuity gate.
 A complete replay fails closed on changed verified source bytes, reordered or
 relabelled candidates, changed status/count/budget values, JSON type
 substitutions, duplicate JSON keys, or an oversized/linked/unstable receipt.
+Before scanning candidate ZIP bytes, a bounded JSON parse and strict
+ordered-roster check reject excessive nesting, oversized numeric tokens,
+nonfinite ordinary JSON exponents, missing/reordered candidate rows, and
+changed index/role/filename declarations. Invalid receipts therefore cannot
+force avoidable batch ZIP reads or decompression merely to establish an
+already-obvious mismatch. Later full replay still independently checks every
+recorded candidate's observed status, hashes, duplicate links and budget
+accounting; the early roster check is not a historical custody proof.
 Its complete success result fingerprints the exact saved receipt bytes; it
 does not modify or extract candidate ZIPs.
 It requires a new bounded scan, so budget for that I/O separately. The receipt

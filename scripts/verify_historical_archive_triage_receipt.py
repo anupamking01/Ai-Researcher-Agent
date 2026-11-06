@@ -9,6 +9,7 @@ import argparse
 import errno
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import stat
@@ -17,6 +18,7 @@ from typing import Sequence
 from scripts import triage_historical_archive_candidates as triage
 
 MAX_RECEIPT_BYTES = 2 * 1024 * 1024
+MAX_RECEIPT_NUMBER_TOKEN_CHARS = 128
 
 
 class ReceiptVerificationError(ValueError):
@@ -77,6 +79,50 @@ def _reject_nonfinite(token: str):
     raise ReceiptVerificationError("nonfinite number in triage receipt")
 
 
+def _bounded_json_int(token: str) -> int:
+    if len(token) > MAX_RECEIPT_NUMBER_TOKEN_CHARS:
+        raise ReceiptVerificationError("oversized JSON number in triage receipt")
+    return int(token)
+
+
+def _bounded_json_float(token: str) -> float:
+    if len(token) > MAX_RECEIPT_NUMBER_TOKEN_CHARS:
+        raise ReceiptVerificationError("oversized JSON number in triage receipt")
+    value = float(token)
+    if not math.isfinite(value):
+        raise ReceiptVerificationError("nonfinite JSON number in triage receipt")
+    return value
+
+
+def _preflight_receipt_roster(
+    recorded: dict, assignments: Sequence[tuple[str, Path]],
+) -> None:
+    """Reject impossible candidate rosters before expensive ZIP reads.
+
+    This is an early shape/order check, not a substitute for full replay of
+    candidate hashes, structural diagnostics or resource-budget accounting.
+    Never include caller-supplied private directory names in an error.
+    """
+    rows = recorded.get("candidates")
+    if type(rows) is not list or len(rows) != len(assignments):
+        raise ReceiptVerificationError(
+            "recorded candidate inventory differs from supplied candidate roster"
+        )
+    for index, (row, (role, path)) in enumerate(zip(rows, assignments), 1):
+        if (
+            type(row) is not dict
+            or type(row.get("candidate_index")) is not int
+            or row["candidate_index"] != index
+            or type(row.get("role")) is not str
+            or row["role"] != role
+            or type(row.get("supplied_filename")) is not str
+            or row["supplied_filename"] != path.name
+        ):
+            raise ReceiptVerificationError(
+                "recorded candidate inventory differs from supplied candidate roster"
+            )
+
+
 def verify_receipt(
     receipt_path: Path, assignments: Sequence[tuple[str, Path]],
 ) -> dict:
@@ -89,8 +135,10 @@ def verify_receipt(
             raw.decode("utf-8"),
             object_pairs_hook=_unique_object,
             parse_constant=_reject_nonfinite,
+            parse_int=_bounded_json_int,
+            parse_float=_bounded_json_float,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ReceiptVerificationError("receipt must be valid UTF-8 JSON") from exc
     if (
         type(recorded) is not dict
@@ -98,12 +146,14 @@ def verify_receipt(
         or recorded["schema_version"] != 3
     ):
         raise ReceiptVerificationError("expected schema-v3 triage receipt")
+    # Malformed receipt rosters must not trigger up to a gigabyte of ZIP I/O.
+    _preflight_receipt_roster(recorded, assignments)
     try:
         recorded_canonical = json.dumps(
             recorded, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
             allow_nan=False,
         )
-    except (ValueError, TypeError, OverflowError) as exc:
+    except (ValueError, TypeError, OverflowError, RecursionError) as exc:
         raise ReceiptVerificationError("invalid receipt JSON number or value") from exc
     replayed = triage.triage_candidates(assignments)
     replayed_canonical = json.dumps(
