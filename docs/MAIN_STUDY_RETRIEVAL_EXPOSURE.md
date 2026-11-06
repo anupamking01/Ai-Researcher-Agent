@@ -23,3 +23,43 @@ These fields allow a reader to see how *assignment* to retrieval capacity differ
 The original task-paired strict-support estimand, deterministic confidence intervals, exact sign-flip p-values and Holm adjustment in the frozen confirmatory analysis are **unchanged**. This exploratory audit does not read support rates to compute its exposure descriptives (the independent input preflight nevertheless checks the original mirrored scores for integrity); no reweighting, subgroup selection, outcome-conditioned rerun, treatment-model call, evaluator call, or human rating occurs.
 
 Only summary CSV bytes are locally pinned. Matching those bytes does not independently authenticate the missing original treatment reports/traces, provider retrieval execution, or original archives. Historical within-task fixed-order temporal confounding remains unresolved, as do the automated-to-human custody checks and genuine blinded evaluation by two eligible independent annotators. Keep diagnostic pilot, frozen automated confirmatory, exploratory retrieval exposure, and pending human-validation findings explicitly separate.
+
+
+## Replaying a saved exploratory exposure receipt
+
+A previously exported JSON diagnostic can be checked against the original
+Git-retained, SHA-256-pinned CSV inputs without trusting the producer's
+calculation logic or running treatment or evaluation workflows:
+
+```bash
+python -m scripts.analyze_main_study_retrieval_exposure > exposure.json
+python -m scripts.verify_main_study_retrieval_exposure_artifact \\
+  --artifact exposure.json
+```
+
+The second command does **not import the exploratory producer**. It performs
+the complete published two-CSV integrity audit, captures the treatment ledger
+against its original SHA-256, and independently recomputes every count, rate,
+mean, 40 task-level resource observations and 30 task-paired differences. The
+saved artifact must contain exactly the producer's fields and values; missing
+rows, altered denominators, reordered cells, invalid status/provenance claims,
+additional inferential fields and inconsistent source fingerprints fail closed.
+Strict JSON input handling rejects duplicate keys, nonfinite numbers, excess
+integer length, excessive nesting and oversized or non-regular saved receipts.
+The command rechecks the published CSV integrity before a PASS and prints a
+compact SHA-256-bound verification receipt. These checks are exercised with
+synthetic tampering tests and a read-only original-frozen-CSV smoke test.
+
+A successful replay establishes **local content and arithmetic consistency
+with the frozen summary CSV bytes**, not independence of the two implementations
+from every shared assumption: both use the established frozen input auditor for
+CSV ingestion, matrix identities and provenance preflight. It cannot recover or
+authenticate missing original source reports, traces, retrieval execution or
+provider activity. It also cannot prove that a saved receipt was not replaced
+*after* the verification window. An external archival custody claim would
+require a separately retained, trusted hash of that specific saved JSON file.
+
+This extra verification does not preregister the post-hoc diagnostic, promote
+resource exposure into a causal explanation, create confidence intervals or
+p-values, or change any frozen primary comparisons. The pending independent
+human-evaluation and historical fixed-order confounding gates remain unchanged.
