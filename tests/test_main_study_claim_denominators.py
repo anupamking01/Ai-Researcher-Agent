@@ -131,3 +131,31 @@ def test_nonfinite_rate_fails_closed():
     rows[0]["strict_support_rate"] = "inf"
     with pytest.raises(ValueError):
         diagnostic.summarize_claim_denominators(rows)
+
+
+def test_published_summary_reproduces_frozen_variant_macro_rates():
+    """Production gate accepts only published bytes and leaves inference intact."""
+    import json
+    from scripts import audit_frozen_analysis_csv_inputs as audit
+
+    result = diagnostic.run_verified()
+    assert result["published_summary_preflight_passed"] is True
+    assert result["verified_published_evaluator_csv_sha256"] == (
+        audit.FROZEN_SUPPORT_CSV_SHA256
+    )
+    assert result["published_input_aggregate_sha256_reference"] == (
+        audit.PUBLISHED_INPUT_AGGREGATE_SHA256
+    )
+    inference = json.loads(
+        (audit.REPO_ROOT / "outputs/main_study_inference.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    for variant in audit.VARIANTS:
+        observed = result["variant_summaries"][variant][
+            "equal_report_macro_strict_support"
+        ]
+        frozen = inference["variant_summary"][variant]["means"][
+            "strict_support_rate"
+        ]
+        assert observed == pytest.approx(frozen, abs=1e-12)
