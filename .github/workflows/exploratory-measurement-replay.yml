@@ -67,7 +67,7 @@ jobs:
 
       - name: Reproduce and independently verify both frozen-CSV exploratory diagnostics
         env:
-          AUDIT_DIR: \${{ runner.temp }}/vera-exploratory-measurement
+          AUDIT_DIR: ${{ runner.temp }}/vera-exploratory-measurement
         run: |
           set -euo pipefail
           mkdir -p "$AUDIT_DIR"
@@ -142,7 +142,7 @@ jobs:
       - name: Retain checked diagnostic JSONs, independent receipts and checkout index
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: vera-exploratory-measurement-\${{ github.run_id }}
-          path: \${{ runner.temp }}/vera-exploratory-measurement/*.json
+          name: vera-exploratory-measurement-${{ github.run_id }}
+          path: ${{ runner.temp }}/vera-exploratory-measurement/*.json
           if-no-files-found: error
           retention-days: 90
