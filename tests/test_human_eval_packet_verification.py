@@ -1354,6 +1354,6 @@ def test_packet_verifier_rejects_seeds_outside_generation_domain(
     manifest_path = packet_case["output_root"] / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["blind_seed"] = bad_seed
-    manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\\n", encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="outside the 256-bit domain"):
         _verify(packet_case)
