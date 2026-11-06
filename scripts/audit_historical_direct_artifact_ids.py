@@ -21,6 +21,7 @@ from scripts import audit_historical_workflow_artifacts as inventory
 REPOSITORY = inventory.REPOSITORY
 API_BASE = inventory.API_BASE
 MAX_METADATA_BYTES = 64 * 1024
+MAX_METADATA_INTEGER_DIGITS = 20
 # Same-provider upload pins, not independent source/report custody fingerprints.
 ORIGINAL_PINS = (logs.ORIGINAL, logs.RECOVERED)
 RUN_SOURCES = {role: (run_id, sha) for role, run_id, _, sha, _, _ in inventory.HISTORICAL_RUNS}
@@ -60,6 +61,18 @@ def _unique_keys(pairs: list[tuple[str, object]]) -> dict:
 
 def _reject_nonfinite(value: str):
     raise DirectArtifactAuditError(f"non-finite GitHub metadata number: {value}")
+
+
+def _bounded_metadata_integer(token: str) -> int:
+    """Reject oversized integer literals before Python converts them."""
+    if len(token.lstrip("-")) > MAX_METADATA_INTEGER_DIGITS:
+        raise DirectArtifactAuditError("GitHub metadata integer exceeds digit limit")
+    return int(token)
+
+
+def _reject_metadata_float(token: str):
+    """Pinned GitHub artifact metadata does not use float-valued fields."""
+    raise DirectArtifactAuditError("GitHub metadata floating-point token is invalid")
 
 
 def fetch_direct_metadata(artifact_id: int) -> dict | None:
@@ -108,9 +121,13 @@ def fetch_direct_metadata(artifact_id: int) -> dict | None:
         parsed = json.loads(
             raw.decode("utf-8"), object_pairs_hook=_unique_keys,
             parse_constant=_reject_nonfinite,
+            parse_int=_bounded_metadata_integer,
+            parse_float=_reject_metadata_float,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise DirectArtifactAuditError("GitHub artifact metadata is not UTF-8 JSON") from exc
+    except DirectArtifactAuditError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as exc:
+        raise DirectArtifactAuditError("GitHub artifact metadata is not bounded UTF-8 JSON") from exc
     if type(parsed) is not dict:
         raise DirectArtifactAuditError("GitHub artifact metadata must be an object")
     return parsed

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from datetime import datetime, timezone
 from io import BytesIO
 from urllib.error import HTTPError
@@ -160,6 +161,37 @@ def test_bad_metadata_body_is_rejected_before_any_custody_claim(monkeypatch, raw
     monkeypatch.setattr(audit, "_open_direct_metadata", lambda request, timeout: _Response(request.full_url, raw))
     with pytest.raises(audit.DirectArtifactAuditError):
         audit.fetch_direct_metadata(audit.ORIGINAL_PINS[0]["artifact_id"])
+
+
+
+@pytest.mark.parametrize("raw, message", [
+    (b'{"nested":' + b"[" * 1500 + b"0" + b"]" * 1500 + b"}", "bounded UTF-8 JSON"),
+    (b'{"extra":' + b"9" * 5000 + b"}", "digit limit"),
+    (b'{"optional_ratio":1.25}', "floating-point"),
+    (b'{"optional_ratio":1e999}', "floating-point"),
+])
+def test_untrusted_json_is_a_controlled_audit_error(monkeypatch, raw, message):
+    """Deep or adversarial JSON must not crash the direct-ID audit."""
+    monkeypatch.setattr(
+        audit, "_open_direct_metadata",
+        lambda request, timeout: _Response(request.full_url, raw),
+    )
+    with pytest.raises(audit.DirectArtifactAuditError, match=message):
+        audit.fetch_direct_metadata(audit.ORIGINAL_PINS[0]["artifact_id"])
+
+
+def test_normal_pinned_json_and_bounded_integer_remain_accepted(monkeypatch):
+    pin = audit.ORIGINAL_PINS[0]
+    candidate = _candidate(pin)
+    candidate["unused_counter"] = 12345678901234567890
+    raw = json.dumps(candidate).encode("utf-8")
+    monkeypatch.setattr(
+        audit, "_open_direct_metadata",
+        lambda request, timeout: _Response(request.full_url, raw),
+    )
+    parsed = audit.fetch_direct_metadata(pin["artifact_id"])
+    assert parsed == candidate
+    assert audit._validate_metadata(parsed, pin)
 
 
 def test_redirected_metadata_endpoint_is_not_accepted(monkeypatch):
