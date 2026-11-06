@@ -215,7 +215,7 @@ def test_invalid_receipt_numeric_tokens_fail_before_archive_scan(
 @pytest.mark.parametrize("tamper", [
     "readiness", "authenticated", "role_count", "provider_count",
     "duplicate_count", "archive_budget", "negative_reservation",
-    "boolean_reservation", "unknown_role",
+    "boolean_reservation", "unknown_role", "unhashable_digest",
 ])
 def test_contradictory_receipt_claims_fail_before_archive_scan(
     tmp_path, monkeypatch, tamper,
@@ -241,6 +241,8 @@ def test_contradictory_receipt_claims_fail_before_archive_scan(
         document["batch_archive_bytes_reserved"] = -1
     elif tamper == "boolean_reservation":
         document["batch_declared_uncompressed_bytes_reserved"] = True
+    elif tamper == "unhashable_digest":
+        document["candidates"][0]["observed_regular_member_content_sha256"] = []
     else:
         document["by_role"]["invented_source"] = {}
     receipt.write_text(json.dumps(document), encoding="utf-8")

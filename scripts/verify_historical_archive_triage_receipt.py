@@ -153,6 +153,16 @@ def _preflight_receipt_claims(recorded: dict) -> None:
         raise ReceiptVerificationError(failed)
 
     rows = recorded["candidates"]  # Already type-checked by roster preflight.
+    # JSON permits arrays/objects in place of hash strings. Reject their types
+    # before building distinct-digest sets, rather than leaking a TypeError.
+    for row in rows:
+        if any(
+            row.get(field) is not None and type(row[field]) is not str
+            for field in (
+                "observed_regular_member_content_sha256", "observed_zip_sha256",
+            )
+        ):
+            raise ReceiptVerificationError(failed)
     by_role = recorded.get("by_role")
     if type(by_role) is not dict or set(by_role) != set(triage.ROLES):
         raise ReceiptVerificationError(failed)
