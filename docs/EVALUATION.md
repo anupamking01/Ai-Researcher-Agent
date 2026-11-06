@@ -110,6 +110,27 @@ tests cover coherent task substitution and missing or rewritten source pins.
 byte-for-byte unchanged.** Its historical SHA-256 is pinned in immutable
 analysis provenance and must not be edited merely to add checks; editing
 it invalidates independently reproducible historical-receipt verification.
+
+### Independent mathematical regression anchors for frozen inference
+
+`tests/test_main_study_inference_reference_cases.py` guards the unchanged,
+source-pinned inference implementation with **synthetic, hand-checkable**
+10-task sign-flip reference cases. The complete randomized-sign universe
+contains `2^10 = 1,024` assignments, including zero-difference tasks.
+For ten same-direction nonzero differences, the exact two-sided p-value
+must be `2/1024`; for all-zero differences or one nonzero difference
+with nine ties it must be `1`; for two same-direction differences with
+eight ties it must be `1/2`. Task permutation and contrast reversal
+must not change the exact sign-flip p-value.
+
+Additional tests pin the predeclared three-contrast Holm family, bootstrap
+seed/draw count, contrast definitions, constant-effect paired CI and direction,
+and the all-tied undefined standardized effect. They protect inferential
+interpretation against future regressions without altering
+`scripts/analyze_main_study.py`, the preregistered analysis plan, or any
+historical result. These are **mathematical test fixtures**, not pilot,
+confirmatory, exploratory, or human-evaluation measurements.
+
 This optional new audit neither changes the preregistered estimands nor
 reclassifies original outputs; it does not authenticate missing
 source traces/reports, prove experimental execution, or establish human
