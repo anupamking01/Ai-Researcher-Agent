@@ -23,3 +23,20 @@ The command independently verifies the retained blinded freeze first. It then li
 ## Limitations
 
 SHA-256 and file consistency do not prove human identity, independent authorship, eligibility, consent, validity of declarations, statistical agreement, or treatment effects. This is observational verification, not an atomic filesystem transaction. Independently retain the original pre-freeze pair receipt and its digest outside the mutable archive. With additional raters this exact-two-submission gate is not the applicable protocol mechanism; use the frozen assignment/deviation plan. Pilot, confirmatory automated, exploratory, and pending human validation claims remain separate.
+
+
+## Bounded pair-receipt capture
+
+The optional pair-to-freeze link consumes a small independently pinned JSON
+provenance receipt, not a full annotation CSV. That receipt has a **64-KiB**
+limit. Its source capture enforces this limit **at the opened file descriptor,
+before reading any payload**, rather than first allowing the shared 64-MiB
+human-rating input limit and only rejecting the oversized bytes afterward.
+The same file-identity, append-growth, symlink and replacement checks remain in
+force. The default source-capture contract for genuine rating/packet inputs
+is unchanged. Synthetic regression coverage checks oversized pre-read refusal,
+the exact size boundary, concurrent growth and invalid caller limits.
+
+This is a resource-safety and integrity safeguard on a future coordinator
+receipt, not evidence that human ratings were collected or that historical
+treatment reports were authenticated.

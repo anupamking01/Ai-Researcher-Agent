@@ -47,7 +47,9 @@ def _digest(value) -> bool:
 def _pinned_pair(path: Path, independently_pinned_sha256: str):
     _require(_digest(independently_pinned_sha256),
              "independent pair receipt SHA-256 must be lowercase 64-hex")
-    data = freeze._capture_regular_input(path, label="pair receipt")
+    data = freeze._capture_regular_input(
+        path, label="pair receipt", max_bytes=MAX_RECEIPT_BYTES
+    )
     _require(len(data) <= MAX_RECEIPT_BYTES, "pair receipt exceeds resource bound")
     _require(hashlib.sha256(data).hexdigest() == independently_pinned_sha256,
              "pair receipt does not match independent SHA-256")

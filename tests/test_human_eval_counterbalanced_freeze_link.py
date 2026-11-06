@@ -139,3 +139,53 @@ def test_pair_receipt_changed_mid_verification_rejected(frozen_case, monkeypatch
     monkeypatch.setattr(link.freeze_verify, "verify_frozen_snapshot", mutate)
     with pytest.raises(ValueError, match="pair receipt changed during"):
         link.verify_counterbalanced_freeze_link(**frozen_case)
+
+
+def test_oversized_pair_receipt_is_refused_before_any_content_read(tmp_path, monkeypatch):
+    """A 64-KiB provenance record must not consume the 64-MiB ratings allowance."""
+    source = tmp_path / "oversized-pair-receipt.json"
+    source.write_bytes(b" " * (link.MAX_RECEIPT_BYTES + 1))
+
+    def unexpected_read(*args, **kwargs):
+        raise AssertionError("oversized pair receipt was read")
+
+    monkeypatch.setattr(freeze.os, "pread", unexpected_read)
+    with pytest.raises(ValueError, match=f"pair receipt exceeds {link.MAX_RECEIPT_BYTES} byte"):
+        link._pinned_pair(source, "0" * 64)
+
+
+def test_pair_receipt_capture_exact_limit_and_concurrent_growth_gate(tmp_path, monkeypatch):
+    source = tmp_path / "limit-receipt.json"
+    original = b"x" * link.MAX_RECEIPT_BYTES
+    source.write_bytes(original)
+    assert freeze._capture_regular_input(
+        source, label="pair receipt", max_bytes=link.MAX_RECEIPT_BYTES
+    ) == original
+
+    # A file initially within the limit must still fail if it grows in
+    # the bounded descriptor observation window.
+    real_pread = freeze.os.pread
+    changed = False
+
+    def grow_during_capture(fd, size, offset):
+        nonlocal changed
+        data = real_pread(fd, size, offset)
+        if not changed:
+            changed = True
+            with source.open("ab") as destination:
+                destination.write(b"y")
+        return data
+
+    monkeypatch.setattr(freeze.os, "pread", grow_during_capture)
+    with pytest.raises(ValueError, match="grew while it was being read|changed while it was being read"):
+        freeze._capture_regular_input(
+            source, label="pair receipt", max_bytes=link.MAX_RECEIPT_BYTES
+        )
+
+
+@pytest.mark.parametrize("invalid_limit", [True, 0, -1, 1.0, freeze.MAX_HUMAN_FREEZE_INPUT_BYTES + 1])
+def test_capture_rejects_invalid_caller_specific_resource_limits(tmp_path, invalid_limit):
+    source = tmp_path / "tiny-receipt.json"
+    source.write_bytes(b"{}")
+    with pytest.raises(ValueError, match="capture limit"):
+        freeze._capture_regular_input(source, label="pair receipt", max_bytes=invalid_limit)

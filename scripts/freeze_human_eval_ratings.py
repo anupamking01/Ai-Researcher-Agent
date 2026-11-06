@@ -460,8 +460,16 @@ def _validate_annotator_attestation_coverage(
         )
 
 
-def _capture_regular_input(path: Path, *, label: str) -> bytes:
-    """Capture one stable, path-bound regular file without following symlinks."""
+def _capture_regular_input(
+    path: Path, *, label: str,
+    max_bytes: int = MAX_HUMAN_FREEZE_INPUT_BYTES,
+) -> bytes:
+    """Capture stable, path-bound bytes, allowing tighter receipt-specific bounds."""
+    if (
+        type(max_bytes) is not int
+        or not 0 < max_bytes <= MAX_HUMAN_FREEZE_INPUT_BYTES
+    ):
+        raise ValueError("human-evaluation capture limit must be a positive bounded integer")
     path = Path(path)
     directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     directory_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(
@@ -491,9 +499,9 @@ def _capture_regular_input(path: Path, *, label: str) -> bytes:
             before = os.fstat(file_fd)
             if not stat.S_ISREG(before.st_mode):
                 raise ValueError(f"{label} must be a regular file: {path}")
-            if before.st_size > MAX_HUMAN_FREEZE_INPUT_BYTES:
+            if before.st_size > max_bytes:
                 raise ValueError(
-                    f"{label} exceeds {MAX_HUMAN_FREEZE_INPUT_BYTES} byte "
+                    f"{label} exceeds {max_bytes} byte "
                     "human-evaluation input capture limit"
                 )
             chunks = []
@@ -513,9 +521,9 @@ def _capture_regular_input(path: Path, *, label: str) -> bytes:
             if os.pread(file_fd, 1, before.st_size):
                 raise ValueError(f"{label} grew while it was being read")
             after = os.fstat(file_fd)
-            if after.st_size > MAX_HUMAN_FREEZE_INPUT_BYTES:
+            if after.st_size > max_bytes:
                 raise ValueError(
-                    f"{label} exceeds {MAX_HUMAN_FREEZE_INPUT_BYTES} byte "
+                    f"{label} exceeds {max_bytes} byte "
                     "human-evaluation input capture limit"
                 )
             before_identity = (
