@@ -1,0 +1,148 @@
+name: exploratory-measurement-replay
+
+# Read-only, post-hoc diagnostics. No treatment, evaluator, or human-rating work.
+on:
+  push:
+    branches: [research-paper-eval-2027]
+    paths:
+      - ".github/workflows/exploratory-measurement-replay.yml"
+      - "scripts/analyze_main_study_retrieval_exposure.py"
+      - "scripts/verify_main_study_retrieval_exposure_artifact.py"
+      - "scripts/analyze_main_study_claim_denominators.py"
+      - "scripts/verify_main_study_claim_denominator_artifact.py"
+      - "scripts/audit_frozen_analysis_csv_inputs.py"
+      - "scripts/validate_main_study_inputs.py"
+      - "scripts/verify_frozen_main_study_tasks.py"
+      - "scripts/build_human_eval_packet.py"
+      - "experiments/main_budget_tasks.json"
+      - "outputs/main_study_runs.csv"
+      - "outputs/posthoc_support_runs.csv"
+      - "outputs/main_study_analysis_inputs_manifest.json"
+      - "tests/test_exploratory_measurement_replay_workflow.py"
+      - "docs/EXPLORATORY_MEASUREMENT_REPLAY.md"
+      - "requirements.txt"
+  pull_request:
+    paths:
+      - ".github/workflows/exploratory-measurement-replay.yml"
+      - "scripts/analyze_main_study_retrieval_exposure.py"
+      - "scripts/verify_main_study_retrieval_exposure_artifact.py"
+      - "scripts/analyze_main_study_claim_denominators.py"
+      - "scripts/verify_main_study_claim_denominator_artifact.py"
+      - "scripts/audit_frozen_analysis_csv_inputs.py"
+      - "scripts/validate_main_study_inputs.py"
+      - "scripts/verify_frozen_main_study_tasks.py"
+      - "scripts/build_human_eval_packet.py"
+      - "experiments/main_budget_tasks.json"
+      - "outputs/main_study_runs.csv"
+      - "outputs/posthoc_support_runs.csv"
+      - "outputs/main_study_analysis_inputs_manifest.json"
+      - "tests/test_exploratory_measurement_replay_workflow.py"
+      - "docs/EXPLORATORY_MEASUREMENT_REPLAY.md"
+      - "requirements.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  replay-exploratory-measurements:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout research snapshot without write credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up fixed Python interpreter
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+
+      - name: Install exact minimal task-manifest parser dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --no-deps markdown-it-py==3.0.0 mdurl==0.1.2
+          python -m pip check
+
+      - name: Reproduce and independently verify both frozen-CSV exploratory diagnostics
+        env:
+          AUDIT_DIR: \${{ runner.temp }}/vera-exploratory-measurement
+        run: |
+          set -euo pipefail
+          mkdir -p "$AUDIT_DIR"
+          python -m scripts.analyze_main_study_retrieval_exposure > "$AUDIT_DIR/retrieval_exposure.json"
+          python -m scripts.verify_main_study_retrieval_exposure_artifact \
+            --artifact "$AUDIT_DIR/retrieval_exposure.json" \
+            > "$AUDIT_DIR/retrieval_exposure_verification.json"
+          python -m scripts.analyze_main_study_claim_denominators > "$AUDIT_DIR/claim_denominators.json"
+          python -m scripts.verify_main_study_claim_denominator_artifact \
+            --artifact "$AUDIT_DIR/claim_denominators.json" \
+            > "$AUDIT_DIR/claim_denominators_verification.json"
+
+          # Store hashes and the exact checkout/run ID, not a human- or
+          # historical-execution-authentication assertion.
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["AUDIT_DIR"])
+          documents = {
+              name: (root / name).read_bytes()
+              for name in (
+                  "retrieval_exposure.json",
+                  "retrieval_exposure_verification.json",
+                  "claim_denominators.json",
+                  "claim_denominators_verification.json",
+              )
+          }
+          parsed = {name: json.loads(raw) for name, raw in documents.items()}
+          expected = {
+              "retrieval_exposure.json": "post_hoc_exploratory_retrieval_exposure_only",
+              "retrieval_exposure_verification.json": "verified_post_hoc_exploratory_retrieval_exposure_only",
+              "claim_denominators.json": "post_hoc_exploratory_denominator_diagnostic_only",
+              "claim_denominators_verification.json": "verified_post_hoc_exploratory_denominator_diagnostic_only",
+          }
+          for name, status in expected.items():
+              assert parsed[name]["status"] == status, name
+              assert parsed[name]["human_validation_performed"] is False, name
+              assert parsed[name]["original_execution_authenticated"] is False, name
+          for name in ("retrieval_exposure_verification.json",
+                       "claim_denominators_verification.json"):
+              assert parsed[name]["cells_checked"] == 40, name
+              assert parsed[name]["paired_contrast_rows_checked"] == 30, name
+          for prefix in ("retrieval_exposure", "claim_denominators"):
+              assert parsed[f"{prefix}_verification.json"]["diagnostic_sha256"] == (
+                  hashlib.sha256(documents[f"{prefix}.json"]).hexdigest()
+              ), prefix
+          assert parsed["retrieval_exposure_verification.json"]["confirmatory_inference_changed"] is False
+          assert parsed["claim_denominators_verification.json"]["confirmatory_primary_estimand_changed"] is False
+          manifest = {
+              "schema_version": 1,
+              "status": "verified_local_post_hoc_exploratory_measurements_only",
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "checkout_commit_sha": os.environ["GITHUB_SHA"],
+              "workflow_run_id": os.environ["GITHUB_RUN_ID"],
+              "files_sha256": {
+                  name: hashlib.sha256(raw).hexdigest()
+                  for name, raw in sorted(documents.items())
+              },
+              "frozen_confirmatory_inference_changed": False,
+              "original_execution_authenticated": False,
+              "human_validation_performed": False,
+          }
+          (root / "artifact_index.json").write_text(
+              json.dumps(manifest, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Retain checked diagnostic JSONs, independent receipts and checkout index
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-exploratory-measurement-\${{ github.run_id }}
+          path: \${{ runner.temp }}/vera-exploratory-measurement/*.json
+          if-no-files-found: error
+          retention-days: 90
