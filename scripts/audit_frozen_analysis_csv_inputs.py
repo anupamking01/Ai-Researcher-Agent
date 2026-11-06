@@ -42,8 +42,8 @@ class InputIntegrityError(ValueError):
 def _file_identity(metadata: os.stat_result) -> tuple[int, ...]:
     """Metadata used to detect a path or open-file replacement during capture."""
     return (
-        metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_size,
-        metadata.st_mtime_ns, metadata.st_ctime_ns,
+        metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_nlink,
+        metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns,
     )
 
 
@@ -57,8 +57,14 @@ def _capture_csv_bytes(path: Path, *, label: str) -> bytes:
         fd = os.open(path, flags)
         before = os.fstat(fd)
         path_before = os.stat(path, follow_symlinks=False)
-        if not stat.S_ISREG(before.st_mode) or _file_identity(before) != _file_identity(path_before):
-            raise InputIntegrityError(f"{label} must be a non-symlink regular CSV file")
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or _file_identity(before) != _file_identity(path_before)
+        ):
+            raise InputIntegrityError(
+                f"{label} must be a non-symlink regular CSV file with exactly one link"
+            )
         if not 0 < before.st_size <= MAX_INPUT_BYTES:
             raise InputIntegrityError(f"{label} is empty or exceeds input limit")
         captured = bytearray()

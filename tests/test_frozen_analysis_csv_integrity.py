@@ -295,6 +295,47 @@ def test_audit_rejects_symlinked_csv_even_with_identical_valid_bytes(
         _check(matrix)
 
 
+
+
+@pytest.mark.parametrize("input_index", [3, 4])
+def test_audit_rejects_hardlinked_csv_even_when_bytes_are_unchanged(
+    matrix, input_index, tmp_path,
+):
+    # A second inode name permits unnoticed edits through an alias. The
+    # independent CSV capture must use the same single-link policy as the
+    # independent inference JSON reader, even for internally valid rows.
+    if not hasattr(os, "link"):
+        pytest.skip("hard links require POSIX filesystem support")
+    source = matrix[input_index]
+    alias = tmp_path / f"other-name-{input_index}.csv"
+    os.link(source, alias)
+    assert alias.read_bytes() == source.read_bytes()
+    with pytest.raises(audit.InputIntegrityError, match="exactly one link"):
+        _check(matrix)
+
+
+def test_audit_detects_alias_created_during_csv_capture(matrix, monkeypatch, tmp_path):
+    # This changes only inode link count, not CSV contents. Include st_nlink
+    # in both observed identities so the source cannot be aliased mid-read.
+    if not hasattr(os, "link"):
+        pytest.skip("hard links require POSIX filesystem support")
+    source = matrix[3]
+    alias = tmp_path / "late-alias.csv"
+    original_read = os.read
+    created = False
+
+    def link_then_read(fd, count):
+        nonlocal created
+        if not created:
+            os.link(source, alias)
+            created = True
+        return original_read(fd, count)
+
+    monkeypatch.setattr(audit.os, "read", link_then_read)
+    with pytest.raises(audit.InputIntegrityError, match="changed during bounded CSV capture"):
+        audit._read_csv(source, label="synthetic")
+    assert created and alias.read_bytes() == source.read_bytes()
+
 def test_audit_rejects_symlinked_parent_directory(matrix, tmp_path):
     source = matrix[3]
     parent_alias = tmp_path / "linked_parent"

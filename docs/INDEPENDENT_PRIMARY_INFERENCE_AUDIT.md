@@ -38,7 +38,11 @@ JSON input also rejects nesting beyond 32 containers, numeric tokens beyond
 recomputation. Synthetic-only regression tests cover these failure modes and
 quoted bracket escapes. This is an internal current-file consistency guard,
 not a new historical SHA pin, independent proof of original experimental
-custody, or a change to the preserved inference implementation. The summary
+custody, or a change to the preserved inference implementation. Both CSV captures now require a single-link regular file and detect changes
+to the inode link count during capture. This rejects hard-link aliases that
+can otherwise be rewritten through a second pathname without replacing the
+named source. The rule is a local snapshot safeguard, not cryptographic
+custody or detection of unobserved changes after a successful read. The summary
 CSV reader remains shared with the existing independent CSV preflight; only
 the *statistical arithmetic* here is separately implemented.
 
