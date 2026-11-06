@@ -29,6 +29,17 @@ its **repository, exact workflow checkout commit, Actions run ID, and run
 attempt** from the GitHub Actions run page/API (not from the bundle itself).
 Check out that exact commit with the pinned frozen CSV inputs and run:
 
+The replay verifier now independently checks that the running source repository's
+Git `HEAD` equals the externally supplied checkout SHA, that the code is at
+the repository root, and that the tracked or untracked replay scripts and
+frozen source files have **no local changes**. Missing Git metadata, altered
+verifier code, untracked replacement scripts, or a mismatched checkout fail
+closed even when an extracted bundle rehashes consistently. A clean checkout
+is only a *local source-continuity condition*: Git HEAD and a clean worktree
+do not cryptographically attest GitHub's remote execution or the historical
+original report/trace custody. The two frozen CSV fingerprints remain required.
+
+
 ```bash
 python -m scripts.verify_exploratory_measurement_bundle \
   --directory /path/to/extracted-five-json-files \

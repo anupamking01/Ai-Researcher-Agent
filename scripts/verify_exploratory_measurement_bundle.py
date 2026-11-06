@@ -10,6 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import subprocess
 
 from scripts import audit_frozen_analysis_csv_inputs as audit
 from scripts import verify_main_study_claim_denominator_artifact as denominators
@@ -118,6 +119,40 @@ def _positive_id(value: str, *, label: str) -> None:
              f"{label} must be a positive decimal identifier")
 
 
+# A bundle index can claim a GitHub checkout SHA without the independent
+# replay actually reading its code. Bound CLI and API replay to a clean,
+# matching local Git checkout before accepting source-derived receipts.
+REPLAY_SOURCE_PATHS = (
+    "scripts",
+    "outputs/main_study_runs.csv",
+    "outputs/posthoc_support_runs.csv",
+    "outputs/main_study_analysis_inputs_manifest.json",
+    "experiments/main_budget_tasks.json",
+)
+
+
+def _verify_source_checkout(checkout_sha: str) -> None:
+    root = Path(__file__).resolve().parents[1]
+
+    def git(*args: str) -> str:
+        try:
+            result = subprocess.run(
+                ["git", *args], cwd=root, check=True, capture_output=True,
+                text=True, timeout=15,
+            )
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            raise ValueError("bundle source checkout identity cannot be verified") from exc
+        return result.stdout.strip()
+
+    _require(git("rev-parse", "--verify", "HEAD") == checkout_sha,
+             "bundle replay checkout HEAD differs from externally pinned SHA")
+    _require(Path(git("rev-parse", "--show-toplevel")).resolve() == root,
+             "bundle replay sources are not at the checkout root")
+    _require(not git("status", "--porcelain=v1", "--untracked-files=all",
+                     "--", *REPLAY_SOURCE_PATHS),
+             "bundle replay has modified or untracked research source inputs")
+
+
 def verify_bundle(directory: Path, *, repository: str, checkout_sha: str,
                   run_id: str, run_attempt: str) -> dict:
     """Bind five stable bundle files to external run pins and independent CSV replay."""
@@ -127,6 +162,7 @@ def verify_bundle(directory: Path, *, repository: str, checkout_sha: str,
              "invalid expected GitHub repository")
     _positive_id(run_id, label="run ID")
     _positive_id(run_attempt, label="run attempt")
+    _verify_source_checkout(checkout_sha)
     directory = Path(directory)
     raw = _capture(directory)
     digests = {name: hashlib.sha256(raw[name]).hexdigest() for name in FILES}
