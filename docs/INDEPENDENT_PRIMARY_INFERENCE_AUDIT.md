@@ -139,3 +139,20 @@ and hashes are unchanged.
 The original diagnostic pilot, frozen automated confirmatory results,
 exploratory follow-ups, and still-pending genuine blinded human evaluation
 must be reported separately. The auditor does not alter or select outcomes.
+
+
+**Held-ancestor capture for published CSV preflight (6 November 2026):**
+The shared frozen-summary CSV reader now opens and holds each ancestor
+directory using `O_DIRECTORY|O_NOFOLLOW` and descriptor-relative access.
+It rejects symlinked parents, checks the expected leaf inode and single-link
+constraint, and rechecks the held ancestor chain after reading. Previously,
+a parent could be replaced after an initial `is_symlink()` inspection while
+the CSV was still opened by its full pathname. Synthetic regression tests
+cover same-byte directory replacement during capture, symlink injection between
+parent inspection and opening, and legitimate nested CSV paths. This applies
+to the independent frozen-CSV input preflight and downstream exploratory
+denominator inspection as well as the independent inference audit. The
+published SHA-256 pins, 40-cell arithmetic checks, frozen statistical
+implementation, and confirmatory results are unchanged. This is a *local
+path-continuity safeguard*, not proof of original experiment custody, an
+atomic filesystem snapshot, or evidence of human-validation readiness.

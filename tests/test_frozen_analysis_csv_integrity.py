@@ -474,3 +474,76 @@ def test_disabling_source_anchor_does_not_disable_published_byte_pin(matrix):
         audit.audit_frozen_csv_inputs(
             matrix[3], matrix[4], require_original_task_set=False
         )
+
+
+def test_audit_accepts_unredirected_nested_csv_capture(tmp_path):
+    """Deeply nested legitimate evidence is not rejected by ancestry checks."""
+    nested = tmp_path / "archive" / "frozen" / "summaries"
+    nested.mkdir(parents=True)
+    path = nested / "checks.csv"
+    original = b"variant_id,task_id\\nD3,synthetic-01\\n"
+    path.write_bytes(original)
+    captured, rows = audit._read_csv(path, label="nested synthetic")
+    assert captured == original
+    assert rows == [{"variant_id": "D3", "task_id": "synthetic-01"}]
+
+
+@pytest.mark.parametrize("input_index", [3, 4])
+def test_audit_rejects_parent_directory_swapped_mid_capture(
+    matrix, monkeypatch, tmp_path, input_index,
+):
+    """Even identical leaf bytes cannot hide a changed ancestor pathname."""
+    original = matrix[input_index].read_bytes()
+    active = tmp_path / f"active-{input_index}"
+    active.mkdir()
+    source = active / matrix[input_index].name
+    source.write_bytes(original)
+    replacement = tmp_path / f"replacement-{input_index}"
+    replacement.mkdir()
+    (replacement / source.name).write_bytes(original)
+    archived = tmp_path / f"old-active-{input_index}"
+    real_read = os.read
+    swapped = False
+
+    def swap_on_read(fd, size):
+        nonlocal swapped
+        if not swapped:
+            active.rename(archived)
+            replacement.rename(active)
+            swapped = True
+        return real_read(fd, size)
+
+    monkeypatch.setattr(audit.os, "read", swap_on_read)
+    with pytest.raises(audit.InputIntegrityError, match="parent directory changed"):
+        audit._read_csv(source, label="synthetic")
+    assert swapped
+    assert source.read_bytes() == original
+
+
+def test_audit_prevents_parent_symlink_injected_between_stat_and_open(
+    tmp_path, monkeypatch,
+):
+    """A transient symlink cannot redirect the already-inspected parent."""
+    active = tmp_path / "active-source"
+    active.mkdir()
+    target = tmp_path / "other-source"
+    target.mkdir()
+    original = b"variant_id,task_id\\nD3,synthetic-01\\n"
+    (active / "checks.csv").write_bytes(original)
+    (target / "checks.csv").write_bytes(original)
+    archived = tmp_path / "old-source"
+    real_open = os.open
+    injected = False
+
+    def inject_before_open(path, flags, *args, **kwargs):
+        nonlocal injected
+        if path == active.name and kwargs.get("dir_fd") is not None and not injected:
+            active.rename(archived)
+            active.symlink_to(target, target_is_directory=True)
+            injected = True
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(audit.os, "open", inject_before_open)
+    with pytest.raises(audit.InputIntegrityError, match="stable CSV"):
+        audit._read_csv(active / "checks.csv", label="synthetic")
+    assert injected

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from contextlib import ExitStack
 from decimal import Decimal, InvalidOperation
 import hashlib
 import io
@@ -47,49 +48,117 @@ def _file_identity(metadata: os.stat_result) -> tuple[int, ...]:
     )
 
 
-def _capture_csv_bytes(path: Path, *, label: str) -> bytes:
-    """Bounded descriptor capture, not historical experimental authentication."""
-    if any(parent.is_symlink() for parent in path.parents):
-        raise InputIntegrityError(f"{label} has a symlinked parent directory")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    fd = None
-    try:
-        fd = os.open(path, flags)
-        before = os.fstat(fd)
-        path_before = os.stat(path, follow_symlinks=False)
-        if (
-            not stat.S_ISREG(before.st_mode)
-            or before.st_nlink != 1
-            or _file_identity(before) != _file_identity(path_before)
-        ):
-            raise InputIntegrityError(
-                f"{label} must be a non-symlink regular CSV file with exactly one link"
-            )
-        if not 0 < before.st_size <= MAX_INPUT_BYTES:
-            raise InputIntegrityError(f"{label} is empty or exceeds input limit")
-        captured = bytearray()
-        while len(captured) <= MAX_INPUT_BYTES:
-            chunk = os.read(fd, min(65536, MAX_INPUT_BYTES + 1 - len(captured)))
-            if not chunk:
-                break
-            captured.extend(chunk)
-        after = os.fstat(fd)
-        path_after = os.stat(path, follow_symlinks=False)
-        if not 0 < len(captured) <= MAX_INPUT_BYTES:
-            raise InputIntegrityError(f"{label} is empty or exceeds input limit")
-        if (
-            len(captured) != before.st_size
-            or _file_identity(before) != _file_identity(after)
-            or _file_identity(before) != _file_identity(path_after)
-        ):
-            raise InputIntegrityError(f"{label} changed during bounded CSV capture")
-        return bytes(captured)
-    except OSError as exc:
-        raise InputIntegrityError(f"{label} cannot be opened as a stable CSV file") from exc
-    finally:
-        if fd is not None:
-            os.close(fd)
+def _directory_identity(metadata: os.stat_result) -> tuple[int, int, int]:
+    """Stable directory identity; sibling writes may change mtime/ctime."""
+    return (metadata.st_dev, metadata.st_ino, metadata.st_mode)
 
+
+def _capture_csv_bytes(path: Path, *, label: str) -> bytes:
+    """Capture a bounded CSV while holding and rechecking no-follow ancestors.
+
+    The original published SHA-256 still binds the bytes separately. This
+    protects the *local pathname* during capture, not historical authorship.
+    """
+    path = Path(path)
+    if ".." in path.parts:
+        raise InputIntegrityError(f"{label} path contains parent traversal")
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise InputIntegrityError(f"{label} requires no-follow directory support")
+    absolute = path.absolute()
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    file_flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
+    try:
+        with ExitStack() as stack:
+            parent_fd = os.open(absolute.anchor, directory_flags)
+            stack.callback(os.close, parent_fd)
+            ancestors = []
+            for component in absolute.parts[1:-1]:
+                visible_before = os.stat(
+                    component, dir_fd=parent_fd, follow_symlinks=False
+                )
+                if stat.S_ISLNK(visible_before.st_mode):
+                    raise InputIntegrityError(
+                        f"{label} has a symlinked parent directory"
+                    )
+                if not stat.S_ISDIR(visible_before.st_mode):
+                    raise InputIntegrityError(
+                        f"{label} parent component is not a directory"
+                    )
+                child_fd = os.open(component, directory_flags, dir_fd=parent_fd)
+                stack.callback(os.close, child_fd)
+                if (
+                    _directory_identity(visible_before)
+                    != _directory_identity(os.fstat(child_fd))
+                ):
+                    raise InputIntegrityError(
+                        f"{label} parent directory changed before capture"
+                    )
+                ancestors.append((parent_fd, component, child_fd))
+                parent_fd = child_fd
+
+            path_before = os.stat(
+                absolute.name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if not stat.S_ISREG(path_before.st_mode) or path_before.st_nlink != 1:
+                raise InputIntegrityError(
+                    f"{label} must be a non-symlink regular CSV file with exactly one link"
+                )
+            if not 0 < path_before.st_size <= MAX_INPUT_BYTES:
+                raise InputIntegrityError(f"{label} is empty or exceeds input limit")
+
+            fd = os.open(absolute.name, file_flags, dir_fd=parent_fd)
+            stack.callback(os.close, fd)
+            before = os.fstat(fd)
+            path_opened = os.stat(
+                absolute.name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or _file_identity(path_before) != _file_identity(before)
+                or _file_identity(before) != _file_identity(path_opened)
+            ):
+                raise InputIntegrityError(
+                    f"{label} must be a non-symlink regular CSV file with exactly one link"
+                )
+
+            captured = bytearray()
+            while len(captured) <= MAX_INPUT_BYTES:
+                chunk = os.read(
+                    fd, min(65536, MAX_INPUT_BYTES + 1 - len(captured))
+                )
+                if not chunk:
+                    break
+                captured.extend(chunk)
+            after = os.fstat(fd)
+            path_after = os.stat(
+                absolute.name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if not 0 < len(captured) <= MAX_INPUT_BYTES:
+                raise InputIntegrityError(f"{label} is empty or exceeds input limit")
+            if (
+                len(captured) != before.st_size
+                or _file_identity(before) != _file_identity(after)
+                or _file_identity(before) != _file_identity(path_after)
+            ):
+                raise InputIntegrityError(f"{label} changed during bounded CSV capture")
+
+            for holder_fd, component, child_fd in ancestors:
+                visible = os.stat(
+                    component, dir_fd=holder_fd, follow_symlinks=False
+                )
+                if (
+                    _directory_identity(visible)
+                    != _directory_identity(os.fstat(child_fd))
+                ):
+                    raise InputIntegrityError(
+                        f"{label} parent directory changed during capture"
+                    )
+            return bytes(captured)
+    except OSError as exc:
+        raise InputIntegrityError(
+            f"{label} cannot be opened as a stable CSV file"
+        ) from exc
 
 def _read_csv(path: Path, *, label: str) -> tuple[bytes, list[dict[str, str]]]:
     raw = _capture_csv_bytes(Path(path), label=label)
