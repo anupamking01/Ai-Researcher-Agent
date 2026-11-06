@@ -123,6 +123,111 @@ def _preflight_receipt_roster(
             )
 
 
+
+def _preflight_receipt_claims(recorded: dict) -> None:
+    """Reject impossible research claims/accounting before costly ZIP rescans.
+
+    This is a cheap consistency check on *untrusted receipt declarations*,
+    not proof of the candidate source bytes or independent archive custody.
+    Full replay remains mandatory after these checks pass.
+    """
+    failed = "recorded triage receipt has inconsistent claims or accounting"
+    fixed = {
+        "status": "candidate_triage_only_no_historical_authentication",
+        "all_explicit_candidates_accounted_for": True,
+        "distinct_zip_bytes_establish_independent_custody": False,
+        "supplied_candidates_proven_exhaustive": False,
+        "github_service_metadata_is_independent_custody": False,
+        "original_treatment_evidence_authenticated": False,
+        "human_evaluation_ready": False,
+        "experimental_treatments_rerun": False,
+        "evaluator_rerun": False,
+        "human_ratings_generated": False,
+        "batch_archive_byte_budget": triage.MAX_BATCH_ARCHIVE_BYTES,
+        "batch_declared_uncompressed_byte_budget": triage.MAX_BATCH_UNCOMPRESSED_BYTES,
+    }
+    if any(
+        type(recorded.get(key)) is not type(value) or recorded[key] != value
+        for key, value in fixed.items()
+    ):
+        raise ReceiptVerificationError(failed)
+
+    rows = recorded["candidates"]  # Already type-checked by roster preflight.
+    by_role = recorded.get("by_role")
+    if type(by_role) is not dict or set(by_role) != set(triage.ROLES):
+        raise ReceiptVerificationError(failed)
+
+    for role in triage.ROLES:
+        role_rows = [row for row in rows if row["role"] == role]
+        expected = {
+            "candidate_count": len(role_rows),
+            "provider_concordant_count": sum(
+                row.get("github_provider_zip_digest_and_size_match") is True
+                for row in role_rows
+            ),
+            "other_role_provider_concordant_count": sum(
+                row.get("other_role_github_provider_zip_match") is not None
+                for row in role_rows
+            ),
+            "distinct_regular_member_content_count": len({
+                row.get("observed_regular_member_content_sha256")
+                for row in role_rows if row.get("structural_preflight_succeeded") is True
+            }),
+            "distinct_structurally_verified_zip_count": len({
+                row.get("observed_zip_sha256")
+                for row in role_rows if row.get("structural_preflight_succeeded") is True
+            }),
+            "distinct_provider_concordant_zip_count": len({
+                row.get("observed_zip_sha256")
+                for row in role_rows
+                if row.get("github_provider_zip_digest_and_size_match") is True
+            }),
+        }
+        observed = by_role[role]
+        if type(observed) is not dict or set(observed) != set(expected):
+            raise ReceiptVerificationError(failed)
+        if any(
+            type(observed[key]) is not int or observed[key] != value
+            for key, value in expected.items()
+        ):
+            raise ReceiptVerificationError(failed)
+
+    counts = {
+        "batch_candidates_not_inspected_due_to_archive_budget": sum(
+            row.get("status") == "not_inspected_batch_archive_byte_budget_exceeded"
+            for row in rows
+        ),
+        "batch_candidates_not_inspected_due_to_budget": sum(
+            row.get("status") == "not_inspected_batch_decompression_budget_exceeded"
+            for row in rows
+        ),
+        "same_regular_members_duplicate_count": sum(
+            row.get("same_regular_members_as_candidate_index") is not None
+            for row in rows
+        ),
+        "verified_zip_byte_duplicate_count": sum(
+            row.get("duplicate_verified_zip_of_candidate_index") is not None
+            for row in rows
+        ),
+        "other_role_provider_concordant_candidate_count": sum(
+            row.get("other_role_github_provider_zip_match") is not None
+            for row in rows
+        ),
+    }
+    if any(
+        type(recorded.get(key)) is not int or recorded[key] != value
+        for key, value in counts.items()
+    ):
+        raise ReceiptVerificationError(failed)
+    for used, allowance in (
+        ("batch_archive_bytes_reserved", triage.MAX_BATCH_ARCHIVE_BYTES),
+        ("batch_declared_uncompressed_bytes_reserved", triage.MAX_BATCH_UNCOMPRESSED_BYTES),
+    ):
+        value = recorded.get(used)
+        if type(value) is not int or not 0 <= value <= allowance:
+            raise ReceiptVerificationError(failed)
+
+
 def verify_receipt(
     receipt_path: Path, assignments: Sequence[tuple[str, Path]],
 ) -> dict:
@@ -148,6 +253,7 @@ def verify_receipt(
         raise ReceiptVerificationError("expected schema-v3 triage receipt")
     # Malformed receipt rosters must not trigger up to a gigabyte of ZIP I/O.
     _preflight_receipt_roster(recorded, assignments)
+    _preflight_receipt_claims(recorded)
     try:
         recorded_canonical = json.dumps(
             recorded, sort_keys=True, separators=(",", ":"), ensure_ascii=False,

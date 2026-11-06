@@ -210,3 +210,44 @@ def test_invalid_receipt_numeric_tokens_fail_before_archive_scan(
     monkeypatch.setattr(verify.triage, "triage_candidates", no_archive_scan)
     with pytest.raises(verify.ReceiptVerificationError, match=diagnostic):
         verify.verify_receipt(receipt, [("original_treatment", candidate)])
+
+
+@pytest.mark.parametrize("tamper", [
+    "readiness", "authenticated", "role_count", "provider_count",
+    "duplicate_count", "archive_budget", "negative_reservation",
+    "boolean_reservation", "unknown_role",
+])
+def test_contradictory_receipt_claims_fail_before_archive_scan(
+    tmp_path, monkeypatch, tamper,
+):
+    candidate = _zip(tmp_path / "candidate.zip", b"synthetic evidence")
+    assignments = [("original_treatment", candidate)]
+    receipt = _receipt(tmp_path / "receipt.json", assignments)
+    document = json.loads(receipt.read_text(encoding="utf-8"))
+
+    if tamper == "readiness":
+        document["human_evaluation_ready"] = True
+    elif tamper == "authenticated":
+        document["original_treatment_evidence_authenticated"] = True
+    elif tamper == "role_count":
+        document["by_role"]["original_treatment"]["candidate_count"] = 0
+    elif tamper == "provider_count":
+        document["by_role"]["original_treatment"]["provider_concordant_count"] = 1
+    elif tamper == "duplicate_count":
+        document["verified_zip_byte_duplicate_count"] = 1
+    elif tamper == "archive_budget":
+        document["batch_archive_byte_budget"] += 1
+    elif tamper == "negative_reservation":
+        document["batch_archive_bytes_reserved"] = -1
+    elif tamper == "boolean_reservation":
+        document["batch_declared_uncompressed_bytes_reserved"] = True
+    else:
+        document["by_role"]["invented_source"] = {}
+    receipt.write_text(json.dumps(document), encoding="utf-8")
+
+    def no_archive_scan(*args, **kwargs):
+        raise AssertionError("contradictory receipt must fail before ZIP inspection")
+
+    monkeypatch.setattr(verify.triage, "triage_candidates", no_archive_scan)
+    with pytest.raises(verify.ReceiptVerificationError, match="inconsistent claims"):
+        verify.verify_receipt(receipt, assignments)
