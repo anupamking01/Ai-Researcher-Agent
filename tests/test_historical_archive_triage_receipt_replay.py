@@ -57,7 +57,7 @@ def test_replay_rejects_changed_receipt_claim_even_when_python_compares_equal(tm
     doc = json.loads(receipt.read_text())
     doc["all_explicit_candidates_accounted_for"] = 1  # 1 == True in Python
     receipt.write_text(json.dumps(doc), encoding="utf-8")
-    with pytest.raises(verify.ReceiptVerificationError, match="differs"):
+    with pytest.raises(verify.ReceiptVerificationError, match="inconsistent claims"):
         verify.verify_receipt(receipt, assignments)
 
 
