@@ -48,7 +48,7 @@ def _archive_source_snapshot(path: Path) -> tuple[tuple[int, ...], str]:
                 )
             if not 0 < before.st_size <= preflight.MAX_ARCHIVE_BYTES:
                 raise RecoveryConcordanceError("archive source size outside preflight bounds")
-            digest = preflight._fingerprint(handle)
+            digest = preflight._fingerprint(handle, expected_bytes=before.st_size)
             if (
                 not preflight._unchanged(before, os.fstat(handle.fileno()))
                 or not preflight._unchanged(before, os.stat(path, follow_symlinks=False))
