@@ -10,6 +10,7 @@ on:
       - "scripts/verify_main_study_retrieval_exposure_artifact.py"
       - "scripts/analyze_main_study_claim_denominators.py"
       - "scripts/verify_main_study_claim_denominator_artifact.py"
+      - "scripts/verify_exploratory_measurement_bundle.py"
       - "scripts/audit_frozen_analysis_csv_inputs.py"
       - "scripts/validate_main_study_inputs.py"
       - "scripts/verify_frozen_main_study_tasks.py"
@@ -19,6 +20,7 @@ on:
       - "outputs/posthoc_support_runs.csv"
       - "outputs/main_study_analysis_inputs_manifest.json"
       - "tests/test_exploratory_measurement_replay_workflow.py"
+      - "tests/test_exploratory_measurement_bundle_verification.py"
       - "docs/EXPLORATORY_MEASUREMENT_REPLAY.md"
       - "requirements.txt"
   pull_request:
@@ -28,6 +30,7 @@ on:
       - "scripts/verify_main_study_retrieval_exposure_artifact.py"
       - "scripts/analyze_main_study_claim_denominators.py"
       - "scripts/verify_main_study_claim_denominator_artifact.py"
+      - "scripts/verify_exploratory_measurement_bundle.py"
       - "scripts/audit_frozen_analysis_csv_inputs.py"
       - "scripts/validate_main_study_inputs.py"
       - "scripts/verify_frozen_main_study_tasks.py"
@@ -37,6 +40,7 @@ on:
       - "outputs/posthoc_support_runs.csv"
       - "outputs/main_study_analysis_inputs_manifest.json"
       - "tests/test_exploratory_measurement_replay_workflow.py"
+      - "tests/test_exploratory_measurement_bundle_verification.py"
       - "docs/EXPLORATORY_MEASUREMENT_REPLAY.md"
       - "requirements.txt"
   workflow_dispatch:
@@ -80,7 +84,7 @@ jobs:
             --artifact "$AUDIT_DIR/claim_denominators.json" \
             > "$AUDIT_DIR/claim_denominators_verification.json"
 
-          # Store hashes and the exact checkout/run ID, not a human- or
+          # Store hashes and the exact checkout/run ID/attempt, not a human- or
           # historical-execution-authentication assertion.
           python - <<'PY'
           import hashlib
@@ -88,7 +92,14 @@ jobs:
           import os
           from pathlib import Path
 
+          import subprocess
+
           root = Path(os.environ["AUDIT_DIR"])
+          # GITHUB_SHA must identify the bytes actually checked out, including
+          # the synthetic merge checkout used for pull_request triggers.
+          assert subprocess.check_output(
+              ["git", "rev-parse", "HEAD"], text=True
+          ).strip() == os.environ["GITHUB_SHA"]
           documents = {
               name: (root / name).read_bytes()
               for name in (
@@ -120,11 +131,12 @@ jobs:
           assert parsed["retrieval_exposure_verification.json"]["confirmatory_inference_changed"] is False
           assert parsed["claim_denominators_verification.json"]["confirmatory_primary_estimand_changed"] is False
           manifest = {
-              "schema_version": 1,
+              "schema_version": 2,
               "status": "verified_local_post_hoc_exploratory_measurements_only",
               "repository": os.environ["GITHUB_REPOSITORY"],
               "checkout_commit_sha": os.environ["GITHUB_SHA"],
               "workflow_run_id": os.environ["GITHUB_RUN_ID"],
+              "workflow_run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
               "files_sha256": {
                   name: hashlib.sha256(raw).hexdigest()
                   for name, raw in sorted(documents.items())
@@ -139,10 +151,20 @@ jobs:
           )
           PY
 
+          # A second, offline verifier checks the entire five-file bundle,
+          # replays both independent CSV audits, and binds externally supplied
+          # run/attempt/commit identity before artifacts are published.
+          python -m scripts.verify_exploratory_measurement_bundle \
+            --directory "$AUDIT_DIR" \
+            --expected-repository "$GITHUB_REPOSITORY" \
+            --expected-checkout-sha "$GITHUB_SHA" \
+            --expected-run-id "$GITHUB_RUN_ID" \
+            --expected-run-attempt "$GITHUB_RUN_ATTEMPT"
+
       - name: Retain checked diagnostic JSONs, independent receipts and checkout index
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: vera-exploratory-measurement-${{ github.run_id }}
+          name: vera-exploratory-measurement-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/vera-exploratory-measurement/*.json
           if-no-files-found: error
           retention-days: 90

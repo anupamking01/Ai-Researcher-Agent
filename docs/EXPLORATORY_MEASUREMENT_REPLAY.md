@@ -22,6 +22,39 @@ GitHub run link into an independently controlled archive if durable external
 custody is required. CI artifacts alone are not independent historical
 authentication, nor do they recover any missing original report or trace.
 
+## Independently verify a downloaded five-file bundle
+
+After downloading and extracting a retained artifact, independently obtain
+its **repository, exact workflow checkout commit, Actions run ID, and run
+attempt** from the GitHub Actions run page/API (not from the bundle itself).
+Check out that exact commit with the pinned frozen CSV inputs and run:
+
+```bash
+python -m scripts.verify_exploratory_measurement_bundle \
+  --directory /path/to/extracted-five-json-files \
+  --expected-repository anupamking01/Ai-Researcher-Agent \
+  --expected-checkout-sha <full-40-character-run-checkout-SHA> \
+  --expected-run-id <GitHub-Actions-run-ID> \
+  --expected-run-attempt <GitHub-Actions-attempt-number>
+```
+
+The verifier rejects missing or extra members, symlinks/hardlinks, changed
+bundle bytes, duplicate JSON keys, false research-status claims, missing or
+altered run/attempt identity, and mismatched file digests. It independently
+recomputes both saved verification receipts against the pinned CSVs and
+requires exact typed equality; simply rewriting a JSON result and updating
+the index hashes cannot make a changed measurement pass. The CI workflow
+runs this same check **before upload**, and each workflow re-run uses a
+distinct run-attempt artifact name. Manifest schema v2 records that attempt.
+
+**Trust boundary:** The index is a self-declared digest ledger, not a
+signature or trusted original-execution attestation. The externally checked
+run identity and independently verified **published summary CSVs** are
+necessary; neither establishes original treatment report/trace custody.
+A downloaded v1 bundle from an earlier run is not silently upgraded: replay
+that run's original files or use the new v2 workflow on a current checkout.
+This process adds no tests of significance and no human rating.
+
 The workflow is triggered by relevant edits on
 `research-paper-eval-2027`, qualifying PR changes, or manual dispatch. It
 uses read-only repository permissions, a pinned Python interpreter, and
