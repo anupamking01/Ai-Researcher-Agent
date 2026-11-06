@@ -20,6 +20,10 @@ RECEIPT_NAME = "preflight_receipt.json"
 # A receipt contains fixed metadata and hashes, never an annotation payload.
 # Bound untrusted retained bytes before JSON parsing, including concurrent growth.
 MAX_RECEIPT_BYTES = 64 * 1024
+# Receipt JSON has only a shallow, fixed schema. Reject adversarial nesting
+# before invoking the recursive JSON decoder, even under the byte-size cap.
+MAX_RECEIPT_JSON_DEPTH = 32
+MAX_RECEIPT_INTEGER_DIGITS = 20
 _RECEIPT_KEYS = {
     "schema_version",
     "study_id",
@@ -51,6 +55,47 @@ def _unique_json_object(pairs: list[tuple[str, object]]) -> dict:
             )
         value[key] = member
     return value
+
+
+def _require_bounded_json_depth(raw: bytes) -> None:
+    """Bound JSON container depth, ignoring brackets inside quoted strings."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:  # backslash
+                escaped = True
+            elif byte == 0x22:  # quote
+                in_string = False
+        elif byte == 0x22:
+            in_string = True
+        elif byte in (0x7B, 0x5B):  # { [
+            depth += 1
+            if depth > MAX_RECEIPT_JSON_DEPTH:
+                raise ValueError(
+                    "human-evaluation preflight receipt JSON nesting exceeds "
+                    f"{MAX_RECEIPT_JSON_DEPTH} levels"
+                )
+        elif byte in (0x7D, 0x5D):  # } ]
+            depth -= 1
+    # The standard decoder still checks balanced containers and valid strings.
+
+
+def _bounded_json_integer(token: str) -> int:
+    if len(token.lstrip("-")) > MAX_RECEIPT_INTEGER_DIGITS:
+        raise ValueError("human-evaluation preflight receipt integer token is too long")
+    return int(token)
+
+
+def _reject_json_float(_token: str) -> float:
+    raise ValueError("human-evaluation preflight receipt disallows floating-point numbers")
+
+
+def _reject_json_constant(_token: str) -> float:
+    raise ValueError("human-evaluation preflight receipt disallows nonfinite JSON constants")
 
 
 def _require_receipt_size(size: int) -> None:
@@ -187,12 +232,16 @@ def _retained_receipt_window(receipt_root: Path):
                     "human-evaluation preflight receipt must be a regular file without hardlink aliases"
                 )
             _require_same_object(current, opened)
+            _require_bounded_json_depth(receipt_bytes)
             try:
                 retained = json.loads(
                     receipt_bytes.decode("utf-8"),
                     object_pairs_hook=_unique_json_object,
+                    parse_int=_bounded_json_integer,
+                    parse_float=_reject_json_float,
+                    parse_constant=_reject_json_constant,
                 )
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
                 raise ValueError(
                     "human-evaluation preflight receipt is not valid UTF-8 JSON"
                 ) from exc
@@ -265,6 +314,17 @@ def _validate_receipt_schema(receipt: dict) -> None:
             )
     if receipt["n_reports"] == 0:
         raise ValueError("human-evaluation preflight receipt schema has no reports")
+    if receipt["study_id"] != "budget-main-v1":
+        raise ValueError("human-evaluation preflight receipt study_id mismatch")
+    if receipt["status"] != "human_eval_annotator_submission_verified":
+        raise ValueError("human-evaluation preflight receipt status mismatch")
+    if receipt["presentation_order"] not in ("canonical", "reverse"):
+        raise ValueError("human-evaluation preflight receipt presentation_order mismatch")
+    if receipt["n_missing_dimension_values"] > 5 * receipt["n_reports"]:
+        raise ValueError(
+            "human-evaluation preflight receipt missing-dimension count exceeds "
+            "five rubric values per report"
+        )
     submission = receipt["submission"]
     if not isinstance(submission, dict) or set(submission) != {
         "name",

@@ -798,6 +798,68 @@ def test_receipt_verifier_rejects_duplicate_json_keys(tmp_path):
         )
 
 
+@pytest.mark.parametrize(
+    "change, message",
+    [
+        ({"status": "human_eval_verified"}, "status mismatch"),
+        ({"study_id": "other-study"}, "study_id mismatch"),
+        ({"presentation_order": "randomized"}, "presentation_order mismatch"),
+        ({"n_missing_dimension_values": 11}, "missing-dimension count exceeds"),
+    ],
+)
+def test_receipt_rejects_impossible_declarations_before_ratings_replay(
+    tmp_path, monkeypatch, change, message
+):
+    receipt_root, submission, bundle = _published_receipt(tmp_path)
+    receipt_path = receipt_root / verify.RECEIPT_NAME
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt.update(change)
+    receipt_path.write_text(json.dumps(receipt) + "\n", encoding="utf-8")
+
+    def unexpected_replay(*args, **kwargs):
+        raise AssertionError("replay must not occur for impossible receipt metadata")
+
+    monkeypatch.setattr(freeze, "preflight_annotator_submission", unexpected_replay)
+    with pytest.raises(ValueError, match=message):
+        verify.verify_preflight_receipt(
+            receipt_root=receipt_root,
+            rating_path=submission,
+            annotator_bundle_root=bundle,
+        )
+
+
+@pytest.mark.parametrize(
+    "raw, message",
+    [
+        ('{"nested":' + "[" * 48 + "0" + "]" * 48 + "}", "nesting exceeds"),
+        ('{"n_reports":' + "9" * 5000 + "}", "integer token is too long"),
+        ('{"n_reports":1e999999}', "floating-point numbers"),
+        ('{"n_reports":NaN}', "nonfinite JSON constants"),
+    ],
+)
+def test_receipt_parser_rejects_adversarial_json_before_replay(
+    tmp_path, monkeypatch, raw, message
+):
+    receipt_root, submission, bundle = _published_receipt(tmp_path)
+    (receipt_root / verify.RECEIPT_NAME).write_text(raw, encoding="utf-8")
+
+    def unexpected_replay(*args, **kwargs):
+        raise AssertionError("malformed receipt must not trigger submission replay")
+
+    monkeypatch.setattr(freeze, "preflight_annotator_submission", unexpected_replay)
+    with pytest.raises(ValueError, match=message):
+        verify.verify_preflight_receipt(
+            receipt_root=receipt_root,
+            rating_path=submission,
+            annotator_bundle_root=bundle,
+        )
+
+
+def test_json_nesting_guard_ignores_brackets_in_escaped_strings():
+    harmless = json.dumps({"field": ('["\\\\"]' * 40)})
+    verify._require_bounded_json_depth(harmless.encode("utf-8"))
+
+
 def test_receipt_verifier_rejects_undeclared_directory_entry(tmp_path):
     receipt_root, submission, bundle = _published_receipt(tmp_path)
     (receipt_root / "untracked.txt").write_text("unexpected\n", encoding="utf-8")

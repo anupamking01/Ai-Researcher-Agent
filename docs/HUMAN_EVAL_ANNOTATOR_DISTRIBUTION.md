@@ -74,6 +74,21 @@ a mutation of the verification window, not as unchanged custody. These local
 checks strengthen the retained-receipt handoff but do not independently
 authenticate any original experimental source, annotation, or human rating.
 
+## Fail-fast receipt validation before replay
+
+The independent blinded submission-receipt verifier treats retained receipts as
+untrusted input. In addition to its 64-KiB descriptor-bound capture, it now
+limits JSON container nesting to 32 levels and integer tokens to 20 digits,
+rejects nonfinite and floating-point JSON numbers, and checks the frozen study,
+verification status, allowed presentation order, and mathematically possible
+five-dimension missingness count **before** re-reading the annotator bundle or
+ratings submission. Invalid metadata cannot trigger a costly replay or end in an
+unhandled JSON-recursion/large-integer parser failure. Literal brackets within
+JSON strings are not counted as nesting. The exact receipt still must match a
+fresh verified blinded preflight; these checks do not prove an annotator's
+identity or establish original treatment-artifact custody. No scoring, rubric,
+assignment, or human-validation claim changes.
+
 ## Integrity properties
 
 The exporter fails closed if the coordinator packet does not pass its existing
