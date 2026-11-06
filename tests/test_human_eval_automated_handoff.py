@@ -87,12 +87,16 @@ def case(tmp_path):
                 "model_calls": "1", "report_words": "10",
                 "treatment_cost_usd": "0.01", "latency_seconds": "1.0",
                 "posthoc_claims_checked": "2",
+                "posthoc_strict_support_rate": "0.5",
+                "posthoc_evaluator_cost_usd": "0.0125",
             })
             evaluator_rows.append({
                 "variant_id": variant, "task_id": task, "run_id": run,
                 "claims_checked": "2", "supported": "1",
                 "partially_supported": "0", "unsupported": "1",
                 "contradicted": "0",
+                "strict_support_rate": "0.5",
+                "estimated_cost_usd": "0.0125",
             })
     _write_csv(tmp_path / lineage.MAIN_REL, main_rows)
     _write_csv(tmp_path / lineage.SUPPORT_REL, evaluator_rows)
