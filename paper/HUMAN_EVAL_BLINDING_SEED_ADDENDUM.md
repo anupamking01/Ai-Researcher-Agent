@@ -77,3 +77,26 @@ a secret was *never* previously disclosed. Any historically exposed packet
 must remain disqualified from genuine blinded scoring; retain it as evidence
 and generate a new independently authenticated, versioned packet only before
 human scoring begins. No original experiments or human ratings were changed.
+
+
+## Prospective verification and distribution gate — 7 November 2026
+
+The independent packet verifier now **fails closed** if a packet carries the
+historically disclosed fixed seed `20260915`, even when its manifest,
+blinding key, template, and report hashes are all internally consistent. The
+annotator exporter calls this same verifier before creating distribution
+artifacts, so it too refuses this historically predictable mapping. The
+verifier also requires the seed to be a nonnegative integer in the 256-bit
+generation domain. Synthetic, offline regression cases cover source-pinned
+verification, source-unpinned diagnostics, export refusal, and out-of-domain
+seeds.
+
+This is a prospective human-blinding safeguard, **not** evidence that a
+permitted seed came from a secure randomness source or remained secret.
+Previously exposed historical packets should be retained for archival
+provenance, not issued to annotators. Other publicly exposed seeds, seed leaks,
+and post-generation disclosure require independent coordinator review; a
+matching hash or a large numeric seed does not prove unpredictability.
+The historical treatment/evaluator recovery gap remains unresolved; do not
+distribute any packet until original source custody and all handoff gates pass.
+No pilot, automated-confirmatory, exploratory, or human-rating result changes.

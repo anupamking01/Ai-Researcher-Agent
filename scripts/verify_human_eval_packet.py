@@ -372,6 +372,18 @@ def verify_packet(
     _require_equal(manifest.get("variants"), list(build.EXPECTED_VARIANTS), label="variant contract")
     if type(manifest.get("blind_seed")) is not int:
         raise ValueError("packet manifest blind_seed must be an integer")
+    # The original protocol published 20260915 as its fixed shuffle seed.
+    # With a public cell order, a packet using that seed is reproducibly
+    # unblinded without the private key. Byte-consistent inputs are NOT enough
+    # to make such a packet safe for human distribution.
+    seed = manifest["blind_seed"]
+    if not 0 <= seed < (1 << build.BLINDING_SEED_BITS):
+        raise ValueError("packet manifest blind_seed is outside the 256-bit domain")
+    if seed == 20260915:
+        raise ValueError(
+            "packet manifest uses publicly disclosed legacy fixed seed 20260915; "
+            "the treatment mapping is recoverable and the packet must not be distributed"
+        )
 
     expected_task_entry = {
         "name": task_manifest_path.name,

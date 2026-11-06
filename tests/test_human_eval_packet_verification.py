@@ -1301,3 +1301,59 @@ def test_rehashed_packet_jsonl_requires_generator_record_envelope(
 
     with pytest.raises(ValueError, match=diagnostic):
         _verify(packet_case)
+
+
+def _build_public_seed_packet(case: dict, output_root: Path) -> Path:
+    """Create a fully consistent OLD fixed-seed packet from synthetic reports."""
+    build.build_packet(
+        case["repo_root"] / "outputs" / "experiment_traces",
+        output_root,
+        seed=20260915,  # Public in the original protocol: NOT blinded.
+        task_manifest_path=case["task_manifest_path"],
+    )
+    return output_root
+
+
+@pytest.mark.parametrize("require_original_sources", [False, True])
+def test_consistent_public_fixed_seed_packet_cannot_be_verified_for_human_scoring(
+    source_anchored_packet_case, tmp_path, require_original_sources
+):
+    case = source_anchored_packet_case
+    legacy = _build_public_seed_packet(case, tmp_path / "legacy_public_seed")
+    with pytest.raises(ValueError, match="publicly disclosed legacy fixed seed"):
+        verify_packet(
+            output_root=legacy,
+            task_manifest_path=case["task_manifest_path"],
+            repo_root=case["repo_root"],
+            require_original_sources=require_original_sources,
+        )
+
+
+def test_public_seed_packet_cannot_be_exported_for_annotators(
+    source_anchored_packet_case, tmp_path
+):
+    from scripts import export_human_eval_annotator_bundle as exporter
+
+    case = source_anchored_packet_case
+    legacy = _build_public_seed_packet(case, tmp_path / "legacy_public_seed")
+    distribution = tmp_path / "unsafe_distribution"
+    with pytest.raises(ValueError, match="publicly disclosed legacy fixed seed"):
+        exporter.export_annotator_bundle(
+            packet_root=legacy,
+            output_root=distribution,
+            task_manifest_path=case["task_manifest_path"],
+            repo_root=case["repo_root"],
+        )
+    assert not distribution.exists()
+
+
+@pytest.mark.parametrize("bad_seed", [-1, 1 << build.BLINDING_SEED_BITS])
+def test_packet_verifier_rejects_seeds_outside_generation_domain(
+    packet_case, bad_seed
+):
+    manifest_path = packet_case["output_root"] / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["blind_seed"] = bad_seed
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="outside the 256-bit domain"):
+        _verify(packet_case)
