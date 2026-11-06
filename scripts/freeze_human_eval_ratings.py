@@ -462,9 +462,13 @@ def _validate_annotator_attestation_coverage(
 
 def _capture_regular_input(
     path: Path, *, label: str,
-    max_bytes: int = MAX_HUMAN_FREEZE_INPUT_BYTES,
+    max_bytes: int | None = None,
 ) -> bytes:
     """Capture stable, path-bound bytes, allowing tighter receipt-specific bounds."""
+    # Resolve the default at call time: the existing tests and verification
+    # callers can deliberately narrow the shared capture limit dynamically.
+    if max_bytes is None:
+        max_bytes = MAX_HUMAN_FREEZE_INPUT_BYTES
     if (
         type(max_bytes) is not int
         or not 0 < max_bytes <= MAX_HUMAN_FREEZE_INPUT_BYTES
