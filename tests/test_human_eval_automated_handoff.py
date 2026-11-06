@@ -151,6 +151,27 @@ def test_composite_gate_proves_both_source_pins_and_report_run_coverage(case):
     ))
 
 
+
+@pytest.mark.parametrize("field, value, expected", [
+    ("posthoc_strict_support_rate", "0.75", "strict support rate mirror mismatch"),
+    ("posthoc_evaluator_cost_usd", "0.05", "evaluator cost mirror mismatch"),
+])
+def test_handoff_rejects_rehashed_mismatched_automated_measurements(
+    case, field, value, expected,
+):
+    """Matching run IDs and freshly hashed CSVs must not conceal score/cost drift."""
+    path = case["repo_root"] / lineage.MAIN_REL
+    rows = lineage._read_study_csv(path.read_bytes(), path=path)
+    rows[0][field] = value
+    _write_csv(path, rows)
+    research_path, research_hash = _archive_input_manifest(case["repo_root"])
+    case["research_manifest_path"] = research_path
+    case["expected_research_manifest_sha256"] = research_hash
+
+    with pytest.raises(ValueError, match=expected):
+        combined.verify_automated_handoff(**case)
+
+
 def test_distribution_alone_can_pass_when_evaluator_run_was_replaced(case):
     path = case["repo_root"] / lineage.SUPPORT_REL
     rows = lineage._read_study_csv(path.read_bytes(), path=path)
