@@ -26,6 +26,22 @@ treatment/evaluator support-count and strict-rate mirrors. This is not a claim
 that legacy CSVs satisfy the newer prospective metadata contract. It rejects
 duplicate or non-finite inference JSON members.
 
+**Read-only input snapshot integrity (6 November 2026):** The optional
+independent auditor captures both CSVs through the existing 256-KiB
+descriptor-bound frozen-summary CSV reader, so lexical validation, parsing and
+subsequent arithmetic use the *same* captured bytes. The inference JSON is
+captured through a bounded 8-MiB regular-file descriptor with source-path,
+size, metadata and hardlink checks before/after reading; symlinked ancestors
+and observed concurrent rewrites or replacements fail closed. Its fixed-schema
+JSON input also rejects nesting beyond 32 containers, numeric tokens beyond
+128 characters, and nonfinite numeric values before expensive bootstrap
+recomputation. Synthetic-only regression tests cover these failure modes and
+quoted bracket escapes. This is an internal current-file consistency guard,
+not a new historical SHA pin, independent proof of original experimental
+custody, or a change to the preserved inference implementation. The summary
+CSV reader remains shared with the existing independent CSV preflight; only
+the *statistical arithmetic* here is separately implemented.
+
 It checks: frozen task order and configuration, report-level strict-support
 fractions, four variant mean strict-support rates, the three preregistered
 left/right paired means and mean/median contrasts, all ten task differences per

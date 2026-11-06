@@ -12,11 +12,14 @@ from functools import lru_cache
 from fractions import Fraction
 import json
 import math
+import os
 import random
+import stat
 import statistics
 from pathlib import Path
 
-from scripts.validate_main_study_inputs import read_csv_rows, validate_rows
+from scripts.audit_frozen_analysis_csv_inputs import _read_csv as _read_captured_csv
+from scripts.validate_main_study_inputs import validate_rows
 
 ROOT = Path(__file__).resolve().parents[1]
 VARIANTS = ("D3", "D6", "P6", "P6V")
@@ -37,6 +40,112 @@ TREATMENT_SECONDARY_FIELDS = (
     "latency_seconds", "model_calls", "report_words",
 )
 ABS_TOL = 1e-12
+# The published summary and inference JSON are small and fixed-schema. These
+# limits protect the *optional* independent audit's read-only input path.
+MAX_INFERENCE_BYTES = 8 * 1024 * 1024
+MAX_INFERENCE_JSON_DEPTH = 32
+MAX_INFERENCE_NUMBER_CHARS = 128
+
+
+def _source_identity(info):
+    return (
+        info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_nlink,
+        info.st_mtime_ns, info.st_ctime_ns,
+    )
+
+
+def _capture_inference_bytes(path: Path) -> bytes:
+    """Capture a bounded, stable JSON file; no archival authenticity implied."""
+    path = Path(path)
+    if any(parent.is_symlink() for parent in path.parents):
+        raise ValueError("inference JSON has a symlinked parent directory")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        with os.fdopen(os.open(path, flags), "rb") as stream:
+            before = os.fstat(stream.fileno())
+            path_before = os.stat(path, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or _source_identity(before) != _source_identity(path_before)
+            ):
+                raise ValueError("inference JSON must be a stable single-link regular file")
+            if not 0 < before.st_size <= MAX_INFERENCE_BYTES:
+                raise ValueError("inference JSON is empty or exceeds size limit")
+            raw = bytearray()
+            while len(raw) <= MAX_INFERENCE_BYTES:
+                chunk = os.read(
+                    stream.fileno(),
+                    min(65536, MAX_INFERENCE_BYTES + 1 - len(raw)),
+                )
+                if not chunk:
+                    break
+                raw.extend(chunk)
+            after = os.fstat(stream.fileno())
+            path_after = os.stat(path, follow_symlinks=False)
+            if (
+                len(raw) != before.st_size
+                or _source_identity(before) != _source_identity(after)
+                or _source_identity(before) != _source_identity(path_after)
+            ):
+                raise ValueError("inference JSON changed during bounded capture")
+            return bytes(raw)
+    except OSError as exc:
+        raise ValueError("inference JSON cannot be opened as a stable file") from exc
+
+
+def _require_shallow_json(raw: bytes) -> None:
+    """Bound untrusted container nesting without counting bracket characters in strings."""
+    depth = 0
+    quoted = False
+    escaped = False
+    for character in raw:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif character == 92:  # backslash
+                escaped = True
+            elif character == 34:  # closing quote
+                quoted = False
+        elif character == 34:
+            quoted = True
+        elif character in (91, 123):  # '[' or '{'
+            depth += 1
+            if depth > MAX_INFERENCE_JSON_DEPTH:
+                raise ValueError("inference JSON exceeds nesting limit")
+        elif character in (93, 125):
+            depth -= 1
+            if depth < 0:
+                raise ValueError("inference JSON has unmatched closing delimiter")
+
+
+def _bounded_inference_int(token: str) -> int:
+    if len(token) > MAX_INFERENCE_NUMBER_CHARS:
+        raise ValueError("inference JSON numeric token exceeds length limit")
+    return int(token)
+
+
+def _bounded_inference_float(token: str) -> float:
+    if len(token) > MAX_INFERENCE_NUMBER_CHARS:
+        raise ValueError("inference JSON numeric token exceeds length limit")
+    number = float(token)
+    if not math.isfinite(number):
+        raise ValueError("inference JSON contains non-finite numeric value")
+    return number
+
+
+def _decode_inference_json(raw: bytes):
+    _require_shallow_json(raw)
+    try:
+        return json.loads(
+            raw, object_pairs_hook=_unique_keys,
+            parse_constant=_reject_constant,
+            parse_int=_bounded_inference_int,
+            parse_float=_bounded_inference_float,
+        )
+    except RecursionError as exc:
+        raise ValueError("inference JSON exceeds decoder nesting limit") from exc
 
 
 def _unique_keys(pairs):
@@ -510,16 +619,13 @@ def audit_primary(treatment_rows, evaluator_rows, inference):
 
 
 def audit_files(main_csv: Path, support_csv: Path, inference_json: Path):
-    if inference_json.is_symlink() or not inference_json.is_file():
-        raise ValueError("inference JSON must be a regular file")
-    if inference_json.stat().st_size > 8 * 1024 * 1024:
-        raise ValueError("inference JSON exceeds size limit")
-    inference = json.loads(
-        inference_json.read_text(encoding="utf-8"),
-        object_pairs_hook=_unique_keys,
-        parse_constant=_reject_constant,
-    )
-    return audit_primary(read_csv_rows(main_csv), read_csv_rows(support_csv), inference)
+    # Read and parse *the same captured bytes* for each input. Prior to this
+    # change CSV parsing could reread a mutable path in two passes, while JSON
+    # performed a separate stat check followed by an unbounded pathname read.
+    inference = _decode_inference_json(_capture_inference_bytes(inference_json))
+    _, main_rows = _read_captured_csv(Path(main_csv), label="treatment CSV")
+    _, support_rows = _read_captured_csv(Path(support_csv), label="evaluator CSV")
+    return audit_primary(main_rows, support_rows, inference)
 
 
 def main():
