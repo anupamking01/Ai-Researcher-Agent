@@ -155,7 +155,7 @@ def inspect_workflow(raw: bytes, *, recovered: bool) -> None:
     # Both launch workflows must install the same pinned source dependencies.
     for dependency in ("requirements.txt", "requirements-dev.txt"):
         if len(re.findall(
-            rf"(?m)^\\s*pip install -r {re.escape(dependency)}\\s*$", workflow,
+            rf"(?m)^\s*pip install -r {re.escape(dependency)}\s*$", workflow,
         )) != 1:
             raise HistoricalEvaluatorPolicyError(f"historical workflow install drift: {dependency}")
     if recovered:
