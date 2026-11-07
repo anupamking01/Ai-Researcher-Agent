@@ -11,6 +11,9 @@ on:
       - scripts/audit_historical_design_source.py
       - scripts/audit_historical_task_freeze.py
       - scripts/audit_historical_variant_factors.py
+      - scripts/audit_historical_common_evaluator_policy.py
+      - tests/test_historical_common_evaluator_policy.py
+      - docs/HISTORICAL_COMMON_EVALUATOR_SOURCE_POLICY.md
       - tests/test_historical_variant_factors.py
       - docs/HISTORICAL_VARIANT_FACTOR_SOURCE_AUDIT.md
       - tests/test_historical_task_freeze.py
@@ -25,6 +28,9 @@ on:
       - scripts/audit_historical_design_source.py
       - scripts/audit_historical_task_freeze.py
       - scripts/audit_historical_variant_factors.py
+      - scripts/audit_historical_common_evaluator_policy.py
+      - tests/test_historical_common_evaluator_policy.py
+      - docs/HISTORICAL_COMMON_EVALUATOR_SOURCE_POLICY.md
       - tests/test_historical_variant_factors.py
       - docs/HISTORICAL_VARIANT_FACTOR_SOURCE_AUDIT.md
       - tests/test_historical_task_freeze.py
@@ -64,6 +70,7 @@ jobs:
           python -m scripts.audit_historical_design_source > "$RUNNER_TEMP/vera-design-audit/receipt.json"
           python -m scripts.audit_historical_task_freeze > "$RUNNER_TEMP/vera-design-audit/task-freeze.json"
           python -m scripts.audit_historical_variant_factors > "$RUNNER_TEMP/vera-design-audit/variant-factors.json"
+          python -m scripts.audit_historical_common_evaluator_policy > "$RUNNER_TEMP/vera-design-audit/evaluator-policy.json"
           python - <<'PY'
           import json
           import os
@@ -113,6 +120,21 @@ jobs:
           assert factors["historical_config_blob"] == "c98916c4a0aa17a94c38dd981489693bec5b87a7"
           assert factors["runner_config_handoff_ast_checked"] is True
           assert factors["source_linked_factor_matrix"] == expected
+          evaluator = json.loads((Path(os.environ["RUNNER_TEMP"]) /
+                                  "vera-design-audit" / "evaluator-policy.json").read_text())
+          assert evaluator["status"] == "pinned_historical_evaluator_source_policy_comparison_only"
+          assert evaluator["prompt_generator_bytes_identical"] is True
+          assert evaluator["score_normalizer_bytes_identical"] is True
+          assert evaluator["evaluator_core_call_ast_identical"] is True
+          assert evaluator["recovery_zero_successful_source_sentinel_added"] is True
+          for label in ("entire_evaluator_input_policy_identical",
+                        "historical_execution_authenticated",
+                        "original_37_evaluations_authenticated",
+                        "recovered_3_evaluations_authenticated",
+                        "per_cell_evidence_status_authenticated",
+                        "equal_evaluator_outputs_established",
+                        "human_validation_performed"):
+              assert evaluator[label] is False, label
           for field in ("original_treatment_execution_authenticated",
                         "original_report_trace_custody_authenticated",
                         "actual_factor_values_in_original_traces_verified",
