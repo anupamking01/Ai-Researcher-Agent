@@ -1,0 +1,80 @@
+name: historical-design-source-audit
+
+# Offline planned-design source audit: not a treatment/evaluator rerun or
+# original-execution authentication.
+on:
+  push:
+    branches:
+      - research-paper-eval-2027
+    paths:
+      - .github/workflows/historical-design-source-audit.yml
+      - scripts/audit_historical_design_source.py
+      - scripts/audit_main_study_design_identifiability.py
+      - tests/test_historical_design_source_audit.py
+      - tests/test_main_study_design_identifiability.py
+      - docs/HISTORICAL_DESIGN_SOURCE_AUDIT.md
+  pull_request:
+    paths:
+      - .github/workflows/historical-design-source-audit.yml
+      - scripts/audit_historical_design_source.py
+      - scripts/audit_main_study_design_identifiability.py
+      - tests/test_historical_design_source_audit.py
+      - tests/test_main_study_design_identifiability.py
+      - docs/HISTORICAL_DESIGN_SOURCE_AUDIT.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-pinned-runner-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout full Git history without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up offline Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+
+      - name: Verify historical source and exact structural rank
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --is-shallow-repository)" = false
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          mkdir -p "$RUNNER_TEMP/vera-design-audit"
+          python -m scripts.audit_historical_design_source > "$RUNNER_TEMP/vera-design-audit/receipt.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          receipt = json.loads((Path(os.environ["RUNNER_TEMP"]) /
+                               "vera-design-audit" / "receipt.json").read_text())
+          assert receipt["status"] == "historical_source_bound_planned_design_nonidentifiability"
+          assert receipt["source_linked_variant_order"] == ["D3", "D6", "P6", "P6V"]
+          assert receipt["design_rank_task_treatment_position"] == 13
+          assert receipt["historical_runner_task_then_variant_ast_checked"] is True
+          assert receipt["historical_runner_awaited_agent_call_checked"] is True
+          for field in (
+              "original_treatment_execution_authenticated",
+              "actual_run_timestamps_authenticated",
+              "time_varying_web_conditions_measured",
+              "causal_effects_identified",
+              "human_ratings_collected",
+          ):
+              assert receipt[field] is False, field
+          PY
+
+      - name: Retain planned-design audit receipt (90 days)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-historical-design-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vera-design-audit/receipt.json
+          if-no-files-found: error
+          retention-days: 90
