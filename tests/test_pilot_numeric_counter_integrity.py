@@ -80,6 +80,19 @@ def test_integer_telemetry_is_accepted(tmp_path, variant):
     assert validate_pilot(tmp_path) == []
 
 
+def _assert_numeric_rejected(errors, diagnostic, value, field_message):
+    # An unambiguous source parser must reject Python's NaN/Infinity JSON
+    # extensions before field-specific telemetry validation can inspect them.
+    if type(value) is float and not math.isfinite(value):
+        assert any(
+            "invalid JSON artifact" in error
+            and "nonstandard JSON numeric constant" in error
+            for error in errors
+        ), errors
+    else:
+        assert any(diagnostic + field_message in error for error in errors), errors
+
+
 @pytest.mark.parametrize("target,field,value,diagnostic", [
     ("pilot_progress.json", "total_expected_runs", True, "progress.total_expected_runs"),
     ("pilot_progress.json", "attempted_runs", 1.0, "progress.attempted_runs"),
@@ -105,19 +118,6 @@ def test_integer_telemetry_is_accepted(tmp_path, variant):
     ("trace", "total_tokens", float("inf"), "trace.total_tokens"),
     ("trace", "verified_claim_count", "0", "trace.verified_claim_count"),
 ])
-def _assert_numeric_rejected(errors, diagnostic, value, field_message):
-    # An unambiguous source parser must reject Python's NaN/Infinity JSON
-    # extensions before field-specific telemetry validation can inspect them.
-    if type(value) is float and not math.isfinite(value):
-        assert any(
-            "invalid JSON artifact" in error
-            and "nonstandard JSON numeric constant" in error
-            for error in errors
-        ), errors
-    else:
-        assert any(diagnostic + field_message in error for error in errors), errors
-
-
 def test_invalid_or_coerced_counter_is_reported(
     tmp_path, target, field, value, diagnostic
 ):
