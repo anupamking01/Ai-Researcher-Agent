@@ -27,8 +27,52 @@ PILOT_TREATMENT_FACTORS = {
 }
 
 
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict:
+    """Reject duplicate keys at every depth, including otherwise unused fields."""
+    record = {}
+    for key, value in pairs:
+        if key in record:
+            raise ValueError(f"duplicate JSON key {key!r}")
+        record[key] = value
+    return record
+
+
+def _reject_json_constant(token: str):
+    """Python's JSON decoder otherwise accepts NaN and Infinity extensions."""
+    raise ValueError(f"nonstandard JSON numeric constant {token!r}")
+
+
+def _finite_json_float(token: str) -> float:
+    value = float(token)
+    if not math.isfinite(value):
+        raise ValueError(f"nonfinite JSON numeric literal {token!r}")
+    return value
+
+
 def _load_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+    """Parse one unambiguous, finite JSON object without last-key-wins semantics."""
+    payload = json.loads(
+        path.read_text(encoding="utf-8"),
+        object_pairs_hook=_unique_json_object,
+        parse_constant=_reject_json_constant,
+        parse_float=_finite_json_float,
+    )
+    if not isinstance(payload, dict):
+        raise ValueError("top-level JSON document must be an object")
+    return payload
+
+
+def _read_artifact(path: Path, output_root: Path, errors: list[str]) -> dict | None:
+    """Return a diagnostic instead of crashing or silently selecting bad inputs."""
+    try:
+        return _load_json(path)
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
+        try:
+            label = str(path.relative_to(output_root))
+        except ValueError:
+            label = str(path)
+        errors.append(f"invalid JSON artifact {label}: {exc}")
+        return None
 
 
 def _source_url_list(
@@ -88,9 +132,11 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
     if errors:
         return errors
 
-    manifest = _load_json(manifest_path)
-    progress = _load_json(progress_path)
-    summary = _load_json(summary_path)
+    manifest = _read_artifact(manifest_path, output_root, errors)
+    progress = _read_artifact(progress_path, output_root, errors)
+    summary = _read_artifact(summary_path, output_root, errors)
+    if errors:
+        return errors
 
     # Do not let set construction silently collapse a repeated treatment or
     # task ID into a plausible-looking completed experimental matrix.
@@ -150,7 +196,9 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
 
     seen_pairs: set[tuple[str, str]] = set()
     for trace_file in trace_files:
-        payload = _load_json(trace_file)
+        payload = _read_artifact(trace_file, output_root, errors)
+        if payload is None:
+            continue
         experiment = payload.get("experiment", {})
         trace = payload.get("trace", {})
         if not isinstance(experiment, dict) or not isinstance(trace, dict):
