@@ -100,3 +100,15 @@ def test_rejects_checkout_without_canonical_publication(history):
     _git(root, "checkout", "--quiet", milestones.analysis_plan)
     with pytest.raises(FreezeChronologyError, match="does not descend"):
         audit_history(root, milestones=milestones)
+
+
+def test_rejects_shallow_history_even_when_current_plan_is_present(history, tmp_path):
+    root, milestones = history
+    shallow = tmp_path.parent / f"{tmp_path.name}-shallow-copy"
+    subprocess.run(
+        ["git", "clone", "--quiet", "--depth", "1", root.as_uri(), str(shallow)],
+        check=True,
+    )
+    assert _git(shallow, "rev-parse", "--is-shallow-repository") == "true"
+    with pytest.raises(FreezeChronologyError, match="non-shallow"):
+        audit_history(shallow, milestones=milestones)

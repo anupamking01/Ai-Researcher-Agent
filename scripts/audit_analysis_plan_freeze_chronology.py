@@ -55,6 +55,10 @@ def audit_history(root: Path, *, milestones: Milestones = Milestones()) -> dict:
     root = root.resolve()
     if _git(root, "rev-parse", "--show-toplevel").decode().strip() != str(root):
         raise FreezeChronologyError("the supplied path is not the Git repository root")
+    # A shallow checkout can contain some pinned objects while lacking the
+    # complete ancestry needed to audit the order of historical milestones.
+    if _git(root, "rev-parse", "--is-shallow-repository").decode().strip() != "false":
+        raise FreezeChronologyError("complete, non-shallow Git history is required")
     refs = vars(milestones)
     for name, sha in refs.items():
         if len(sha) != 40 or any(ch not in "0123456789abcdef" for ch in sha):

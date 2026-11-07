@@ -1,0 +1,103 @@
+name: analysis-freeze-chronology
+
+# Historical, read-only Git ancestry and exact analysis-plan byte audit.
+# This is NOT a treatment/evaluator rerun or proof of outcome blinding.
+on:
+  push:
+    branches:
+      - research-paper-eval-2027
+    paths:
+      - .github/workflows/analysis-freeze-chronology.yml
+      - scripts/audit_analysis_plan_freeze_chronology.py
+      - tests/test_analysis_plan_freeze_chronology.py
+      - tests/test_analysis_freeze_chronology_workflow.py
+      - docs/MAIN_STUDY_ANALYSIS_FREEZE_CHRONOLOGY.md
+      - paper/RESEARCH_PROTOCOL.md
+      - paper/ANALYSIS_PLAN.md
+      - paper/MAIN_STUDY_INFERENCE.md
+  pull_request:
+    paths:
+      - .github/workflows/analysis-freeze-chronology.yml
+      - scripts/audit_analysis_plan_freeze_chronology.py
+      - tests/test_analysis_plan_freeze_chronology.py
+      - tests/test_analysis_freeze_chronology_workflow.py
+      - docs/MAIN_STUDY_ANALYSIS_FREEZE_CHRONOLOGY.md
+      - paper/RESEARCH_PROTOCOL.md
+      - paper/ANALYSIS_PLAN.md
+      - paper/MAIN_STUDY_INFERENCE.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-original-freeze-chronology:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout complete Git ancestry without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up fixed offline Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+
+      - name: Audit historical commits and freeze boundary without outcome access
+        env:
+          CHRONOLOGY_OUTPUT: ${{ runner.temp }}/vera-freeze-chronology/chronology.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --is-shallow-repository)" = false
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          mkdir -p "$(dirname "$CHRONOLOGY_OUTPUT")"
+          python -m scripts.audit_analysis_plan_freeze_chronology > "$CHRONOLOGY_OUTPUT"
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["CHRONOLOGY_OUTPUT"])
+          raw = path.read_bytes()
+          receipt = json.loads(raw)
+          assert receipt["status"] == "verified_git_history_sequence_not_outcome_blinding"
+          assert receipt["prior_protocol_precedes_treatments_in_git"] is True
+          assert receipt["written_analysis_plan_postdates_treatment_commit_in_git"] is True
+          assert receipt["written_analysis_plan_postdates_evaluator_recovery_commit_in_git"] is True
+          assert receipt["written_analysis_plan_precedes_canonical_git_publication"] is True
+          assert receipt["current_analysis_plan_bytes_equal_original_commit"] is True
+          for claim in (
+              "prospective_precollection_analysis_preregistration_established",
+              "pre_analysis_outcome_blinding_established",
+              "original_treatment_authenticity_established",
+              "human_validation_performed",
+          ):
+              assert receipt[claim] is False, claim
+          index = {
+              "schema_version": 1,
+              "status": "git_chronology_audited_without_outcome_blinding_claim",
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "checkout_sha": os.environ["GITHUB_SHA"],
+              "workflow_run_id": os.environ["GITHUB_RUN_ID"],
+              "workflow_run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "chronology_receipt_sha256": hashlib.sha256(raw).hexdigest(),
+              "historical_treatment_authenticity_established": False,
+              "human_validation_performed": False,
+          }
+          (path.parent / "audit_index.json").write_text(
+              json.dumps(index, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+          )
+          PY
+
+      - name: Retain Git-only chronology evidence (90 days)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-analysis-freeze-chronology-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vera-freeze-chronology/*.json
+          if-no-files-found: error
+          retention-days: 90
