@@ -10,6 +10,9 @@ on:
       - .github/workflows/historical-design-source-audit.yml
       - scripts/audit_historical_design_source.py
       - scripts/audit_historical_task_freeze.py
+      - scripts/audit_historical_variant_factors.py
+      - tests/test_historical_variant_factors.py
+      - docs/HISTORICAL_VARIANT_FACTOR_SOURCE_AUDIT.md
       - tests/test_historical_task_freeze.py
       - docs/MAIN_STUDY_TASK_FREEZE_CHRONOLOGY.md
       - scripts/audit_main_study_design_identifiability.py
@@ -21,6 +24,9 @@ on:
       - .github/workflows/historical-design-source-audit.yml
       - scripts/audit_historical_design_source.py
       - scripts/audit_historical_task_freeze.py
+      - scripts/audit_historical_variant_factors.py
+      - tests/test_historical_variant_factors.py
+      - docs/HISTORICAL_VARIANT_FACTOR_SOURCE_AUDIT.md
       - tests/test_historical_task_freeze.py
       - docs/MAIN_STUDY_TASK_FREEZE_CHRONOLOGY.md
       - scripts/audit_main_study_design_identifiability.py
@@ -57,6 +63,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/vera-design-audit"
           python -m scripts.audit_historical_design_source > "$RUNNER_TEMP/vera-design-audit/receipt.json"
           python -m scripts.audit_historical_task_freeze > "$RUNNER_TEMP/vera-design-audit/task-freeze.json"
+          python -m scripts.audit_historical_variant_factors > "$RUNNER_TEMP/vera-design-audit/variant-factors.json"
           python - <<'PY'
           import json
           import os
@@ -90,6 +97,28 @@ jobs:
               "human_ratings_collected",
           ):
               assert receipt[field] is False, field
+          factors = json.loads((Path(os.environ["RUNNER_TEMP"]) /
+                                "vera-design-audit" / "variant-factors.json").read_text())
+          expected = {
+              "D3": {"planning_mode": "direct", "source_budget": 3,
+                     "verification_mode": "none", "stream_report": False},
+              "D6": {"planning_mode": "direct", "source_budget": 6,
+                     "verification_mode": "none", "stream_report": False},
+              "P6": {"planning_mode": "planner", "source_budget": 6,
+                     "verification_mode": "none", "stream_report": False},
+              "P6V": {"planning_mode": "planner", "source_budget": 6,
+                      "verification_mode": "verify", "stream_report": False},
+          }
+          assert factors["status"] == "historical_source_bound_planned_factor_matrix_only"
+          assert factors["historical_config_blob"] == "c98916c4a0aa17a94c38dd981489693bec5b87a7"
+          assert factors["runner_config_handoff_ast_checked"] is True
+          assert factors["source_linked_factor_matrix"] == expected
+          for field in ("original_treatment_execution_authenticated",
+                        "original_report_trace_custody_authenticated",
+                        "actual_factor_values_in_original_traces_verified",
+                        "equal_total_compute_established", "causal_effects_identified",
+                        "human_validation_performed"):
+              assert factors[field] is False, field
           PY
 
       - name: Retain planned-design audit receipt (90 days)
