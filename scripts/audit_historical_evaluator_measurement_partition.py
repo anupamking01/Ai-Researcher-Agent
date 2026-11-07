@@ -100,9 +100,15 @@ def audit_checkout(root: Path) -> dict:
     if (source_receipt["entire_evaluator_input_policy_identical"] is not False
             or source_receipt["recovery_zero_successful_source_sentinel_added"] is not True):
         raise EvaluatorPartitionError("historical evaluator-policy difference unverified")
+    # The full-history task-freeze audit runs separately in this same CI job.
+    # Avoid the optional task-manifest helper here: it imports markdown_it,
+    # which is intentionally absent from this dependency-free source job.
+    # Exact task IDs are verified below; both summary byte pins stay mandatory.
     frozen.audit_frozen_csv_inputs(
         root / "outputs/main_study_runs.csv",
         root / "outputs/posthoc_support_runs.csv",
+        require_original_task_set=False,
+        require_published_input_bytes=True,
     )
     raw = frozen._capture_csv_bytes(
         root / "outputs/posthoc_support_runs.csv", label="frozen evaluator partition"

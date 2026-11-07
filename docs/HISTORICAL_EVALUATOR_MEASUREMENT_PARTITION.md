@@ -12,7 +12,12 @@ From a full-history checkout, run:
 python -m scripts.audit_historical_evaluator_measurement_partition
 ```
 
-This audit first verifies immutable historical Git source and evaluator-policy differences, then runs the existing published-SHA-pinned 40-cell treatment/evaluator CSV integrity preflight. It separately captures and checks the published evaluator CSV bytes and matches its recorded per-cell evidence-status metadata with the three cells explicitly named by the historical recovery workflow. Failures include changed bytes, inconsistent/missing/duplicate cells, extra/missing columns, reused run IDs, or changed recovery-status fields. Its receipt is retained in the existing offline historical-source CI.
+This audit first verifies immutable historical Git source and evaluator-policy differences, then runs the existing published-SHA-pinned 40-cell treatment/evaluator CSV integrity preflight. The summary preflight requires **both published CSV SHA-256 pins**; its optional
+task-manifest helper is disabled only to avoid importing the Markdown parser
+into this deliberately dependency-free historical CI job. The same job runs
+the separate full-history original task-manifest freeze audit, and this
+partition independently requires the original exact ten task IDs.
+It separately captures and checks the published evaluator CSV bytes and matches its recorded per-cell evidence-status metadata with the three cells explicitly named by the historical recovery workflow. Failures include changed bytes, inconsistent/missing/duplicate cells, extra/missing columns, reused run IDs, or changed recovery-status fields. Its receipt is retained in the existing offline historical-source CI.
 
 ## Recorded split (not independently authenticated historical execution)
 
