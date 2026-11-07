@@ -1,0 +1,637 @@
+"""Synthetic-only checks for pre-unblinding human-evaluation freeze verification.
+
+No scores in this module are collected human ratings or experimental results.
+"""
+import csv
+import hashlib
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from scripts import freeze_human_eval_ratings as freeze
+from scripts.verify_human_eval_freeze import verify_frozen_snapshot
+from human_eval_test_support import write_valid_annotator_attestations
+
+
+def _write_ratings(path: Path, annotator: str, score: str = "3") -> Path:
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(freeze.RATING_FIELDS))
+        writer.writeheader()
+        writer.writerow(
+            {
+                "annotator_id": annotator,
+                "blind_id": "H001",
+                "correctness_1_5": score,
+                "completeness_1_5": "3",
+                "source_quality_1_5": "4",
+                "synthesis_reasoning_1_5": "4",
+                "clarity_1_5": "3",
+                "notes": "",
+            }
+        )
+    return path
+
+
+@pytest.fixture
+def frozen_case(tmp_path: Path):
+    packet = tmp_path / "packet.jsonl"
+    packet.write_text(
+        json.dumps(
+            {
+                "blind_id": "H001",
+                "task_id": "main-01",
+                "question": "Synthetic question",
+                "report_markdown": "Synthetic report",
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    protocol = tmp_path / "protocol.md"
+    protocol.write_bytes(freeze.DEFAULT_PROTOCOL.read_bytes())
+    assignment = tmp_path / "assignment.md"
+    assignment.write_bytes(freeze.DEFAULT_ASSIGNMENT_PLAN.read_bytes())
+    first = _write_ratings(tmp_path / "annotator-a.csv", "synthetic-a")
+    second = _write_ratings(tmp_path / "annotator-b.csv", "synthetic-b")
+    output = tmp_path / "frozen-v1"
+
+    freeze.freeze_ratings(
+        [first, second],
+        annotator_attestations_path=write_valid_annotator_attestations(
+            tmp_path / "annotator_attestations.csv",
+            ("synthetic-a", "synthetic-b"),
+        ),
+        packet_path=packet,
+        protocol_path=protocol,
+        assignment_plan_path=assignment,
+        output_root=output,
+    )
+    return {
+        "ratings": [first, second],
+        "freeze_root": output,
+        "packet_path": packet,
+        "protocol_path": protocol,
+        "assignment_plan_path": assignment,
+    }
+
+
+def _verify(case):
+    return verify_frozen_snapshot(
+        case["ratings"],
+        freeze_root=case["freeze_root"],
+        packet_path=case["packet_path"],
+        protocol_path=case["protocol_path"],
+        assignment_plan_path=case["assignment_plan_path"],
+    )
+
+
+def _rewrite_manifest(case, mutate):
+    path = case["freeze_root"] / "freeze_manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    mutate(manifest)
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _manifest_child(manifest, path):
+    child = manifest
+    for key in path:
+        child = child[key]
+    return child
+
+
+@pytest.mark.parametrize("duplicate_key", ["status", r"st\u0061tus"])
+def test_duplicate_freeze_manifest_key_is_rejected(frozen_case, duplicate_key):
+    path = frozen_case["freeze_root"] / "freeze_manifest.json"
+    original = path.read_text(encoding="utf-8")
+    path.write_text(
+        '{"' + duplicate_key + '":"ambiguous",' + original[1:],
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate JSON key.*status.*freeze manifest"):
+        _verify(frozen_case)
+
+
+@pytest.mark.parametrize(
+    "object_path",
+    [
+        (),
+        ("packet",),
+        ("protocol",),
+        ("assignment_plan",),
+        ("annotator_guide",),
+        ("assignment_coverage",),
+        ("producer",),
+        ("content_validator",),
+        ("content_validator_runtime",),
+        ("rating_inputs", 0),
+        ("frozen_ratings",),
+        ("frozen_ratings", "dimension_counts"),
+        ("frozen_ratings", "dimension_counts", "correctness_1_5"),
+        ("agreement",),
+    ],
+)
+def test_freeze_manifest_rejects_undeclared_fields_at_every_level(
+    frozen_case, object_path
+):
+    def mutate(manifest):
+        _manifest_child(manifest, object_path)["variant_id"] = "D3"
+
+    _rewrite_manifest(frozen_case, mutate)
+
+    with pytest.raises(ValueError, match="freeze manifest schema mismatch"):
+        _verify(frozen_case)
+
+
+@pytest.mark.parametrize(
+    ("object_path", "field"),
+    [
+        ((), "integrity_note"),
+        (("rating_inputs", 0), "input_index"),
+    ],
+)
+def test_freeze_manifest_requires_all_declared_fields(frozen_case, object_path, field):
+    def mutate(manifest):
+        _manifest_child(manifest, object_path).pop(field)
+
+    _rewrite_manifest(frozen_case, mutate)
+
+    with pytest.raises(ValueError, match="freeze manifest schema mismatch"):
+        _verify(frozen_case)
+
+
+def test_freeze_manifest_integrity_statement_is_immutable(frozen_case):
+    _rewrite_manifest(
+        frozen_case,
+        lambda manifest: manifest.__setitem__(
+            "integrity_note", "Treatment identities were opened before freezing."
+        ),
+    )
+
+    with pytest.raises(ValueError, match="freeze manifest integrity note mismatch"):
+        _verify(frozen_case)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("input_index", 99, "rating input 1 index mismatch"),
+    ],
+)
+def test_self_contained_freeze_validates_rating_input_identity_fields(
+    frozen_case, field, value, error
+):
+    _rewrite_manifest(
+        frozen_case,
+        lambda manifest: manifest["rating_inputs"][0].__setitem__(field, value),
+    )
+
+    with pytest.raises(ValueError, match=error):
+        verify_frozen_snapshot(
+            [],
+            freeze_root=frozen_case["freeze_root"],
+            packet_path=frozen_case["packet_path"],
+            protocol_path=frozen_case["protocol_path"],
+            assignment_plan_path=frozen_case["assignment_plan_path"],
+        )
+
+
+@pytest.mark.parametrize("value", [True, 1.0])
+def test_rating_input_index_requires_an_integer(frozen_case, value):
+    _rewrite_manifest(
+        frozen_case,
+        lambda manifest: manifest["rating_inputs"][0].__setitem__(
+            "input_index", value
+        ),
+    )
+
+    with pytest.raises(ValueError, match=r"rating_inputs\[1\]\.input_index.*integer"):
+        _verify(frozen_case)
+
+
+def test_legacy_manifest_rejects_object_hidden_in_scalar_field(frozen_case):
+    shutil.rmtree(frozen_case["freeze_root"] / "governing_inputs")
+
+    def mutate(manifest):
+        for role in ("packet", "protocol", "assignment_plan", "annotator_guide"):
+            manifest[role].pop("archive_path")
+        manifest["protocol"]["bytes"] = {"variant_id": "D3"}
+
+    _rewrite_manifest(frozen_case, mutate)
+
+    with pytest.raises(ValueError, match=r"protocol\.bytes.*integer"):
+        _verify(frozen_case)
+
+
+@pytest.mark.parametrize(
+    "duplicate_key", ["raw_exact_agreement", r"raw_exact_agre\u0065ment"]
+)
+def test_duplicate_nested_agreement_key_is_rejected_even_if_rehashed(
+    frozen_case, duplicate_key
+):
+    agreement_path = frozen_case["freeze_root"] / "agreement.json"
+    original = agreement_path.read_text(encoding="utf-8")
+    needle = '"raw_exact_agreement": 1.0'
+    assert needle in original
+    replacement = f'"{duplicate_key}": 0.0, "raw_exact_agreement": 1.0'
+    agreement_path.write_text(original.replace(needle, replacement, 1), encoding="utf-8")
+    content = agreement_path.read_bytes()
+
+    def mutate(manifest):
+        manifest["agreement"]["bytes"] = len(content)
+        manifest["agreement"]["sha256"] = hashlib.sha256(content).hexdigest()
+
+    _rewrite_manifest(frozen_case, mutate)
+    with pytest.raises(ValueError, match="duplicate JSON key.*raw_exact_agreement.*agreement output"):
+        _verify(frozen_case)
+
+
+def test_verified_snapshot_recomputes_blinded_invariants(frozen_case):
+    receipt = _verify(frozen_case)
+    assert receipt == {
+        "schema_version": 1,
+        "study_id": "budget-main-v1",
+        "status": "blinded_human_ratings_verified",
+        "blinding_key_used": False,
+        "annotator_attestations_verified": True,
+        "n_raw_rating_inputs": 2,
+        "n_rows": 2,
+        "n_annotators": 2,
+        "n_blind_ids": 1,
+        "requires_predeclared_multi_rater_statistic": False,
+    }
+
+
+def test_changed_raw_rating_is_rejected(frozen_case):
+    first = frozen_case["ratings"][0]
+    _write_ratings(first, "synthetic-a", score="4")
+    with pytest.raises(ValueError, match="raw rating inputs"):
+        _verify(frozen_case)
+
+
+def test_changed_packet_is_rejected(frozen_case):
+    frozen_case["packet_path"].write_text(
+        json.dumps(
+            {
+                "blind_id": "H999",
+                "task_id": "main-01",
+                "question": "Replacement",
+                "report_markdown": "Replacement report",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="packet fingerprint|unknown blind_id"):
+        _verify(frozen_case)
+
+
+@pytest.mark.parametrize("which", ["protocol_path", "assignment_plan_path"])
+def test_changed_frozen_plan_is_rejected(frozen_case, which):
+    frozen_case[which].write_text("# Changed after freeze\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="fingerprint"):
+        _verify(frozen_case)
+
+
+def test_tampered_frozen_ratings_are_rejected_even_if_manifest_hash_is_updated(frozen_case):
+    frozen_path = frozen_case["freeze_root"] / "frozen_ratings.csv"
+    with frozen_path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    rows[0]["correctness_1_5"] = "4"
+    with frozen_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(freeze.RATING_FIELDS))
+        writer.writeheader()
+        writer.writerows(rows)
+    content = frozen_path.read_bytes()
+
+    def mutate(manifest):
+        manifest["frozen_ratings"]["bytes"] = len(content)
+        manifest["frozen_ratings"]["sha256"] = hashlib.sha256(content).hexdigest()
+
+    _rewrite_manifest(frozen_case, mutate)
+    with pytest.raises(ValueError, match="normalized raw inputs"):
+        _verify(frozen_case)
+
+
+def test_tampered_agreement_is_rejected_even_if_manifest_hash_is_updated(frozen_case):
+    agreement_path = frozen_case["freeze_root"] / "agreement.json"
+    agreement = json.loads(agreement_path.read_text(encoding="utf-8"))
+    agreement["pairwise"][0]["dimensions"]["correctness_1_5"]["raw_exact_agreement"] = 0.0
+    agreement_path.write_text(json.dumps(agreement, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    content = agreement_path.read_bytes()
+
+    def mutate(manifest):
+        manifest["agreement"]["bytes"] = len(content)
+        manifest["agreement"]["sha256"] = hashlib.sha256(content).hexdigest()
+
+    _rewrite_manifest(frozen_case, mutate)
+    with pytest.raises(ValueError, match="recomputed agreement"):
+        _verify(frozen_case)
+
+
+def test_manifest_summary_drift_is_rejected(frozen_case):
+    _rewrite_manifest(
+        frozen_case,
+        lambda manifest: manifest["frozen_ratings"].__setitem__("n_rows", 999),
+    )
+    with pytest.raises(ValueError, match="frozen row count"):
+        _verify(frozen_case)
+
+
+def test_missing_output_is_rejected(frozen_case):
+    (frozen_case["freeze_root"] / "agreement.json").unlink()
+    with pytest.raises(ValueError, match="agreement output must be a regular file"):
+        _verify(frozen_case)
+
+
+def test_cli_reports_pass_without_unblinding(frozen_case):
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.verify_human_eval_freeze",
+            *(str(path) for path in frozen_case["ratings"]),
+            "--freeze-root",
+            str(frozen_case["freeze_root"]),
+            "--packet",
+            str(frozen_case["packet_path"]),
+            "--protocol",
+            str(frozen_case["protocol_path"]),
+            "--assignment-plan",
+            str(frozen_case["assignment_plan_path"]),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode == 0
+    assert "HUMAN EVAL VERIFY: PASS (ratings remain blinded)" in result.stdout
+    assert "variant_id" not in result.stdout
+    assert "D3" not in result.stdout
+    assert result.stderr == ""
+
+
+def test_cli_failure_has_no_success_receipt_or_traceback(frozen_case):
+    (frozen_case["freeze_root"] / "agreement.json").write_text("{}\n", encoding="utf-8")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.verify_human_eval_freeze",
+            *(str(path) for path in frozen_case["ratings"]),
+            "--freeze-root",
+            str(frozen_case["freeze_root"]),
+            "--packet",
+            str(frozen_case["packet_path"]),
+            "--protocol",
+            str(frozen_case["protocol_path"]),
+            "--assignment-plan",
+            str(frozen_case["assignment_plan_path"]),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode != 0
+    assert "HUMAN EVAL VERIFY: FAIL" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert "HUMAN EVAL VERIFY: PASS" not in result.stdout
+
+
+def test_freeze_retains_exact_raw_rating_bytes(frozen_case):
+    manifest = json.loads(
+        (frozen_case["freeze_root"] / "freeze_manifest.json").read_text(encoding="utf-8")
+    )
+    for index, source in enumerate(frozen_case["ratings"], start=1):
+        entry = manifest["rating_inputs"][index - 1]
+        assert entry["archive_path"] == f"raw_rating_inputs/{index:04d}.csv"
+        assert (
+            frozen_case["freeze_root"] / entry["archive_path"]
+        ).read_bytes() == source.read_bytes()
+
+
+def test_freeze_retains_exact_producer_source(frozen_case):
+    manifest = json.loads(
+        (frozen_case["freeze_root"] / "freeze_manifest.json").read_text(encoding="utf-8")
+    )
+    producer = manifest["producer"]
+    archived = frozen_case["freeze_root"] / producer["path"]
+    expected = Path(freeze.__file__).resolve().read_bytes()
+
+    assert producer["path"] == "provenance/freeze_human_eval_ratings.py"
+    assert archived.read_bytes() == expected
+    assert producer["bytes"] == len(expected)
+    assert producer["sha256"] == hashlib.sha256(expected).hexdigest()
+
+
+def test_freeze_retains_exact_blinding_validator_source(frozen_case):
+    manifest = json.loads(
+        (frozen_case["freeze_root"] / "freeze_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    validator = manifest["content_validator"]
+    archived = frozen_case["freeze_root"] / validator["path"]
+    expected = Path(freeze.packet_build.__file__).resolve().read_bytes()
+
+    assert validator["path"] == "provenance/build_human_eval_packet.py"
+    assert archived.read_bytes() == expected
+    assert validator["bytes"] == len(expected)
+    assert validator["sha256"] == hashlib.sha256(expected).hexdigest()
+
+
+def test_freeze_binds_markdown_renderer_contract(frozen_case):
+    manifest = json.loads(
+        (frozen_case["freeze_root"] / "freeze_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert manifest["content_validator_runtime"] == (
+        freeze.packet_build.content_validator_runtime_contract()
+    )
+    assert manifest["content_validator_runtime"]["mdurl_version"]
+
+
+def test_tampered_markdown_renderer_contract_is_rejected(frozen_case):
+    _rewrite_manifest(
+        frozen_case,
+        lambda manifest: manifest["content_validator_runtime"].__setitem__(
+            "markdown_it_py_version", "0.0.0-tampered"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="content validator runtime contract"):
+        _verify(frozen_case)
+
+
+def test_renderer_environment_drift_is_rejected(frozen_case, monkeypatch):
+    current = freeze.packet_build.content_validator_runtime_contract()
+    monkeypatch.setattr(
+        freeze.packet_build,
+        "content_validator_runtime_contract",
+        lambda: {**current, "markdown_it_py_version": "0.0.0-drifted"},
+    )
+
+    with pytest.raises(ValueError, match="content validator runtime contract"):
+        _verify(frozen_case)
+
+
+def test_missing_markdown_renderer_contract_is_rejected(frozen_case):
+    _rewrite_manifest(
+        frozen_case,
+        lambda manifest: manifest.pop("content_validator_runtime"),
+    )
+
+    with pytest.raises(ValueError, match="content validator runtime contract"):
+        _verify(frozen_case)
+
+
+def test_tampered_archived_blinding_validator_is_rejected(frozen_case):
+    archived = (
+        frozen_case["freeze_root"]
+        / "provenance"
+        / "build_human_eval_packet.py"
+    )
+    archived.write_bytes(archived.read_bytes() + b"\n# tampered\n")
+
+    with pytest.raises(ValueError, match="archived content validator fingerprint"):
+        _verify(frozen_case)
+
+
+def test_tampered_archived_freeze_producer_is_rejected(frozen_case):
+    archived = (
+        frozen_case["freeze_root"]
+        / "provenance"
+        / "freeze_human_eval_ratings.py"
+    )
+    archived.write_bytes(archived.read_bytes() + b"\n# tampered\n")
+
+    with pytest.raises(ValueError, match="archived freeze producer fingerprint"):
+        _verify(frozen_case)
+
+
+def test_manifest_cannot_redirect_freeze_producer(frozen_case):
+    _rewrite_manifest(
+        frozen_case,
+        lambda manifest: manifest["producer"].__setitem__("path", "../freeze.py"),
+    )
+
+    with pytest.raises(ValueError, match="freeze producer manifest path mismatch"):
+        _verify(frozen_case)
+
+
+def test_freeze_root_rejects_undeclared_blinding_key(frozen_case):
+    (frozen_case["freeze_root"] / "blinding_key.csv").write_text(
+        "blind_id,variant_id\nH001,D3\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="freeze root contents mismatch"):
+        _verify(frozen_case)
+
+
+def test_provenance_archive_rejects_undeclared_extra_file(frozen_case):
+    extra = frozen_case["freeze_root"] / "provenance" / "notes.txt"
+    extra.write_text("unexpected\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="provenance archive contents mismatch"):
+        _verify(frozen_case)
+
+
+def test_self_contained_freeze_verifies_after_external_ratings_are_removed(frozen_case):
+    for path in frozen_case["ratings"]:
+        path.unlink()
+
+    receipt = verify_frozen_snapshot(
+        [],
+        freeze_root=frozen_case["freeze_root"],
+        packet_path=frozen_case["packet_path"],
+        protocol_path=frozen_case["protocol_path"],
+        assignment_plan_path=frozen_case["assignment_plan_path"],
+    )
+
+    assert receipt["status"] == "blinded_human_ratings_verified"
+    assert receipt["n_raw_rating_inputs"] == 2
+
+
+def test_tampered_in_bundle_raw_rating_is_rejected(frozen_case):
+    archived = frozen_case["freeze_root"] / "raw_rating_inputs" / "0001.csv"
+    archived.write_bytes(archived.read_bytes() + b"\n")
+
+    with pytest.raises(ValueError, match="archived raw rating input 1 fingerprint"):
+        verify_frozen_snapshot(
+            [],
+            freeze_root=frozen_case["freeze_root"],
+            packet_path=frozen_case["packet_path"],
+            protocol_path=frozen_case["protocol_path"],
+            assignment_plan_path=frozen_case["assignment_plan_path"],
+        )
+
+
+def test_manifest_cannot_redirect_raw_archive_path(frozen_case):
+    _rewrite_manifest(
+        frozen_case,
+        lambda manifest: manifest["rating_inputs"][0].__setitem__(
+            "archive_path", "../annotator-a.csv"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="raw rating archive path 1 mismatch"):
+        verify_frozen_snapshot(
+            [],
+            freeze_root=frozen_case["freeze_root"],
+            packet_path=frozen_case["packet_path"],
+            protocol_path=frozen_case["protocol_path"],
+            assignment_plan_path=frozen_case["assignment_plan_path"],
+        )
+
+
+def test_raw_archive_rejects_undeclared_extra_file(frozen_case):
+    extra = frozen_case["freeze_root"] / "raw_rating_inputs" / "extra.csv"
+    extra.write_text("unexpected\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="raw rating archive contents mismatch"):
+        verify_frozen_snapshot(
+            [],
+            freeze_root=frozen_case["freeze_root"],
+            packet_path=frozen_case["packet_path"],
+            protocol_path=frozen_case["protocol_path"],
+            assignment_plan_path=frozen_case["assignment_plan_path"],
+        )
+
+
+def test_cli_can_verify_from_freeze_bundle_without_external_ratings(frozen_case):
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.verify_human_eval_freeze",
+            "--freeze-root",
+            str(frozen_case["freeze_root"]),
+            "--packet",
+            str(frozen_case["packet_path"]),
+            "--protocol",
+            str(frozen_case["protocol_path"]),
+            "--assignment-plan",
+            str(frozen_case["assignment_plan_path"]),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 0
+    assert "HUMAN EVAL VERIFY: PASS (ratings remain blinded)" in result.stdout
+    assert result.stderr == ""

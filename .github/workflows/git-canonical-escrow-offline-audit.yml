@@ -1,0 +1,113 @@
+name: git-canonical-escrow-offline-audit
+
+# Reverify the original source ZIP from Git itself, even after the provider's
+# time-limited Actions artifact disappears. Never fetch or rerun treatments.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research-paper-eval-2027
+    paths:
+      - .github/workflows/git-canonical-escrow-offline-audit.yml
+      - research-evidence/**
+      - experiments/main_budget_tasks.json
+      - experiments/openai_pricing_2026-09-08.json
+      - paper/ANALYSIS_PLAN.md
+      - paper/MAIN_STUDY_INFERENCE.md
+      - outputs/canonical_analysis_source.json
+      - outputs/main_study_analysis_inputs_manifest.json
+      - outputs/main_study_analysis_provenance.json
+      - outputs/main_study_inference.json
+      - outputs/main_study_runs.csv
+      - outputs/posthoc_support_runs.csv
+      - scripts/**
+      - tests/test_git_canonical_escrow.py
+  pull_request:
+    paths:
+      - .github/workflows/git-canonical-escrow-offline-audit.yml
+      - research-evidence/**
+      - experiments/main_budget_tasks.json
+      - experiments/openai_pricing_2026-09-08.json
+      - paper/ANALYSIS_PLAN.md
+      - paper/MAIN_STUDY_INFERENCE.md
+      - outputs/**
+      - scripts/**
+      - tests/test_git_canonical_escrow.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: git-canonical-escrow-offline-audit-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-git-escrow:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout research snapshot
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Checkout provenance-bound immutable analysis revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: f333623380526fa05dcb14110e7ec1fb72d2d0e2
+          path: frozen-analysis-checkout
+          persist-credentials: false
+
+      - name: Require exact frozen-design and publication concordance
+        shell: bash
+        run: |
+          set -euo pipefail
+          frozen="$GITHUB_WORKSPACE/frozen-analysis-checkout"
+          test "$(git -C "$frozen" rev-parse HEAD)" = f333623380526fa05dcb14110e7ec1fb72d2d0e2
+          for relative in \
+            experiments/main_budget_tasks.json \
+            experiments/openai_pricing_2026-09-08.json \
+            paper/ANALYSIS_PLAN.md \
+            outputs/canonical_analysis_source.json \
+            outputs/main_study_analysis_inputs_manifest.json \
+            outputs/main_study_inference.json \
+            outputs/main_study_runs.csv \
+            outputs/posthoc_support_runs.csv \
+            paper/MAIN_STUDY_INFERENCE.md; do
+            cmp -- "$GITHUB_WORKSPACE/$relative" "$frozen/$relative"
+          done
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+
+      - name: Verify tracked ZIP against provider-observed pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "226f009ba6b158b77fc98f4e56ec96e1943d1749bc818b0876e90f76077de4b5  research-evidence/canonical-analysis-36070798723.zip" \
+            | sha256sum --check --status
+
+      - name: Replay exact saved Git evidence offline
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.verify_preserved_canonical_bundle \
+            research-evidence/canonical-analysis-36070798723.metadata.json \
+            research-evidence/canonical-analysis-36070798723.zip \
+            research-evidence/canonical-analysis-36070798723.verification.json \
+            --root "$GITHUB_WORKSPACE/frozen-analysis-checkout" \
+            --receipt-out "$RUNNER_TEMP/offline-git-escrow-replay.json"
+          python - "$RUNNER_TEMP/offline-git-escrow-replay.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          receipt = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          assert receipt["source_provider_metadata_and_archive_reverified"] is True
+          assert receipt["saved_receipt_exactly_recomputed"] is True
+          assert receipt["original_github_source_availability_checked"] is False
+          assert receipt["independent_historical_custody_authenticated"] is False
+          assert receipt["original_treatment_traces_authenticated"] is False
+          assert receipt["human_evaluation_ready"] is False
+          assert receipt["human_ratings_generated"] is False
+          print("Git escrow replay: PASS (canonical analysis only; no original evidence/human claims)")
+          PY

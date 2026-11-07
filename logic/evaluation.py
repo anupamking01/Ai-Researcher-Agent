@@ -7,8 +7,8 @@ benchmark results; it only defines metrics and aggregation utilities.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
-from math import sqrt
+from dataclasses import asdict, dataclass
+from math import floor, isfinite, sqrt
 from random import Random
 from typing import Callable, Iterable, Sequence
 
@@ -28,24 +28,62 @@ class RunTrace:
     completion_tokens: int = 0
     estimated_cost_usd: float = 0.0
 
+    # Experimental metadata. Defaults preserve compatibility with older traces.
+    variant_id: str = ""
+    task_set_id: str = ""
+    task_id: str = ""
+    question: str = ""
+    planning_mode: str = ""
+    verification_mode: str = ""
+    source_budget: int = 0
+    query_count: int = 0
+    search_call_count: int = 0
+    model_call_count: int = 0
+    unavailable_usage_call_count: int = 0
+    supported_claim_count: int = 0
+    partially_supported_claim_count: int = 0
+    contradicted_claim_count: int = 0
+    smart_model: str = ""
+    fast_model: str = ""
+    temperature: float = 0.0
+    usage_accounting_status: str = "unavailable"
+    cost_accounting_status: str = "not_computed"
+
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
 
     @property
+    def successful_source_count(self) -> int:
+        return max(self.source_count - self.failed_source_count, 0)
+
+    @property
     def source_success_rate(self) -> float:
         if self.source_count <= 0:
             return 0.0
-        successful = max(self.source_count - self.failed_source_count, 0)
-        return successful / self.source_count
+        return self.successful_source_count / self.source_count
+
+    @property
+    def verified_claim_count(self) -> int:
+        explicit_total = (
+            self.supported_claim_count
+            + self.partially_supported_claim_count
+            + self.unsupported_claim_count
+            + self.contradicted_claim_count
+        )
+        return explicit_total if explicit_total > 0 else self.citation_count
+
+    @property
+    def claim_support_rate(self) -> float:
+        """Strict support rate: fully supported claims / all verified claims."""
+        total = self.verified_claim_count
+        if total <= 0:
+            return 0.0
+        return self.supported_claim_count / total
 
     @property
     def citation_precision_proxy(self) -> float:
-        """A conservative proxy based on manually flagged unsupported claims.
-
-        This is not a factuality score. It only becomes meaningful when an
-        evaluator has annotated unsupported claims using a fixed protocol.
-        """
+        """Legacy conservative proxy based on manually flagged unsupported claims."""
         if self.citation_count <= 0:
             return 0.0
         supported = max(self.citation_count - self.unsupported_claim_count, 0)
@@ -54,7 +92,10 @@ class RunTrace:
     def to_dict(self) -> dict:
         data = asdict(self)
         data["total_tokens"] = self.total_tokens
+        data["successful_source_count"] = self.successful_source_count
         data["source_success_rate"] = self.source_success_rate
+        data["verified_claim_count"] = self.verified_claim_count
+        data["claim_support_rate"] = self.claim_support_rate
         data["citation_precision_proxy"] = self.citation_precision_proxy
         return data
 
@@ -85,6 +126,33 @@ def population_stddev(values: Iterable[float]) -> float:
     return sqrt(safe_mean((value - mean) ** 2 for value in values))
 
 
+def _finite_float(value: float, *, label: str) -> float:
+    """Normalize one numeric value and reject invalid statistical inputs."""
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be finite") from exc
+    if not isfinite(normalized):
+        raise ValueError(f"{label} must be finite")
+    return normalized
+
+
+def _finite_values(values: Iterable[float], *, label: str) -> list[float]:
+    return [_finite_float(value, label=label) for value in values]
+
+
+def _linear_quantile(ordered: Sequence[float], probability: float) -> float:
+    """Return the linearly interpolated quantile of a sorted sample."""
+    position = probability * (len(ordered) - 1)
+    lower_index = floor(position)
+    upper_index = min(lower_index + 1, len(ordered) - 1)
+    fraction = position - lower_index
+    return float(
+        (1.0 - fraction) * ordered[lower_index]
+        + fraction * ordered[upper_index]
+    )
+
+
 def bootstrap_confidence_interval(
     values: Sequence[float],
     statistic: Callable[[Iterable[float]], float] = safe_mean,
@@ -103,7 +171,7 @@ def bootstrap_confidence_interval(
     if n_resamples <= 0:
         raise ValueError("n_resamples must be positive")
 
-    sample = [float(value) for value in values]
+    sample = _finite_values(values, label="bootstrap sample")
     if not sample:
         return {
             "estimate": 0.0,
@@ -115,15 +183,24 @@ def bootstrap_confidence_interval(
 
     rng = Random(seed)
     estimates = sorted(
-        statistic(rng.choices(sample, k=len(sample))) for _ in range(n_resamples)
+        _finite_float(
+            statistic(rng.choices(sample, k=len(sample))),
+            label="bootstrap statistic",
+        )
+        for _ in range(n_resamples)
     )
+    estimate = _finite_float(statistic(sample), label="bootstrap statistic")
     alpha = (1.0 - confidence) / 2.0
-    lower_index = max(0, int(alpha * n_resamples))
-    upper_index = min(n_resamples - 1, int((1.0 - alpha) * n_resamples) - 1)
+    lower = _finite_float(
+        _linear_quantile(estimates, alpha), label="bootstrap interval"
+    )
+    upper = _finite_float(
+        _linear_quantile(estimates, 1.0 - alpha), label="bootstrap interval"
+    )
     return {
-        "estimate": float(statistic(sample)),
-        "lower": float(estimates[lower_index]),
-        "upper": float(estimates[upper_index]),
+        "estimate": estimate,
+        "lower": lower,
+        "upper": upper,
         "confidence": confidence,
         "n_resamples": n_resamples,
     }
@@ -143,12 +220,24 @@ def paired_metric_comparison(
     if len(baseline) != len(candidate):
         raise ValueError("paired comparisons require equal-length sequences")
 
-    deltas = [float(new) - float(old) for old, new in zip(baseline, candidate)]
+    baseline_values = _finite_values(baseline, label="baseline values")
+    candidate_values = _finite_values(candidate, label="candidate values")
+    deltas = [
+        _finite_float(new - old, label="paired deltas")
+        for old, new in zip(baseline_values, candidate_values)
+    ]
+    try:
+        mean_delta = safe_mean(deltas)
+        median_delta = safe_median(deltas)
+        delta_stddev = population_stddev(deltas)
+    except OverflowError as exc:
+        raise ValueError("paired summary must be finite") from exc
+
     return {
         "n_pairs": len(deltas),
-        "mean_delta": safe_mean(deltas),
-        "median_delta": safe_median(deltas),
-        "delta_stddev": population_stddev(deltas),
+        "mean_delta": _finite_float(mean_delta, label="paired summary"),
+        "median_delta": _finite_float(median_delta, label="paired summary"),
+        "delta_stddev": _finite_float(delta_stddev, label="paired summary"),
         "wins": sum(delta > 0 for delta in deltas),
         "ties": sum(delta == 0 for delta in deltas),
         "losses": sum(delta < 0 for delta in deltas),
@@ -167,12 +256,16 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
             "n_runs": 0,
             "completion_rate": 0.0,
             "avg_sources": 0.0,
+            "avg_successful_sources": 0.0,
             "avg_source_success_rate": 0.0,
+            "avg_claim_support_rate": 0.0,
             "avg_citation_precision_proxy": 0.0,
             "avg_latency_seconds": 0.0,
             "median_latency_seconds": 0.0,
             "latency_stddev_seconds": 0.0,
             "avg_total_tokens": 0.0,
+            "avg_model_calls": 0.0,
+            "avg_search_calls": 0.0,
             "total_tokens_stddev": 0.0,
             "avg_estimated_cost_usd": 0.0,
             "median_estimated_cost_usd": 0.0,
@@ -186,7 +279,11 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
         "n_runs": len(runs),
         "completion_rate": safe_mean(1.0 if run.completed else 0.0 for run in runs),
         "avg_sources": safe_mean(float(run.source_count) for run in runs),
+        "avg_successful_sources": safe_mean(
+            float(run.successful_source_count) for run in runs
+        ),
         "avg_source_success_rate": safe_mean(run.source_success_rate for run in runs),
+        "avg_claim_support_rate": safe_mean(run.claim_support_rate for run in runs),
         "avg_citation_precision_proxy": safe_mean(
             run.citation_precision_proxy for run in runs
         ),
@@ -195,6 +292,8 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
         "latency_stddev_seconds": population_stddev(latencies),
         "avg_total_tokens": safe_mean(total_tokens),
         "total_tokens_stddev": population_stddev(total_tokens),
+        "avg_model_calls": safe_mean(float(run.model_call_count) for run in runs),
+        "avg_search_calls": safe_mean(float(run.search_call_count) for run in runs),
         "avg_estimated_cost_usd": safe_mean(costs),
         "median_estimated_cost_usd": safe_median(costs),
     }
