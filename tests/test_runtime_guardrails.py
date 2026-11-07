@@ -200,6 +200,7 @@ def _make_valid_artifacts(tmp_path):
     _write_json(
         tmp_path / "pilot_manifest.json",
         {
+            "task_set_id": "pilot-v1-test",
             "variants": ["D6"],
             "task_ids": ["pilot-01"],
             "smart_model": "gpt-5.6-terra",
@@ -210,6 +211,9 @@ def _make_valid_artifacts(tmp_path):
     _write_json(
         tmp_path / "pilot_progress.json",
         {
+            "task_set_id": "pilot-v1-test",
+            "variants": ["D6"],
+            "task_ids": ["pilot-01"],
             "total_expected_runs": 1,
             "attempted_runs": 1,
             "completed_runs": 1,
@@ -230,11 +234,13 @@ def _make_valid_artifacts(tmp_path):
             "experiment": {
                 "variant_id": "D6",
                 "task_id": "pilot-01",
+                "task_set_id": "pilot-v1-test",
                 "source_budget": 6,
             },
             "trace": {
                 "variant_id": "D6",
                 "task_id": "pilot-01",
+                "task_set_id": "pilot-v1-test",
                 "completed": True,
                 "source_budget": 6,
                 "source_count": 6,
