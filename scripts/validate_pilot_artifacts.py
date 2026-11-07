@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import Counter
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -48,6 +49,31 @@ def _source_url_list(
         )
         return None
     return values
+
+
+def _count(record: dict, field: str, source: str, errors: list[str]) -> int:
+    """Reject coerced/missing telemetry while collecting all independent errors."""
+    value = record.get(field)
+    if type(value) is not int or value < 0:
+        errors.append(f"{source}.{field} must be a nonnegative integer; got {value!r}")
+        return 0
+    return value
+
+
+def _temperature(record: dict, source: str, errors: list[str]) -> int | float | None:
+    """Reject numeric-looking strings, booleans and nonfinite settings."""
+    value = record.get("temperature")
+    if type(value) not in (int, float):
+        errors.append(f"{source}.temperature must be a finite numeric value")
+        return None
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:
+        finite = False
+    if not finite:
+        errors.append(f"{source}.temperature must be a finite numeric value")
+        return None
+    return value
 
 
 def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
@@ -99,23 +125,22 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
         errors.append("manifest defines no expected experiment runs")
         return errors
 
-    if progress.get("total_expected_runs") != expected_count:
+    progress_counts = {
+        field: _count(progress, field, "progress", errors)
+        for field in ("total_expected_runs", "attempted_runs", "completed_runs",
+                      "failed_runs", "timeout_runs")
+    }
+    if progress_counts["total_expected_runs"] != expected_count:
         errors.append(
             "progress total_expected_runs does not match manifest: "
             f"{progress.get('total_expected_runs')} != {expected_count}"
         )
-    if progress.get("attempted_runs") != expected_count:
-        errors.append(
-            f"attempted_runs={progress.get('attempted_runs')} expected={expected_count}"
-        )
-    if progress.get("completed_runs") != expected_count:
-        errors.append(
-            f"completed_runs={progress.get('completed_runs')} expected={expected_count}"
-        )
-    if progress.get("failed_runs", 0) != 0:
-        errors.append(f"failed_runs={progress.get('failed_runs')}")
-    if progress.get("timeout_runs", 0) != 0:
-        errors.append(f"timeout_runs={progress.get('timeout_runs')}")
+    for field in ("attempted_runs", "completed_runs"):
+        if progress_counts[field] != expected_count:
+            errors.append(f"{field}={progress.get(field)} expected={expected_count}")
+    for field in ("failed_runs", "timeout_runs"):
+        if progress_counts[field] != 0:
+            errors.append(f"{field}={progress.get(field)}")
 
     trace_files = sorted((output_root / "experiment_traces").glob("*/*.json"))
     if len(trace_files) != expected_count:
@@ -182,10 +207,10 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
         if trace.get("completed") is not True:
             errors.append(f"{label}: completed is not true")
 
-        source_budget = int(trace.get("source_budget", experiment.get("source_budget", 0)) or 0)
-        source_count = int(trace.get("source_count", 0) or 0)
-        success_count = int(trace.get("successful_source_count", 0) or 0)
-        failed_count = int(trace.get("failed_source_count", 0) or 0)
+        source_budget = _count(trace, "source_budget", f"{label}: trace", errors)
+        source_count = _count(trace, "source_count", f"{label}: trace", errors)
+        success_count = _count(trace, "successful_source_count", f"{label}: trace", errors)
+        failed_count = _count(trace, "failed_source_count", f"{label}: trace", errors)
         scheduled_urls = _source_url_list(trace, "scheduled_urls", label, errors)
         successful_urls = _source_url_list(trace, "successful_urls", label, errors)
         failed_urls = _source_url_list(trace, "failed_urls", label, errors)
@@ -235,23 +260,16 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
             else planning_mode
         )
         expected_queries = 1 if expected_mode == "direct" else 4
-        if int(trace.get("query_count", 0) or 0) != expected_queries:
-            errors.append(
-                f"{label}: query_count={trace.get('query_count')} expected={expected_queries}"
-            )
-        if int(trace.get("search_call_count", 0) or 0) != expected_queries:
-            errors.append(
-                f"{label}: search_call_count={trace.get('search_call_count')} expected={expected_queries}"
-            )
-
-        if int(trace.get("research_context_words", 0) or 0) <= 0:
-            errors.append(f"{label}: research_context_words is zero")
-        if int(trace.get("report_words", 0) or 0) <= 0:
-            errors.append(f"{label}: report_words is zero")
-        if int(trace.get("model_call_count", 0) or 0) <= 0:
-            errors.append(f"{label}: model_call_count is zero")
-        if int(trace.get("total_tokens", 0) or 0) <= 0:
-            errors.append(f"{label}: provider total_tokens is zero")
+        for field in ("query_count", "search_call_count"):
+            if _count(trace, field, f"{label}: trace", errors) != expected_queries:
+                errors.append(
+                    f"{label}: {field}={trace.get(field)} expected={expected_queries}"
+                )
+        for field in ("research_context_words", "report_words", "model_call_count",
+                      "total_tokens"):
+            if _count(trace, field, f"{label}: trace", errors) <= 0:
+                display = "provider total_tokens" if field == "total_tokens" else field
+                errors.append(f"{label}: {display} is zero")
         if trace.get("usage_accounting_status") != "provider_usage_complete":
             errors.append(
                 f"{label}: usage_accounting_status={trace.get('usage_accounting_status')}"
@@ -261,7 +279,10 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
             errors.append(f"{label}: smart model differs from manifest")
         if trace.get("fast_model") != manifest.get("fast_model"):
             errors.append(f"{label}: fast model differs from manifest")
-        if float(trace.get("temperature", -999)) != float(manifest.get("temperature", -998)):
+        trace_temperature = _temperature(trace, f"{label}: trace", errors)
+        manifest_temperature = _temperature(manifest, "manifest", errors)
+        if (trace_temperature is not None and manifest_temperature is not None
+                and trace_temperature != manifest_temperature):
             errors.append(f"{label}: temperature differs from manifest")
 
         verification_mode = (
@@ -273,18 +294,21 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
                 errors.append(
                     f"{label}: verification_status={trace.get('verification_status')}"
                 )
-            if int(trace.get("verified_claim_count", 0) or 0) <= 0:
+            if _count(trace, "verified_claim_count", f"{label}: trace", errors) <= 0:
                 errors.append(f"{label}: verifier checked zero claims")
-        elif trace.get("verification_status") != "not_requested":
-            errors.append(
-                f"{label}: unexpected verification_status={trace.get('verification_status')}"
-            )
+        else:
+            if "verified_claim_count" in trace:
+                _count(trace, "verified_claim_count", f"{label}: trace", errors)
+            if trace.get("verification_status") != "not_requested":
+                errors.append(
+                    f"{label}: unexpected verification_status={trace.get('verification_status')}"
+                )
 
     missing_pairs = expected_pairs - seen_pairs
     if missing_pairs:
         errors.append(f"missing trace pairs: {sorted(missing_pairs)}")
 
-    if int(summary.get("n_trace_files", -1)) != expected_count:
+    if _count(summary, "n_trace_files", "summary", errors) != expected_count:
         errors.append(
             f"summary n_trace_files={summary.get('n_trace_files')} expected={expected_count}"
         )
@@ -294,14 +318,11 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
         if not isinstance(stats, dict):
             errors.append(f"summary missing variant {variant}")
             continue
-        if int(stats.get("n_runs", -1)) != len(task_ids):
-            errors.append(
-                f"summary {variant}.n_runs={stats.get('n_runs')} expected={len(task_ids)}"
-            )
-        if int(stats.get("n_completed", -1)) != len(task_ids):
-            errors.append(
-                f"summary {variant}.n_completed={stats.get('n_completed')} expected={len(task_ids)}"
-            )
+        for field in ("n_runs", "n_completed"):
+            if _count(stats, field, f"summary {variant}", errors) != len(task_ids):
+                errors.append(
+                    f"summary {variant}.{field}={stats.get(field)} expected={len(task_ids)}"
+                )
 
     return errors
 
