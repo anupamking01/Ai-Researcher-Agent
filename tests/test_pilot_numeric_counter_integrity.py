@@ -1,5 +1,6 @@
 """Offline diagnostic-pilot numeric telemetry checks; no experiments run."""
 import json
+import math
 import pytest
 from scripts.validate_pilot_artifacts import validate_pilot
 
@@ -104,21 +105,37 @@ def test_integer_telemetry_is_accepted(tmp_path, variant):
     ("trace", "total_tokens", float("inf"), "trace.total_tokens"),
     ("trace", "verified_claim_count", "0", "trace.verified_claim_count"),
 ])
+def _assert_numeric_rejected(errors, diagnostic, value, field_message):
+    # An unambiguous source parser must reject Python's NaN/Infinity JSON
+    # extensions before field-specific telemetry validation can inspect them.
+    if type(value) is float and not math.isfinite(value):
+        assert any(
+            "invalid JSON artifact" in error
+            and "nonstandard JSON numeric constant" in error
+            for error in errors
+        ), errors
+    else:
+        assert any(diagnostic + field_message in error for error in errors), errors
+
+
 def test_invalid_or_coerced_counter_is_reported(
     tmp_path, target, field, value, diagnostic
 ):
     write_cell(tmp_path)
     mutate(tmp_path, target, field, value)
-    assert any(diagnostic + " must be a nonnegative integer" in e
-               for e in validate_pilot(tmp_path))
+    _assert_numeric_rejected(
+        validate_pilot(tmp_path), diagnostic, value, " must be a nonnegative integer"
+    )
 
 
 @pytest.mark.parametrize("value", ["2", True, 2.5, None, float("inf")])
 def test_p6v_verification_count_must_be_integer(tmp_path, value):
     write_cell(tmp_path, "P6V")
     mutate(tmp_path, "trace", "verified_claim_count", value, variant="P6V")
-    assert any("trace.verified_claim_count must be a nonnegative integer" in e
-               for e in validate_pilot(tmp_path))
+    _assert_numeric_rejected(
+        validate_pilot(tmp_path), "trace.verified_claim_count", value,
+        " must be a nonnegative integer"
+    )
 
 
 @pytest.mark.parametrize("target,value,diagnostic", [
@@ -136,8 +153,9 @@ def test_invalid_temperatures_are_reported_not_coerced(
 ):
     write_cell(tmp_path)
     mutate(tmp_path, target, "temperature", value)
-    assert any(diagnostic + " must be a finite numeric value" in e
-               for e in validate_pilot(tmp_path))
+    _assert_numeric_rejected(
+        validate_pilot(tmp_path), diagnostic, value, " must be a finite numeric value"
+    )
 
 
 def test_distinct_valid_temperatures_still_fail(tmp_path):
