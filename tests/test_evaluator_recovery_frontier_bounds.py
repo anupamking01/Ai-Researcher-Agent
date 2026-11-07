@@ -128,3 +128,54 @@ def test_exact_replacement_width_three_of_ten():
     result = frontier.calculate_frontier_envelope(main, evaluated)
     assert (Fraction(result["p6v_quality_upper_exact"]) -
             Fraction(result["p6v_quality_lower_exact"])) == Fraction(3, 10)
+
+
+def test_frontier_entry_certificate_uses_strict_cheaper_arm_boundary():
+    main, evaluated = fixture_rows()
+    result = frontier.calculate_frontier_envelope(main, evaluated)
+    assert result["p6v_frontier_entry_quality_boundary_exact"] == "1/2"
+    assert result["p6v_frontier_entry_requires_strictly_higher_quality"] is True
+    assert result["p6v_recovered_observed_score_sum_exact"] == "1"
+    assert result["p6v_recovered_score_sum_entry_boundary_exact"] == "3/2"
+    assert result["p6v_maximum_quality_with_at_most_k_replacements_exact"] == [
+        "9/20", "11/20", "3/5", "13/20",
+    ]
+    assert result["p6v_can_enter_frontier_with_at_most_k_replacements"] == [
+        False, True, True, True,
+    ]
+    assert result["p6v_minimum_recovered_measurements_to_replace_for_frontier_entry"] == 1
+
+
+def test_no_number_of_policy_measurement_replacements_can_reach_frontier():
+    main, evaluated = fixture_rows(d3_supported=3)
+    result = frontier.calculate_frontier_envelope(main, evaluated)
+    assert result["p6v_frontier_entry_quality_boundary_exact"] == "3/4"
+    assert result["p6v_can_enter_frontier_with_at_most_k_replacements"] == [
+        False, False, False, False,
+    ]
+    assert result["p6v_minimum_recovered_measurements_to_replace_for_frontier_entry"] is None
+
+
+def test_cheapest_p6v_enters_without_replacements_or_quality_boundary():
+    main, evaluated = fixture_rows(p6v_cost="0.5")
+    result = frontier.calculate_frontier_envelope(main, evaluated)
+    assert result["p6v_frontier_entry_quality_boundary_exact"] is None
+    assert result["p6v_frontier_entry_requires_strictly_higher_quality"] is False
+    assert result["p6v_minimum_recovered_measurements_to_replace_for_frontier_entry"] == 0
+
+
+def test_equal_cost_and_quality_are_nondominating_ties():
+    main, evaluated = fixture_rows(p6v_cost="1")
+    treatment = next(row for row in main
+                     if row["variant_id"] == "P6V" and row["task_id"] == "main-10")
+    treatment["posthoc_strict_support_rate"] = "0.5"
+    evaluator = next(row for row in evaluated
+                     if row["variant_id"] == "P6V" and row["task_id"] == "main-10")
+    evaluator["supported"] = "2"
+    evaluator["unsupported"] = "2"
+    evaluator["strict_support_rate"] = "0.5"
+    result = frontier.calculate_frontier_envelope(main, evaluated)
+    assert result["p6v_frontier_entry_quality_boundary_exact"] == "1/2"
+    assert result["p6v_frontier_entry_requires_strictly_higher_quality"] is False
+    assert result["p6v_minimum_recovered_measurements_to_replace_for_frontier_entry"] == 0
+    assert "P6V" in result["frozen_frontier"]

@@ -27,6 +27,39 @@ To verify from a full-history checkout, without running models or treatments:
 
 The historical-design-source audit workflow runs the verified entrypoint and retains a separate machine-readable receipt. Both CSVs must still match their published SHA-256, and the historical source-policy audit must pass before issuing a production receipt. The synthetic tests do not constitute new experimental observations.
 
+## Exact frontier-entry threshold and minimum-replacement certificate
+
+The endpoint envelope identifies *whether* P6V could appear on the descriptive
+frontier, but not *how much* policy-sensitive measurement replacement would be
+required. The same source-pinned audit now computes the exact boundary set by
+non-more-expensive unchanged treatments. If the competing treatment is
+**strictly cheaper**, P6V must have **strictly greater** quality; a quality
+tie does not suffice. For an equal-cost competitor, equal quality is sufficient
+when no cheaper arm has that quality. The audit checks this boundary using
+exact fractions rather than rounded published rates.
+
+For the retained inputs D3 is cheaper than P6V and has quality **67/80**.
+P6V's seven held-fixed scores contribute **7/12** to its ten-task mean.
+Therefore P6V could join the frontier only if the **sum** of its three
+replacement scores were **strictly greater than 61/24** (approximately
+2.5417 out of 3). Their published sum is **11/8**. The required total
+increase is therefore **strictly greater than 7/6** across those three
+scores (or **strictly greater than 7/60** in P6V's mean quality).
+
+With at most **one** arbitrary replacement, the largest possible quality is
+**197/240**, still below 67/80. With at most **two** replacements, the
+largest possible quality is **103/120**, above 67/80; with all three, it is
+**53/60**. Thus **at least two of the three historically recovered scores
+would have to change** to make P6V enter the frontier within this unrestricted
+[0,1] replacement model. This certificate follows by selecting the largest
+gains `1 - observed_score` for each permitted replacement count; it does
+not choose replacement outcomes or conduct new experiments.
+
+These are purely algebraic stress-test thresholds, **not** evidence that two
+real measurements were wrong, that such shifts are plausible, or that the
+recovery policy caused any shift. The frozen descriptive frontier and all
+primary inference remain unchanged.
+
 ## Claim limits
 
 These are mathematically possible replacements, **not** observed policy-induced changes or credible distributions of unknown scores. No evidence establishes that any of the three published measurements is wrong, or that the sentinel changed an actual provider call. The envelope cannot diagnose the direction of any bias and excludes potential errors in the 37 held-fixed measurements or in treatment costs. It does not establish causal effects, independently authenticate missing original traces/reports, resolve fixed-order timing confounding, or retrospectively preregister the September analysis. Its "possible" frontier does **not** overturn the unchanged frozen descriptive result or justify changing a treatment's reported score.

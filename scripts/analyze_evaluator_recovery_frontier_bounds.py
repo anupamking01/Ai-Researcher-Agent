@@ -45,6 +45,24 @@ def _frontier(qualities: dict[str, Fraction],
     ]
 
 
+def _p6v_frontier_entry_threshold(
+    qualities: dict[str, Fraction], costs: dict[str, Fraction],
+) -> tuple[Fraction | None, bool]:
+    """Quality boundary for entry with all other arms and costs held fixed.
+
+    At equal quality, a strictly cheaper rival dominates; an equally costly
+    rival does not. No non-more-expensive rivals means unconditional entry.
+    """
+    rivals = [arm for arm in VARIANTS if arm != "P6V"
+              and costs[arm] <= costs["P6V"]]
+    if not rivals:
+        return None, False
+    boundary = max(qualities[arm] for arm in rivals)
+    strict = any(costs[arm] < costs["P6V"] and qualities[arm] == boundary
+                 for arm in rivals)
+    return boundary, strict
+
+
 def calculate_frontier_envelope(
     treatment_rows: list[dict[str, str]],
     evaluator_rows: list[dict[str, str]],
@@ -127,6 +145,34 @@ def calculate_frontier_envelope(
                 if arm in low_frontier or arm in high_frontier]
     guaranteed = [arm for arm in VARIANTS
                   if arm in low_frontier and arm in high_frontier]
+    # An exact minimal-replacement certificate, not an empirical correction.
+    # To maximize P6V under at most k allowed replacements, set the k
+    # recovered cells with the largest (1 - observed_score) to one.
+    # No other arm's quality or any treatment cost is allowed to vary.
+    threshold, strict_threshold = _p6v_frontier_entry_threshold(
+        observed_quality, costs
+    )
+    recovered_observed_sum = sum((scores[cell] for cell in RECOVERED), Fraction())
+    largest_gains = sorted(
+        (Fraction(1) - scores[cell] for cell in RECOVERED), reverse=True
+    )
+    maximum_quality_by_k: list[str] = []
+    p6v_member_by_k: list[bool] = []
+    cumulative_gain = Fraction()
+    for k in range(len(RECOVERED) + 1):
+        if k:
+            cumulative_gain += largest_gains[k - 1]
+        maximum_quality = observed_quality["P6V"] + cumulative_gain / len(TASK_IDS)
+        maximum_quality_by_k.append(_as_fraction(maximum_quality))
+        p6v_member_by_k.append(
+            "P6V" in _frontier(dict(observed_quality, P6V=maximum_quality), costs)
+        )
+    min_replacements = next(
+        (k for k, member in enumerate(p6v_member_by_k) if member), None
+    )
+    if p6v_member_by_k[-1] != ("P6V" in high_frontier):
+        raise FrontierEnvelopeError("replacement entry certificate disagrees with envelope")
+
     return {
         "schema_version": 1,
         "status": "post_hoc_exploratory_recovery_policy_pareto_envelope_only",
@@ -148,6 +194,19 @@ def calculate_frontier_envelope(
         "guaranteed_frontier_members": guaranteed,
         "possible_frontier_members": possible,
         "frontier_invariant_across_envelope": low_frontier == high_frontier,
+        "p6v_frontier_entry_quality_boundary_exact": (
+            None if threshold is None else _as_fraction(threshold)
+        ),
+        "p6v_frontier_entry_requires_strictly_higher_quality": strict_threshold,
+        "p6v_recovered_observed_score_sum_exact": _as_fraction(recovered_observed_sum),
+        "p6v_recovered_score_sum_entry_boundary_exact": (
+            None if threshold is None
+            else _as_fraction(len(TASK_IDS) * (threshold - held_p6v))
+        ),
+        "p6v_maximum_quality_with_at_most_k_replacements_exact": maximum_quality_by_k,
+        "p6v_can_enter_frontier_with_at_most_k_replacements": p6v_member_by_k,
+        "p6v_minimum_recovered_measurements_to_replace_for_frontier_entry": min_replacements,
+        "replacement_count_is_algebraic_not_an_observed_policy_change": True,
         "endpoints_exhaust_membership_states_under_one_arm_monotonicity": True,
         "all_other_37_scores_and_all_40_treatment_costs_fixed": True,
         "measurement_bias_estimated": False,
