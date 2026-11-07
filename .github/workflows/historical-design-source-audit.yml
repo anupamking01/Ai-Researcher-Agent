@@ -9,6 +9,9 @@ on:
     paths:
       - .github/workflows/historical-design-source-audit.yml
       - scripts/audit_historical_design_source.py
+      - scripts/audit_historical_task_freeze.py
+      - tests/test_historical_task_freeze.py
+      - docs/MAIN_STUDY_TASK_FREEZE_CHRONOLOGY.md
       - scripts/audit_main_study_design_identifiability.py
       - tests/test_historical_design_source_audit.py
       - tests/test_main_study_design_identifiability.py
@@ -17,6 +20,9 @@ on:
     paths:
       - .github/workflows/historical-design-source-audit.yml
       - scripts/audit_historical_design_source.py
+      - scripts/audit_historical_task_freeze.py
+      - tests/test_historical_task_freeze.py
+      - docs/MAIN_STUDY_TASK_FREEZE_CHRONOLOGY.md
       - scripts/audit_main_study_design_identifiability.py
       - tests/test_historical_design_source_audit.py
       - tests/test_main_study_design_identifiability.py
@@ -50,6 +56,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           mkdir -p "$RUNNER_TEMP/vera-design-audit"
           python -m scripts.audit_historical_design_source > "$RUNNER_TEMP/vera-design-audit/receipt.json"
+          python -m scripts.audit_historical_task_freeze > "$RUNNER_TEMP/vera-design-audit/task-freeze.json"
           python - <<'PY'
           import json
           import os
@@ -61,6 +68,20 @@ jobs:
           assert receipt["design_rank_task_treatment_position"] == 13
           assert receipt["historical_runner_task_then_variant_ast_checked"] is True
           assert receipt["historical_runner_awaited_agent_call_checked"] is True
+          task = json.loads((Path(os.environ["RUNNER_TEMP"]) /
+                             "vera-design-audit" / "task-freeze.json").read_text())
+          assert task["status"] == "historical_git_task_prelaunch_freeze_only"
+          assert task["manifest_git_blob"] == "68316fdb00631856006119370f9f549b23d1bee3"
+          assert task["prelaunch_git_ancestry_verified"] is True
+          assert task["unchanged_manifest_blob_at_launch"] is True
+          assert task["task_ids"] == [f"main-{n:02d}" for n in range(1, 11)]
+          for label in ("independent_external_task_preregistration_established",
+                        "task_selection_outcome_blinding_established",
+                        "task_independence_established",
+                        "original_treatment_execution_authenticated",
+                        "original_report_trace_custody_authenticated",
+                        "human_validation_performed"):
+              assert task[label] is False, label
           for field in (
               "original_treatment_execution_authenticated",
               "actual_run_timestamps_authenticated",
@@ -75,6 +96,6 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: vera-historical-design-source-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/vera-design-audit/receipt.json
+          path: ${{ runner.temp }}/vera-design-audit/
           if-no-files-found: error
           retention-days: 90
