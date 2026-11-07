@@ -76,10 +76,29 @@ def _load_traces(pricing):
         for path in sorted(variant_dir.glob("*.json")):
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
-                trace = payload.get("trace", {})
-                experiment = payload.get("experiment", {})
-            except (json.JSONDecodeError, OSError):
-                continue
+            except (UnicodeError, json.JSONDecodeError, OSError) as exc:
+                # Skipping a damaged run silently changes which pilot cells are
+                # selected for a descriptive comparison. Fail before publication.
+                raise ValueError(f"unreadable or malformed pilot trace: {path}") from exc
+            if (not isinstance(payload, dict)
+                    or not isinstance(payload.get("trace"), dict)
+                    or not isinstance(payload.get("experiment"), dict)):
+                raise ValueError(f"invalid pilot trace structure: {path}")
+            trace, experiment = payload["trace"], payload["experiment"]
+            for field in ("variant_id", "task_set_id", "task_id"):
+                recorded = trace.get(field)
+                declared = experiment.get(field)
+                if recorded and declared and recorded != declared:
+                    raise ValueError(
+                        f"pilot trace/experiment {field} mismatch: {path}"
+                    )
+            declared_variant = (
+                trace.get("variant_id") or experiment.get("variant_id") or variant
+            )
+            if declared_variant != variant:
+                raise ValueError(
+                    f"pilot trace variant disagrees with directory {variant}: {path}"
+                )
 
             estimated_cost, cost_status = _estimate_reported_token_cost(
                 trace.get("provider_usage_by_model", {}), pricing
@@ -157,8 +176,48 @@ def _variant_summary(rows):
     return summaries
 
 
+def _index_pilot_rows(rows):
+    """Reject ambiguous pilot selection rather than overwriting a run per cell.
+
+    A pilot summary is diagnostic, but selecting the last row of a duplicated
+    (variant, task) cell can silently prefer a retry. Mixed task sets can also
+    produce false task-level pairs. Selection must happen explicitly upstream,
+    before calling this summarizer; neither success nor score can pick a row.
+    """
+    by_key = {}
+    run_ids = set()
+    task_set_id = None
+    for position, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            raise ValueError(f"pilot row {position} is not a record")
+        for field in ("variant_id", "task_set_id", "task_id", "run_id"):
+            value = row.get(field)
+            if type(value) is not str or not value or value != value.strip():
+                raise ValueError(f"pilot row {position} has invalid {field}")
+        if row["variant_id"] not in VARIANT_ORDER:
+            raise ValueError(f"pilot row {position} has unexpected variant")
+        if task_set_id is None:
+            task_set_id = row["task_set_id"]
+        elif row["task_set_id"] != task_set_id:
+            raise ValueError("mixed pilot task_set_id values; refuse cross-study pairing")
+        cell = (row["variant_id"], row["task_id"])
+        if cell in by_key:
+            raise ValueError(
+                f"duplicate pilot treatment/task cell {cell}; "
+                "do not silently select one attempted run"
+            )
+        if row["run_id"] in run_ids:
+            raise ValueError(
+                f"reused pilot run_id {row['run_id']!r}; "
+                "independent cells require distinct runs"
+            )
+        by_key[cell] = row
+        run_ids.add(row["run_id"])
+    return by_key
+
+
 def _paired_operational_differences(rows):
-    by_key = {(r["variant_id"], r["task_id"]): r for r in rows if r["task_id"]}
+    by_key = _index_pilot_rows(rows)
     comparisons = {}
     for left, right, name in (
         ("D6", "P6", "P6_minus_D6"),
@@ -168,10 +227,16 @@ def _paired_operational_differences(rows):
         task_ids = sorted(
             {task_id for variant, task_id in by_key if variant in {left, right}}
         )
+        missing_left_task_ids = []
+        missing_right_task_ids = []
         for task_id in task_ids:
             a = by_key.get((left, task_id))
             b = by_key.get((right, task_id))
-            if not a or not b:
+            if a is None:
+                missing_left_task_ids.append(task_id)
+            if b is None:
+                missing_right_task_ids.append(task_id)
+            if a is None or b is None:
                 continue
             cost_delta = None
             if a["estimated_cost_usd"] is not None and b["estimated_cost_usd"] is not None:
@@ -187,7 +252,10 @@ def _paired_operational_differences(rows):
                 }
             )
         comparisons[name] = {
+            "n_tasks_union": len(task_ids),
             "n_pairs": len(pairs),
+            "missing_left_task_ids": missing_left_task_ids,
+            "missing_right_task_ids": missing_right_task_ids,
             "avg_total_tokens_delta": _mean(p["total_tokens_delta"] for p in pairs),
             "avg_estimated_cost_usd_delta": _mean(
                 p["estimated_cost_usd_delta"] for p in pairs
@@ -221,6 +289,8 @@ def main():
         raise SystemExit(
             f"No pilot traces found under {TRACE_ROOT}. Run scripts/run_pilot.py first."
         )
+    # Check the complete source selection before summaries or output writes.
+    _index_pilot_rows(rows)
 
     payload = {
         "n_trace_files": len(rows),

@@ -1,0 +1,13 @@
+# Pilot summarizer: fail-closed source selection and paired coverage
+
+**Scope:** Offline integrity hardening for the **five-task diagnostic pilot** only. No historical trace, original canonical pilot CSV, ten-task automated result, preregistered/qualified analysis plan, exploratory measurement, or human rating is edited.
+
+The pilot summarizer previously ignored malformed JSON files and built its operational paired comparison with a dictionary comprehension keyed by `(variant_id, task_id)`. If a source directory contained both an original and a retry for the same cell, the last encountered row silently overwrote the first. Worse, `task_id` was paired without a `task_set_id` guard, so multiple pilot task sets could be compared as though they were the same experiment. An incomplete pair was simply omitted without an explicit missing-cell inventory. Those behaviors could conceal selection and attrition in diagnostic comparisons.
+
+`scripts/summarize_pilot.py` now rejects malformed trace JSON, invalid trace/experiment structure, conflicting trace/experiment identities, and treatment-directory mismatches instead of silently dropping such sources. Before output is written, the source-selection gate requires a single nonempty task-set identity, distinct `(variant, task)` cells, distinct run IDs, and nonempty stable identifiers. For incomplete **nonduplicated** pilot inputs, the existing paired means still use only actually observed matched tasks, while new `n_tasks_union`, `missing_left_task_ids`, and `missing_right_task_ids` fields disclose what was not paired. It does not impute missing outcomes or choose the better of two attempts.
+
+The historical canonical five-task pilot is independently captured in `experiments/results/pilot_v1_canonical_runs.csv`. A regression test validates its 15 unique selected cells **without recomputing, replacing, or reselecting those rows**. Future retries or recovered copies must be explicitly provenance-reviewed upstream and never chosen by score, success, or filename ordering in the summary.
+
+Run offline: `python -m pytest -q tests/test_pilot_source_selection_integrity.py`. The ordinary firewalled tests CI also runs this file. All negative cases use synthetic rows/trace fixtures; there is no model, evaluator, web, or human scoring execution.
+
+**Inference boundary:** This makes the diagnostic pilot's local summary less prone to silent data-selection errors; it does not authenticate unavailable original main-study reports, fix historical treatment-order confounding, turn the pilot into a confirmatory study, establish automated-plan preregistration, or satisfy pending blinded human evaluation.
