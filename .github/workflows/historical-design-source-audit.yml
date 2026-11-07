@@ -20,6 +20,9 @@ on:
       - scripts/analyze_evaluator_recovery_policy_bounds.py
       - tests/test_evaluator_recovery_policy_bounds.py
       - docs/EVALUATOR_RECOVERY_POLICY_BOUNDS.md
+      - scripts/analyze_evaluator_recovery_frontier_bounds.py
+      - tests/test_evaluator_recovery_frontier_bounds.py
+      - docs/EVALUATOR_RECOVERY_FRONTIER_BOUNDS.md
       - tests/test_historical_variant_factors.py
       - docs/HISTORICAL_VARIANT_FACTOR_SOURCE_AUDIT.md
       - tests/test_historical_task_freeze.py
@@ -43,6 +46,9 @@ on:
       - scripts/analyze_evaluator_recovery_policy_bounds.py
       - tests/test_evaluator_recovery_policy_bounds.py
       - docs/EVALUATOR_RECOVERY_POLICY_BOUNDS.md
+      - scripts/analyze_evaluator_recovery_frontier_bounds.py
+      - tests/test_evaluator_recovery_frontier_bounds.py
+      - docs/EVALUATOR_RECOVERY_FRONTIER_BOUNDS.md
       - tests/test_historical_variant_factors.py
       - docs/HISTORICAL_VARIANT_FACTOR_SOURCE_AUDIT.md
       - tests/test_historical_task_freeze.py
@@ -85,6 +91,7 @@ jobs:
           python -m scripts.audit_historical_common_evaluator_policy > "$RUNNER_TEMP/vera-design-audit/evaluator-policy.json"
           python -m scripts.audit_historical_evaluator_measurement_partition > "$RUNNER_TEMP/vera-design-audit/evaluator-partition.json"
           python -m scripts.analyze_evaluator_recovery_policy_bounds > "$RUNNER_TEMP/vera-design-audit/recovery-policy-bounds.json"
+          python -m scripts.analyze_evaluator_recovery_frontier_bounds > "$RUNNER_TEMP/vera-design-audit/recovery-frontier-bounds.json"
           python - <<'PY'
           import json
           import os
@@ -186,6 +193,24 @@ jobs:
                         "causal_effect_identified", "new_statistical_inference_performed",
                         "frozen_primary_inference_modified", "human_validation_performed"):
               assert recovery_bounds[label] is False, label
+          frontier = json.loads((Path(os.environ["RUNNER_TEMP"]) /
+                                 "vera-design-audit" / "recovery-frontier-bounds.json").read_text())
+          assert frontier["status"] == "post_hoc_exploratory_recovery_policy_pareto_envelope_only"
+          assert frontier["historical_recovery_policy_source_audited"] is True
+          assert frontier["p6v_quality_lower_exact"] == "7/12"
+          assert frontier["p6v_quality_upper_exact"] == "53/60"
+          assert frontier["frozen_frontier"] == ["D3"]
+          assert frontier["lower_endpoint_frontier"] == ["D3"]
+          assert frontier["upper_endpoint_frontier"] == ["D3", "P6V"]
+          assert frontier["guaranteed_frontier_members"] == ["D3"]
+          assert frontier["possible_frontier_members"] == ["D3", "P6V"]
+          assert frontier["frontier_invariant_across_envelope"] is False
+          for label in ("measurement_bias_estimated",
+                        "new_confirmatory_inference_performed",
+                        "original_report_trace_custody_authenticated",
+                        "original_evaluator_execution_authenticated",
+                        "human_validation_performed"):
+              assert frontier[label] is False, label
           for field in ("original_treatment_execution_authenticated",
                         "original_report_trace_custody_authenticated",
                         "actual_factor_values_in_original_traces_verified",
