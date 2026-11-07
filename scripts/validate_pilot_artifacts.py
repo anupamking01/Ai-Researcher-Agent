@@ -16,6 +16,15 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "outputs"
 
+# Independent frozen pilot assignment: a trace must not define its own treatment.
+# Keep this separate from the live runner's ExperimentConfig.from_variant()
+# so postrun validation detects, rather than inherits, a changed factor map.
+PILOT_TREATMENT_FACTORS = {
+    "D6": {"planning_mode": "direct", "source_budget": 6, "verification_mode": "none"},
+    "P6": {"planning_mode": "planner", "source_budget": 6, "verification_mode": "none"},
+    "P6V": {"planning_mode": "planner", "source_budget": 6, "verification_mode": "verify"},
+}
+
 
 def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -151,6 +160,25 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
             errors.append(f"duplicate trace pair: {pair}")
         seen_pairs.add(pair)
 
+        # Never let a self-consistent but incorrectly labelled execution
+        # define the treatment it purports to measure. A P6V trace with
+        # verification disabled or a D6 trace with planner queries must not
+        # pass just because its own counters agree with its own mode.
+        frozen_factors = PILOT_TREATMENT_FACTORS.get(variant)
+        if frozen_factors is not None:
+            for field, expected_value in frozen_factors.items():
+                for source_name, record in (("trace", trace), ("experiment", experiment)):
+                    # Legacy experiment metadata can omit an optional factor;
+                    # the execution trace itself must always declare each one.
+                    if source_name == "experiment" and field not in record:
+                        continue
+                    actual_value = record.get(field)
+                    if type(actual_value) is not type(expected_value) or actual_value != expected_value:
+                        errors.append(
+                            f"{label}: {source_name}.{field}={actual_value!r} "
+                            f"differs from frozen {variant} factor {expected_value!r}"
+                        )
+
         if trace.get("completed") is not True:
             errors.append(f"{label}: completed is not true")
 
@@ -201,7 +229,12 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
             )
 
         planning_mode = trace.get("planning_mode")
-        expected_queries = 1 if planning_mode == "direct" else 4
+        # Use the assigned arm, not a potentially tampered trace mode.
+        expected_mode = (
+            frozen_factors["planning_mode"] if frozen_factors is not None
+            else planning_mode
+        )
+        expected_queries = 1 if expected_mode == "direct" else 4
         if int(trace.get("query_count", 0) or 0) != expected_queries:
             errors.append(
                 f"{label}: query_count={trace.get('query_count')} expected={expected_queries}"
@@ -231,7 +264,10 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
         if float(trace.get("temperature", -999)) != float(manifest.get("temperature", -998)):
             errors.append(f"{label}: temperature differs from manifest")
 
-        verification_mode = trace.get("verification_mode")
+        verification_mode = (
+            frozen_factors["verification_mode"] if frozen_factors is not None
+            else trace.get("verification_mode")
+        )
         if verification_mode == "verify":
             if trace.get("verification_status") != "ok":
                 errors.append(

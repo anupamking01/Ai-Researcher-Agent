@@ -82,15 +82,16 @@ def write_minimal_pilot(root):
     }}
     experiment = {
         "variant_id": "D6", "task_id": "pilot-01",
-        "task_set_id": "pilot-v1", "source_budget": 1,
+        "task_set_id": "pilot-v1", "source_budget": 6,
     }
     trace = {
         "variant_id": "D6", "task_id": "pilot-01",
         "task_set_id": "pilot-v1", "completed": True,
-        "source_budget": 1, "source_count": 1,
-        "successful_source_count": 1, "failed_source_count": 0,
-        "scheduled_urls": ["https://example.org/"],
-        "successful_urls": ["https://example.org/"], "failed_urls": [],
+        "source_budget": 6, "source_count": 6,
+        "successful_source_count": 6, "failed_source_count": 0,
+        "scheduled_urls": [f"https://example.org/{i}" for i in range(6)],
+        "successful_urls": [f"https://example.org/{i}" for i in range(6)],
+        "failed_urls": [],
         "planning_mode": "direct", "query_count": 1,
         "search_call_count": 1, "research_context_words": 10,
         "report_words": 10, "model_call_count": 1,
