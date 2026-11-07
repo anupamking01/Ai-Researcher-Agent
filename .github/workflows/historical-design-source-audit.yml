@@ -14,6 +14,9 @@ on:
       - scripts/audit_historical_common_evaluator_policy.py
       - tests/test_historical_common_evaluator_policy.py
       - docs/HISTORICAL_COMMON_EVALUATOR_SOURCE_POLICY.md
+      - scripts/audit_historical_evaluator_measurement_partition.py
+      - tests/test_historical_evaluator_measurement_partition.py
+      - docs/HISTORICAL_EVALUATOR_MEASUREMENT_PARTITION.md
       - tests/test_historical_variant_factors.py
       - docs/HISTORICAL_VARIANT_FACTOR_SOURCE_AUDIT.md
       - tests/test_historical_task_freeze.py
@@ -31,6 +34,9 @@ on:
       - scripts/audit_historical_common_evaluator_policy.py
       - tests/test_historical_common_evaluator_policy.py
       - docs/HISTORICAL_COMMON_EVALUATOR_SOURCE_POLICY.md
+      - scripts/audit_historical_evaluator_measurement_partition.py
+      - tests/test_historical_evaluator_measurement_partition.py
+      - docs/HISTORICAL_EVALUATOR_MEASUREMENT_PARTITION.md
       - tests/test_historical_variant_factors.py
       - docs/HISTORICAL_VARIANT_FACTOR_SOURCE_AUDIT.md
       - tests/test_historical_task_freeze.py
@@ -71,6 +77,7 @@ jobs:
           python -m scripts.audit_historical_task_freeze > "$RUNNER_TEMP/vera-design-audit/task-freeze.json"
           python -m scripts.audit_historical_variant_factors > "$RUNNER_TEMP/vera-design-audit/variant-factors.json"
           python -m scripts.audit_historical_common_evaluator_policy > "$RUNNER_TEMP/vera-design-audit/evaluator-policy.json"
+          python -m scripts.audit_historical_evaluator_measurement_partition > "$RUNNER_TEMP/vera-design-audit/evaluator-partition.json"
           python - <<'PY'
           import json
           import os
@@ -139,6 +146,26 @@ jobs:
                         "equal_evaluator_outputs_established",
                         "human_validation_performed"):
               assert evaluator[label] is False, label
+          partition = json.loads((Path(os.environ["RUNNER_TEMP"]) /
+                                  "vera-design-audit" / "evaluator-partition.json").read_text())
+          assert partition["status"] == "published_summary_recovery_partition_source_concordance_only"
+          assert partition["cells"] == 40
+          assert partition["historical_source_policy_audited"] is True
+          assert partition["frozen_treatment_evaluator_summary_preflight_passed"] is True
+          assert partition["recovery_cells_by_arm"] == {"D3": 0, "D6": 0, "P6": 0, "P6V": 3}
+          assert partition["recovered_share_of_p6v_cells"] == "3/10"
+          assert partition["frozen_summary_blank_legacy_status_cells"] == 37
+          assert partition["recovered_zero_evidence_status_cells"] == ["P6V/main-10"]
+          for label in (
+              "original_trace_report_custody_authenticated",
+              "original_evaluator_execution_authenticated",
+              "recovered_evaluator_execution_authenticated",
+              "recovered_sentinel_provider_call_authenticated",
+              "bias_direction_or_magnitude_established",
+              "automated_inference_recomputed",
+              "human_validation_performed",
+          ):
+              assert partition[label] is False, label
           for field in ("original_treatment_execution_authenticated",
                         "original_report_trace_custody_authenticated",
                         "actual_factor_values_in_original_traces_verified",
