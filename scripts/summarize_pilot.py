@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import statistics
 from collections import defaultdict
 from pathlib import Path
@@ -35,37 +36,103 @@ def _load_pricing():
     return payload
 
 
-def _estimate_reported_token_cost(provider_usage_by_model, pricing):
-    """Estimate cost using only provider-reported, non-cached token totals.
+def _nonnegative_token_count(value, *, model, field):
+    """Fail closed on lossy coercions or negative provider usage counters."""
+    if type(value) is not int or value < 0:
+        raise ValueError(
+            f"provider usage {model!r}.{field} must be a nonnegative integer"
+        )
+    return value
 
-    Cached-input usage is not separately exposed by the current ledger, so the
-    conservative uncached input rate is applied. Unknown models return no cost
-    rather than silently substituting another model's price.
+
+def _finite_uncached_rate(value, *, model, field):
+    if type(value) not in (int, float) or value < 0:
+        raise ValueError(
+            f"frozen pricing {model!r}.{field} must be finite and nonnegative"
+        )
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:
+        finite = False
+    if not finite:
+        raise ValueError(
+            f"frozen pricing {model!r}.{field} must be finite and nonnegative"
+        )
+    return value
+
+
+def _verify_provider_usage_ledger(trace, by_model):
+    """Reconcile reported token totals against model-level accounting.
+
+    Only enforce the ledger contract when the detailed model map exists.
+    Legacy missing maps remain visibly uncosted, not silently imputed.
+    """
+    if not isinstance(by_model, dict) or not by_model:
+        return
+    totals = {"prompt_tokens": 0, "completion_tokens": 0}
+    for model, usage in by_model.items():
+        if type(model) is not str or not model or not isinstance(usage, dict):
+            raise ValueError("invalid provider usage model bucket")
+        for field in totals:
+            totals[field] += _nonnegative_token_count(
+                usage.get(field, 0), model=model, field=field
+            )
+    totals["total_tokens"] = totals["prompt_tokens"] + totals["completion_tokens"]
+    for field, expected in totals.items():
+        recorded = trace.get(field)
+        if type(recorded) is not int or recorded != expected:
+            raise ValueError(
+                f"provider usage ledger mismatch: trace.{field}={recorded!r} "
+                f"but model buckets sum to {expected}"
+            )
+
+
+def _estimate_reported_token_cost(provider_usage_by_model, pricing):
+    """Estimate only from intact provider counts and finite frozen rates.
+
+    Unknown model rates retain the historical explicit uncosted status.
+    Malformed token counts or price entries are errors, not zero-priced data.
     """
     if not isinstance(provider_usage_by_model, dict):
         return None, "missing_usage_by_model"
+    models = pricing.get("models") if isinstance(pricing, dict) else None
+    if not isinstance(models, dict):
+        raise ValueError("frozen pricing must have a models mapping")
 
-    models = pricing.get("models", {})
     total_cost = 0.0
     saw_usage = False
     for model, usage in provider_usage_by_model.items():
-        if not isinstance(usage, dict):
-            continue
-        prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
-        completion_tokens = int(usage.get("completion_tokens", 0) or 0)
-        if prompt_tokens <= 0 and completion_tokens <= 0:
+        if type(model) is not str or not model or not isinstance(usage, dict):
+            raise ValueError("invalid provider usage model bucket")
+        prompt_tokens = _nonnegative_token_count(
+            usage.get("prompt_tokens", 0), model=model, field="prompt_tokens"
+        )
+        completion_tokens = _nonnegative_token_count(
+            usage.get("completion_tokens", 0), model=model, field="completion_tokens"
+        )
+        if prompt_tokens == 0 and completion_tokens == 0:
             continue
         saw_usage = True
         rate = models.get(model)
         if rate is None:
             return None, f"unknown_model_price:{model}"
-        total_cost += (prompt_tokens / 1_000_000) * float(rate["input"])
-        total_cost += (completion_tokens / 1_000_000) * float(rate["output"])
+        if not isinstance(rate, dict):
+            raise ValueError(f"invalid frozen pricing bucket for {model!r}")
+        input_rate = _finite_uncached_rate(rate.get("input"), model=model, field="input")
+        output_rate = _finite_uncached_rate(rate.get("output"), model=model, field="output")
+        try:
+            total_cost += (
+                prompt_tokens / 1_000_000 * input_rate
+                + completion_tokens / 1_000_000 * output_rate
+            )
+        except OverflowError as exc:
+            raise ValueError("nonfinite frozen-price cost estimate") from exc
+        if not math.isfinite(total_cost):
+            raise ValueError("nonfinite frozen-price cost estimate")
 
     if not saw_usage:
         return None, "no_reported_tokens"
     return total_cost, "estimated_from_frozen_uncached_rates"
-
 
 def _load_traces(pricing):
     rows = []
@@ -100,8 +167,10 @@ def _load_traces(pricing):
                     f"pilot trace variant disagrees with directory {variant}: {path}"
                 )
 
+            by_model = trace.get("provider_usage_by_model", {})
+            _verify_provider_usage_ledger(trace, by_model)
             estimated_cost, cost_status = _estimate_reported_token_cost(
-                trace.get("provider_usage_by_model", {}), pricing
+                by_model, pricing
             )
             rows.append(
                 {
