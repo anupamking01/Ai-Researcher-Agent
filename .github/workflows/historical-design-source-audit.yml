@@ -17,6 +17,9 @@ on:
       - scripts/audit_historical_evaluator_measurement_partition.py
       - tests/test_historical_evaluator_measurement_partition.py
       - docs/HISTORICAL_EVALUATOR_MEASUREMENT_PARTITION.md
+      - scripts/analyze_evaluator_recovery_policy_bounds.py
+      - tests/test_evaluator_recovery_policy_bounds.py
+      - docs/EVALUATOR_RECOVERY_POLICY_BOUNDS.md
       - tests/test_historical_variant_factors.py
       - docs/HISTORICAL_VARIANT_FACTOR_SOURCE_AUDIT.md
       - tests/test_historical_task_freeze.py
@@ -37,6 +40,9 @@ on:
       - scripts/audit_historical_evaluator_measurement_partition.py
       - tests/test_historical_evaluator_measurement_partition.py
       - docs/HISTORICAL_EVALUATOR_MEASUREMENT_PARTITION.md
+      - scripts/analyze_evaluator_recovery_policy_bounds.py
+      - tests/test_evaluator_recovery_policy_bounds.py
+      - docs/EVALUATOR_RECOVERY_POLICY_BOUNDS.md
       - tests/test_historical_variant_factors.py
       - docs/HISTORICAL_VARIANT_FACTOR_SOURCE_AUDIT.md
       - tests/test_historical_task_freeze.py
@@ -78,6 +84,7 @@ jobs:
           python -m scripts.audit_historical_variant_factors > "$RUNNER_TEMP/vera-design-audit/variant-factors.json"
           python -m scripts.audit_historical_common_evaluator_policy > "$RUNNER_TEMP/vera-design-audit/evaluator-policy.json"
           python -m scripts.audit_historical_evaluator_measurement_partition > "$RUNNER_TEMP/vera-design-audit/evaluator-partition.json"
+          python -m scripts.analyze_evaluator_recovery_policy_bounds > "$RUNNER_TEMP/vera-design-audit/recovery-policy-bounds.json"
           python - <<'PY'
           import json
           import os
@@ -166,6 +173,19 @@ jobs:
               "human_validation_performed",
           ):
               assert partition[label] is False, label
+          recovery_bounds = json.loads((Path(os.environ["RUNNER_TEMP"]) /
+                                        "vera-design-audit" / "recovery-policy-bounds.json").read_text())
+          assert recovery_bounds["status"] == "post_hoc_exploratory_recovery_policy_measurement_envelope_only"
+          assert recovery_bounds["historical_recovery_source_and_summary_audited"] is True
+          assert recovery_bounds["recovered_cells_allowed_to_vary"] == 3
+          assert recovery_bounds["worst_case_width_fraction"] == "3/10"
+          assert recovery_bounds["worst_case_lower"] <= recovery_bounds["frozen_observed_contrast"] <= recovery_bounds["worst_case_upper"]
+          for label in ("original_report_trace_custody_authenticated",
+                        "historical_evaluator_execution_authenticated",
+                        "actual_measurement_bias_identified",
+                        "causal_effect_identified", "new_statistical_inference_performed",
+                        "frozen_primary_inference_modified", "human_validation_performed"):
+              assert recovery_bounds[label] is False, label
           for field in ("original_treatment_execution_authenticated",
                         "original_report_trace_custody_authenticated",
                         "actual_factor_values_in_original_traces_verified",
