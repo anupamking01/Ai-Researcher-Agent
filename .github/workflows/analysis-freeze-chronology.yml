@@ -15,6 +15,8 @@ on:
       - paper/RESEARCH_PROTOCOL.md
       - paper/ANALYSIS_PLAN.md
       - paper/MAIN_STUDY_INFERENCE.md
+      - paper/MAIN_STUDY_REPORTING_COVER.md
+      - outputs/main_study_inference.json
   pull_request:
     paths:
       - .github/workflows/analysis-freeze-chronology.yml
@@ -25,6 +27,8 @@ on:
       - paper/RESEARCH_PROTOCOL.md
       - paper/ANALYSIS_PLAN.md
       - paper/MAIN_STUDY_INFERENCE.md
+      - paper/MAIN_STUDY_REPORTING_COVER.md
+      - outputs/main_study_inference.json
   workflow_dispatch:
 
 permissions:
@@ -71,6 +75,10 @@ jobs:
           assert receipt["written_analysis_plan_postdates_evaluator_recovery_commit_in_git"] is True
           assert receipt["written_analysis_plan_precedes_canonical_git_publication"] is True
           assert receipt["current_analysis_plan_bytes_equal_original_commit"] is True
+          assert receipt["canonical_publication_report_bytes_unchanged"] is True
+          assert receipt["canonical_publication_inference_json_bytes_unchanged"] is True
+          assert receipt["separate_committed_reporting_cover_checked"] is True
+          assert receipt["historical_report_contains_unqualified_preregistration_wording"] is True
           for claim in (
               "prospective_precollection_analysis_preregistration_established",
               "pre_analysis_outcome_blinding_established",

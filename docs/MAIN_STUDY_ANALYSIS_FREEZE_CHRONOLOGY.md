@@ -46,3 +46,27 @@ The dedicated [analysis-freeze-chronology workflow](../.github/workflows/analysi
 A passing workflow retains the audit's JSON receipt and an exact checkout/run/attempt-bound SHA-256 index for 90 days. Tests guard the full-history checkout, relevant workflow triggers, credential isolation, and **false** status of any claims of prospective precollection preregistration, outcome blinding, original treatment authenticity, or human validation. The index binds a CI replay, not independent evidence custody.
 
 This is **a reproducible retrospective chronology audit**, not proof that outcomes were hidden when the plan was written, not a prospective registration, and not validation of the historical treatment outputs. The frozen analysis plan and canonical result files remain unchanged. The original research reports/traces, original-source continuity, and two eligible independent annotators remain unresolved gates.
+
+## Publication-facing qualification without historical result edits (7 November 2026)
+
+The published [main-study Markdown results](../paper/MAIN_STUDY_INFERENCE.md)
+still contain the historically generated phrase "three preregistered
+strict-support contrasts." Silently changing those historical result bytes
+would break canonical output custody; leaving the phrase unqualified could
+mislead a reader about precollection registration.
+
+The separate [main-study reporting cover](../paper/MAIN_STUDY_REPORTING_COVER.md)
+must therefore accompany the frozen results in any manuscript or handoff.
+The offline chronology auditor now also checks that the canonical-result JSON
+and Markdown are **byte-for-byte identical to their original September 24 Git
+publication**, including the historical wording; that the separately committed
+cover exists, is unchanged in the checkout, and explicitly declares the
+postcollection limitation, fixed treatment-order confounding, unavailable
+original evidence, and pending human validation. It retains SHA-256 fingerprints
+of both historical files and the cover in its read-only receipt.
+
+This is a **reporting-context and Git-byte-continuity control**, not a proof
+that the frozen statistical method was planned before results were seen, a
+new statistical test, an independent source archive, or retroactive human
+validation. Original experimental artifacts and independent custody remain
+unverified. No source results or frozen analysis-plan bytes are altered.

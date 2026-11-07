@@ -35,7 +35,22 @@ def history(tmp_path: Path) -> tuple[Path, Milestones]:
     treatment = _commit(tmp_path, "treatments", "draft protocol placeholder\n")
     recovery = _commit(tmp_path, "evaluator-recovery", "draft protocol placeholder\n")
     plan = _commit(tmp_path, "freeze-inference", "frozen synthetic analysis\n")
-    publication = _commit(tmp_path, "publish-results", "frozen synthetic analysis\n")
+    (tmp_path / "paper" / "MAIN_STUDY_INFERENCE.md").write_text(
+        "Primary inference is limited to the three preregistered strict-support contrasts.\\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "outputs").mkdir()
+    (tmp_path / "outputs" / "main_study_inference.json").write_text(
+        '{"synthetic": true}\\n', encoding="utf-8"
+    )
+    publication = _commit(tmp_path, "publish-results", "frozen synthetic analysis\\n")
+    (tmp_path / "paper" / "MAIN_STUDY_REPORTING_COVER.md").write_text(
+        (Path(__file__).resolve().parents[1] / "paper" / "MAIN_STUDY_REPORTING_COVER.md")
+        .read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-m", "add reporting qualification")
     return tmp_path, Milestones(prior, treatment, recovery, plan, publication)
 
 
@@ -112,3 +127,66 @@ def test_rejects_shallow_history_even_when_current_plan_is_present(history, tmp_
     assert _git(shallow, "rev-parse", "--is-shallow-repository") == "true"
     with pytest.raises(FreezeChronologyError, match="non-shallow"):
         audit_history(shallow, milestones=milestones)
+
+
+def test_published_report_and_json_are_unchanged_with_committed_cover(history):
+    root, milestones = history
+    receipt = audit_history(root, milestones=milestones)
+    assert receipt["canonical_publication_report_bytes_unchanged"] is True
+    assert receipt["canonical_publication_inference_json_bytes_unchanged"] is True
+    assert receipt["historical_report_contains_unqualified_preregistration_wording"] is True
+    assert receipt["separate_committed_reporting_cover_checked"] is True
+    assert len(receipt["original_publication_sha256_by_path"]) == 2
+    assert len(receipt["reporting_cover_sha256"]) == 64
+    assert receipt["prospective_precollection_analysis_preregistration_established"] is False
+
+
+def test_rejects_working_copy_rewrite_of_historical_report(history):
+    root, milestones = history
+    (root / "paper" / "MAIN_STUDY_INFERENCE.md").write_text("new interpretation\\n")
+    with pytest.raises(FreezeChronologyError, match="canonical publication/report bytes changed"):
+        audit_history(root, milestones=milestones)
+
+
+def test_rejects_committed_rewrite_of_canonical_result_json(history):
+    root, milestones = history
+    (root / "outputs" / "main_study_inference.json").write_text('{"selected": true}\\n')
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "replace frozen numeric result")
+    with pytest.raises(FreezeChronologyError, match="canonical publication/report bytes changed"):
+        audit_history(root, milestones=milestones)
+
+
+def test_rejects_missing_or_symlinked_cover(history):
+    root, milestones = history
+    cover = root / "paper" / "MAIN_STUDY_REPORTING_COVER.md"
+    cover.unlink()
+    with pytest.raises(FreezeChronologyError, match="absent or oversized"):
+        audit_history(root, milestones=milestones)
+    cover.symlink_to(root / "paper" / "MAIN_STUDY_INFERENCE.md")
+    with pytest.raises(FreezeChronologyError, match="symlink"):
+        audit_history(root, milestones=milestones)
+
+
+def test_rejects_cover_omitting_precollection_qualification(history):
+    root, milestones = history
+    cover = root / "paper" / "MAIN_STUDY_REPORTING_COVER.md"
+    content = cover.read_text()
+    content = content.replace(
+        "prospective\nprecollection statistical preregistration is not established",
+        "prospective\nprecollection preregistration is certain",
+    )
+    assert content != cover.read_text()
+    cover.write_text(content)
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "delete historical qualification")
+    with pytest.raises(FreezeChronologyError, match="reporting cover lacks required claim"):
+        audit_history(root, milestones=milestones)
+
+
+def test_rejects_uncommitted_cover_rewrite(history):
+    root, milestones = history
+    cover = root / "paper" / "MAIN_STUDY_REPORTING_COVER.md"
+    cover.write_text(cover.read_text() + "\\nunsaved clarification\\n")
+    with pytest.raises(FreezeChronologyError, match="differs from committed HEAD"):
+        audit_history(root, milestones=milestones)

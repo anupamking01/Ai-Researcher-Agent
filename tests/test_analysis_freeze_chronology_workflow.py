@@ -30,6 +30,8 @@ def test_chronology_audit_triggers_on_its_own_contract_and_frozen_plan():
         "paper/RESEARCH_PROTOCOL.md",
         "paper/ANALYSIS_PLAN.md",
         "paper/MAIN_STUDY_INFERENCE.md",
+        "paper/MAIN_STUDY_REPORTING_COVER.md",
+        "outputs/main_study_inference.json",
     }
     for event in ("push", "pull_request"):
         assert needed <= set(workflow["on"][event]["paths"])
@@ -73,6 +75,9 @@ def test_chronology_receipt_does_not_elevate_claims_and_is_retained():
     ):
         assert f'receipt[claim] is False' in run
         assert status in run or 'for claim in (' in run
+    assert "canonical_publication_report_bytes_unchanged" in run
+    assert "canonical_publication_inference_json_bytes_unchanged" in run
+    assert "separate_committed_reporting_cover_checked" in run
     assert "chronology_receipt_sha256" in run
     assert "checkout_sha" in run
     upload = steps[3]

@@ -8,6 +8,7 @@ Requires an unshallowed checkout containing the pinned historical commits.
 from __future__ import annotations
 
 import argparse
+import hashlib
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -87,7 +88,9 @@ def audit_history(root: Path, *, milestones: Milestones = Milestones()) -> dict:
     if not frozen or frozen != head or frozen != plan_path.read_bytes():
         raise FreezeChronologyError("the historical analysis-plan bytes have changed")
 
+    reporting = _audit_reporting_boundary(root, milestones)
     return {
+        **reporting,
         "status": "verified_git_history_sequence_not_outcome_blinding",
         "historical_commit_shas": dict(refs),
         "prior_protocol_precedes_treatments_in_git": True,
@@ -99,6 +102,88 @@ def audit_history(root: Path, *, milestones: Milestones = Milestones()) -> dict:
         "pre_analysis_outcome_blinding_established": False,
         "original_treatment_authenticity_established": False,
         "human_validation_performed": False,
+    }
+
+
+
+# The original manuscript-facing report cannot be silently rewritten to correct
+# a retrospective scientific claim. Require a separately committed, qualified
+# cover whose wording is auditable alongside the preserved publication bytes.
+_FROZEN_REPORT_FILES = (
+    "paper/MAIN_STUDY_INFERENCE.md",
+    "outputs/main_study_inference.json",
+)
+_REPORTING_COVER = "paper/MAIN_STUDY_REPORTING_COVER.md"
+_LEGACY_CLAIM = b"three preregistered strict-support contrasts"
+_REQUIRED_COVER_CLAIMS = (
+    "prospective precollection statistical preregistration is not established",
+    "outcome blinding at the september 14 freeze is not established",
+    "designated primary contrasts",
+    "post-collection, pre-canonical-publication analysis",
+    "fixed-order temporal confounding",
+    "five-task pilot remains diagnostic",
+    "post-hoc exploratory diagnostics remain exploratory",
+    "human validation remains pending",
+    "original source custody remains unverified",
+    "main_study_inference.md",
+    "main_study_analysis_freeze_chronology.md",
+)
+
+
+def _reporting_regular_bytes(root: Path, relative: str, limit: int) -> bytes:
+    path = root / relative
+    # No redirected source/cover pathname may be presented as a repository file.
+    cursor = path
+    while cursor != root:
+        if cursor.is_symlink():
+            raise FreezeChronologyError(f"reporting source uses symlink: {relative}")
+        cursor = cursor.parent
+    if not path.is_file() or path.stat().st_size > limit:
+        raise FreezeChronologyError(f"reporting source is absent or oversized: {relative}")
+    return path.read_bytes()
+
+
+def _audit_reporting_boundary(root: Path, milestones: Milestones) -> dict:
+    publication_fingerprints = {}
+    for relative in _FROZEN_REPORT_FILES:
+        limit = 1024 * 1024 if relative.endswith(".json") else 256 * 1024
+        historical = _git(root, "show", f"{milestones.canonical_publication}:{relative}")
+        at_head = _git(root, "show", f"HEAD:{relative}")
+        working = _reporting_regular_bytes(root, relative, limit)
+        if not historical or historical != at_head or historical != working:
+            raise FreezeChronologyError(
+                f"canonical publication/report bytes changed: {relative}"
+            )
+        publication_fingerprints[relative] = hashlib.sha256(historical).hexdigest()
+
+    historic_report = _git(
+        root, "show",
+        f"{milestones.canonical_publication}:paper/MAIN_STUDY_INFERENCE.md",
+    )
+    if _LEGACY_CLAIM not in historic_report:
+        raise FreezeChronologyError(
+            "expected unqualified historical wording was not found in canonical report"
+        )
+
+    cover = _reporting_regular_bytes(root, _REPORTING_COVER, 64 * 1024)
+    if cover != _git(root, "show", f"HEAD:{_REPORTING_COVER}"):
+        raise FreezeChronologyError("reporting cover differs from committed HEAD")
+    try:
+        prose = cover.decode("utf-8").casefold()
+    except UnicodeDecodeError as exc:
+        raise FreezeChronologyError("reporting cover must be UTF-8") from exc
+    for claim in _REQUIRED_COVER_CLAIMS:
+        if claim not in prose:
+            raise FreezeChronologyError(f"reporting cover lacks required claim: {claim}")
+
+    return {
+        "canonical_publication_report_bytes_unchanged": True,
+        "canonical_publication_inference_json_bytes_unchanged": True,
+        "historical_report_contains_unqualified_preregistration_wording": True,
+        "separate_committed_reporting_cover_checked": True,
+        "original_publication_sha256_by_path": publication_fingerprints,
+        "reporting_cover_sha256": hashlib.sha256(cover).hexdigest(),
+        "reporting_scope": "postcollection_designated_primary_not_prospective_preregistration",
     }
 
 
