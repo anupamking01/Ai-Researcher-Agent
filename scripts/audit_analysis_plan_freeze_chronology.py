@@ -169,7 +169,7 @@ def _audit_reporting_boundary(root: Path, milestones: Milestones) -> dict:
     if cover != _git(root, "show", f"HEAD:{_REPORTING_COVER}"):
         raise FreezeChronologyError("reporting cover differs from committed HEAD")
     try:
-        prose = cover.decode("utf-8").casefold()
+        prose = " ".join(cover.decode("utf-8").casefold().split())
     except UnicodeDecodeError as exc:
         raise FreezeChronologyError("reporting cover must be UTF-8") from exc
     for claim in _REQUIRED_COVER_CLAIMS:

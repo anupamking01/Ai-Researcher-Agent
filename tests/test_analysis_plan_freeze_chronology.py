@@ -36,14 +36,14 @@ def history(tmp_path: Path) -> tuple[Path, Milestones]:
     recovery = _commit(tmp_path, "evaluator-recovery", "draft protocol placeholder\n")
     plan = _commit(tmp_path, "freeze-inference", "frozen synthetic analysis\n")
     (tmp_path / "paper" / "MAIN_STUDY_INFERENCE.md").write_text(
-        "Primary inference is limited to the three preregistered strict-support contrasts.\\n",
+        "Primary inference is limited to the three preregistered strict-support contrasts.\n",
         encoding="utf-8",
     )
     (tmp_path / "outputs").mkdir()
     (tmp_path / "outputs" / "main_study_inference.json").write_text(
-        '{"synthetic": true}\\n', encoding="utf-8"
+        '{"synthetic": true}\n', encoding="utf-8"
     )
-    publication = _commit(tmp_path, "publish-results", "frozen synthetic analysis\\n")
+    publication = _commit(tmp_path, "publish-results", "frozen synthetic analysis\n")
     (tmp_path / "paper" / "MAIN_STUDY_REPORTING_COVER.md").write_text(
         (Path(__file__).resolve().parents[1] / "paper" / "MAIN_STUDY_REPORTING_COVER.md")
         .read_text(encoding="utf-8"),
@@ -143,14 +143,14 @@ def test_published_report_and_json_are_unchanged_with_committed_cover(history):
 
 def test_rejects_working_copy_rewrite_of_historical_report(history):
     root, milestones = history
-    (root / "paper" / "MAIN_STUDY_INFERENCE.md").write_text("new interpretation\\n")
+    (root / "paper" / "MAIN_STUDY_INFERENCE.md").write_text("new interpretation\n")
     with pytest.raises(FreezeChronologyError, match="canonical publication/report bytes changed"):
         audit_history(root, milestones=milestones)
 
 
 def test_rejects_committed_rewrite_of_canonical_result_json(history):
     root, milestones = history
-    (root / "outputs" / "main_study_inference.json").write_text('{"selected": true}\\n')
+    (root / "outputs" / "main_study_inference.json").write_text('{"selected": true}\n')
     _git(root, "add", ".")
     _git(root, "commit", "-m", "replace frozen numeric result")
     with pytest.raises(FreezeChronologyError, match="canonical publication/report bytes changed"):
@@ -187,6 +187,6 @@ def test_rejects_cover_omitting_precollection_qualification(history):
 def test_rejects_uncommitted_cover_rewrite(history):
     root, milestones = history
     cover = root / "paper" / "MAIN_STUDY_REPORTING_COVER.md"
-    cover.write_text(cover.read_text() + "\\nunsaved clarification\\n")
+    cover.write_text(cover.read_text() + "\nunsaved clarification\n")
     with pytest.raises(FreezeChronologyError, match="differs from committed HEAD"):
         audit_history(root, milestones=milestones)
