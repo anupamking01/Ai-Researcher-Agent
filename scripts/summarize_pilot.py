@@ -12,7 +12,7 @@ import csv
 import json
 import math
 import statistics
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 
@@ -216,6 +216,10 @@ def _variant_summary(rows):
         items = grouped.get(variant, [])
         verified = [item for item in items if item["claims_checked"] > 0]
         costed = [item for item in items if item["estimated_cost_usd"] is not None]
+        uncosted = [item for item in items if item["estimated_cost_usd"] is None]
+        cost_status_counts = Counter(
+            item.get("cost_accounting_status") or "unspecified" for item in items
+        )
         summaries[variant] = {
             "n_runs": len(items),
             "n_completed": sum(1 for item in items if item["completed"]),
@@ -230,6 +234,9 @@ def _variant_summary(rows):
             "avg_total_tokens": _mean(item["total_tokens"] for item in items),
             "avg_estimated_cost_usd": _mean(item["estimated_cost_usd"] for item in costed),
             "costed_runs": len(costed),
+            "uncosted_runs": len(uncosted),
+            "uncosted_task_ids": sorted(item["task_id"] for item in uncosted),
+            "cost_accounting_status_counts": dict(sorted(cost_status_counts.items())),
             "avg_latency_seconds": _mean(item["latency_seconds"] for item in items),
             "avg_report_words": _mean(item["report_words"] for item in items),
             "avg_claim_support_rate_verified_only": _mean(
@@ -298,6 +305,7 @@ def _paired_operational_differences(rows):
         )
         missing_left_task_ids = []
         missing_right_task_ids = []
+        uncosted_pair_details = []
         for task_id in task_ids:
             a = by_key.get((left, task_id))
             b = by_key.get((right, task_id))
@@ -310,6 +318,20 @@ def _paired_operational_differences(rows):
             cost_delta = None
             if a["estimated_cost_usd"] is not None and b["estimated_cost_usd"] is not None:
                 cost_delta = b["estimated_cost_usd"] - a["estimated_cost_usd"]
+            else:
+                # Preserve a missing/unknown-price cost as missing, not zero.
+                # Never infer an all-task treatment cost effect from partial pairs.
+                uncosted_pair_details.append({
+                    "task_id": task_id,
+                    "left_cost_status": (
+                        a.get("cost_accounting_status") or "unspecified"
+                        if a["estimated_cost_usd"] is None else "costed"
+                    ),
+                    "right_cost_status": (
+                        b.get("cost_accounting_status") or "unspecified"
+                        if b["estimated_cost_usd"] is None else "costed"
+                    ),
+                })
             pairs.append(
                 {
                     "task_id": task_id,
@@ -320,14 +342,21 @@ def _paired_operational_differences(rows):
                     "successful_sources_delta": b["successful_source_count"] - a["successful_source_count"],
                 }
             )
+        costed_pairs = [
+            pair for pair in pairs if pair["estimated_cost_usd_delta"] is not None
+        ]
         comparisons[name] = {
             "n_tasks_union": len(task_ids),
             "n_pairs": len(pairs),
+            "n_costed_pairs": len(costed_pairs),
+            "n_uncosted_pairs": len(uncosted_pair_details),
+            "costed_pair_task_ids": [pair["task_id"] for pair in costed_pairs],
+            "uncosted_pair_details": uncosted_pair_details,
             "missing_left_task_ids": missing_left_task_ids,
             "missing_right_task_ids": missing_right_task_ids,
             "avg_total_tokens_delta": _mean(p["total_tokens_delta"] for p in pairs),
             "avg_estimated_cost_usd_delta": _mean(
-                p["estimated_cost_usd_delta"] for p in pairs
+                p["estimated_cost_usd_delta"] for p in costed_pairs
             ),
             "avg_latency_seconds_delta": _mean(p["latency_seconds_delta"] for p in pairs),
             "avg_model_calls_delta": _mean(p["model_calls_delta"] for p in pairs),
@@ -376,6 +405,7 @@ def main():
             "Verifier support rates are available only for verification variants.",
             "Estimated USD cost applies uncached input rates because cached-input tokens are not separately captured by the current usage ledger.",
             "Unknown model IDs are left uncosted rather than assigned an inferred price.",
+            "Cost means are complete-case descriptive estimates: costed/uncosted run and paired-task denominators, missing tasks, and recorded accounting statuses must accompany interpretation. Missing costs are not assumed random and are never imputed.",
             "Long-context pricing multipliers, if triggered, require separate review before publication claims.",
         ],
     }
