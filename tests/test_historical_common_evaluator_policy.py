@@ -35,6 +35,10 @@ jobs:
       SMART_LLM_MODEL: gpt-5.6-terra
       TEMPERATURE: "1"
     steps:
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
       - name: Run treatments
         run: python scripts/run_budget_main_study.py --max-agent-cost-usd 3.00
       - name: Run evaluator
@@ -47,6 +51,10 @@ jobs:
       SMART_LLM_MODEL: gpt-5.6-terra
       TEMPERATURE: "1"
     steps:
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
       - name: budget-main-study-34620917346
         with:
           run-id: 34620917346
@@ -95,6 +103,8 @@ def test_workflows_match_declared_core_and_different_purposes():
     (WORKFLOW.replace("--max-evaluator-cost-usd 1.25", "--max-evaluator-cost-usd 2"), False),
     (RECOVERY_WORKFLOW.replace("len(evals) != 37", "len(evals) != 36"), True),
     (RECOVERY_WORKFLOW + "\n      - name: Inject treatment\n        run: python scripts/run_budget_main_study.py --max-agent-cost-usd 3.00\n", True),
+    (WORKFLOW.replace("pip install -r requirements.txt", "pip install -r different.txt"), False),
+    (RECOVERY_WORKFLOW.replace("pip install -r requirements-dev.txt", "echo skipped"), True),
 ])
 def test_invalid_workflow_drift_rejected(mutated, recovered):
     with pytest.raises(audit.HistoricalEvaluatorPolicyError):
@@ -105,3 +115,43 @@ def test_checkout_fail_closed_on_substituted_git_blob(tmp_path, monkeypatch):
     monkeypatch.setattr(audit.history, "_git", lambda *args: b"0" * 40)
     with pytest.raises(audit.HistoricalEvaluatorPolicyError, match="blob mismatch"):
         audit.audit_checkout(tmp_path)
+
+
+
+def _shared_runtime_fixture():
+    sources = {}
+    for path in audit.RUNTIME_DEPENDENCY_BLOBS:
+        raw = (b"openai==0.27.10\n" if path == "requirements.txt"
+               else ("shared dependency " + path).encode())
+        for commit in (audit.ORIGINAL, audit.RECOVERY):
+            sources[(commit, path)] = raw
+    return sources
+
+
+def test_historical_shared_runtime_source_continuity():
+    source_hashes = audit.inspect_shared_runtime_dependencies(_shared_runtime_fixture())
+    assert set(source_hashes) == set(audit.RUNTIME_DEPENDENCY_BLOBS)
+    assert all(len(value) == 64 for value in source_hashes.values())
+
+
+@pytest.mark.parametrize("path", sorted(audit.RUNTIME_DEPENDENCY_BLOBS))
+def test_historical_shared_runtime_source_drift_rejected(path):
+    sources = _shared_runtime_fixture()
+    sources[(audit.RECOVERY, path)] += b"\n# unexpected code"
+    with pytest.raises(audit.HistoricalEvaluatorPolicyError, match="source drift"):
+        audit.inspect_shared_runtime_dependencies(sources)
+
+
+def test_historical_shared_runtime_missing_file_rejected():
+    sources = _shared_runtime_fixture()
+    del sources[(audit.ORIGINAL, "logic/usage.py")]
+    with pytest.raises(audit.HistoricalEvaluatorPolicyError, match="source drift"):
+        audit.inspect_shared_runtime_dependencies(sources)
+
+
+def test_historical_provider_client_pin_drift_rejected():
+    sources = _shared_runtime_fixture()
+    for commit in (audit.ORIGINAL, audit.RECOVERY):
+        sources[(commit, "requirements.txt")] = b"openai==1.0.0\n"
+    with pytest.raises(audit.HistoricalEvaluatorPolicyError, match="client pin"):
+        audit.inspect_shared_runtime_dependencies(sources)

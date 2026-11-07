@@ -126,8 +126,12 @@ jobs:
           assert evaluator["prompt_generator_bytes_identical"] is True
           assert evaluator["score_normalizer_bytes_identical"] is True
           assert evaluator["evaluator_core_call_ast_identical"] is True
+          assert evaluator["shared_runtime_dependency_bytes_identical"] is True
+          assert len(evaluator["shared_runtime_source_sha256"]) == 7
           assert evaluator["recovery_zero_successful_source_sentinel_added"] is True
-          for label in ("entire_evaluator_input_policy_identical",
+          for label in ("historical_installed_package_versions_authenticated",
+                        "historical_provider_execution_authenticated",
+                        "entire_evaluator_input_policy_identical",
                         "historical_execution_authenticated",
                         "original_37_evaluations_authenticated",
                         "recovered_3_evaluations_authenticated",

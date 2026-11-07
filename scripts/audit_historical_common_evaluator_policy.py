@@ -35,6 +35,23 @@ EXPECTED_BLOBS = {
     (RECOVERY, RECOVERY_WORKFLOW): "e5ef5a82ecc5cc0fc0337893bd2e82d147673098",
 }
 
+# Historical evaluator execution, usage and cost dependencies. These are
+# source-level checks, not evidence about installed packages or API responses.
+RUNTIME_DEPENDENCY_BLOBS = {
+    "agent/llm_utils.py": "bbc8daec4ae972f26851195dc59dd0ca1966d865",
+    "logic/usage.py": "336b7d96967395d368a962a751001f34b4fb8091",
+    "settings/config.py": "943e126fa0e7dcd19179b4f6aec827ce0fcb42ba",
+    "scripts/summarize_pilot.py": "08413f9d9ab7748cfed78c30ec1c189610c7fd14",
+    "experiments/openai_pricing_2026-09-08.json": "7082f89c2a2adb7e8fa1f006971e91f5ef84d282",
+    "requirements.txt": "ce750159fc65f1bd533c02891fd68177b5df324a",
+    "requirements-dev.txt": "fe93bd52ff68a801a663ec88fcde541a906b6f9c",
+}
+EXPECTED_BLOBS.update({
+    (commit, path): blob_sha
+    for commit in (ORIGINAL, RECOVERY)
+    for path, blob_sha in RUNTIME_DEPENDENCY_BLOBS.items()
+})
+
 class HistoricalEvaluatorPolicyError(ValueError):
     """The frozen Git source does not support the stated evaluator provenance."""
 
@@ -135,6 +152,12 @@ def inspect_workflow(raw: bytes, *, recovered: bool) -> None:
     ):
         if len(re.findall(pattern, workflow)) != 1:
             raise HistoricalEvaluatorPolicyError(f"historical workflow {label} changed")
+    # Both launch workflows must install the same pinned source dependencies.
+    for dependency in ("requirements.txt", "requirements-dev.txt"):
+        if len(re.findall(
+            rf"(?m)^\\s*pip install -r {re.escape(dependency)}\\s*$", workflow,
+        )) != 1:
+            raise HistoricalEvaluatorPolicyError(f"historical workflow install drift: {dependency}")
     if recovered:
         if ("run-id: 34620917346" not in workflow
                 or "name: budget-main-study-34620917346" not in workflow
@@ -148,6 +171,33 @@ def inspect_workflow(raw: bytes, *, recovered: bool) -> None:
         workflow,
     ):
         raise HistoricalEvaluatorPolicyError("original workflow lacks treatment invocation")
+
+def inspect_shared_runtime_dependencies(sources: dict[tuple[str, str], bytes]) -> dict[str, str]:
+    """Check independently pinned dependencies and return their SHA-256 hashes.
+
+    Comparing Git sources rules out *source drift* between the two historical
+    revisions. It does not prove which package wheels or provider versions ran.
+    """
+    fingerprints: dict[str, str] = {}
+    for path in RUNTIME_DEPENDENCY_BLOBS:
+        original = sources.get((ORIGINAL, path))
+        recovered = sources.get((RECOVERY, path))
+        if (not isinstance(original, bytes) or not original
+                or not isinstance(recovered, bytes) or original != recovered):
+            raise HistoricalEvaluatorPolicyError(
+                f"historical evaluator runtime dependency source drift: {path}"
+            )
+        fingerprints[path] = hashlib.sha256(original).hexdigest()
+    try:
+        requirement_lines = sources[(ORIGINAL, "requirements.txt")].decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise HistoricalEvaluatorPolicyError("historical requirements are not UTF-8") from exc
+    provider_pins = [line.strip() for line in requirement_lines
+                     if line.strip().lower().startswith("openai")]
+    if provider_pins != ["openai==0.27.10"]:
+        raise HistoricalEvaluatorPolicyError("historical OpenAI client pin changed")
+    return fingerprints
+
 
 def audit_checkout(root: Path) -> dict:
     root = root.resolve()
@@ -173,6 +223,7 @@ def audit_checkout(root: Path) -> dict:
         raise HistoricalEvaluatorPolicyError("score-normalizer bytes changed between phases")
     inspect_workflow(sources[(ORIGINAL, ORIGINAL_WORKFLOW)], recovered=False)
     inspect_workflow(sources[(RECOVERY, RECOVERY_WORKFLOW)], recovered=True)
+    runtime_fingerprints = inspect_shared_runtime_dependencies(sources)
     return {
         "schema_version": 1,
         "status": "pinned_historical_evaluator_source_policy_comparison_only",
@@ -188,6 +239,10 @@ def audit_checkout(root: Path) -> dict:
         "prompt_generator_bytes_identical": True,
         "score_normalizer_bytes_identical": True,
         "evaluator_core_call_ast_identical": True,
+        "shared_runtime_dependency_bytes_identical": True,
+        "shared_runtime_source_sha256": runtime_fingerprints,
+        "historical_installed_package_versions_authenticated": False,
+        "historical_provider_execution_authenticated": False,
         "original_empty_evidence_rejected": True,
         "recovery_zero_successful_source_sentinel_added": True,
         "entire_evaluator_input_policy_identical": False,
