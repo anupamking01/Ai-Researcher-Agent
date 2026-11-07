@@ -24,12 +24,14 @@ This project is an end-to-end planner/execution web-research system **and** an e
 | Common post-hoc claim-support evaluator | ✅ Implemented |
 | Frozen 10-task paired main-study design | ✅ Implemented |
 | Evaluator-only recovery without replacing treatments | ✅ Implemented |
-| Predeclared paired statistical analysis | ✅ Implemented and frozen |
+| Frozen paired statistical analysis | ✅ Implemented; plan postdates treatment and evaluator recovery |
 | Canonical recovered-study inference | ✅ Completed, provenance-verified, and preserved |
 | Secret-seeded, reproducible blinded human-evaluation packets | ✅ Implemented |
 | Pre-unblinding human-rating freeze/agreement tooling | ✅ Implemented |
 | Human rubric annotations | ⏳ Pending real annotators |
 | Final paper-level claims | ⏳ Pending human validation and manuscript synthesis |
+
+**Statistical-plan timing:** The exact paired analysis plan was committed after the historical treatment run and common-evaluator recovery. It was frozen before the canonical Git publication, but prospective precollection statistical preregistration and outcome blinding at the freeze are **not established**. See the [source-linked chronology and offline Git audit](docs/MAIN_STUDY_ANALYSIS_FREEZE_CHRONOLOGY.md). This does not alter the frozen estimates or imply that anyone inspected outcomes before writing the plan.
 
 A GitHub Actions workflow or recovery job can fail for operational reasons even when some treatment artifacts were produced. Final results must therefore be tied to the exact canonical artifact set and provenance used for analysis rather than inferred from a workflow label alone.
 
