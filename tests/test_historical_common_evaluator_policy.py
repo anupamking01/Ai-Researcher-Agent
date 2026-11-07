@@ -35,8 +35,10 @@ jobs:
       SMART_LLM_MODEL: gpt-5.6-terra
       TEMPERATURE: "1"
     steps:
-      - run: python scripts/run_budget_main_study.py --max-agent-cost-usd 3.00
-      - run: python scripts/evaluate_posthoc_support.py --max-evaluator-cost-usd 1.25
+      - name: Run treatments
+        run: python scripts/run_budget_main_study.py --max-agent-cost-usd 3.00
+      - name: Run evaluator
+        run: python scripts/evaluate_posthoc_support.py --max-evaluator-cost-usd 1.25
 '''
 RECOVERY_WORKFLOW = '''
 jobs:
@@ -48,8 +50,10 @@ jobs:
       - name: budget-main-study-34620917346
         with:
           run-id: 34620917346
-      - run: python scripts/evaluate_posthoc_support.py --max-evaluator-cost-usd 1.25
-      - run: |
+      - name: Run evaluator
+        run: python scripts/evaluate_posthoc_support.py --max-evaluator-cost-usd 1.25
+      - name: Preflight
+        run: |
           if len(evals) != 37:
               pass
           expected_missing = [('P6V','main-02'), ('P6V','main-08'), ('P6V','main-10')]
@@ -90,7 +94,7 @@ def test_workflows_match_declared_core_and_different_purposes():
     (WORKFLOW.replace('TEMPERATURE: "1"', 'TEMPERATURE: "0"'), False),
     (WORKFLOW.replace("--max-evaluator-cost-usd 1.25", "--max-evaluator-cost-usd 2"), False),
     (RECOVERY_WORKFLOW.replace("len(evals) != 37", "len(evals) != 36"), True),
-    (RECOVERY_WORKFLOW + "\n      - run: python scripts/run_budget_main_study.py --max-agent-cost-usd 3.00\n", True),
+    (RECOVERY_WORKFLOW + "\n      - name: Inject treatment\n        run: python scripts/run_budget_main_study.py --max-agent-cost-usd 3.00\n", True),
 ])
 def test_invalid_workflow_drift_rejected(mutated, recovered):
     with pytest.raises(audit.HistoricalEvaluatorPolicyError):
