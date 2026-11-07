@@ -15,6 +15,13 @@ import statistics
 from collections import Counter, defaultdict
 from pathlib import Path
 
+# Use the same ambiguity-rejecting JSON document parser as the postrun
+# validator; this offline summarizer is also routinely run on its own.
+try:
+    from .validate_pilot_artifacts import _load_json as _load_strict_pilot_json
+except ImportError:  # python scripts/summarize_pilot.py
+    from validate_pilot_artifacts import _load_json as _load_strict_pilot_json
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TRACE_ROOT = REPO_ROOT / "outputs" / "experiment_traces"
@@ -24,13 +31,45 @@ PRICING_FILE = REPO_ROOT / "experiments" / "openai_pricing_2026-09-08.json"
 VARIANT_ORDER = ("D6", "P6", "P6V")
 
 
+def _pilot_counter(trace, field):
+    """Preserve absent legacy counters but reject coercion of observed values."""
+    value = trace.get(field, 0)
+    if type(value) is not int or value < 0:
+        raise ValueError(f"pilot trace {field} must be a nonnegative integer")
+    return value
+
+
+def _pilot_measurement(trace, field, *, maximum=None):
+    """Reject invalid continuous telemetry before taking diagnostic means."""
+    value = trace.get(field, 0.0)
+    if type(value) not in (int, float) or value < 0:
+        raise ValueError(f"pilot trace {field} must be finite and nonnegative")
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:
+        finite = False
+    if not finite or (maximum is not None and value > maximum):
+        raise ValueError(f"pilot trace {field} must be finite and in range")
+    return float(value)
+
+
+def _pilot_completed(trace):
+    value = trace.get("completed", False)
+    if type(value) is not bool:
+        raise ValueError("pilot trace completed must be a boolean")
+    return value
+
+
 def _mean(values):
     values = [value for value in values if value is not None]
     return statistics.mean(values) if values else None
 
 
 def _load_pricing():
-    payload = json.loads(PRICING_FILE.read_text(encoding="utf-8"))
+    try:
+        payload = _load_strict_pilot_json(PRICING_FILE)
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
+        raise ValueError(f"invalid frozen pricing document {PRICING_FILE}: {exc}") from exc
     if payload.get("unit") != "per_1m_text_tokens":
         raise ValueError(f"Unsupported pricing unit in {PRICING_FILE}")
     return payload
@@ -142,8 +181,8 @@ def _load_traces(pricing):
             continue
         for path in sorted(variant_dir.glob("*.json")):
             try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (UnicodeError, json.JSONDecodeError, OSError) as exc:
+                payload = _load_strict_pilot_json(path)
+            except (UnicodeError, ValueError, OSError, RecursionError) as exc:
                 # Skipping a damaged run silently changes which pilot cells are
                 # selected for a descriptive comparison. Fail before publication.
                 raise ValueError(f"unreadable or malformed pilot trace: {path}") from exc
@@ -178,25 +217,25 @@ def _load_traces(pricing):
                     "task_set_id": trace.get("task_set_id") or experiment.get("task_set_id", ""),
                     "task_id": trace.get("task_id") or experiment.get("task_id", ""),
                     "run_id": trace.get("run_id", path.stem),
-                    "completed": bool(trace.get("completed", False)),
-                    "source_count": int(trace.get("source_count", 0) or 0),
-                    "successful_source_count": int(trace.get("successful_source_count", 0) or 0),
-                    "failed_source_count": int(trace.get("failed_source_count", 0) or 0),
-                    "search_call_count": int(trace.get("search_call_count", 0) or 0),
-                    "model_call_count": int(trace.get("model_call_count", 0) or 0),
-                    "prompt_tokens": int(trace.get("prompt_tokens", 0) or 0),
-                    "completion_tokens": int(trace.get("completion_tokens", 0) or 0),
-                    "total_tokens": int(trace.get("total_tokens", 0) or 0),
+                    "completed": _pilot_completed(trace),
+                    "source_count": _pilot_counter(trace, "source_count"),
+                    "successful_source_count": _pilot_counter(trace, "successful_source_count"),
+                    "failed_source_count": _pilot_counter(trace, "failed_source_count"),
+                    "search_call_count": _pilot_counter(trace, "search_call_count"),
+                    "model_call_count": _pilot_counter(trace, "model_call_count"),
+                    "prompt_tokens": _pilot_counter(trace, "prompt_tokens"),
+                    "completion_tokens": _pilot_counter(trace, "completion_tokens"),
+                    "total_tokens": _pilot_counter(trace, "total_tokens"),
                     "estimated_cost_usd": estimated_cost,
                     "cost_accounting_status": cost_status,
-                    "latency_seconds": float(trace.get("latency_seconds", 0.0) or 0.0),
-                    "report_words": int(trace.get("report_words", 0) or 0),
-                    "claims_checked": int(trace.get("verified_claim_count", 0) or 0),
-                    "supported_claim_count": int(trace.get("supported_claim_count", 0) or 0),
-                    "partially_supported_claim_count": int(trace.get("partially_supported_claim_count", 0) or 0),
-                    "unsupported_claim_count": int(trace.get("unsupported_claim_count", 0) or 0),
-                    "contradicted_claim_count": int(trace.get("contradicted_claim_count", 0) or 0),
-                    "claim_support_rate": float(trace.get("claim_support_rate", 0.0) or 0.0),
+                    "latency_seconds": _pilot_measurement(trace, "latency_seconds"),
+                    "report_words": _pilot_counter(trace, "report_words"),
+                    "claims_checked": _pilot_counter(trace, "verified_claim_count"),
+                    "supported_claim_count": _pilot_counter(trace, "supported_claim_count"),
+                    "partially_supported_claim_count": _pilot_counter(trace, "partially_supported_claim_count"),
+                    "unsupported_claim_count": _pilot_counter(trace, "unsupported_claim_count"),
+                    "contradicted_claim_count": _pilot_counter(trace, "contradicted_claim_count"),
+                    "claim_support_rate": _pilot_measurement(trace, "claim_support_rate", maximum=1.0),
                     "usage_accounting_status": trace.get("usage_accounting_status", ""),
                     "verification_status": trace.get("verification_status", ""),
                     "smart_model": trace.get("smart_model", ""),
