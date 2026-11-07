@@ -131,6 +131,31 @@ def _load_tasks(task_file: Path):
     return task_set_id, tasks
 
 
+def _require_fresh_pilot_workspace(output_root: Path) -> None:
+    """Refuse reuse of an output workspace before any provider work or writes.
+
+    Pilot reports, traces, summaries and checkpoints share `outputs/`. A
+    second invocation in that directory may replace its manifest/progress or
+    mix old and new reports, even when each invocation's plan has unique cells.
+    The runner never chooses which historical run to keep.
+    """
+    if output_root.is_symlink():
+        raise ValueError("pilot output root must not be a symlink")
+    if not output_root.exists():
+        return
+    if not output_root.is_dir():
+        raise ValueError("pilot output root must be a directory")
+    try:
+        occupied = next(output_root.iterdir(), None)
+    except OSError as exc:
+        raise ValueError("cannot inspect pilot output workspace") from exc
+    if occupied is not None:
+        raise ValueError(
+            "pilot output workspace is not empty; preserve earlier artifacts "
+            "and use a fresh checkout/workspace for a separate diagnostic run"
+        )
+
+
 def _git_commit():
     try:
         return subprocess.check_output(
@@ -163,10 +188,16 @@ def _write_manifest(task_set_id, tasks, variants, base_config):
         "cost_accounting": "not_computed_without_frozen_pricing_table",
     }
     path = output_root / "pilot_manifest.json"
-    path.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    # Exclusive creation also blocks two concurrent pilot processes from
+    # silently replacing one another's manifest after both pass preflight.
+    try:
+        with path.open("x", encoding="utf-8") as handle:
+            handle.write(json.dumps(manifest, indent=2, sort_keys=True))
+    except FileExistsError as exc:
+        raise SystemExit(
+            "Pilot aborted: pilot manifest already exists; "
+            "preserve the prior run rather than overwriting it"
+        ) from exc
     return path
 
 
@@ -290,6 +321,12 @@ async def main():
         tasks = _select_tasks(tasks, args.task_id)
         _validate_run_plan(task_set_id, tasks, args.variants)
     except ValueError as exc:
+        raise SystemExit(f"Pilot aborted: {exc}") from exc
+    # Perform the workspace-custody check before importing model code,
+    # writing checkpoints or initiating any live/API execution.
+    try:
+        _require_fresh_pilot_workspace(REPO_ROOT / "outputs")
+    except (ValueError, OSError) as exc:
         raise SystemExit(f"Pilot aborted: {exc}") from exc
     _check_environment()
 
