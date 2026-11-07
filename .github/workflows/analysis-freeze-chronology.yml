@@ -14,6 +14,7 @@ on:
       - docs/MAIN_STUDY_ANALYSIS_FREEZE_CHRONOLOGY.md
       - paper/RESEARCH_PROTOCOL.md
       - paper/ANALYSIS_PLAN.md
+      - paper/HUMAN_EVAL_ANALYSIS_PLAN.md
       - paper/MAIN_STUDY_INFERENCE.md
       - paper/MAIN_STUDY_REPORTING_COVER.md
       - outputs/main_study_inference.json
@@ -26,6 +27,7 @@ on:
       - docs/MAIN_STUDY_ANALYSIS_FREEZE_CHRONOLOGY.md
       - paper/RESEARCH_PROTOCOL.md
       - paper/ANALYSIS_PLAN.md
+      - paper/HUMAN_EVAL_ANALYSIS_PLAN.md
       - paper/MAIN_STUDY_INFERENCE.md
       - paper/MAIN_STUDY_REPORTING_COVER.md
       - outputs/main_study_inference.json
@@ -79,6 +81,10 @@ jobs:
           assert receipt["canonical_publication_inference_json_bytes_unchanged"] is True
           assert receipt["separate_committed_reporting_cover_checked"] is True
           assert receipt["historical_report_contains_unqualified_preregistration_wording"] is True
+          assert receipt["historical_human_analysis_plan_bytes_unchanged"] is True
+          assert receipt["historical_human_plan_contains_unqualified_automated_preregistration_wording"] is True
+          assert receipt["human_plan_freeze_does_not_backdate_automated_plan"] is True
+          assert len(receipt["historical_human_analysis_plan_sha256"]) == 64
           for claim in (
               "prospective_precollection_analysis_preregistration_established",
               "pre_analysis_outcome_blinding_established",

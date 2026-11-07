@@ -22,6 +22,7 @@ class Milestones:
     evaluator_recovery: str = "8733ce492abc74e7b2966ed22ce08d3fddec43ca"
     analysis_plan: str = "7352cae144e82e7862630db9501c00570adec640"
     canonical_publication: str = "1ddc84c261bc4207206e9e1d8724743392585598"
+    human_analysis_plan: str = "682d2861f1eaa988e196efcc492b0b23c9e838da"
 
 
 class FreezeChronologyError(ValueError):
@@ -73,6 +74,7 @@ def audit_history(root: Path, *, milestones: Milestones = Milestones()) -> dict:
         ("treatment", "evaluator_recovery"),
         ("evaluator_recovery", "analysis_plan"),
         ("analysis_plan", "canonical_publication"),
+        ("canonical_publication", "human_analysis_plan"),
     )
     for left, right in ordered:
         if not _ancestor(root, refs[left], refs[right]) or refs[left] == refs[right]:
@@ -114,6 +116,11 @@ _FROZEN_REPORT_FILES = (
     "outputs/main_study_inference.json",
 )
 _REPORTING_COVER = "paper/MAIN_STUDY_REPORTING_COVER.md"
+_HUMAN_PLAN_FILE = "paper/HUMAN_EVAL_ANALYSIS_PLAN.md"
+_HUMAN_PLAN_LEGACY_CLAIM = (
+    "the automated strict-support analysis remains the study's "
+    "preregistered confirmatory analysis"
+)
 _LEGACY_CLAIM = b"three preregistered strict-support contrasts"
 _REQUIRED_COVER_CLAIMS = (
     "prospective precollection statistical preregistration is not established",
@@ -127,6 +134,8 @@ _REQUIRED_COVER_CLAIMS = (
     "original source custody remains unverified",
     "main_study_inference.md",
     "main_study_analysis_freeze_chronology.md",
+    "human_eval_analysis_plan.md",
+    "does not retroactively establish prospective",
 )
 
 
@@ -165,6 +174,23 @@ def _audit_reporting_boundary(root: Path, milestones: Milestones) -> dict:
             "expected unqualified historical wording was not found in canonical report"
         )
 
+    # Preserve the independent human-analysis-plan freeze without backdating
+    # the earlier automated statistical plan or inventing outcome blinding.
+    human_original = _git(root, "show",
+                          f"{milestones.human_analysis_plan}:{_HUMAN_PLAN_FILE}")
+    human_head = _git(root, "show", f"HEAD:{_HUMAN_PLAN_FILE}")
+    human_working = _reporting_regular_bytes(root, _HUMAN_PLAN_FILE, 256 * 1024)
+    if not human_original or human_original != human_head or human_original != human_working:
+        raise FreezeChronologyError("frozen human-evaluation analysis plan bytes changed")
+    try:
+        human_prose = " ".join(human_original.decode("utf-8").casefold().split())
+    except UnicodeDecodeError as exc:
+        raise FreezeChronologyError("frozen human-analysis plan must be UTF-8") from exc
+    if _HUMAN_PLAN_LEGACY_CLAIM not in human_prose:
+        raise FreezeChronologyError(
+            "expected historical automated-preregistration claim absent from human plan"
+        )
+
     cover = _reporting_regular_bytes(root, _REPORTING_COVER, 64 * 1024)
     if cover != _git(root, "show", f"HEAD:{_REPORTING_COVER}"):
         raise FreezeChronologyError("reporting cover differs from committed HEAD")
@@ -179,6 +205,10 @@ def _audit_reporting_boundary(root: Path, milestones: Milestones) -> dict:
     return {
         "canonical_publication_report_bytes_unchanged": True,
         "canonical_publication_inference_json_bytes_unchanged": True,
+        "historical_human_analysis_plan_bytes_unchanged": True,
+        "historical_human_plan_contains_unqualified_automated_preregistration_wording": True,
+        "historical_human_analysis_plan_sha256": hashlib.sha256(human_original).hexdigest(),
+        "human_plan_freeze_does_not_backdate_automated_plan": True,
         "historical_report_contains_unqualified_preregistration_wording": True,
         "separate_committed_reporting_cover_checked": True,
         "original_publication_sha256_by_path": publication_fingerprints,

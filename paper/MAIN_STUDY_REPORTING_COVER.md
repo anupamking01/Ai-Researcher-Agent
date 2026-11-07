@@ -33,6 +33,19 @@ source custody remains unverified. No human ratings or inter-annotator
 agreement have been collected. This cover does not close evidence-recovery or
 blinded-distribution gates.
 
+## Separate human-evaluation analysis-plan chronology
+
+The [human-evaluation analysis plan](HUMAN_EVAL_ANALYSIS_PLAN.md) was committed
+on **25 September 2026**, after the automated canonical publication. It was
+frozen before collection of human ratings, which remain pending. Its historical
+description of the automated strict-support analysis as **"preregistered
+confirmatory"** is preserved as written, but this later human-evaluation plan
+**does not retroactively establish prospective** precollection statistical
+preregistration for the earlier automated experiment. The September 14 exact
+automated plan still postdates the September 11 treatments and September 13
+evaluator recovery; neither plan proves outcome blinding. This qualification
+is required when citing the human-evaluation plan beside automated results.
+
 **Citation practice:** Accompany the historical
 [main-study inference report](MAIN_STUDY_INFERENCE.md) with this cover and
 [the chronology audit](../docs/MAIN_STUDY_ANALYSIS_FREEZE_CHRONOLOGY.md).

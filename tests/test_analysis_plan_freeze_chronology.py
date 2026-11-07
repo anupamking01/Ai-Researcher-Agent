@@ -44,6 +44,12 @@ def history(tmp_path: Path) -> tuple[Path, Milestones]:
         '{"synthetic": true}\n', encoding="utf-8"
     )
     publication = _commit(tmp_path, "publish-results", "frozen synthetic analysis\n")
+    (tmp_path / "paper" / "HUMAN_EVAL_ANALYSIS_PLAN.md").write_text(
+        "The automated strict-support analysis remains the study's preregistered\n"
+        "confirmatory analysis under paper/ANALYSIS_PLAN.md.\n",
+        encoding="utf-8",
+    )
+    human_plan = _commit(tmp_path, "freeze-human-plan", "frozen synthetic analysis\n")
     (tmp_path / "paper" / "MAIN_STUDY_REPORTING_COVER.md").write_text(
         (Path(__file__).resolve().parents[1] / "paper" / "MAIN_STUDY_REPORTING_COVER.md")
         .read_text(encoding="utf-8"),
@@ -51,7 +57,7 @@ def history(tmp_path: Path) -> tuple[Path, Milestones]:
     )
     _git(tmp_path, "add", ".")
     _git(tmp_path, "commit", "-m", "add reporting qualification")
-    return tmp_path, Milestones(prior, treatment, recovery, plan, publication)
+    return tmp_path, Milestones(prior, treatment, recovery, plan, publication, human_plan)
 
 
 def test_good_history_is_explicitly_nonprospective(history):
@@ -136,6 +142,10 @@ def test_published_report_and_json_are_unchanged_with_committed_cover(history):
     assert receipt["canonical_publication_inference_json_bytes_unchanged"] is True
     assert receipt["historical_report_contains_unqualified_preregistration_wording"] is True
     assert receipt["separate_committed_reporting_cover_checked"] is True
+    assert receipt["historical_human_analysis_plan_bytes_unchanged"] is True
+    assert receipt["historical_human_plan_contains_unqualified_automated_preregistration_wording"] is True
+    assert receipt["human_plan_freeze_does_not_backdate_automated_plan"] is True
+    assert len(receipt["historical_human_analysis_plan_sha256"]) == 64
     assert len(receipt["original_publication_sha256_by_path"]) == 2
     assert len(receipt["reporting_cover_sha256"]) == 64
     assert receipt["prospective_precollection_analysis_preregistration_established"] is False
@@ -190,3 +200,41 @@ def test_rejects_uncommitted_cover_rewrite(history):
     cover.write_text(cover.read_text() + "\nunsaved clarification\n")
     with pytest.raises(FreezeChronologyError, match="differs from committed HEAD"):
         audit_history(root, milestones=milestones)
+
+def test_rejects_uncommitted_human_plan_rewrite(history):
+    root, milestones = history
+    path = root / "paper" / "HUMAN_EVAL_ANALYSIS_PLAN.md"
+    path.write_text("prospectively preregistered automated inference\n")
+    with pytest.raises(FreezeChronologyError, match="human-evaluation analysis plan bytes changed"):
+        audit_history(root, milestones=milestones)
+
+
+def test_rejects_committed_human_plan_rewrite(history):
+    root, milestones = history
+    path = root / "paper" / "HUMAN_EVAL_ANALYSIS_PLAN.md"
+    path.write_text("rewritten plan after outcome access\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "rewrite frozen human plan")
+    with pytest.raises(FreezeChronologyError, match="human-evaluation analysis plan bytes changed"):
+        audit_history(root, milestones=milestones)
+
+
+def test_rejects_missing_human_plan_reporting_qualification(history):
+    root, milestones = history
+    path = root / "paper" / "MAIN_STUDY_REPORTING_COVER.md"
+    original_text = path.read_text()
+    assert "does not retroactively establish prospective" in original_text
+    path.write_text(original_text.replace(
+        "does not retroactively establish prospective", "proves prospective"
+    ))
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "overclaim historical human plan")
+    with pytest.raises(FreezeChronologyError, match="reporting cover lacks required claim"):
+        audit_history(root, milestones=milestones)
+
+
+def test_rejects_human_plan_milestone_out_of_order(history):
+    root, milestones = history
+    inverted = replace(milestones, human_analysis_plan=milestones.canonical_publication)
+    with pytest.raises(FreezeChronologyError, match="historical order"):
+        audit_history(root, milestones=inverted)

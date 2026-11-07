@@ -65,6 +65,25 @@ postcollection limitation, fixed treatment-order confounding, unavailable
 original evidence, and pending human validation. It retains SHA-256 fingerprints
 of both historical files and the cover in its read-only receipt.
 
+## Human-evaluation plan cannot backdate automated preregistration
+
+The [human-evaluation analysis plan](../paper/HUMAN_EVAL_ANALYSIS_PLAN.md)
+entered Git on **25 September 2026** (commit
+[682d2861](https://github.com/anupamking01/Ai-Researcher-Agent/commit/682d2861f1eaa988e196efcc492b0b23c9e838da)), after the canonical
+automated analysis. It was frozen before any human ratings were collected;
+genuine human validation is still pending. Its preserved description of the
+**automated** strict-support tests as "preregistered confirmatory" cannot
+establish prospective precollection statistical preregistration for the earlier
+September 11 automated treatment runs.
+
+The full-history chronology verifier now checks that the human-analysis-plan
+bytes match their original September 25 Git commit, that commit's ancestry
+follows the automated canonical publication, and the separate reporting cover
+explicitly qualifies the misleading retrospective automated claim. Its receipt
+retains the human plan SHA-256 without rewriting its frozen bytes. These are
+historical Git-source and reporting checks, not human ratings or archival
+source-report authentication.
+
 This is a **reporting-context and Git-byte-continuity control**, not a proof
 that the frozen statistical method was planned before results were seen, a
 new statistical test, an independent source archive, or retroactive human
