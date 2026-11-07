@@ -36,8 +36,32 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
     progress = _load_json(progress_path)
     summary = _load_json(summary_path)
 
-    variants = [str(value) for value in manifest.get("variants", [])]
-    task_ids = [str(value) for value in manifest.get("task_ids", [])]
+    # Do not let set construction silently collapse a repeated treatment or
+    # task ID into a plausible-looking completed experimental matrix.
+    variants = manifest.get("variants")
+    task_ids = manifest.get("task_ids")
+    for name, values in (("variants", variants), ("task_ids", task_ids)):
+        if not isinstance(values, list) or not values:
+            errors.append(f"manifest {name} must be a nonempty list")
+            continue
+        if any(type(value) is not str or not value or value != value.strip() for value in values):
+            errors.append(f"manifest {name} has invalid identifiers")
+        if all(type(value) is str for value in values) and len(set(values)) != len(values):
+            errors.append(f"manifest {name} contains duplicates")
+    if isinstance(variants, list) and any(
+        type(value) is not str or value not in ("D6", "P6", "P6V") for value in variants
+    ):
+        errors.append("manifest variants contains unsupported treatment")
+    task_set_id = manifest.get("task_set_id")
+    if type(task_set_id) is not str or not task_set_id or task_set_id != task_set_id.strip():
+        errors.append("manifest task_set_id is invalid")
+    if errors:
+        return errors
+    for name, expected in (
+        ("variants", variants), ("task_ids", task_ids), ("task_set_id", task_set_id)
+    ):
+        if progress.get(name) != expected:
+            errors.append(f"progress {name} differs from manifest")
     expected_pairs = {(variant, task_id) for variant in variants for task_id in task_ids}
     expected_count = len(expected_pairs)
 
@@ -74,11 +98,32 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
         payload = _load_json(trace_file)
         experiment = payload.get("experiment", {})
         trace = payload.get("trace", {})
-        variant = str(experiment.get("variant_id") or trace.get("variant_id") or "")
-        task_id = str(experiment.get("task_id") or trace.get("task_id") or "")
+        if not isinstance(experiment, dict) or not isinstance(trace, dict):
+            errors.append(f"invalid pilot trace identity structure: {trace_file.name}")
+            continue
+        variant = experiment.get("variant_id") or trace.get("variant_id") or ""
+        task_id = experiment.get("task_id") or trace.get("task_id") or ""
         pair = (variant, task_id)
         label = f"{variant}/{task_id or trace_file.name}"
 
+        # The runner records both its declared cell and its execution trace.
+        # Either may be missing in legacy traces, but supplied identities may
+        # never disagree with each other or with the manifest/directory.
+        for name, expected in (
+            ("variant_id", variant),
+            ("task_id", task_id),
+            ("task_set_id", task_set_id),
+        ):
+            for source_name, source in (("experiment", experiment), ("trace", trace)):
+                recorded = source.get(name)
+                if recorded is not None and recorded != expected:
+                    errors.append(
+                        f"{label}: {source_name}.{name} disagrees with expected {expected!r}"
+                    )
+        if trace_file.parent.name != variant:
+            errors.append(
+                f"{label}: trace directory {trace_file.parent.name!r} disagrees with variant"
+            )
         if pair not in expected_pairs:
             errors.append(f"unexpected trace pair: {pair}")
         if pair in seen_pairs:

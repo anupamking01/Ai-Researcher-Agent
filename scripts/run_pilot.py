@@ -69,12 +69,66 @@ def _check_environment():
         raise SystemExit("TEMPERATURE must be a numeric value") from exc
 
 
+def _validate_run_plan(task_set_id, tasks, variants):
+    """Reject ambiguous pilot cells before spending model or browsing budget.
+
+    The execution loop must visit each intended treatment/task cell once.
+    Duplicate task IDs or variants otherwise create implicit retries, and a
+    later artifact may overwrite the first attempt without an explicit rule.
+    """
+    if type(task_set_id) is not str or not task_set_id or task_set_id != task_set_id.strip():
+        raise ValueError("pilot task_set_id must be a nonempty, unpadded string")
+    if not isinstance(tasks, list) or not tasks:
+        raise ValueError("pilot tasks must be a nonempty list")
+    if not isinstance(variants, (list, tuple)) or not variants:
+        raise ValueError("pilot variants must be a nonempty list")
+
+    seen_variants = set()
+    for variant in variants:
+        if type(variant) is not str or variant not in ("D6", "P6", "P6V"):
+            raise ValueError(f"unsupported pilot variant: {variant!r}")
+        if variant in seen_variants:
+            raise ValueError(f"duplicate pilot variant {variant!r}; no implicit reruns")
+        seen_variants.add(variant)
+
+    seen_tasks = set()
+    for index, task in enumerate(tasks, start=1):
+        if not isinstance(task, dict):
+            raise ValueError(f"pilot task {index} must be an object")
+        task_id = task.get("id")
+        if type(task_id) is not str or not task_id or task_id != task_id.strip():
+            raise ValueError(f"pilot task {index} has invalid id")
+        if task_id in seen_tasks:
+            raise ValueError(f"duplicate pilot task id {task_id!r}; no implicit reruns")
+        seen_tasks.add(task_id)
+        question = task.get("question")
+        if type(question) is not str or not question.strip():
+            raise ValueError(f"pilot task {task_id!r} has no question")
+
+
+def _select_tasks(tasks, requested_task_ids):
+    """Preserve frozen task order while refusing duplicate or unknown filters."""
+    if not requested_task_ids:
+        return tasks
+    if len(requested_task_ids) != len(set(requested_task_ids)):
+        raise ValueError("duplicate --task-id selection; supply each ID once")
+    selected_ids = set(requested_task_ids)
+    known_ids = {task["id"] for task in tasks}
+    missing = selected_ids - known_ids
+    if missing:
+        raise ValueError(f"unknown pilot task IDs: {sorted(missing)}")
+    return [task for task in tasks if task["id"] in selected_ids]
+
+
 def _load_tasks(task_file: Path):
     payload = json.loads(task_file.read_text(encoding="utf-8"))
-    tasks = payload.get("tasks", [])
-    if not tasks:
-        raise SystemExit(f"No tasks found in {task_file}")
-    return payload["task_set_id"], tasks
+    if not isinstance(payload, dict):
+        raise ValueError(f"pilot task file must contain an object: {task_file}")
+    tasks = payload.get("tasks")
+    task_set_id = payload.get("task_set_id")
+    # Check the complete source manifest before any optional CLI filtering.
+    _validate_run_plan(task_set_id, tasks, ("D6",))
+    return task_set_id, tasks
 
 
 def _git_commit():
@@ -229,14 +283,15 @@ async def main():
     )
     args = parser.parse_args()
 
+    # Validate source and selected design before writing a manifest, importing
+    # the agent, or initiating any paid/live work.
+    try:
+        task_set_id, tasks = _load_tasks(args.task_file)
+        tasks = _select_tasks(tasks, args.task_id)
+        _validate_run_plan(task_set_id, tasks, args.variants)
+    except ValueError as exc:
+        raise SystemExit(f"Pilot aborted: {exc}") from exc
     _check_environment()
-    task_set_id, tasks = _load_tasks(args.task_file)
-    if args.task_id:
-        selected = set(args.task_id)
-        tasks = [task for task in tasks if task["id"] in selected]
-        missing = selected - {task["id"] for task in tasks}
-        if missing:
-            raise SystemExit(f"Unknown task IDs: {sorted(missing)}")
 
     from logic.experiment import ExperimentConfig
 
