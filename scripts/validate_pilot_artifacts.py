@@ -7,6 +7,7 @@ into CI assertions so a run is only green when its artifacts are usable.
 
 from __future__ import annotations
 
+from collections import Counter
 import json
 import sys
 from pathlib import Path
@@ -18,6 +19,26 @@ DEFAULT_OUTPUT_ROOT = REPO_ROOT / "outputs"
 
 def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _source_url_list(
+    trace: dict, name: str, label: str, errors: list[str]
+) -> list[str] | None:
+    """Validate source identity before comparing per-stage retrieval accounting.
+
+    Strings are not URL lists, and padding/empty entries make exact source
+    matching ambiguous. Do not normalize away differences after collection.
+    """
+    values = trace.get(name)
+    if not isinstance(values, list) or any(
+        type(url) is not str or not url or url != url.strip()
+        for url in values
+    ):
+        errors.append(
+            f"{label}: {name} must be a list of nonempty, unpadded URL strings"
+        )
+        return None
+    return values
 
 
 def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
@@ -137,9 +158,24 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
         source_count = int(trace.get("source_count", 0) or 0)
         success_count = int(trace.get("successful_source_count", 0) or 0)
         failed_count = int(trace.get("failed_source_count", 0) or 0)
-        scheduled_urls = trace.get("scheduled_urls", []) or []
-        successful_urls = trace.get("successful_urls", []) or []
-        failed_urls = trace.get("failed_urls", []) or []
+        scheduled_urls = _source_url_list(trace, "scheduled_urls", label, errors)
+        successful_urls = _source_url_list(trace, "successful_urls", label, errors)
+        failed_urls = _source_url_list(trace, "failed_urls", label, errors)
+
+        # Each scheduled browse is an independent URL-budget unit. Counts and
+        # list lengths alone cannot detect reused URLs or an unrelated URL
+        # substituted into successful/failed evidence bookkeeping.
+        if scheduled_urls is not None and len(set(scheduled_urls)) != len(scheduled_urls):
+            errors.append(f"{label}: duplicate scheduled source URL")
+        if all(urls is not None for urls in (
+            scheduled_urls, successful_urls, failed_urls
+        )):
+            if Counter(scheduled_urls) != (
+                Counter(successful_urls) + Counter(failed_urls)
+            ):
+                errors.append(
+                    f"{label}: success/failure URLs do not partition scheduled source URLs"
+                )
 
         if source_count != source_budget:
             errors.append(
@@ -147,15 +183,15 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
             )
         if success_count < 1:
             errors.append(f"{label}: no successfully processed evidence sources")
-        if len(scheduled_urls) != source_count:
+        if scheduled_urls is not None and len(scheduled_urls) != source_count:
             errors.append(
                 f"{label}: scheduled_urls={len(scheduled_urls)} source_count={source_count}"
             )
-        if len(successful_urls) != success_count:
+        if successful_urls is not None and len(successful_urls) != success_count:
             errors.append(
                 f"{label}: successful_urls={len(successful_urls)} successful_source_count={success_count}"
             )
-        if len(failed_urls) != failed_count:
+        if failed_urls is not None and len(failed_urls) != failed_count:
             errors.append(
                 f"{label}: failed_urls={len(failed_urls)} failed_source_count={failed_count}"
             )
