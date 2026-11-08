@@ -46,13 +46,13 @@ def test_valid_synthetic_data():
 
 @pytest.mark.parametrize("bad", ["nan", "inf", "-inf", "-0.1", "not-a-number"])
 def test_invalid_treatment_measurement_rejected(bad):
-    with pytest.raises(audit.NumericInputError, match="numeric"):
+    with pytest.raises(audit.NumericInputError, match="numeric|nonfinite|negative"):
         _check(main_change={"treatment_cost_usd": bad})
 
 
 @pytest.mark.parametrize("bad", ["3.5", "-1", "nan", "inf", "oops"])
 def test_nonintegral_or_invalid_claim_counts_rejected(bad):
-    with pytest.raises(audit.NumericInputError, match="count|numeric"):
+    with pytest.raises(audit.NumericInputError, match="count|numeric|nonfinite|negative|fractional"):
         _check(support_change={"supported": bad})
 
 
