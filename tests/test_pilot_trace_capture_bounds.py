@@ -117,7 +117,9 @@ def test_detects_in_place_growth_during_descriptor_read(tmp_path, monkeypatch):
 
 def test_detects_pathname_replacement_during_descriptor_read(tmp_path, monkeypatch):
     path = _write(tmp_path)
-    replacement = tmp_path / "replacement.json"
+    # Keep the replacement staged outside the trace-root inventory.
+    # Otherwise the inventory correctly rejects it before capture begins.
+    replacement = tmp_path.parent / f"{tmp_path.name}-replacement.json"
     replacement.write_bytes(path.read_bytes())
     original_read = pilot.os.read
     replaced = False
