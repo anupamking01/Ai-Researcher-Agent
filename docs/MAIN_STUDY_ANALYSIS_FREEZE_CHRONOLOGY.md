@@ -89,3 +89,41 @@ that the frozen statistical method was planned before results were seen, a
 new statistical test, an independent source archive, or retroactive human
 validation. Original experimental artifacts and independent custody remain
 unverified. No source results or frozen analysis-plan bytes are altered.
+
+
+## Source-bound scope of the earlier protocol (9 November 2026)
+
+The chronology of Git commits alone does not prove that the **design actually
+written down before the treatments** was the same as the realized main-study
+matrix. The full-history audit now separately resolves the pre-treatment
+`paper/RESEARCH_PROTOCOL.md` Git blob at commit
+[e390c0de](https://github.com/anupamking01/Ai-Researcher-Agent/commit/e390c0de7001011c171d0161a6eb1b96517a3583).
+It requires the exact historical Git blob ID
+`706986c65eeb4628255198570e4e0f2fb48ee7ac`, reads only that Git
+object, and records its SHA-256 in the audit receipt. This source is **not**
+replaced by a later working-copy edit.
+
+The earlier protocol's explicitly labeled *minimum viable candidate matrix*
+listed **eight arms**: D3, D6, D12, P3, P6, P12, D6V, and P6V. The
+realized frozen treatment study used **four arms**: D3, D6, P6, P6V.
+The earlier text favored paired analysis but did **not** specify the later
+exact sign-flip/Holm three-test procedure. In particular, the earlier
+protocol's `D12 - D6` comparison is not a measured contrast in the
+four-arm main study. This is a **historical design-scope distinction**,
+not a post-hoc amendment to the canonical experiment, a new hypothesis
+test, or a claim that planning changes were driven by observed results.
+
+The offline `audit_analysis_plan_freeze_chronology` receipt now exposes
+`historical_prior_protocol_candidate_variants`,
+`realized_main_study_variants`,
+`prior_candidate_matrix_identical_to_realized_matrix` (**false**),
+and `prior_protocol_specified_later_exact_holm_signflip_procedure`
+(**false**). CI checks these negative claims and the pinned Git blob,
+with synthetic tests covering misleading matrix edits and a substituted
+historical blob. A passing test establishes only **source consistency of
+the documented Git revision** and the described discrepancy. It cannot
+prove what experimenters privately planned, when they learned results,
+whether original treatment evidence survives, or whether human
+annotations exist. The pilot remains diagnostic, the fixed automated
+analysis remains post-collection and qualified, secondary sensitivity work
+remains exploratory, and human validation is still pending.
