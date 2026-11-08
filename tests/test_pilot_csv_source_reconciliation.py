@@ -1,6 +1,7 @@
 """Synthetic, offline source-to-CSV reconciliation tests for pilot schema v5."""
 import csv
 import json
+import os
 
 import pytest
 
@@ -147,3 +148,67 @@ def test_v5_unknown_price_is_exported_as_missing(tmp_path, monkeypatch):
     row["estimated_cost_usd"] = "0"
     _save_rows(tmp_path, fields, rows)
     assert "estimated_cost_usd" in _errors(tmp_path)
+
+
+def test_v5_rejects_oversized_export_before_csv_parsing(tmp_path, monkeypatch):
+    from scripts import audit_pilot_runs_csv as auditor
+
+    _fixture(tmp_path, monkeypatch)
+    path = tmp_path / "pilot_runs.csv"
+    with path.open("ab") as handle:
+        handle.write(b"x" * (auditor.MAX_PILOT_RUNS_CSV_BYTES + 1))
+    assert "exceeds bounded capture size" in _errors(tmp_path)
+
+
+def test_v5_rejects_hardlinked_export(tmp_path, monkeypatch):
+    _fixture(tmp_path, monkeypatch)
+    path = tmp_path / "pilot_runs.csv"
+    os.link(path, tmp_path / "unreviewed-pilot-copy.csv")
+    assert "non-aliased regular file" in _errors(tmp_path)
+
+
+def test_capture_rejects_same_byte_path_replacement(tmp_path, monkeypatch):
+    from scripts import audit_pilot_runs_csv as auditor
+
+    path = tmp_path / "pilot_runs.csv"
+    replacement = tmp_path / "replacement.csv"
+    path.write_bytes(b"header\nrow\n")
+    replacement.write_bytes(path.read_bytes())
+    original_read = os.read
+    replaced = False
+
+    def swap_after_first_read(fd, size):
+        nonlocal replaced
+        data = original_read(fd, size)
+        if data and not replaced:
+            os.replace(replacement, path)
+            replaced = True
+        return data
+
+    monkeypatch.setattr(auditor.os, "read", swap_after_first_read)
+    with pytest.raises(ValueError, match="changed during bounded capture"):
+        auditor._read_bounded_pilot_csv(path)
+    assert replaced
+
+
+def test_capture_rejects_in_place_growth_during_read(tmp_path, monkeypatch):
+    from scripts import audit_pilot_runs_csv as auditor
+
+    path = tmp_path / "pilot_runs.csv"
+    path.write_bytes(b"header\nrow\n")
+    original_read = os.read
+    grew = False
+
+    def grow_after_first_read(fd, size):
+        nonlocal grew
+        data = original_read(fd, size)
+        if data and not grew:
+            with path.open("ab") as handle:
+                handle.write(b"unreviewed extra data")
+            grew = True
+        return data
+
+    monkeypatch.setattr(auditor.os, "read", grow_after_first_read)
+    with pytest.raises(ValueError, match="changed during bounded capture"):
+        auditor._read_bounded_pilot_csv(path)
+    assert grew

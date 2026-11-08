@@ -7,8 +7,11 @@ downstream products, so every exported field is checked against source data.
 from __future__ import annotations
 
 import csv
+import io
 import json
 import math
+import os
+import stat
 from pathlib import Path
 
 COLUMNS = (
@@ -41,6 +44,59 @@ COUNTERS = {
 }
 FLOATS = {"latency_seconds", "claim_support_rate", "estimated_cost_usd"}
 TEXT = ("usage_accounting_status", "verification_status", "smart_model", "fast_model")
+
+
+# A diagnostic five-task, three-treatment CSV is small. Reject unexpectedly
+# large/unbounded or aliased workspaces before parsing a research export.
+MAX_PILOT_RUNS_CSV_BYTES = 2 * 1024 * 1024
+
+
+def _read_bounded_pilot_csv(path: Path) -> str:
+    """Capture a single bounded regular-file generation, not a moving path.
+
+    Holding a descriptor prevents a path swap from changing the bytes mid-read;
+    pre/post descriptor and path metadata reject observed mutation or aliasing.
+    This is a local input-integrity guard, not external trace authentication.
+    """
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise ValueError("secure no-follow CSV capture is unavailable")
+    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    fd = os.open(path, flags)
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise ValueError("pilot_runs.csv must be a non-aliased regular file")
+        if before.st_size > MAX_PILOT_RUNS_CSV_BYTES:
+            raise ValueError("pilot_runs.csv exceeds bounded capture size")
+        chunks = []
+        captured = 0
+        while True:
+            block = os.read(
+                fd, min(65536, MAX_PILOT_RUNS_CSV_BYTES + 1 - captured)
+            )
+            if not block:
+                break
+            captured += len(block)
+            if captured > MAX_PILOT_RUNS_CSV_BYTES:
+                raise ValueError("pilot_runs.csv exceeds bounded capture size")
+            chunks.append(block)
+        after = os.fstat(fd)
+        current = os.lstat(path)
+
+        def identity(value):
+            return (
+                value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+                value.st_size, value.st_mtime_ns, value.st_ctime_ns,
+            )
+
+        if (identity(before) != identity(after)
+                or identity(after) != identity(current)
+                or captured != before.st_size):
+            raise ValueError("pilot_runs.csv changed during bounded capture")
+        return b"".join(chunks).decode("utf-8")
+    finally:
+        os.close(fd)
 
 
 def _source_counter(trace, field):
@@ -162,7 +218,7 @@ def audit_pilot_runs_csv(
         return [f"pilot_runs.csv source reconciliation unavailable: {exc}"]
     seen = set()
     try:
-        with csv_path.open("r", encoding="utf-8", newline="") as handle:
+        with io.StringIO(_read_bounded_pilot_csv(csv_path), newline="") as handle:
             reader = csv.DictReader(handle, strict=True)
             if reader.fieldnames != list(COLUMNS):
                 return ["pilot_runs.csv header must match the frozen per-run column schema"]
