@@ -173,7 +173,31 @@ def _estimate_reported_token_cost(provider_usage_by_model, pricing):
         return None, "no_reported_tokens"
     return total_cost, "estimated_from_frozen_uncached_rates"
 
+def _validate_pilot_trace_inventory():
+    """Refuse hidden evidence candidates before selecting diagnostic-pilot rows.
+
+    glob("*.json") silently ignores unexpected arm directories, nested
+    artifacts, staging files, and symlinks. Their presence makes the source
+    set ambiguous even when every *selected* trace is well formed.
+    """
+    if TRACE_ROOT.is_symlink():
+        raise ValueError("pilot trace root must not be a symlink")
+    if not TRACE_ROOT.exists():
+        return
+    if not TRACE_ROOT.is_dir():
+        raise ValueError("pilot trace root must be a directory")
+    for variant_dir in TRACE_ROOT.iterdir():
+        if (variant_dir.is_symlink() or not variant_dir.is_dir()
+                or variant_dir.name not in VARIANT_ORDER):
+            raise ValueError(f"unselected pilot trace directory or entry: {variant_dir}")
+        for entry in variant_dir.iterdir():
+            if entry.is_symlink() or not entry.is_file() or entry.suffix != ".json":
+                raise ValueError(f"unselected pilot trace entry: {entry}")
+
+
 def _load_traces(pricing):
+    # Inventory the entire root, not only files matched by known-arm globbing.
+    _validate_pilot_trace_inventory()
     rows = []
     for variant in VARIANT_ORDER:
         variant_dir = TRACE_ROOT / variant
@@ -192,19 +216,42 @@ def _load_traces(pricing):
                 raise ValueError(f"invalid pilot trace structure: {path}")
             trace, experiment = payload["trace"], payload["experiment"]
             for field in ("variant_id", "task_set_id", "task_id"):
+                # A supplied empty, false, or wrong-type identifier cannot be
+                # replaced by the other record's value via truthy fallback.
+                for source_name, source in (("trace", trace), ("experiment", experiment)):
+                    if field in source:
+                        value = source[field]
+                        if (type(value) is not str or not value
+                                or value != value.strip()):
+                            raise ValueError(
+                                f"invalid pilot {source_name}.{field}: {path}"
+                            )
                 recorded = trace.get(field)
                 declared = experiment.get(field)
-                if recorded and declared and recorded != declared:
+                if recorded is not None and declared is not None and recorded != declared:
                     raise ValueError(
                         f"pilot trace/experiment {field} mismatch: {path}"
                     )
-            declared_variant = (
-                trace.get("variant_id") or experiment.get("variant_id") or variant
-            )
+            declared_variant = trace.get("variant_id") or experiment.get("variant_id")
+            if declared_variant is None:
+                raise ValueError(f"missing pilot variant_id in trace and experiment: {path}")
             if declared_variant != variant:
                 raise ValueError(
                     f"pilot trace variant disagrees with directory {variant}: {path}"
                 )
+            for field in ("task_set_id", "task_id"):
+                if field not in trace and field not in experiment:
+                    raise ValueError(
+                        f"missing pilot {field} in trace and experiment: {path}"
+                    )
+            # The create-only trace publisher names each file by run_id.
+            # An absent legacy run_id still uses the explicit file stem,
+            # but a *supplied* run_id must not contradict the source filename.
+            run_id = trace.get("run_id", path.stem)
+            if type(run_id) is not str or not run_id or run_id != run_id.strip():
+                raise ValueError(f"invalid pilot trace run_id: {path}")
+            if run_id != path.stem:
+                raise ValueError(f"pilot trace run_id disagrees with filename: {path}")
 
             by_model = trace.get("provider_usage_by_model", {})
             _verify_provider_usage_ledger(trace, by_model)
@@ -216,7 +263,7 @@ def _load_traces(pricing):
                     "variant_id": trace.get("variant_id") or experiment.get("variant_id") or variant,
                     "task_set_id": trace.get("task_set_id") or experiment.get("task_set_id", ""),
                     "task_id": trace.get("task_id") or experiment.get("task_id", ""),
-                    "run_id": trace.get("run_id", path.stem),
+                    "run_id": run_id,
                     "completed": _pilot_completed(trace),
                     "source_count": _pilot_counter(trace, "source_count"),
                     "successful_source_count": _pilot_counter(trace, "successful_source_count"),
