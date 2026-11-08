@@ -24,7 +24,8 @@ def _rows():
         "claims_checked": "4", "supported": "2", "partially_supported": "1",
         "unsupported": "1", "contradicted": "0",
         "strict_support_rate": "0.5", "total_tokens": "80",
-        "estimated_cost_usd": "0.004",
+        "estimated_cost_usd": "0.004", "run_id": "synthetic-eval-001",
+        "evidence_status": "",
     }]
     return main, support
 
@@ -207,3 +208,62 @@ def test_numeric_receipt_rechecks_captured_csv_after_parsing(tmp_path, monkeypat
     monkeypatch.setattr(audit, "audit_rows", synthetic_validator)
     with pytest.raises(audit.NumericInputError, match="changed before audit receipt"):
         audit.audit_files(tmp_path)
+
+
+def test_reject_combined_successful_and_failed_sources_over_budget():
+    # Previously each individual count was nonnegative but their sum was unchecked.
+    with pytest.raises(audit.NumericInputError, match="successful plus failed"):
+        _check(main_change={"successful_sources": "2", "failed_sources": "2"})
+
+
+def test_accept_zero_source_sentinel_with_all_unsupported_claims():
+    result = _check(
+        main_change={"successful_sources": "0", "failed_sources": "3",
+                     "posthoc_strict_support_rate": "0"},
+        support_change={"evidence_status": "zero_successful_sources",
+                        "supported": "0", "partially_supported": "0",
+                        "unsupported": "4", "strict_support_rate": "0"},
+    )
+    assert result["n_cells"] == 1
+
+
+def test_reject_zero_source_cell_without_explicit_evidence_sentinel():
+    with pytest.raises(audit.NumericInputError, match="lacks evaluator evidence sentinel"):
+        _check(main_change={"successful_sources": "0", "failed_sources": "3"})
+
+
+@pytest.mark.parametrize("parts", [
+    {"supported": "2", "partially_supported": "1", "unsupported": "1",
+     "strict_support_rate": "0.5"},
+    {"supported": "0", "partially_supported": "1", "unsupported": "3",
+     "strict_support_rate": "0"},
+    {"supported": "0", "partially_supported": "0", "unsupported": "3",
+     "contradicted": "1", "strict_support_rate": "0"},
+])
+def test_reject_evidence_dependent_labels_without_any_successful_source(parts):
+    with pytest.raises(audit.NumericInputError, match="evidence-dependent labels"):
+        _check(main_change={"successful_sources": "0", "failed_sources": "3"},
+               support_change={"evidence_status": "zero_successful_sources", **parts})
+
+
+def test_reject_zero_source_sentinel_when_sources_succeeded():
+    with pytest.raises(audit.NumericInputError, match="sentinel contradicts"):
+        _check(support_change={"evidence_status": "zero_successful_sources"})
+
+
+@pytest.mark.parametrize("run_id", ["", "  ", None])
+def test_reject_missing_evaluator_run_id(run_id):
+    with pytest.raises(audit.NumericInputError, match="missing or duplicate evaluator run_id"):
+        _check(support_change={"run_id": run_id})
+
+
+def test_reject_reused_evaluator_run_id_across_different_cells():
+    main, support = _rows()
+    second_main = {**main[0], "task_id": "synthetic-second"}
+    second_support = {**support[0], "task_id": "synthetic-second"}
+    with pytest.raises(audit.NumericInputError, match="duplicate evaluator run_id"):
+        audit.audit_rows(
+            [main[0], second_main], [support[0], second_support],
+            variants=("D3",), tasks=("synthetic-only", "synthetic-second"),
+            budgets={"D3": 3},
+        )

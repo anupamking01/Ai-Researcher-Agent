@@ -86,10 +86,16 @@ def audit_rows(
         budgets = BUDGETS
     main = _matrix(main_rows, "treatment", variants, tasks)
     support = _matrix(support_rows, "common evaluator", variants, tasks)
+    seen_evaluator_runs: set[str] = set()
     for variant in variants:
         for task in tasks:
             label = f"{variant}/{task}"
             m, e = main[(variant, task)], support[(variant, task)]
+            run_id = e.get("run_id")
+            if (not isinstance(run_id, str) or not run_id.strip()
+                    or run_id in seen_evaluator_runs):
+                raise NumericInputError(f"{label}: missing or duplicate evaluator run_id")
+            seen_evaluator_runs.add(run_id)
             if str(m.get("completed", "")).strip().lower() not in ("true", "1", "yes"):
                 raise NumericInputError(f"{label}: incomplete treatment")
             budget = _count(m, "source_budget", label)
@@ -98,8 +104,12 @@ def audit_rows(
             for key in ("successful_sources", "failed_sources", "search_calls",
                         "model_calls", "total_tokens", "report_words"):
                 _count(m, key, label)
-            if _count(m, "successful_sources", label) > budget:
-                raise NumericInputError(f"{label}: successful sources exceed budget")
+            successful = _count(m, "successful_sources", label)
+            failed = _count(m, "failed_sources", label)
+            if successful + failed > budget:
+                raise NumericInputError(
+                    f"{label}: successful plus failed sources exceed budget"
+                )
             for key in ("treatment_cost_usd", "latency_seconds"):
                 _number(m, key, label)
 
@@ -111,6 +121,20 @@ def audit_rows(
             )]
             if sum(parts) != claims:
                 raise NumericInputError(f"{label}: evaluator claim-count partition mismatch")
+            evidence_status = e.get("evidence_status", "")
+            if successful == 0:
+                if evidence_status != "zero_successful_sources":
+                    raise NumericInputError(
+                        f"{label}: zero-source cell lacks evaluator evidence sentinel"
+                    )
+                if parts != [0, 0, claims, 0]:
+                    raise NumericInputError(
+                        f"{label}: zero-source cell contains evidence-dependent labels"
+                    )
+            elif evidence_status == "zero_successful_sources":
+                raise NumericInputError(
+                    f"{label}: zero-evidence sentinel contradicts retrieved sources"
+                )
             ratio = Decimal(parts[0]) / Decimal(claims)
             _rate(e, "strict_support_rate", ratio, label)
             _rate(m, "posthoc_strict_support_rate", ratio, label)

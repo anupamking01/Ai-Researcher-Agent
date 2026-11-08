@@ -19,6 +19,13 @@ missing/duplicate treatment/task cells, and rates inconsistent with
 supported/checked counts. It crosschecks the treatment CSV's mirrored
 post-hoc claim count, strict rate and evaluator cost with the common
 evaluator CSV, and verifies the frozen treatment browse-budget limits.
+The source budget applies to **successful plus failed** retrieval slots, not
+only successful ones. Each evaluator record must have a nonempty run ID unique
+across all 40 cells. A treatment with zero successful sources must carry the
+`zero_successful_sources` evaluator sentinel and classify every checked claim
+as unsupported, never as supported, partially supported, or contradicted;
+nonzero-source cells cannot carry that sentinel. These are source/evaluator
+accounting constraints, not claims about the authenticity of original traces.
 Small decimal export discrepancies up to absolute `1e-12` are accepted
 for rates and cost mirrors. Each observed 10-task × four-arm cell is
 included; zero-successful-source treatments remain valid.
