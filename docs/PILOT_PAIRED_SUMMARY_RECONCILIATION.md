@@ -10,8 +10,8 @@ treatment-effect estimates. This check prevents silent drift between selected
 raw trace evidence and the reported paired operational comparison.
 
 The offline summarizer now marks newly produced summaries with
-`schema_version: 1`. For that version, the postrun validator requires the
-paired-comparison section. It independently rebuilds the two frozen
+`schema_version: 2` (legacy `schema_version: 1` is also accepted).
+For either version, the postrun validator requires the paired-comparison section. It independently rebuilds the two frozen
 comparison matrices (P6 minus D6; P6V minus P6) from the manifest-selected
 trace cells. It checks the task union, paired denominator, missing-arm task
 identities, exact per-task token/model-call/success-source differences, and
@@ -25,9 +25,11 @@ those comparisons are still checked; missing pre-version rows are **not**
 represented as independently audited. This is an internal cross-artifact
 consistency assertion, not signed historical source custody.
 
-The check **does not** validate price estimates, model-rate applicability,
-long-context surcharges, or cost-missingness denominators; those require
-independent frozen-pricing and accounting review. It does not score report
+The legacy v1 paired-metric check **does not** validate USD estimates or
+cost-missingness denominators; the schema-v2 independent frozen-price check
+below adds those internal accounting assertions. Neither check can validate
+external model-rate applicability, cached-input discounts or long-context
+pricing surcharges; these still require independent review. It does not score report
 quality or recover expired treatment/evaluator artifacts. It does not change
 task selection, treatment ordering, collected traces, or frozen outcomes.
 
