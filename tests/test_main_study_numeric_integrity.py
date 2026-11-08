@@ -1,6 +1,7 @@
 """Synthetic numeric-input integrity regressions; no analyzer or treatment reruns."""
 
 import copy
+import os
 
 import pytest
 
@@ -106,3 +107,103 @@ def test_frozen_csv_inputs_have_internally_consistent_numeric_fields():
     assert result["n_tasks"] == 10
     assert result["status"].endswith("not_original_source_authenticity")
     assert len(result["input_sha256"]) == 2
+
+
+def _synthetic_csv_path(tmp_path, content=b"variant_id,task_id\nD3,main-01\n"):
+    output = tmp_path / "outputs"
+    output.mkdir()
+    path = output / "main_study_runs.csv"
+    path.write_bytes(content)
+    return path
+
+
+def test_csv_capture_reads_exact_synthetic_bytes(tmp_path):
+    source = _synthetic_csv_path(tmp_path)
+    assert audit._csv_bytes(tmp_path, audit.MAIN_PATH) == source.read_bytes()
+
+
+def test_csv_capture_rejects_file_symlink(tmp_path):
+    destination = _synthetic_csv_path(tmp_path)
+    other = tmp_path / "other.csv"
+    destination.replace(other)
+    destination.symlink_to(other)
+    with pytest.raises(audit.NumericInputError, match="redirected|changed"):
+        audit._csv_bytes(tmp_path, audit.MAIN_PATH)
+
+
+def test_csv_capture_rejects_symlinked_parent_directory(tmp_path):
+    real = tmp_path / "real_outputs"
+    real.mkdir()
+    (real / "main_study_runs.csv").write_bytes(b"variant_id,task_id\n")
+    (tmp_path / "outputs").symlink_to(real, target_is_directory=True)
+    with pytest.raises(audit.NumericInputError, match="redirected|changed"):
+        audit._csv_bytes(tmp_path, audit.MAIN_PATH)
+
+
+def test_csv_capture_rejects_hardlinked_file(tmp_path):
+    source = _synthetic_csv_path(tmp_path)
+    os.link(source, tmp_path / "alias.csv")
+    with pytest.raises(audit.NumericInputError, match="single-linked"):
+        audit._csv_bytes(tmp_path, audit.MAIN_PATH)
+
+
+def test_csv_capture_rejects_oversize_sparse_file_without_reading(tmp_path):
+    source = _synthetic_csv_path(tmp_path)
+    with source.open("wb") as handle:
+        handle.truncate(audit.MAX_CSV_BYTES + 1)
+    with pytest.raises(audit.NumericInputError, match="exceeds 2 MiB"):
+        audit._csv_bytes(tmp_path, audit.MAIN_PATH)
+
+
+def test_csv_capture_detects_pathname_replacement_during_read(tmp_path, monkeypatch):
+    source = _synthetic_csv_path(tmp_path)
+    original_pread = os.pread
+    swapped = False
+
+    def replace_during_read(fd, count, offset):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            source.rename(tmp_path / "old.csv")
+            source.write_bytes(b"variant_id,task_id\nP6,main-01\n")
+        return original_pread(fd, count, offset)
+
+    monkeypatch.setattr(audit.os, "pread", replace_during_read)
+    with pytest.raises(audit.NumericInputError, match="changed"):
+        audit._csv_bytes(tmp_path, audit.MAIN_PATH)
+
+
+def test_csv_capture_detects_in_place_edit_during_read(tmp_path, monkeypatch):
+    source = _synthetic_csv_path(tmp_path)
+    original_pread = os.pread
+    mutated = False
+
+    def mutate_during_read(fd, count, offset):
+        nonlocal mutated
+        chunk = original_pread(fd, count, offset)
+        if not mutated:
+            mutated = True
+            with source.open("r+b") as handle:
+                handle.seek(0)
+                handle.write(b"X")
+        return chunk
+
+    monkeypatch.setattr(audit.os, "pread", mutate_during_read)
+    with pytest.raises(audit.NumericInputError, match="changed"):
+        audit._csv_bytes(tmp_path, audit.MAIN_PATH)
+
+
+def test_numeric_receipt_rechecks_captured_csv_after_parsing(tmp_path, monkeypatch):
+    main = _synthetic_csv_path(tmp_path)
+    (tmp_path / audit.SUPPORT_PATH).write_bytes(
+        b"variant_id,task_id\nD3,main-01\n"
+    )
+
+    def synthetic_validator(main_rows, support_rows):
+        assert main_rows[0]["variant_id"] == "D3"
+        main.write_bytes(b"variant_id,task_id\nP6,main-01\n")
+        return {"status": "synthetic_only"}
+
+    monkeypatch.setattr(audit, "audit_rows", synthetic_validator)
+    with pytest.raises(audit.NumericInputError, match="changed before audit receipt"):
+        audit.audit_files(tmp_path)

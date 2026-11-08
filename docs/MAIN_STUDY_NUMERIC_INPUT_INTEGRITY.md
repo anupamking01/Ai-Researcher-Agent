@@ -47,3 +47,25 @@ main-study outcomes retain their post-collection statistical-plan
 chronology and fixed-order/evaluator-recovery qualifications; retrospective
 sensitivity analyses remain **exploratory**; and human validation remains
 pending original-source custody and two independent blinded annotators.
+
+
+## Local CSV capture and receipt continuity
+
+The read-only numeric preflight now opens each fixed CSV using a held file
+descriptor with no-follow directory and file flags. It requires a regular,
+single-linked input no larger than 2 MiB, reads only the initially observed
+length, detects append-only growth, and checks the opened inode, pathname,
+size, link count, and modification/change metadata before accepting bytes.
+After semantic validation it independently recaptures both original paths
+and refuses to issue the receipt if either content changed. Synthetic
+regressions exercise symlinks, hard links, oversized inputs, path replacement,
+in-place modification, and post-parse edits; they do **not** use live treatment
+or evaluator observations.
+
+This is a **bounded, locally consistent capture**, not an atomic snapshot of
+two files, and not proof of historical originality, collision resistance of
+filesystem metadata, or protection against an attacker who changes bytes and
+restores them between observation points. The auditor reports hashes of the
+actual bytes it parsed; it does not revise or authenticate the original 40
+reports/traces. The separately frozen September analyzer and all recorded
+automated/pilot/exploratory results remain unchanged.

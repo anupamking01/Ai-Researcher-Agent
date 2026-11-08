@@ -11,6 +11,8 @@ import csv
 from decimal import Decimal, InvalidOperation
 import hashlib
 import io
+import os
+import stat
 import json
 from pathlib import Path
 
@@ -130,15 +132,76 @@ def audit_rows(
 
 
 def _csv_bytes(root: Path, relative: str) -> bytes:
+    """Read a bounded, path-bound regular CSV through a held file descriptor.
+
+    The pathname, opened file, and captured bytes must describe the same
+    generation. This checks local read integrity, not original-source custody.
+    """
     path = root / relative
-    if path.is_symlink() or not path.is_file():
-        raise NumericInputError(f"{relative}: missing or redirected CSV")
-    if path.stat().st_size > MAX_CSV_BYTES:
-        raise NumericInputError(f"{relative}: CSV exceeds 2 MiB audit bound")
-    content = path.read_bytes()
-    if len(content) > MAX_CSV_BYTES:
-        raise NumericInputError(f"{relative}: CSV grew beyond 2 MiB")
-    return content
+    directory_flags = (
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    )
+    file_flags = (
+        os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    )
+    try:
+        parent_fd = os.open(path.parent, directory_flags)
+        try:
+            parent = os.fstat(parent_fd)
+            if not stat.S_ISDIR(parent.st_mode):
+                raise NumericInputError(f"{relative}: CSV parent is not a directory")
+            file_fd = os.open(path.name, file_flags, dir_fd=parent_fd)
+            try:
+                before = os.fstat(file_fd)
+                if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                    raise NumericInputError(
+                        f"{relative}: CSV must be a single-linked regular file"
+                    )
+                if before.st_size > MAX_CSV_BYTES:
+                    raise NumericInputError(f"{relative}: CSV exceeds 2 MiB audit bound")
+
+                chunks = []
+                offset = 0
+                while offset < before.st_size:
+                    chunk = os.pread(
+                        file_fd, min(1024 * 1024, before.st_size - offset), offset
+                    )
+                    if not chunk:
+                        raise NumericInputError(f"{relative}: CSV truncated during capture")
+                    chunks.append(chunk)
+                    offset += len(chunk)
+                if os.pread(file_fd, 1, before.st_size):
+                    raise NumericInputError(f"{relative}: CSV grew during capture")
+
+                after = os.fstat(file_fd)
+                visible = os.stat(
+                    path.name, dir_fd=parent_fd, follow_symlinks=False
+                )
+                visible_parent = os.stat(path.parent, follow_symlinks=False)
+                def fingerprint(info):
+                    return (
+                        info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+                        info.st_size, info.st_mtime_ns, info.st_ctime_ns,
+                    )
+                if (
+                    fingerprint(before) != fingerprint(after)
+                    or fingerprint(after) != fingerprint(visible)
+                    or not stat.S_ISDIR(visible_parent.st_mode)
+                    or (parent.st_dev, parent.st_ino)
+                    != (visible_parent.st_dev, visible_parent.st_ino)
+                ):
+                    raise NumericInputError(f"{relative}: CSV changed during capture")
+                return b"".join(chunks)
+            finally:
+                os.close(file_fd)
+        finally:
+            os.close(parent_fd)
+    except OSError as exc:
+        raise NumericInputError(
+            f"{relative}: CSV missing, redirected, or changed during capture"
+        ) from exc
 
 
 def _parse_csv(content: bytes, label: str) -> list[dict]:
@@ -165,6 +228,13 @@ def audit_files(root: Path = ROOT) -> dict:
         _parse_csv(main_bytes, MAIN_PATH),
         _parse_csv(support_bytes, SUPPORT_PATH),
     )
+    # Recheck both original paths before issuing the fingerprint receipt.
+    # This is not an atomic filesystem snapshot and cannot authenticate
+    # historical experimental source artifacts.
+    if _csv_bytes(root, MAIN_PATH) != main_bytes:
+        raise NumericInputError(f"{MAIN_PATH}: CSV changed before audit receipt")
+    if _csv_bytes(root, SUPPORT_PATH) != support_bytes:
+        raise NumericInputError(f"{SUPPORT_PATH}: CSV changed before audit receipt")
     return {
         "schema_version": 1,
         **findings,
