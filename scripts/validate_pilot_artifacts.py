@@ -17,8 +17,10 @@ from pathlib import Path
 
 try:
     from .audit_pilot_cost_summary import audit_pilot_cost_summary
+    from .audit_pilot_variant_summary import audit_pilot_variant_summary
 except ImportError:  # python scripts/validate_pilot_artifacts.py
     from audit_pilot_cost_summary import audit_pilot_cost_summary
+    from audit_pilot_variant_summary import audit_pilot_variant_summary
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -823,15 +825,19 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
     # Legacy minimal summary fixtures without a schema marker remain compatible.
     if "schema_version" in summary:
         if (type(summary["schema_version"]) is not int
-                or summary["schema_version"] not in (1, 2)):
-            errors.append("summary.schema_version must be supported integer 1 or 2")
+                or summary["schema_version"] not in (1, 2, 3)):
+            errors.append("summary.schema_version must be supported integer 1, 2 or 3")
         elif "paired_operational_differences" not in summary:
             errors.append("versioned pilot summary is missing paired operational comparisons")
     if "paired_operational_differences" in summary and not errors:
         _audit_pilot_paired_summary(summary, source_traces, variants, task_ids, errors)
-    if summary.get("schema_version") == 2 and not errors:
+    if summary.get("schema_version") in (2, 3) and not errors:
         errors.extend(audit_pilot_cost_summary(
             summary, source_traces, variants, task_ids, PILOT_PRICING_FILE
+        ))
+    if summary.get("schema_version") == 3 and not errors:
+        errors.extend(audit_pilot_variant_summary(
+            summary, source_traces, variants, task_ids
         ))
 
     return errors

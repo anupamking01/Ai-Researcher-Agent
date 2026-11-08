@@ -300,6 +300,13 @@ def _v2_cost_fixture(root, monkeypatch, unpriced=None):
         for field in (
             "costed_runs", "uncosted_runs", "uncosted_task_ids",
             "cost_accounting_status_counts", "avg_estimated_cost_usd",
+            "n_runs", "n_completed", "completion_rate",
+            "avg_source_attempts", "avg_successful_sources",
+            "avg_failed_sources", "avg_search_calls", "avg_model_calls",
+            "avg_prompt_tokens", "avg_completion_tokens", "avg_total_tokens",
+            "avg_latency_seconds", "avg_report_words",
+            "avg_claim_support_rate_verified_only", "verified_runs",
+            "provider_usage_complete_runs",
         ):
             summary["variant_summary"][arm][field] = variants[arm][field]
     pairs = pilot_producer._paired_operational_differences(rows)
@@ -399,3 +406,100 @@ def test_version2_missing_cost_coverage_not_silently_accepted(tmp_path, monkeypa
     del data["paired_operational_differences"]["P6_minus_D6"]["costed_pair_task_ids"]
     _save(tmp_path, data)
     assert "costed_pair_task_ids" in _errors(tmp_path)
+
+
+# Schema version 3 independently reconciles non-cost arm-level means and
+# coverage. Older v2 fixtures remain valid but are never labelled v3-audited.
+_ARM_SOURCE_METRICS = (
+    "n_runs", "n_completed", "completion_rate", "avg_source_attempts",
+    "avg_successful_sources", "avg_failed_sources", "avg_search_calls",
+    "avg_model_calls", "avg_prompt_tokens", "avg_completion_tokens",
+    "avg_total_tokens", "avg_latency_seconds", "avg_report_words",
+    "avg_claim_support_rate_verified_only", "verified_runs",
+    "provider_usage_complete_runs",
+)
+
+
+def _version3_fixture(root, monkeypatch, unpriced=None):
+    data = _v2_cost_fixture(root, monkeypatch, unpriced)
+    data["schema_version"] = 3
+    _save(root, data)
+    return data
+
+
+@pytest.mark.parametrize("unpriced", [None, ("P6", "pilot-02")])
+def test_version3_independent_arm_reconciliation_passes_synthetic_sources(
+    tmp_path, monkeypatch, unpriced
+):
+    _version3_fixture(tmp_path, monkeypatch, unpriced)
+    assert validate_pilot(tmp_path) == []
+
+
+@pytest.mark.parametrize("field", _ARM_SOURCE_METRICS)
+def test_version3_rejects_modified_arm_metric_with_correct_pairs(
+    tmp_path, monkeypatch, field
+):
+    data = _version3_fixture(tmp_path, monkeypatch)
+    arm = data["variant_summary"]["P6V"]
+    observed = arm[field]
+    arm[field] = (0.99 if observed is None else
+                  observed + 1 if type(observed) in (int, float) else "tampered")
+    _save(tmp_path, data)
+    assert f"summary.variant_summary.P6V.{field}" in _errors(tmp_path)
+
+
+@pytest.mark.parametrize("field", _ARM_SOURCE_METRICS)
+def test_version3_requires_explicit_arm_metric_fields(
+    tmp_path, monkeypatch, field
+):
+    data = _version3_fixture(tmp_path, monkeypatch)
+    data["variant_summary"]["D6"].pop(field)
+    _save(tmp_path, data)
+    assert f"summary.variant_summary.D6.{field}" in _errors(tmp_path)
+
+
+@pytest.mark.parametrize("replacement", [True, "3", None, -1, 1e100])
+def test_version3_rejects_invalid_arm_measurement_type(
+    tmp_path, monkeypatch, replacement
+):
+    data = _version3_fixture(tmp_path, monkeypatch)
+    data["variant_summary"]["P6"]["avg_report_words"] = replacement
+    _save(tmp_path, data)
+    assert "avg_report_words" in _errors(tmp_path)
+
+
+def test_version3_detects_stale_report_mean_when_paired_metrics_agree(
+    tmp_path, monkeypatch
+):
+    _version3_fixture(tmp_path, monkeypatch)
+    source = tmp_path / "experiment_traces" / "P6" / "P6-pilot-01.json"
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    payload["trace"]["report_words"] += 11
+    source.write_text(json.dumps(payload), encoding="utf-8")
+    assert "summary.variant_summary.P6.avg_report_words" in _errors(tmp_path)
+
+
+def test_version3_rejects_fictitious_extra_arm(tmp_path, monkeypatch):
+    data = _version3_fixture(tmp_path, monkeypatch)
+    data["variant_summary"]["FAKE"] = dict(data["variant_summary"]["D6"])
+    _save(tmp_path, data)
+    assert "exactly the three pilot arms" in _errors(tmp_path)
+
+
+def test_version2_keeps_original_audit_scope_without_retroactive_claims(
+    tmp_path, monkeypatch
+):
+    data = _v2_cost_fixture(tmp_path, monkeypatch)
+    data["variant_summary"]["D6"].pop("avg_report_words")
+    _save(tmp_path, data)
+    assert validate_pilot(tmp_path) == []
+
+
+def test_version3_requires_verified_only_mean_null_for_unverified_arm(
+    tmp_path, monkeypatch
+):
+    data = _version3_fixture(tmp_path, monkeypatch)
+    assert data["variant_summary"]["D6"]["avg_claim_support_rate_verified_only"] is None
+    data["variant_summary"]["D6"]["avg_claim_support_rate_verified_only"] = 0.0
+    _save(tmp_path, data)
+    assert "avg_claim_support_rate_verified_only" in _errors(tmp_path)
