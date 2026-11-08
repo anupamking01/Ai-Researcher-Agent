@@ -181,14 +181,59 @@ def _audit_progress_events(
         errors.append("progress completed event count differs from completed_runs")
 
 
+
+def _enumerate_pilot_traces(
+    output_root: Path, selected_variants: list[str], errors: list[str]
+) -> list[Path]:
+    """Inventory every trace-root entry before selecting experimental cells.
+
+    A two-level *.json glob can overlook nested retries, unknown arm
+    directories, temporary files, and symlinked sources. A successful
+    cardinality check on *selected* files is not evidence that those were
+    all the files present in the experimental workspace.
+    """
+    root = output_root / "experiment_traces"
+    if root.is_symlink():
+        errors.append("pilot trace root must not be a symlink")
+        return []
+    if not root.is_dir():
+        errors.append("missing or invalid pilot trace root directory")
+        return []
+
+    files: list[Path] = []
+    try:
+        for arm in sorted(root.iterdir()):
+            if (arm.is_symlink() or not arm.is_dir()
+                    or arm.name not in selected_variants):
+                errors.append(
+                    f"unselected pilot trace directory or entry: {arm.relative_to(output_root)}"
+                )
+                continue
+            for source in sorted(arm.iterdir()):
+                if (source.is_symlink() or not source.is_file()
+                        or source.suffix != ".json"):
+                    errors.append(
+                        f"unselected pilot trace entry: {source.relative_to(output_root)}"
+                    )
+                    continue
+                files.append(source)
+    except OSError as exc:
+        errors.append(f"cannot inspect pilot trace inventory: {exc}")
+    return files
+
+
 def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
     errors: list[str] = []
+    if output_root.is_symlink():
+        return ["pilot output root must not be a symlink"]
     manifest_path = output_root / "pilot_manifest.json"
     progress_path = output_root / "pilot_progress.json"
     summary_path = output_root / "pilot_summary.json"
 
     for required in (manifest_path, progress_path, summary_path):
-        if not required.is_file():
+        if required.is_symlink():
+            errors.append(f"required artifact is a symlink: {required.name}")
+        elif not required.is_file():
             errors.append(f"missing required artifact: {required.name}")
     if errors:
         return errors
@@ -252,7 +297,7 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
         if progress_counts[field] != 0:
             errors.append(f"{field}={progress.get(field)}")
 
-    trace_files = sorted((output_root / "experiment_traces").glob("*/*.json"))
+    trace_files = _enumerate_pilot_traces(output_root, variants, errors)
     if len(trace_files) != expected_count:
         errors.append(
             f"trace_count={len(trace_files)} expected={expected_count}"
@@ -268,6 +313,18 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
         if not isinstance(experiment, dict) or not isinstance(trace, dict):
             errors.append(f"invalid pilot trace identity structure: {trace_file.name}")
             continue
+        # The create-only publisher uses run_id as the trace filename stem.
+        # Reject an explicitly supplied but contradictory ID rather than
+        # silently trusting the directory/metadata or selecting a retry.
+        for source_name, record in (("trace", trace), ("experiment", experiment)):
+            if "run_id" in record:
+                run_id = record["run_id"]
+                if (type(run_id) is not str or not run_id
+                        or run_id != run_id.strip() or run_id != trace_file.stem):
+                    errors.append(
+                        f"{trace_file.name}: {source_name}.run_id "
+                        "disagrees with source filename"
+                    )
         variant = experiment.get("variant_id") or trace.get("variant_id") or ""
         task_id = experiment.get("task_id") or trace.get("task_id") or ""
         pair = (variant, task_id)
