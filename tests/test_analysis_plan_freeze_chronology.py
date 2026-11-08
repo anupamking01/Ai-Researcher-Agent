@@ -10,6 +10,7 @@ from scripts.audit_analysis_plan_freeze_chronology import (
     FreezeChronologyError,
     Milestones,
     audit_history,
+    _parse_prior_protocol_scope,
 )
 
 
@@ -31,6 +32,17 @@ def history(tmp_path: Path) -> tuple[Path, Milestones]:
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.name", "Synthetic Research Tester")
     _git(tmp_path, "config", "user.email", "synthetic@example.invalid")
+    protocol = tmp_path / "paper" / "RESEARCH_PROTOCOL.md"
+    protocol.parent.mkdir(exist_ok=True)
+    protocol.write_text(
+        "## Variants\n\nMinimum viable main-study matrix:\n\n"
+        "| ID | Planning |\n|---|---|\n"
+        + "".join(f"| {name} | synthetic |\n" for name in (
+            "D3", "D6", "D12", "P3", "P6", "P12", "D6V", "P6V",
+        ))
+        + "\n## Statistical analysis\n\nPrefer paired differences.\n",
+        encoding="utf-8",
+    )
     prior = _commit(tmp_path, "prior-protocol", "draft protocol placeholder\n")
     treatment = _commit(tmp_path, "treatments", "draft protocol placeholder\n")
     recovery = _commit(tmp_path, "evaluator-recovery", "draft protocol placeholder\n")
@@ -57,7 +69,13 @@ def history(tmp_path: Path) -> tuple[Path, Milestones]:
     )
     _git(tmp_path, "add", ".")
     _git(tmp_path, "commit", "-m", "add reporting qualification")
-    return tmp_path, Milestones(prior, treatment, recovery, plan, publication, human_plan)
+    prior_protocol_blob = _git(
+        tmp_path, "rev-parse", f"{prior}:paper/RESEARCH_PROTOCOL.md"
+    )
+    return tmp_path, Milestones(
+        prior, treatment, recovery, plan, publication, human_plan,
+        prior_protocol_blob,
+    )
 
 
 def test_good_history_is_explicitly_nonprospective(history):
@@ -238,3 +256,52 @@ def test_rejects_human_plan_milestone_out_of_order(history):
     inverted = replace(milestones, human_analysis_plan=milestones.canonical_publication)
     with pytest.raises(FreezeChronologyError, match="historical order"):
         audit_history(root, milestones=inverted)
+
+
+def test_prior_protocol_candidate_design_is_not_misreported_as_frozen_four_arms(history):
+    root, milestones = history
+    receipt = audit_history(root, milestones=milestones)
+    assert receipt["historical_prior_protocol_git_blob_sha"] == milestones.prior_protocol_blob_sha
+    assert receipt["historical_prior_protocol_candidate_variants"] == [
+        "D3", "D6", "D12", "P3", "P6", "P12", "D6V", "P6V",
+    ]
+    assert receipt["realized_main_study_variants"] == ["D3", "D6", "P6", "P6V"]
+    assert receipt["prior_candidate_matrix_identical_to_realized_matrix"] is False
+    assert receipt["prior_protocol_specified_later_exact_holm_signflip_procedure"] is False
+    assert receipt["prior_protocol_source_bound_not_exact_precollection_plan"] is True
+    assert len(receipt["historical_prior_protocol_sha256"]) == 64
+
+
+def test_rejects_mismatched_historical_protocol_blob_even_when_ancestry_is_valid(history):
+    root, milestones = history
+    with pytest.raises(FreezeChronologyError, match="protocol Git blob differs"):
+        audit_history(root, milestones=replace(
+            milestones, prior_protocol_blob_sha="0" * 40
+        ))
+
+
+def test_rejects_prior_protocol_candidate_arm_removed():
+    valid = (
+        "## Variants\n\nMinimum viable main-study matrix:\n"
+        "| ID | Planning |\n|---|---|\n"
+        + "".join(f"| {arm} | synthetic |\n" for arm in (
+            "D3", "D6", "D12", "P3", "P6", "P12", "D6V", "P6V",
+        ))
+        + "\n## Statistical analysis\n\nPrefer paired differences.\n"
+    ).encode()
+    assert len(_parse_prior_protocol_scope(valid)) == 8
+    with pytest.raises(FreezeChronologyError, match="candidate variant matrix"):
+        _parse_prior_protocol_scope(valid.replace(b"| D12 | synthetic |\n", b""))
+
+
+def test_rejects_prior_protocol_claiming_later_exact_test_procedure():
+    protocol = (
+        "## Variants\n\nMinimum viable main-study matrix:\n"
+        "| ID | Planning |\n|---|---|\n"
+        + "".join(f"| {arm} | synthetic |\n" for arm in (
+            "D3", "D6", "D12", "P3", "P6", "P12", "D6V", "P6V",
+        ))
+        + "\n## Statistical analysis\n\nUse Holm and exact sign-flip tests.\n"
+    ).encode()
+    with pytest.raises(FreezeChronologyError, match="later exact inference"):
+        _parse_prior_protocol_scope(protocol)
