@@ -291,7 +291,8 @@ def _v2_cost_fixture(root, monkeypatch, unpriced=None):
                 "model_call_count": calls, "prompt_tokens": tokens - 20,
                 "completion_tokens": 20, "total_tokens": tokens,
                 "latency_seconds": seconds, "report_words": 30,
-                "claims_checked": 0, "claim_support_rate": 0.0,
+                "claims_checked": 2 if arm == "P6V" else 0,
+                "claim_support_rate": 0.0,
                 "usage_accounting_status": "provider_usage_complete",
                 "estimated_cost_usd": cost, "cost_accounting_status": status,
             })
