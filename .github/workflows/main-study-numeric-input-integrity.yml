@@ -24,12 +24,15 @@ permissions:
 
 jobs:
   offline-numeric-audit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          python-version: "3.11"
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
       - name: Numeric evidence preflight (no inference or network APIs)
         run: |
           python -m compileall -q scripts/audit_main_study_numeric_inputs.py
