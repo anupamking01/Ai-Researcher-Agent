@@ -77,6 +77,15 @@ jobs:
           assert receipt["written_analysis_plan_postdates_evaluator_recovery_commit_in_git"] is True
           assert receipt["written_analysis_plan_precedes_canonical_git_publication"] is True
           assert receipt["current_analysis_plan_bytes_equal_original_commit"] is True
+          assert receipt["historical_prior_protocol_git_blob_sha"] == "706986c65eeb4628255198570e4e0f2fb48ee7ac"
+          assert len(receipt["historical_prior_protocol_sha256"]) == 64
+          assert receipt["historical_prior_protocol_candidate_variants"] == [
+              "D3", "D6", "D12", "P3", "P6", "P12", "D6V", "P6V",
+          ]
+          assert receipt["realized_main_study_variants"] == ["D3", "D6", "P6", "P6V"]
+          assert receipt["prior_candidate_matrix_identical_to_realized_matrix"] is False
+          assert receipt["prior_protocol_specified_later_exact_holm_signflip_procedure"] is False
+          assert receipt["prior_protocol_source_bound_not_exact_precollection_plan"] is True
           assert receipt["canonical_publication_report_bytes_unchanged"] is True
           assert receipt["canonical_publication_inference_json_bytes_unchanged"] is True
           assert receipt["separate_committed_reporting_cover_checked"] is True
