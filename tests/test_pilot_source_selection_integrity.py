@@ -66,7 +66,7 @@ def test_missing_pilot_pair_is_explicitly_accounted_without_imputation():
 
 def test_main_rejects_ambiguous_inputs_before_creating_outputs(tmp_path, monkeypatch):
     monkeypatch.setattr(pilot, "_load_pricing", lambda: {"unit": "per_1m_text_tokens"})
-    monkeypatch.setattr(pilot, "_load_traces", lambda pricing: [
+    monkeypatch.setattr(pilot, "_load_traces", lambda pricing, *, source_snapshot=None: [
         row("D6", "task-01"),
         row("D6", "task-01", run_id="retry"),
     ])
