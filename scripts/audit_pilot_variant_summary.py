@@ -3,7 +3,9 @@
 Only schema-v3 pilot summaries assert this independent reconciliation. Earlier
 summaries retain their historical schema rather than acquiring retroactive
 verification claims. This uses selected trace records, never summarized rows,
-the producer's _variant_summary(), or inferred missing measurements.
+the producer's _variant_summary(), or inferred external measurements.
+Absent optional legacy telemetry retains the producer's documented zero-default;
+that convention does not authenticate the missing source observation.
 """
 from __future__ import annotations
 

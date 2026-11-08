@@ -27,7 +27,10 @@ For D6, P6 and P6V, the validator independently checks:
 
 A supplied invalid numeric value is rejected, including booleans, fractional
 counters, negative or nonfinite measurements, and nonfinite means. Values are
-not repaired or selected to improve results. This audit cross-checks the
+not repaired or selected to improve results.
+Absent optional historical telemetry retains the producer's documented
+zero-default convention. This audit can check the resulting *consistency*,
+but cannot establish that a missing observation was a genuine measured zero. This audit cross-checks the
 *internal* source-to-summary relationship; it does not independently
 authenticate original source custody, actual provider billing, retrieval
 truth, or causal validity.
