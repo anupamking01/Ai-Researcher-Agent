@@ -120,6 +120,67 @@ def _temperature(record: dict, source: str, errors: list[str]) -> int | float | 
     return value
 
 
+
+def _audit_progress_events(
+    progress: dict, expected_pairs: set[tuple[str, str]], errors: list[str]
+) -> None:
+    """Reconcile the run-event ledger with the frozen pilot assignment.
+
+    The live runner writes one terminal event per attempted cell. A matching
+    aggregate counter alone cannot establish that different cells were run.
+    Legacy unversioned fixture/checkpoint records may lack this newer ledger;
+    a versioned runner checkpoint must not silently omit it.
+    """
+    if "events" not in progress:
+        version = progress.get("schema_version")
+        if type(version) is int and version >= 1:
+            errors.append("versioned progress is missing its events ledger")
+        return
+
+    events = progress["events"]
+    if not isinstance(events, list):
+        errors.append("progress.events must be a list")
+        return
+    if "current" in progress and progress["current"] is not None:
+        errors.append("progress.current must be null for a completed pilot")
+    if len(events) != len(expected_pairs):
+        errors.append(
+            f"progress events={len(events)} expected={len(expected_pairs)}"
+        )
+    if type(progress.get("attempted_runs")) is int and len(events) != progress["attempted_runs"]:
+        errors.append("progress events count differs from attempted_runs")
+
+    seen: set[tuple[str, str]] = set()
+    completed = 0
+    for index, event in enumerate(events, start=1):
+        label = f"progress.events[{index}]"
+        if not isinstance(event, dict):
+            errors.append(f"{label} must be an object")
+            continue
+        variant, task_id = event.get("variant"), event.get("task_id")
+        if any(
+            type(value) is not str or not value or value != value.strip()
+            for value in (variant, task_id)
+        ):
+            errors.append(f"{label} has invalid treatment/task identity")
+            continue
+        pair = (variant, task_id)
+        if pair not in expected_pairs:
+            errors.append(f"{label} has unplanned treatment/task cell: {pair}")
+        if pair in seen:
+            errors.append(f"{label} duplicates treatment/task cell: {pair}")
+        seen.add(pair)
+        if event.get("status") != "completed" or type(event.get("status")) is not str:
+            errors.append(f"{label} is not a completed terminal event")
+        else:
+            completed += 1
+
+    if seen != expected_pairs:
+        errors.append(f"progress events missing planned cells: {sorted(expected_pairs - seen)}")
+    if type(progress.get("completed_runs")) is int and completed != progress["completed_runs"]:
+        errors.append("progress completed event count differs from completed_runs")
+
+
 def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
     errors: list[str] = []
     manifest_path = output_root / "pilot_manifest.json"
@@ -181,6 +242,9 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
             "progress total_expected_runs does not match manifest: "
             f"{progress.get('total_expected_runs')} != {expected_count}"
         )
+    # A correct aggregate count cannot substitute for a unique, complete
+    # terminal-event ledger when the live runner records one.
+    _audit_progress_events(progress, expected_pairs, errors)
     for field in ("attempted_runs", "completed_runs"):
         if progress_counts[field] != expected_count:
             errors.append(f"{field}={progress.get(field)} expected={expected_count}")
