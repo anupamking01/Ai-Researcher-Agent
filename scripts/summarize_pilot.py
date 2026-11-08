@@ -76,7 +76,7 @@ def _load_pricing():
 
 
 def _nonnegative_token_count(value, *, model, field):
-    """Fail closed on lossy coercions or negative provider usage counters."""
+    """Require explicit nonnegative integer counters; absence is not zero."""
     if type(value) is not int or value < 0:
         raise ValueError(
             f"provider usage {model!r}.{field} must be a nonnegative integer"
@@ -114,7 +114,7 @@ def _verify_provider_usage_ledger(trace, by_model):
             raise ValueError("invalid provider usage model bucket")
         for field in totals:
             totals[field] += _nonnegative_token_count(
-                usage.get(field, 0), model=model, field=field
+                usage.get(field), model=model, field=field
             )
     totals["total_tokens"] = totals["prompt_tokens"] + totals["completion_tokens"]
     for field, expected in totals.items():
@@ -144,10 +144,10 @@ def _estimate_reported_token_cost(provider_usage_by_model, pricing):
         if type(model) is not str or not model or not isinstance(usage, dict):
             raise ValueError("invalid provider usage model bucket")
         prompt_tokens = _nonnegative_token_count(
-            usage.get("prompt_tokens", 0), model=model, field="prompt_tokens"
+            usage.get("prompt_tokens"), model=model, field="prompt_tokens"
         )
         completion_tokens = _nonnegative_token_count(
-            usage.get("completion_tokens", 0), model=model, field="completion_tokens"
+            usage.get("completion_tokens"), model=model, field="completion_tokens"
         )
         if prompt_tokens == 0 and completion_tokens == 0:
             continue
@@ -253,6 +253,13 @@ def _load_traces(pricing):
             if run_id != path.stem:
                 raise ValueError(f"pilot trace run_id disagrees with filename: {path}")
 
+            # Missing legacy model ledgers are explicitly uncosted; supplied
+            # malformed ledgers cannot masquerade as missing information.
+            if ("provider_usage_by_model" in trace
+                    and not isinstance(trace["provider_usage_by_model"], dict)):
+                raise ValueError(
+                    f"pilot provider_usage_by_model must be a mapping: {path}"
+                )
             by_model = trace.get("provider_usage_by_model", {})
             _verify_provider_usage_ledger(trace, by_model)
             estimated_cost, cost_status = _estimate_reported_token_cost(
