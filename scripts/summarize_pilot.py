@@ -233,6 +233,43 @@ def _trace_snapshot_identity(info) -> tuple[int, ...]:
     )
 
 
+
+def _capture_pilot_source_metadata() -> dict[Path, tuple[int, ...]]:
+    """Record the selected trace roster and inode/size/time metadata before parsing.
+
+    This is a local continuity guard, not an authenticated source-byte archive.
+    The independent bounded descriptor loader still checks each individual read.
+    """
+    roster = _validate_pilot_trace_inventory()
+    snapshot = {}
+    for paths in roster.values():
+        for path in paths:
+            try:
+                info = path.lstat()
+            except OSError as exc:
+                raise ValueError(f"pilot source vanished before capture: {path}") from exc
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ValueError(f"pilot source must be a single-link regular file: {path}")
+            if info.st_size > MAX_PILOT_TRACE_JSON_BYTES:
+                raise ValueError(f"pilot source exceeds 8 MiB limit: {path}")
+            snapshot[path] = _trace_snapshot_identity(info)
+    return snapshot
+
+
+def _verify_pilot_source_metadata(snapshot: dict[Path, tuple[int, ...]]) -> None:
+    """Reject additions, removals or observed changes before publishing outputs."""
+    try:
+        current = _validate_pilot_trace_inventory()
+        current_paths = {path for paths in current.values() for path in paths}
+        if current_paths != set(snapshot):
+            raise ValueError("pilot source inventory changed before publication")
+        for path, expected in snapshot.items():
+            if _trace_snapshot_identity(path.lstat()) != expected:
+                raise ValueError(f"pilot source changed before publication: {path}")
+    except OSError as exc:
+        raise ValueError("pilot source disappeared before publication") from exc
+
+
 def _load_captured_pilot_trace(path: Path) -> dict:
     """Parse one bounded, single-link, descriptor-held local source snapshot.
 
@@ -579,9 +616,10 @@ def _write_csv(rows):
         handle.write(_render_csv(rows))
 
 
-def _publish_pilot_outputs(payload, rows):
+def _publish_pilot_outputs(payload, rows, *, prepublish_check=None):
     """Publish complete JSON and CSV bytes, refusing pre-existing output paths.
 
+    An optional source-continuity check runs immediately before each link.
     Stage and fsync both files before linking either canonical name. Hard-link
     publication is create-only even if another process creates a destination
     after preflight. If the second link fails, remove only our first link;
@@ -617,6 +655,8 @@ def _publish_pilot_outputs(payload, rows):
                 os.fsync(handle.fileno())
 
         for temporary, target in staged:
+            if prepublish_check is not None:
+                prepublish_check()
             # Link fails with FileExistsError; it never replaces a prior file.
             os.link(temporary, target)
             linked.append((temporary, target))
@@ -638,6 +678,7 @@ def _publish_pilot_outputs(payload, rows):
 
 def main():
     pricing = _load_pricing()
+    source_metadata = _capture_pilot_source_metadata()
     rows = _load_traces(pricing)
     if not rows:
         raise SystemExit(
@@ -667,7 +708,10 @@ def main():
             "Long-context pricing multipliers, if triggered, require separate review before publication claims.",
         ],
     }
-    _publish_pilot_outputs(payload, rows)
+    _publish_pilot_outputs(
+        payload, rows,
+        prepublish_check=lambda: _verify_pilot_source_metadata(source_metadata),
+    )
 
     print(json.dumps(payload["variant_summary"], indent=2, sort_keys=True))
     print(f"pricing={PRICING_FILE}")
