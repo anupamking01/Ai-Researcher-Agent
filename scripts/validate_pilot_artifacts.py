@@ -188,7 +188,7 @@ def _audit_progress_events(
 # the equally explicit 'Z' suffix but never local/naive or ambiguous offsets.
 _UTC_INSTANT = re.compile(
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
-    r"(?:\\.[0-9]{1,6})?(?:Z|\\+00:00)$"
+    r"(?:\.[0-9]{1,6})?(?:Z|\+00:00)$"
 )
 
 
