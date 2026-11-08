@@ -20,7 +20,11 @@ The independent schema-v5 source-to-CSV auditor in
 record identifiers and the exported status/model columns. That prevents a
 matching malicious trace plus CSV from passing solely by source-to-export
 equality. The independent check does not import the producer and retains the
-exact-value provenance contract. Previous schema versions are not retroactively
+exact-value provenance contract. The auditor also checks **every parsed
+exported CSV cell**, including numeric cells, for a formula-like prefix *before*
+floating-point equivalence: `+1.25` and `1.25` may compare equal as Python
+numbers, but a spreadsheet may evaluate the first as a formula. A safe trace
+is not enough when the subsequent CSV export has been modified. Previous schema versions are not retroactively
 claimed to have this CSV reconciliation gate.
 
 Synthetic offline reproduction:

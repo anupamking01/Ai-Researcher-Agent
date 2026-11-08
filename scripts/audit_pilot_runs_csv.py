@@ -247,6 +247,21 @@ def audit_pilot_runs_csv(
                 if None in row or any(row.get(column) is None for column in COLUMNS):
                     errors.append(f"pilot_runs.csv row {position}: malformed column count")
                     continue
+                # Numeric equivalence is not spreadsheet safety. A mutated
+                # CSV value like +1.25 or -0.0 can pass float comparisons
+                # against the original trace yet be interpreted as a formula
+                # by a spreadsheet. Audit the *exported* cells independently
+                # of the safe-source check, before normalizing any numbers.
+                unsafe_columns = [
+                    column for column in COLUMNS
+                    if _unsafe_spreadsheet_text(row[column])
+                ]
+                if unsafe_columns:
+                    errors.append(
+                        f"pilot_runs.csv row {position}: formula-like exported "
+                        f"CSV cell in {', '.join(unsafe_columns)}"
+                    )
+                    continue
                 key = (row["variant_id"], row["task_id"])
                 if key not in expected:
                     errors.append(f"pilot_runs.csv row {position}: unselected treatment/task cell {key}")

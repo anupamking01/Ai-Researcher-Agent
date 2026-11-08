@@ -102,3 +102,45 @@ def test_full_v5_csv_auditor_does_not_certify_formula_from_its_own_source(
         ["D6"], ["=1+1"], "pilot-set", pricing,
     )
     assert any("formula-like CSV source cell in task_id" in e for e in errors)
+
+
+@pytest.mark.parametrize("column,prefix", [
+    ("latency_seconds", "+"),
+    ("latency_seconds", "\t+"),
+    ("estimated_cost_usd", "+"),
+    ("estimated_cost_usd", "\u2003+"),
+    ("claim_support_rate", "+"),
+    ("claim_support_rate", "\u00a0+"),
+])
+def test_v5_rejects_formula_like_numeric_csv_even_when_value_matches(
+    tmp_path, monkeypatch, column, prefix,
+):
+    # Synthetic validated export; do not change the source trace. Float
+    # parsing accepts these signed/padded values, so a numeric-only audit
+    # would falsely certify a potentially executable spreadsheet cell.
+    from test_pilot_csv_source_reconciliation import (
+        _fixture, _rows, _save_rows, _errors,
+    )
+
+    _fixture(tmp_path, monkeypatch)
+    fields, rows = _rows(tmp_path)
+    target = next(row for row in rows if row[column] != "")
+    original = target[column]
+    assert float(prefix + original) == float(original)
+    target[column] = prefix + original
+    _save_rows(tmp_path, fields, rows)
+    assert f"formula-like exported CSV cell in {column}" in _errors(tmp_path)
+
+
+def test_v5_rejects_formula_in_changed_csv_text_without_changing_source(
+    tmp_path, monkeypatch,
+):
+    from test_pilot_csv_source_reconciliation import (
+        _fixture, _rows, _save_rows, _errors,
+    )
+
+    _fixture(tmp_path, monkeypatch)
+    fields, rows = _rows(tmp_path)
+    rows[0]["smart_model"] = "\u200b=1+1"
+    _save_rows(tmp_path, fields, rows)
+    assert "formula-like exported CSV cell in smart_model" in _errors(tmp_path)
