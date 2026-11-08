@@ -282,6 +282,80 @@ def _audit_pilot_clock_window(
 
 
 
+
+def _audit_pilot_provider_token_ledger(
+    trace: dict, label: str, schema_version: int | None, errors: list[str]
+) -> None:
+    """Check producer token conservation independently of the summarizer.
+
+    The trace producer writes schema-v2 token totals and a per-model ledger.
+    Historical unversioned minimal records without those fields remain
+    compatible, but supplying any part of a ledger activates strict checks.
+    This checks internal consistency, not authenticity of provider billing.
+    """
+    fields = ("prompt_tokens", "completion_tokens", "provider_usage_by_model")
+    if schema_version is None and not any(key in trace for key in fields):
+        return
+    if schema_version == 1 and not any(key in trace for key in fields):
+        return
+
+    prompt = trace.get("prompt_tokens")
+    completion = trace.get("completion_tokens")
+    total = trace.get("total_tokens")
+    valid_counts = True
+    for field, value in (
+        ("prompt_tokens", prompt), ("completion_tokens", completion),
+        ("total_tokens", total),
+    ):
+        if type(value) is not int or value < 0:
+            errors.append(f"{label}: trace.{field} must be a nonnegative integer for provider usage")
+            valid_counts = False
+    if valid_counts and total != prompt + completion:
+        errors.append(
+            f"{label}: provider token totals disagree: total_tokens "
+            "!= prompt_tokens + completion_tokens"
+        )
+
+    if "provider_usage_by_model" not in trace:
+        if schema_version is not None and schema_version >= 2:
+            errors.append(f"{label}: schema-v2 trace missing provider_usage_by_model")
+        return
+    by_model = trace["provider_usage_by_model"]
+    if not isinstance(by_model, dict):
+        errors.append(f"{label}: provider_usage_by_model must be a mapping")
+        return
+    if not by_model and trace.get("usage_accounting_status") == "provider_usage_complete":
+        errors.append(f"{label}: complete provider usage has an empty per-model ledger")
+        return
+
+    sums = {"prompt_tokens": 0, "completion_tokens": 0}
+    ledger_valid = True
+    for model, bucket in by_model.items():
+        if (type(model) is not str or not model or model != model.strip()
+                or not isinstance(bucket, dict)):
+            errors.append(f"{label}: invalid provider model usage bucket")
+            ledger_valid = False
+            continue
+        for field in sums:
+            value = bucket.get(field)
+            if type(value) is not int or value < 0:
+                errors.append(
+                    f"{label}: provider model {model!r}.{field} "
+                    "must be an explicit nonnegative integer"
+                )
+                ledger_valid = False
+            else:
+                sums[field] += value
+    if valid_counts and ledger_valid:
+        for field in sums:
+            if trace[field] != sums[field]:
+                errors.append(
+                    f"{label}: provider usage ledger mismatch for {field}: "
+                    f"trace={trace[field]}, model_sum={sums[field]}"
+                )
+
+
+
 def _enumerate_pilot_traces(
     output_root: Path, selected_variants: list[str], errors: list[str]
 ) -> list[Path]:
@@ -544,6 +618,17 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
             errors.append(
                 f"{label}: usage_accounting_status={trace.get('usage_accounting_status')}"
             )
+
+        # Schema-v2 traces are written with explicit provider token buckets.
+        # A plausible total_tokens count is insufficient evidence of complete
+        # usage: independently reconcile the model-level and aggregate counts.
+        schema_version = payload.get("schema_version")
+        if "schema_version" in payload and (
+            type(schema_version) is not int or schema_version < 1
+        ):
+            errors.append(f"{label}: invalid trace schema_version")
+        else:
+            _audit_pilot_provider_token_ledger(trace, label, schema_version, errors)
 
         if trace.get("smart_model") != manifest.get("smart_model"):
             errors.append(f"{label}: smart model differs from manifest")
