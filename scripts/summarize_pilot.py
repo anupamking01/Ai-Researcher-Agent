@@ -16,6 +16,7 @@ import hashlib
 import json
 import math
 import statistics
+import unicodedata
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -465,10 +466,34 @@ def _paired_operational_differences(rows):
     return comparisons
 
 
+def _pilot_csv_formula_like(value):
+    """Detect spreadsheet execution prefixes without rewriting evidence cells.
+
+    Spreadsheet applications may discard leading whitespace, control or
+    zero-width format characters before interpreting a formula marker.
+    Reject instead of apostrophe-escaping: altering recorded IDs/statuses
+    would break exact provenance and downstream source reconciliation.
+    """
+    if type(value) is not str:
+        return False
+    for char in value:
+        if char.isspace() or unicodedata.category(char)[0] in ("C", "Z"):
+            continue
+        return char in "=+-@"
+    return False
+
+
 def _render_csv(rows):
-    """Prepare the complete export before either canonical path is published."""
+    """Prepare an analysis-safe export before canonical publication."""
     if not rows:
         return ""
+    for number, row in enumerate(rows, start=2):
+        for column, value in row.items():
+            if _pilot_csv_formula_like(value):
+                raise ValueError(
+                    f"pilot_runs.csv row {number} {column}: formula-like CSV cell; "
+                    "reject unsafe source text rather than modifying evidence"
+                )
     with io.StringIO(newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
         writer.writeheader()

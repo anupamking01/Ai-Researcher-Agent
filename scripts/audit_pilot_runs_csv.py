@@ -12,6 +12,7 @@ import json
 import math
 import os
 import stat
+import unicodedata
 from pathlib import Path
 
 COLUMNS = (
@@ -154,6 +155,17 @@ def _source_cost(trace, prices):
     return total, "estimated_from_frozen_uncached_rates"
 
 
+def _unsafe_spreadsheet_text(value):
+    """Independent export-safety check, separate from the CSV producer."""
+    if type(value) is not str:
+        return False
+    for char in value:
+        if char.isspace() or unicodedata.category(char)[0] in ("C", "Z"):
+            continue
+        return char in "=+-@"
+    return False
+
+
 def _expected_row(arm, task, trace, stem, task_set, prices):
     row = {
         "variant_id": arm, "task_set_id": task_set, "task_id": task,
@@ -174,6 +186,12 @@ def _expected_row(arm, task, trace, stem, task_set, prices):
     row["estimated_cost_usd"], row["cost_accounting_status"] = _source_cost(
         trace, prices
     )
+    # Equality with the original trace is insufficient to certify a CSV safe
+    # for spreadsheet handling. Reject executable-looking source text too.
+    for column in ("variant_id", "task_set_id", "task_id", "run_id",
+                   "cost_accounting_status", *TEXT):
+        if _unsafe_spreadsheet_text(row[column]):
+            raise ValueError(f"formula-like CSV source cell in {column}")
     return row
 
 
