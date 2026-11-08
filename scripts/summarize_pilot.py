@@ -484,6 +484,7 @@ def main():
     _index_pilot_rows(rows)
 
     payload = {
+        "schema_version": 1,
         "n_trace_files": len(rows),
         "pricing_reference": {
             "file": str(PRICING_FILE.relative_to(REPO_ROOT)),

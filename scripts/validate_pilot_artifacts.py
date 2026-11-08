@@ -356,6 +356,137 @@ def _audit_pilot_provider_token_ledger(
 
 
 
+def _audit_pilot_paired_summary(
+    summary: dict,
+    source_traces: dict[tuple[str, str], dict],
+    variants: list[str],
+    task_ids: list[str],
+    errors: list[str],
+) -> None:
+    """Independently reconcile descriptive non-cost pair deltas with traces.
+
+    Validate the published rows *and* their means; agreeing aggregate counts
+    cannot establish that the reported per-task contrasts were calculated
+    from the selected experimental cells. USD estimates are deliberately
+    outside this check: price and missingness require a distinct source audit.
+    """
+
+    def match_number(actual, expected, label):
+        if type(expected) is int:
+            if type(actual) is not int or actual != expected:
+                errors.append(f"{label} disagrees with pilot traces: {actual!r} != {expected!r}")
+            return
+        if expected is None:
+            if actual is not None:
+                errors.append(f"{label} must be null when no paired tasks exist")
+            return
+        if type(actual) not in (int, float):
+            errors.append(f"{label} must be a finite numeric mean")
+            return
+        try:
+            valid = math.isfinite(actual) and math.isclose(
+                actual, expected, rel_tol=1e-12, abs_tol=1e-12
+            )
+        except OverflowError:
+            valid = False
+        if not valid:
+            errors.append(f"{label} disagrees with pilot traces: {actual!r} != {expected!r}")
+
+    comparisons = summary.get("paired_operational_differences")
+    expected_names = {
+        "P6_minus_D6": ("D6", "P6"),
+        "P6V_minus_P6": ("P6", "P6V"),
+    }
+    if not isinstance(comparisons, dict):
+        errors.append("summary paired_operational_differences must be an object")
+        return
+    if set(comparisons) != set(expected_names):
+        errors.append("summary paired comparison names differ from frozen pilot contrasts")
+        return
+
+    for name, (left, right) in expected_names.items():
+        record = comparisons[name]
+        label = f"summary paired_operational_differences.{name}"
+        if not isinstance(record, dict):
+            errors.append(f"{label} must be an object")
+            continue
+
+        union_tasks = sorted(task_ids) if left in variants or right in variants else []
+        paired_tasks = sorted(task_ids) if left in variants and right in variants else []
+        expected_missing_left = union_tasks if left not in variants else []
+        expected_missing_right = union_tasks if right not in variants else []
+        match_number(record.get("n_tasks_union"), len(union_tasks), f"{label}.n_tasks_union")
+        match_number(record.get("n_pairs"), len(paired_tasks), f"{label}.n_pairs")
+        for field, expected in (
+            ("missing_left_task_ids", expected_missing_left),
+            ("missing_right_task_ids", expected_missing_right),
+        ):
+            if record.get(field) != expected:
+                errors.append(f"{label}.{field} disagrees with selected pilot tasks")
+
+        expected_rows = []
+        for task in paired_tasks:
+            before = source_traces[(left, task)]
+            after = source_traces[(right, task)]
+            def latency(trace):
+                value = trace.get("latency_seconds", 0.0)
+                if type(value) not in (int, float) or value < 0:
+                    return None
+                try:
+                    return float(value) if math.isfinite(value) else None
+                except (OverflowError, ValueError):
+                    return None
+
+            first_latency, second_latency = latency(before), latency(after)
+            if first_latency is None or second_latency is None:
+                errors.append(f"{label}: nonfinite or invalid source latency for {task}")
+                return
+            expected_rows.append({
+                "task_id": task,
+                "total_tokens_delta": after["total_tokens"] - before["total_tokens"],
+                "latency_seconds_delta": second_latency - first_latency,
+                "model_calls_delta": after["model_call_count"] - before["model_call_count"],
+                "successful_sources_delta": (
+                    after["successful_source_count"] - before["successful_source_count"]
+                ),
+            })
+        rows = record.get("pairs")
+        if not isinstance(rows, list) or len(rows) != len(expected_rows):
+            errors.append(f"{label}.pairs must include each selected paired task exactly once")
+            continue
+        for position, (observed, expected) in enumerate(zip(rows, expected_rows), start=1):
+            row_label = f"{label}.pairs[{position}]"
+            if not isinstance(observed, dict) or observed.get("task_id") != expected["task_id"]:
+                errors.append(f"{row_label} has a missing, repeated or out-of-order task")
+                continue
+            for field in (
+                "total_tokens_delta", "latency_seconds_delta",
+                "model_calls_delta", "successful_sources_delta",
+            ):
+                value = expected[field]
+                if field == "latency_seconds_delta":
+                    match_number(observed.get(field), float(value), f"{row_label}.{field}")
+                else:
+                    match_number(observed.get(field), value, f"{row_label}.{field}")
+
+        for mean_key, row_key in (
+            ("avg_total_tokens_delta", "total_tokens_delta"),
+            ("avg_latency_seconds_delta", "latency_seconds_delta"),
+            ("avg_model_calls_delta", "model_calls_delta"),
+            ("avg_successful_sources_delta", "successful_sources_delta"),
+        ):
+            values = [item[row_key] for item in expected_rows]
+            if values:
+                try:
+                    mean = math.fsum(values) / len(values)
+                except OverflowError:
+                    errors.append(f"{label}: source values overflow the paired mean")
+                    continue
+            else:
+                mean = None
+            match_number(record.get(mean_key), mean, f"{label}.{mean_key}")
+
+
 def _enumerate_pilot_traces(
     output_root: Path, selected_variants: list[str], errors: list[str]
 ) -> list[Path]:
@@ -479,6 +610,7 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
         )
 
     seen_pairs: set[tuple[str, str]] = set()
+    source_traces: dict[tuple[str, str], dict] = {}
     for trace_file in trace_files:
         payload = _read_artifact(trace_file, output_root, errors)
         if payload is None:
@@ -528,6 +660,8 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
         if pair in seen_pairs:
             errors.append(f"duplicate trace pair: {pair}")
         seen_pairs.add(pair)
+        if pair in expected_pairs and pair not in source_traces:
+            source_traces[pair] = trace
 
         # Never let a self-consistent but incorrectly labelled execution
         # define the treatment it purports to measure. A P6V trace with
@@ -678,6 +812,16 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
                 errors.append(
                     f"summary {variant}.{field}={stats.get(field)} expected={len(task_ids)}"
                 )
+
+    # A versioned summary may not silently omit its paired descriptive rows.
+    # Legacy minimal summary fixtures without a schema marker remain compatible.
+    if "schema_version" in summary:
+        if type(summary["schema_version"]) is not int or summary["schema_version"] != 1:
+            errors.append("summary.schema_version must be the supported integer 1")
+        elif "paired_operational_differences" not in summary:
+            errors.append("versioned pilot summary is missing paired operational comparisons")
+    if "paired_operational_differences" in summary and not errors:
+        _audit_pilot_paired_summary(summary, source_traces, variants, task_ids, errors)
 
     return errors
 
