@@ -401,7 +401,7 @@ def _audit_pilot_paired_summary(
         errors.append("summary paired_operational_differences must be an object")
         return
     if set(comparisons) != set(expected_names):
-        errors.append("summary paired comparison names differ from frozen pilot contrasts")
+        errors.append("summary paired_operational_differences names differ from frozen pilot contrasts")
         return
 
     for name, (left, right) in expected_names.items():
