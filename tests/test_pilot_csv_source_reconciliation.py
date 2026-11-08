@@ -7,7 +7,7 @@ import pytest
 from scripts import audit_pilot_cost_summary as price_auditor
 from scripts import summarize_pilot as producer
 from scripts import validate_pilot_artifacts as validator
-from tests.test_pilot_paired_summary_reconciliation import _version4_fixture
+from test_pilot_paired_summary_reconciliation import _version4_fixture
 
 
 def _fixture(tmp_path, monkeypatch):
@@ -32,7 +32,7 @@ def _rows(root):
 
 def _save_rows(root, fields, rows):
     with (root / "pilot_runs.csv").open("w", newline="", encoding="utf-8") as h:
-        writer = csv.DictWriter(h, fieldnames=fields)
+        writer = csv.DictWriter(h, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -125,7 +125,7 @@ def test_v4_legacy_did_not_require_csv(tmp_path, monkeypatch):
 
 def test_v5_unknown_price_is_exported_as_missing(tmp_path, monkeypatch):
     # The source-to-CSV audit preserves, rather than imputes, missing price.
-    from tests.test_pilot_paired_summary_reconciliation import _version3_fixture
+    from test_pilot_paired_summary_reconciliation import _version3_fixture
     summary = _version3_fixture(tmp_path, monkeypatch, ("P6", "pilot-02"))
     digest = __import__("hashlib").sha256(
         validator.PILOT_PRICING_FILE.read_bytes()
