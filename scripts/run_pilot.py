@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 import subprocess
 import sys
@@ -28,6 +29,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+# The live runner must reject ambiguous input *before* any API, model import,
+# output publication, or execution. Keep its parser aligned with the offline
+# artifact validator rather than reimplementing strict JSON rules here.
+from scripts.validate_pilot_artifacts import _load_json as _load_strict_pilot_json
 
 
 REQUIRED_ENV = (
@@ -64,9 +70,11 @@ def _check_environment():
             f"{names}. Do not rely on application defaults for paper results."
         )
     try:
-        float(os.environ["TEMPERATURE"])
-    except ValueError as exc:
-        raise SystemExit("TEMPERATURE must be a numeric value") from exc
+        temperature = float(os.environ["TEMPERATURE"])
+    except (ValueError, OverflowError) as exc:
+        raise SystemExit("TEMPERATURE must be a finite numeric value") from exc
+    if not math.isfinite(temperature):
+        raise SystemExit("TEMPERATURE must be a finite numeric value")
 
 
 def _validate_run_plan(task_set_id, tasks, variants):
@@ -121,9 +129,13 @@ def _select_tasks(tasks, requested_task_ids):
 
 
 def _load_tasks(task_file: Path):
-    payload = json.loads(task_file.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"pilot task file must contain an object: {task_file}")
+    # Reject repeated keys (including nested task identities), nonstandard
+    # constants and floating-point overflow, rather than letting json.loads
+    # silently replace the frozen task source's earlier values.
+    try:
+        payload = _load_strict_pilot_json(task_file)
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
+        raise ValueError(f"invalid pilot task manifest {task_file}: {exc}") from exc
     tasks = payload.get("tasks")
     task_set_id = payload.get("task_set_id")
     # Check the complete source manifest before any optional CLI filtering.
