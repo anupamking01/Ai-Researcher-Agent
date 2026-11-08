@@ -4,9 +4,15 @@ Read only selected traces and the committed price document; never impute unknown
 model prices or treat this internal consistency check as provider bill custody.
 """
 from collections import Counter
+import hashlib
 import json
 import math
 from pathlib import Path
+
+# Immutable byte identity of the original 2026-09-08 pricing document.
+# This anchor is deliberately independent of the summary's self-reported hash;
+# changing the rate table and recomputing every cost must not pass unnoticed.
+FROZEN_PILOT_PRICING_SHA256 = "35eb6aea8a4e494ea6b94a0905e893849958d37ac386915aac7958b00c4eeace"
 
 
 def _strict_object(pairs):
@@ -35,8 +41,9 @@ def audit_pilot_cost_summary(summary, traces, variants, task_ids, pricing_path: 
     if pricing_path.is_symlink() or not pricing_path.is_file():
         return ["missing or symlinked frozen pilot pricing document"]
     try:
+        pricing_bytes = pricing_path.read_bytes()
         pricing = json.loads(
-            pricing_path.read_text(encoding="utf-8"),
+            pricing_bytes.decode("utf-8"),
             object_pairs_hook=_strict_object,
             parse_constant=_no_constant,
             parse_float=_finite_float,
@@ -47,6 +54,20 @@ def audit_pilot_cost_summary(summary, traces, variants, task_ids, pricing_path: 
             or pricing.get("unit") != "per_1m_text_tokens"
             or not isinstance(pricing.get("models"), dict)):
         return ["frozen pilot pricing must contain per-million models mapping"]
+    # Schema v4 binds the actual *bytes*, not just a reusable date/currency
+    # label or a mutually edited summary digest. Earlier schemas retain their
+    # precisely documented, weaker cost-audit scope.
+    if summary.get("schema_version") == 4:
+        actual_digest = hashlib.sha256(pricing_bytes).hexdigest()
+        if actual_digest != FROZEN_PILOT_PRICING_SHA256:
+            return errors + [
+                "frozen pilot pricing bytes disagree with immutable SHA-256 pin"
+            ]
+        declared = summary.get("pricing_reference")
+        if not isinstance(declared, dict) or declared.get("sha256") != actual_digest:
+            errors.append(
+                "summary.pricing_reference.sha256 disagrees with frozen pilot pricing bytes"
+            )
     reference = summary.get("pricing_reference")
     expected_reference = {
         "file": "experiments/openai_pricing_2026-09-08.json",

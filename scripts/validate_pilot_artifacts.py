@@ -825,17 +825,17 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
     # Legacy minimal summary fixtures without a schema marker remain compatible.
     if "schema_version" in summary:
         if (type(summary["schema_version"]) is not int
-                or summary["schema_version"] not in (1, 2, 3)):
-            errors.append("summary.schema_version must be supported integer 1, 2 or 3")
+                or summary["schema_version"] not in (1, 2, 3, 4)):
+            errors.append("summary.schema_version must be supported integer 1, 2, 3 or 4")
         elif "paired_operational_differences" not in summary:
             errors.append("versioned pilot summary is missing paired operational comparisons")
     if "paired_operational_differences" in summary and not errors:
         _audit_pilot_paired_summary(summary, source_traces, variants, task_ids, errors)
-    if summary.get("schema_version") in (2, 3) and not errors:
+    if summary.get("schema_version") in (2, 3, 4) and not errors:
         errors.extend(audit_pilot_cost_summary(
             summary, source_traces, variants, task_ids, PILOT_PRICING_FILE
         ))
-    if summary.get("schema_version") == 3 and not errors:
+    if summary.get("schema_version") in (3, 4) and not errors:
         errors.extend(audit_pilot_variant_summary(
             summary, source_traces, variants, task_ids
         ))

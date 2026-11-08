@@ -2,7 +2,9 @@
 
 No live treatments, evaluators, frozen analysis, or human ratings are run.
 """
+import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -202,7 +204,7 @@ def test_missing_or_unselected_comparison_set_fails(tmp_path, bad):
     assert "paired_operational_differences" in _errors(tmp_path)
 
 
-@pytest.mark.parametrize("bad", [None, True, 1.0, "1", 4])
+@pytest.mark.parametrize("bad", [None, True, 1.0, "1", 5])
 def test_invalid_summary_version_rejected(tmp_path, bad):
     data = _write(tmp_path)
     data["schema_version"] = bad
@@ -505,3 +507,82 @@ def test_version3_requires_verified_only_mean_null_for_unverified_arm(
     data["variant_summary"]["D6"]["avg_claim_support_rate_verified_only"] = 0.0
     _save(tmp_path, data)
     assert "avg_claim_support_rate_verified_only" in _errors(tmp_path)
+
+
+# Schema v4 adds a byte-level price-table custody boundary. Every test below
+# uses synthetic pilot cells and an explicitly substituted synthetic price pin;
+# no treatment/evaluator/provider call or frozen result is regenerated.
+from scripts import audit_pilot_cost_summary as pilot_price_auditor
+
+
+def _version4_fixture(root, monkeypatch):
+    data = _version3_fixture(root, monkeypatch)
+    pricing = pilot_validator.PILOT_PRICING_FILE
+    digest = hashlib.sha256(pricing.read_bytes()).hexdigest()
+    monkeypatch.setattr(
+        pilot_price_auditor, "FROZEN_PILOT_PRICING_SHA256", digest
+    )
+    data["schema_version"] = 4
+    data["pricing_reference"]["sha256"] = digest
+    _save(root, data)
+    return data
+
+
+def test_committed_frozen_pilot_pricing_matches_independent_byte_pin():
+    price = (Path(__file__).resolve().parents[1]
+             / "experiments/openai_pricing_2026-09-08.json")
+    assert hashlib.sha256(price.read_bytes()).hexdigest() == (
+        pilot_price_auditor.FROZEN_PILOT_PRICING_SHA256
+    )
+
+
+def test_version4_price_pin_accepts_unchanged_synthetic_price(tmp_path, monkeypatch):
+    _version4_fixture(tmp_path, monkeypatch)
+    assert validate_pilot(tmp_path) == []
+
+
+@pytest.mark.parametrize("bad", [None, "", "0" * 64, True, 123])
+def test_version4_rejects_missing_or_falsified_summary_price_hash(
+    tmp_path, monkeypatch, bad
+):
+    data = _version4_fixture(tmp_path, monkeypatch)
+    if bad is None:
+        data["pricing_reference"].pop("sha256")
+    else:
+        data["pricing_reference"]["sha256"] = bad
+    _save(tmp_path, data)
+    assert "pricing_reference.sha256" in _errors(tmp_path)
+
+
+def test_version4_rejects_price_bytes_changed_with_all_costs_unchanged(
+    tmp_path, monkeypatch
+):
+    _version4_fixture(tmp_path, monkeypatch)
+    pricing = pilot_validator.PILOT_PRICING_FILE
+    pricing.write_bytes(pricing.read_bytes() + b"\n")
+    assert "immutable SHA-256 pin" in _errors(tmp_path)
+
+
+def test_version4_rejects_coordinated_price_and_declared_hash_rewrite(
+    tmp_path, monkeypatch
+):
+    data = _version4_fixture(tmp_path, monkeypatch)
+    pricing = pilot_validator.PILOT_PRICING_FILE
+    changed = json.loads(pricing.read_text(encoding="utf-8"))
+    changed["models"]["smart"]["output"] = 23.0
+    pricing.write_text(json.dumps(changed), encoding="utf-8")
+    # A jointly updated digest cannot replace the independently recorded pin.
+    data["pricing_reference"]["sha256"] = hashlib.sha256(
+        pricing.read_bytes()
+    ).hexdigest()
+    _save(tmp_path, data)
+    assert "immutable SHA-256 pin" in _errors(tmp_path)
+
+
+def test_version3_preserves_legacy_price_audit_scope_without_new_byte_claim(
+    tmp_path, monkeypatch
+):
+    _version3_fixture(tmp_path, monkeypatch)
+    pricing = pilot_validator.PILOT_PRICING_FILE
+    pricing.write_bytes(pricing.read_bytes() + b"\n")
+    assert validate_pilot(tmp_path) == []

@@ -9,6 +9,7 @@ a dated, frozen pricing table committed with the experiment.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 import statistics
@@ -484,10 +485,11 @@ def main():
     _index_pilot_rows(rows)
 
     payload = {
-        "schema_version": 3,
+        "schema_version": 4,
         "n_trace_files": len(rows),
         "pricing_reference": {
             "file": str(PRICING_FILE.relative_to(REPO_ROOT)),
+            "sha256": hashlib.sha256(PRICING_FILE.read_bytes()).hexdigest(),
             "effective_date": pricing.get("effective_date"),
             "currency": pricing.get("currency"),
             "method": "provider-reported prompt/output tokens multiplied by frozen uncached text-token rates",
