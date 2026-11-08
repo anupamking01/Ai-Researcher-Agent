@@ -18,9 +18,11 @@ from pathlib import Path
 try:
     from .audit_pilot_cost_summary import audit_pilot_cost_summary
     from .audit_pilot_variant_summary import audit_pilot_variant_summary
+    from .audit_pilot_runs_csv import audit_pilot_runs_csv
 except ImportError:  # python scripts/validate_pilot_artifacts.py
     from audit_pilot_cost_summary import audit_pilot_cost_summary
     from audit_pilot_variant_summary import audit_pilot_variant_summary
+    from audit_pilot_runs_csv import audit_pilot_runs_csv
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -619,6 +621,7 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
 
     seen_pairs: set[tuple[str, str]] = set()
     source_traces: dict[tuple[str, str], dict] = {}
+    source_stems: dict[tuple[str, str], str] = {}
     for trace_file in trace_files:
         payload = _read_artifact(trace_file, output_root, errors)
         if payload is None:
@@ -670,6 +673,7 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
         seen_pairs.add(pair)
         if pair in expected_pairs and pair not in source_traces:
             source_traces[pair] = trace
+            source_stems[pair] = trace_file.stem
 
         # Never let a self-consistent but incorrectly labelled execution
         # define the treatment it purports to measure. A P6V trace with
@@ -825,19 +829,25 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
     # Legacy minimal summary fixtures without a schema marker remain compatible.
     if "schema_version" in summary:
         if (type(summary["schema_version"]) is not int
-                or summary["schema_version"] not in (1, 2, 3, 4)):
-            errors.append("summary.schema_version must be supported integer 1, 2, 3 or 4")
+                or summary["schema_version"] not in (1, 2, 3, 4, 5)):
+            errors.append("summary.schema_version must be supported integer 1, 2, 3, 4 or 5")
         elif "paired_operational_differences" not in summary:
             errors.append("versioned pilot summary is missing paired operational comparisons")
     if "paired_operational_differences" in summary and not errors:
         _audit_pilot_paired_summary(summary, source_traces, variants, task_ids, errors)
-    if summary.get("schema_version") in (2, 3, 4) and not errors:
+    if summary.get("schema_version") in (2, 3, 4, 5) and not errors:
         errors.extend(audit_pilot_cost_summary(
             summary, source_traces, variants, task_ids, PILOT_PRICING_FILE
         ))
-    if summary.get("schema_version") in (3, 4) and not errors:
+    if summary.get("schema_version") in (3, 4, 5) and not errors:
         errors.extend(audit_pilot_variant_summary(
             summary, source_traces, variants, task_ids
+        ))
+
+    if summary.get("schema_version") == 5 and not errors:
+        errors.extend(audit_pilot_runs_csv(
+            output_root / "pilot_runs.csv", source_traces, source_stems,
+            variants, task_ids, task_set_id, PILOT_PRICING_FILE,
         ))
 
     return errors

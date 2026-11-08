@@ -204,7 +204,7 @@ def test_missing_or_unselected_comparison_set_fails(tmp_path, bad):
     assert "paired_operational_differences" in _errors(tmp_path)
 
 
-@pytest.mark.parametrize("bad", [None, True, 1.0, "1", 5])
+@pytest.mark.parametrize("bad", [None, True, 1.0, "1", 6])
 def test_invalid_summary_version_rejected(tmp_path, bad):
     data = _write(tmp_path)
     data["schema_version"] = bad

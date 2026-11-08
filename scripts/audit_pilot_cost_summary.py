@@ -57,7 +57,7 @@ def audit_pilot_cost_summary(summary, traces, variants, task_ids, pricing_path: 
     # Schema v4 binds the actual *bytes*, not just a reusable date/currency
     # label or a mutually edited summary digest. Earlier schemas retain their
     # precisely documented, weaker cost-audit scope.
-    if summary.get("schema_version") == 4:
+    if summary.get("schema_version") in (4, 5):
         actual_digest = hashlib.sha256(pricing_bytes).hexdigest()
         if actual_digest != FROZEN_PILOT_PRICING_SHA256:
             return errors + [
