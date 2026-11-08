@@ -61,10 +61,10 @@ def _finite_json_float(token: str) -> float:
     return value
 
 
-def _load_json(path: Path) -> dict:
-    """Parse one unambiguous, finite JSON object without last-key-wins semantics."""
+def _parse_json_document(document: str) -> dict:
+    """Apply the same strict JSON rules to captured bytes and path reads."""
     payload = json.loads(
-        path.read_text(encoding="utf-8"),
+        document,
         object_pairs_hook=_unique_json_object,
         parse_constant=_reject_json_constant,
         parse_float=_finite_json_float,
@@ -72,6 +72,11 @@ def _load_json(path: Path) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("top-level JSON document must be an object")
     return payload
+
+
+def _load_json(path: Path) -> dict:
+    """Parse one unambiguous, finite JSON object without last-key-wins semantics."""
+    return _parse_json_document(path.read_text(encoding="utf-8"))
 
 
 def _read_artifact(path: Path, output_root: Path, errors: list[str]) -> dict | None:

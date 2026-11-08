@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import io
 import os
+import stat
 import tempfile
 import hashlib
 import json
@@ -23,9 +24,15 @@ from pathlib import Path
 # Use the same ambiguity-rejecting JSON document parser as the postrun
 # validator; this offline summarizer is also routinely run on its own.
 try:
-    from .validate_pilot_artifacts import _load_json as _load_strict_pilot_json
+    from .validate_pilot_artifacts import (
+        _load_json as _load_strict_pilot_json,
+        _parse_json_document as _parse_strict_pilot_json_document,
+    )
 except ImportError:  # python scripts/summarize_pilot.py
-    from validate_pilot_artifacts import _load_json as _load_strict_pilot_json
+    from validate_pilot_artifacts import (
+        _load_json as _load_strict_pilot_json,
+        _parse_json_document as _parse_strict_pilot_json_document,
+    )
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +41,8 @@ OUTPUT_JSON = REPO_ROOT / "outputs" / "pilot_summary.json"
 OUTPUT_CSV = REPO_ROOT / "outputs" / "pilot_runs.csv"
 PRICING_FILE = REPO_ROOT / "experiments" / "openai_pricing_2026-09-08.json"
 VARIANT_ORDER = ("D6", "P6", "P6V")
+PILOT_TASKS_PER_VARIANT = 5
+MAX_PILOT_TRACE_JSON_BYTES = 8 * 1024 * 1024  # cap untrusted local trace parsing
 
 
 def _pilot_counter(trace, field):
@@ -178,43 +187,105 @@ def _estimate_reported_token_cost(provider_usage_by_model, pricing):
         return None, "no_reported_tokens"
     return total_cost, "estimated_from_frozen_uncached_rates"
 
-def _validate_pilot_trace_inventory():
-    """Refuse hidden evidence candidates before selecting diagnostic-pilot rows.
+def _bounded_pilot_entries(directory: Path, maximum: int) -> list[Path]:
+    """Read no more than the frozen design's expected entries plus one."""
+    entries = []
+    with os.scandir(directory) as iterator:
+        for entry in iterator:
+            if len(entries) >= maximum:
+                raise ValueError(
+                    f"pilot trace inventory entry limit exceeded in {directory}"
+                )
+            entries.append(Path(entry.path))
+    return entries
 
-    glob("*.json") silently ignores unexpected arm directories, nested
-    artifacts, staging files, and symlinks. Their presence makes the source
-    set ambiguous even when every *selected* trace is well formed.
+
+def _validate_pilot_trace_inventory() -> dict[str, list[Path]]:
+    """Return a bounded, complete source roster rather than rescanning glob(). 
+
+    A five-task, three-treatment diagnostic pilot has at most five trace files
+    per treatment. Reject extra/unselected files before parsing any source.
+    This is not an independently authenticated historical source manifest.
     """
+    inventory: dict[str, list[Path]] = {arm: [] for arm in VARIANT_ORDER}
     if TRACE_ROOT.is_symlink():
         raise ValueError("pilot trace root must not be a symlink")
     if not TRACE_ROOT.exists():
-        return
+        return inventory  # preserve the historical empty-workspace behavior
     if not TRACE_ROOT.is_dir():
         raise ValueError("pilot trace root must be a directory")
-    for variant_dir in TRACE_ROOT.iterdir():
+    for variant_dir in _bounded_pilot_entries(TRACE_ROOT, len(VARIANT_ORDER)):
         if (variant_dir.is_symlink() or not variant_dir.is_dir()
                 or variant_dir.name not in VARIANT_ORDER):
             raise ValueError(f"unselected pilot trace directory or entry: {variant_dir}")
-        for entry in variant_dir.iterdir():
+        for entry in _bounded_pilot_entries(variant_dir, PILOT_TASKS_PER_VARIANT):
             if entry.is_symlink() or not entry.is_file() or entry.suffix != ".json":
                 raise ValueError(f"unselected pilot trace entry: {entry}")
+            inventory[variant_dir.name].append(entry)
+    return {arm: sorted(paths) for arm, paths in inventory.items()}
+
+
+def _trace_snapshot_identity(info) -> tuple[int, ...]:
+    """Capture identity plus mutation-sensitive metadata for one trace file."""
+    return (
+        info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+        info.st_size, info.st_mtime_ns, info.st_ctime_ns,
+    )
+
+
+def _load_captured_pilot_trace(path: Path) -> dict:
+    """Parse one bounded, single-link, descriptor-held local source snapshot.
+
+    A pathname-only second read after inventory validation could follow a
+    replacement/symlink or see a concurrently modified trace. Preserve the
+    strict JSON contract while bounding memory and checking read stability.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    descriptor = os.open(path, flags)
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise ValueError("pilot trace must be a single-link regular file")
+        if before.st_size > MAX_PILOT_TRACE_JSON_BYTES:
+            raise ValueError("pilot trace exceeds 8 MiB source-size limit")
+        captured = bytearray()
+        while True:
+            # One extra byte identifies unadvertised growth without unbounded read.
+            length = min(1024 * 1024, MAX_PILOT_TRACE_JSON_BYTES + 1 - len(captured))
+            if length <= 0:
+                raise ValueError("pilot trace exceeds 8 MiB source-size limit")
+            chunk = os.read(descriptor, length)
+            if not chunk:
+                break
+            captured.extend(chunk)
+            if len(captured) > MAX_PILOT_TRACE_JSON_BYTES:
+                raise ValueError("pilot trace exceeds 8 MiB source-size limit")
+        after = os.fstat(descriptor)
+        at_path = path.lstat()
+        if (
+            _trace_snapshot_identity(before) != _trace_snapshot_identity(after)
+            or _trace_snapshot_identity(before) != _trace_snapshot_identity(at_path)
+            or len(captured) != before.st_size
+        ):
+            raise ValueError("pilot trace changed during bounded source capture")
+    finally:
+        os.close(descriptor)
+    return _parse_strict_pilot_json_document(captured.decode("utf-8"))
 
 
 def _load_traces(pricing):
     # Inventory the entire root, not only files matched by known-arm globbing.
-    _validate_pilot_trace_inventory()
+    inventory = _validate_pilot_trace_inventory()
     rows = []
     for variant in VARIANT_ORDER:
-        variant_dir = TRACE_ROOT / variant
-        if not variant_dir.exists():
-            continue
-        for path in sorted(variant_dir.glob("*.json")):
+        for path in inventory[variant]:
             try:
-                payload = _load_strict_pilot_json(path)
+                payload = _load_captured_pilot_trace(path)
             except (UnicodeError, ValueError, OSError, RecursionError) as exc:
-                # Skipping a damaged run silently changes which pilot cells are
-                # selected for a descriptive comparison. Fail before publication.
-                raise ValueError(f"unreadable or malformed pilot trace: {path}") from exc
+                # Never silently skip an oversized, unstable or invalid source.
+                raise ValueError(
+                    f"unreadable or malformed pilot trace: {path}: {exc}"
+                ) from exc
             if (not isinstance(payload, dict)
                     or not isinstance(payload.get("trace"), dict)
                     or not isinstance(payload.get("experiment"), dict)):
