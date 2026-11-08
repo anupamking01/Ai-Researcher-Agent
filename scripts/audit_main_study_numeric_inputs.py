@@ -11,6 +11,7 @@ import csv
 from decimal import Decimal, InvalidOperation
 import hashlib
 import io
+import math
 import os
 import stat
 import json
@@ -30,6 +31,7 @@ MAX_CSV_BYTES = 2 * 1024 * 1024
 # frozen-input audit independently applies the same exact-integer ceiling.
 MAX_NUMERIC_TOKEN_CHARS = 128
 MAX_FLOAT_DECIMAL_EXPONENT = 308
+MIN_FLOAT_DECIMAL_EXPONENT = -324
 MAX_EXACT_INTEGER = (1 << 53) - 1
 
 
@@ -50,11 +52,17 @@ def _number(row: dict, key: str, label: str) -> Decimal:
         raise NumericInputError(f"{label}: invalid numeric {key}") from exc
     if not number.is_finite() or number < 0:
         raise NumericInputError(f"{label}: nonfinite or negative {key}")
-    # Values outside the finite binary64 decimal magnitude range cannot be
-    # represented meaningfully by the historical float-based input pipeline.
-    # Zero is safe even with an extreme written exponent: no expansion needed.
-    if number != 0 and abs(number.adjusted()) > MAX_FLOAT_DECIMAL_EXPONENT:
-        raise NumericInputError(f"{label}: extreme numeric exponent {key}")
+    # Bound the exponent before conversion; an exponent bomb is only a few
+    # bytes in CSV. A nonzero input must not overflow to infinity or silently
+    # underflow to zero in the historical binary64-based analysis pipeline.
+    # Permit finite subnormal values down to approximately 5e-324.
+    if number != 0:
+        exponent = number.adjusted()
+        if not MIN_FLOAT_DECIMAL_EXPONENT <= exponent <= MAX_FLOAT_DECIMAL_EXPONENT:
+            raise NumericInputError(f"{label}: extreme numeric exponent {key}")
+        converted = float(number)
+        if not math.isfinite(converted) or converted == 0:
+            raise NumericInputError(f"{label}: nonrepresentable numeric {key}")
     return number
 
 

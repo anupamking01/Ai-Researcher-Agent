@@ -270,7 +270,7 @@ def test_reject_reused_evaluator_run_id_across_different_cells():
 
 
 @pytest.mark.parametrize("value", [
-    "1e1000000000", "1e-1000000000", "1e309", "1e-309",
+    "1e1000000000", "1e-1000000000", "1e309", "1e-325",
     "9" * (audit.MAX_NUMERIC_TOKEN_CHARS + 1),
 ])
 def test_extreme_or_oversized_measurement_tokens_fail_closed(value):
@@ -295,3 +295,13 @@ def test_maximum_exact_integer_and_small_decimal_measurement_remain_parseable():
         "treatment_cost_usd": "1e-20",
     })
     assert result["n_cells"] == 1
+
+
+@pytest.mark.parametrize("value", ["9e308", "1e-324"])
+def test_nonzero_decimal_must_not_overflow_or_underflow_binary64(value):
+    with pytest.raises(audit.NumericInputError, match="nonrepresentable numeric"):
+        _check(main_change={"treatment_cost_usd": value})
+
+
+def test_smallest_subnormal_float_is_still_a_valid_input():
+    assert _check(main_change={"treatment_cost_usd": "5e-324"})["n_cells"] == 1

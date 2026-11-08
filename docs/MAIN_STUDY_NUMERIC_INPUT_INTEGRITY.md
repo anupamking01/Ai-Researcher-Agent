@@ -82,13 +82,15 @@ automated/pilot/exploratory results remain unchanged.
 
 The independent preflight rejects numeric tokens longer than 128 characters,
 nonzero decimal measurements whose adjusted base-10 exponent lies outside
-[-308, 308], and integer counts above 2^53−1. These are defensive parsing
+[-324, 308] or which overflow or underflow to a nonfinite/zero binary64
+value, and integer counts above 2^53−1. These are defensive parsing
 bounds, not new scientific thresholds or revised scores. In particular, a
 short token such as `1e1000000000` must not allocate a billion-digit integer
 when an externally supplied CSV is audited. The count ceiling matches the
 separate pinned-input auditor's exact-integer limit; all original CSV values
 remain unchanged. Synthetic tests exercise oversized tokens, extreme positive
-and negative exponents, out-of-range counts, and boundary acceptance.
+and negative exponents, nonrepresentable binary64 values, out-of-range
+counts, and acceptance of the smallest subnormal value.
 
 This check is independent of, and does not replace, the frozen byte-pinned
 analysis-input verifier. It does not establish historical report/trace custody,
