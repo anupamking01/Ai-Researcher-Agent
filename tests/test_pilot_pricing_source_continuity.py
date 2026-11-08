@@ -3,6 +3,7 @@
 No treatment/evaluator API calls or changes to frozen findings.
 """
 from pathlib import Path
+import json
 import os
 
 import pytest
@@ -19,6 +20,26 @@ def _price(tmp_path, monkeypatch):
     target.write_bytes(FROZEN.read_bytes())
     monkeypatch.setattr(pilot, "PRICING_FILE", target)
     return target
+
+
+def _pilot_setup(tmp_path, monkeypatch):
+    folder = tmp_path / "traces" / "D6"
+    folder.mkdir(parents=True)
+    (folder / "d6-01.json").write_text(json.dumps({
+        "trace": {
+            "variant_id": "D6", "task_set_id": "synthetic-pilot",
+            "task_id": "pilot-01", "run_id": "d6-01", "completed": True,
+        },
+        "experiment": {
+            "variant_id": "D6", "task_set_id": "synthetic-pilot",
+            "task_id": "pilot-01",
+        },
+    }), encoding="utf-8")
+    monkeypatch.setattr(pilot, "TRACE_ROOT", tmp_path / "traces")
+    monkeypatch.setattr(pilot, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(pilot, "OUTPUT_JSON", tmp_path / "pilot_summary.json")
+    monkeypatch.setattr(pilot, "OUTPUT_CSV", tmp_path / "pilot_runs.csv")
+    return _price(tmp_path, monkeypatch)
 
 
 def test_captures_one_pinned_frozen_price_generation(tmp_path, monkeypatch):
@@ -72,8 +93,7 @@ def test_symlinked_frozen_price_is_rejected(tmp_path, monkeypatch):
 
 
 def test_price_mutation_during_summary_stops_both_publications(tmp_path, monkeypatch):
-    from tests.test_pilot_summary_source_continuity import _setup
-    _setup(tmp_path, monkeypatch)
+    _pilot_setup(tmp_path, monkeypatch)
     original = pilot._load_traces
 
     def mutate_after_costing(pricing, *, source_snapshot=None):
@@ -91,8 +111,7 @@ def test_price_mutation_during_summary_stops_both_publications(tmp_path, monkeyp
 def test_price_mutation_after_first_output_rolls_back_only_owned_json(
     tmp_path, monkeypatch,
 ):
-    from tests.test_pilot_summary_source_continuity import _setup
-    _setup(tmp_path, monkeypatch)
+    _pilot_setup(tmp_path, monkeypatch)
     original_link = os.link
 
     def mutate_after_first_link(source, target, *args, **kwargs):
