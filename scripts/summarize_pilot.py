@@ -9,6 +9,9 @@ a dated, frozen pricing table committed with the experiment.
 from __future__ import annotations
 
 import csv
+import io
+import os
+import tempfile
 import hashlib
 import json
 import math
@@ -462,16 +465,79 @@ def _paired_operational_differences(rows):
     return comparisons
 
 
-def _write_csv(rows):
-    OUTPUT_CSV.parent.mkdir(parents=True, exist_ok=True)
+def _render_csv(rows):
+    """Prepare the complete export before either canonical path is published."""
     if not rows:
-        OUTPUT_CSV.write_text("", encoding="utf-8")
-        return
-    fieldnames = list(rows[0].keys())
-    with OUTPUT_CSV.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        return ""
+    with io.StringIO(newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
+        return handle.getvalue()
+
+
+def _write_csv(rows):
+    """Legacy fixture helper; the standalone CLI uses create-only publication."""
+    OUTPUT_CSV.parent.mkdir(parents=True, exist_ok=True)
+    with OUTPUT_CSV.open("w", encoding="utf-8", newline="") as handle:
+        handle.write(_render_csv(rows))
+
+
+def _publish_pilot_outputs(payload, rows):
+    """Publish complete JSON and CSV bytes, refusing pre-existing output paths.
+
+    Stage and fsync both files before linking either canonical name. Hard-link
+    publication is create-only even if another process creates a destination
+    after preflight. If the second link fails, remove only our first link;
+    never delete or overwrite a competing file. Two names are not a single
+    atomic transaction and this does not authenticate upstream traces.
+    """
+    if OUTPUT_JSON == OUTPUT_CSV:
+        raise ValueError("pilot JSON and CSV output paths must differ")
+    targets = (
+        (OUTPUT_JSON, json.dumps(payload, indent=2, sort_keys=True)),
+        (OUTPUT_CSV, _render_csv(rows)),
+    )
+    for target, _ in targets:
+        if target.is_symlink() or target.exists():
+            raise FileExistsError(
+                f"pilot output already exists: {target}; preserve existing evidence"
+            )
+
+    staged = []
+    linked = []
+    try:
+        for target, content in targets:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", newline="",
+                dir=target.parent, prefix=".pilot-publication-", suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temporary = Path(handle.name)
+                staged.append((temporary, target))
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+
+        for temporary, target in staged:
+            # Link fails with FileExistsError; it never replaces a prior file.
+            os.link(temporary, target)
+            linked.append((temporary, target))
+    except Exception:
+        for temporary, target in reversed(linked):
+            try:
+                source, destination = temporary.stat(), target.lstat()
+                if (source.st_dev, source.st_ino) == (
+                    destination.st_dev, destination.st_ino
+                ):
+                    target.unlink()
+            except FileNotFoundError:
+                pass
+        raise
+    finally:
+        for temporary, _ in staged:
+            temporary.unlink(missing_ok=True)
 
 
 def main():
@@ -505,12 +571,7 @@ def main():
             "Long-context pricing multipliers, if triggered, require separate review before publication claims.",
         ],
     }
-    OUTPUT_JSON.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_JSON.write_text(
-        json.dumps(payload, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    _write_csv(rows)
+    _publish_pilot_outputs(payload, rows)
 
     print(json.dumps(payload["variant_summary"], indent=2, sort_keys=True))
     print(f"pricing={PRICING_FILE}")
