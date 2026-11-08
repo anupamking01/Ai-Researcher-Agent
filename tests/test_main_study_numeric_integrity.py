@@ -267,3 +267,31 @@ def test_reject_reused_evaluator_run_id_across_different_cells():
             variants=("D3",), tasks=("synthetic-only", "synthetic-second"),
             budgets={"D3": 3},
         )
+
+
+@pytest.mark.parametrize("value", [
+    "1e1000000000", "1e-1000000000", "1e309", "1e-309",
+    "9" * (audit.MAX_NUMERIC_TOKEN_CHARS + 1),
+])
+def test_extreme_or_oversized_measurement_tokens_fail_closed(value):
+    # An exponent-bomb is small in CSV bytes but can be costly when normalized
+    # or converted to an int/float by an independent offline verifier.
+    with pytest.raises(audit.NumericInputError, match="extreme numeric exponent|oversized numeric token"):
+        _check(main_change={"treatment_cost_usd": value})
+
+
+@pytest.mark.parametrize("value", [
+    str(audit.MAX_EXACT_INTEGER + 1),
+    "1e20",
+])
+def test_inexact_or_unbounded_integer_counts_fail_closed(value):
+    with pytest.raises(audit.NumericInputError, match="exact-integer ceiling"):
+        _check(main_change={"total_tokens": value})
+
+
+def test_maximum_exact_integer_and_small_decimal_measurement_remain_parseable():
+    result = _check(main_change={
+        "total_tokens": str(audit.MAX_EXACT_INTEGER),
+        "treatment_cost_usd": "1e-20",
+    })
+    assert result["n_cells"] == 1

@@ -25,6 +25,12 @@ BUDGETS = {"D3": 3, "D6": 6, "P6": 6, "P6V": 6}
 CLAIM_CAP = 12
 TOL = Decimal("0.000000000001")
 MAX_CSV_BYTES = 2 * 1024 * 1024
+# Guard the independent Decimal parser against tiny exponent-bomb tokens and
+# count values too large for exact downstream float-based analysis. The existing
+# frozen-input audit independently applies the same exact-integer ceiling.
+MAX_NUMERIC_TOKEN_CHARS = 128
+MAX_FLOAT_DECIMAL_EXPONENT = 308
+MAX_EXACT_INTEGER = (1 << 53) - 1
 
 
 class NumericInputError(ValueError):
@@ -35,12 +41,20 @@ def _number(row: dict, key: str, label: str) -> Decimal:
     raw = row.get(key)
     if raw is None or str(raw).strip() == "":
         raise NumericInputError(f"{label}: missing numeric {key}")
+    token = str(raw).strip()
+    if len(token) > MAX_NUMERIC_TOKEN_CHARS:
+        raise NumericInputError(f"{label}: oversized numeric token {key}")
     try:
-        number = Decimal(str(raw).strip())
+        number = Decimal(token)
     except (InvalidOperation, ValueError, TypeError) as exc:
         raise NumericInputError(f"{label}: invalid numeric {key}") from exc
     if not number.is_finite() or number < 0:
         raise NumericInputError(f"{label}: nonfinite or negative {key}")
+    # Values outside the finite binary64 decimal magnitude range cannot be
+    # represented meaningfully by the historical float-based input pipeline.
+    # Zero is safe even with an extreme written exponent: no expansion needed.
+    if number != 0 and abs(number.adjusted()) > MAX_FLOAT_DECIMAL_EXPONENT:
+        raise NumericInputError(f"{label}: extreme numeric exponent {key}")
     return number
 
 
@@ -48,6 +62,8 @@ def _count(row: dict, key: str, label: str) -> int:
     value = _number(row, key, label)
     if value != value.to_integral_value():
         raise NumericInputError(f"{label}: fractional count {key}")
+    if value > MAX_EXACT_INTEGER:
+        raise NumericInputError(f"{label}: count {key} exceeds exact-integer ceiling")
     return int(value)
 
 

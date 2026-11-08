@@ -76,3 +76,20 @@ restores them between observation points. The auditor reports hashes of the
 actual bytes it parsed; it does not revise or authenticate the original 40
 reports/traces. The separately frozen September analyzer and all recorded
 automated/pilot/exploratory results remain unchanged.
+
+
+## Bounded numeric conversion
+
+The independent preflight rejects numeric tokens longer than 128 characters,
+nonzero decimal measurements whose adjusted base-10 exponent lies outside
+[-308, 308], and integer counts above 2^53−1. These are defensive parsing
+bounds, not new scientific thresholds or revised scores. In particular, a
+short token such as `1e1000000000` must not allocate a billion-digit integer
+when an externally supplied CSV is audited. The count ceiling matches the
+separate pinned-input auditor's exact-integer limit; all original CSV values
+remain unchanged. Synthetic tests exercise oversized tokens, extreme positive
+and negative exponents, out-of-range counts, and boundary acceptance.
+
+This check is independent of, and does not replace, the frozen byte-pinned
+analysis-input verifier. It does not establish historical report/trace custody,
+preregistered confirmatory status, or human-evaluation results.
