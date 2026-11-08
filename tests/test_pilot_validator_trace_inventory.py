@@ -18,13 +18,18 @@ def _write(root):
         "schema_version": 1, "task_set_id": "synthetic-inventory",
         "variants": [arm], "task_ids": [task_id],
         "smart_model": "smart", "fast_model": "fast", "temperature": 1.0,
+        "started_at_utc": "2026-09-07T23:59:59+00:00",
     }
     progress = {
         "schema_version": 1, "task_set_id": "synthetic-inventory",
         "variants": [arm], "task_ids": [task_id],
         "total_expected_runs": 1, "attempted_runs": 1, "completed_runs": 1,
         "failed_runs": 0, "timeout_runs": 0, "current": None,
-        "events": [{"variant": arm, "task_id": task_id, "status": "completed"}],
+        "started_at_utc": "2026-09-08T00:00:00+00:00",
+        "finished_at_utc": "2026-09-08T00:02:00+00:00",
+        "events": [{"variant": arm, "task_id": task_id, "status": "completed",
+                    "started_at_utc": "2026-09-08T00:00:10+00:00",
+                    "finished_at_utc": "2026-09-08T00:01:00+00:00"}],
     }
     summary = {
         "n_trace_files": 1,

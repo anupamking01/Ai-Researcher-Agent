@@ -8,8 +8,10 @@ into CI assertions so a run is only green when its artifacts are usable.
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime, timedelta
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -182,6 +184,104 @@ def _audit_progress_events(
 
 
 
+# The runner records these UTC instants using datetime.isoformat(). Accept
+# the equally explicit 'Z' suffix but never local/naive or ambiguous offsets.
+_UTC_INSTANT = re.compile(
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\\.[0-9]{1,6})?(?:Z|\\+00:00)$"
+)
+
+
+def _pilot_utc_instant(value, source: str, errors: list[str]) -> datetime | None:
+    if type(value) is not str or not _UTC_INSTANT.fullmatch(value):
+        errors.append(f"{source} must be an explicit UTC ISO-8601 timestamp")
+        return None
+    try:
+        result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        errors.append(f"{source} must be a valid UTC ISO-8601 timestamp")
+        return None
+    if result.utcoffset() != timedelta(0):
+        errors.append(f"{source} must be in UTC")
+        return None
+    return result
+
+
+def _audit_pilot_clock_window(
+    manifest: dict, progress: dict, errors: list[str]
+) -> None:
+    """Verify versioned pilot event timestamps without assuming treatment order.
+
+    The serial live runner records a launch, a checkpoint start/finish and
+    per-cell event intervals. These instants are *reported metadata*, not
+    authenticated wall-clock receipts or proof of randomized assignment.
+    Unversioned historical checkpoints retain their explicit legacy
+    compatibility, but malformed version markers cannot bypass this audit.
+    """
+    if "schema_version" not in progress:
+        return
+    version = progress["schema_version"]
+    if type(version) is not int or version < 1:
+        errors.append("progress.schema_version must be a positive integer")
+        return
+
+    manifest_start = _pilot_utc_instant(
+        manifest.get("started_at_utc"), "manifest.started_at_utc", errors
+    )
+    progress_start = _pilot_utc_instant(
+        progress.get("started_at_utc"), "progress.started_at_utc", errors
+    )
+    progress_finish = _pilot_utc_instant(
+        progress.get("finished_at_utc"), "progress.finished_at_utc", errors
+    )
+    if manifest_start is not None and progress_start is not None:
+        if progress_start < manifest_start:
+            errors.append("progress started before manifest creation")
+    if progress_start is not None and progress_finish is not None:
+        if progress_finish < progress_start:
+            errors.append("progress finished before it started")
+
+    events = progress.get("events")
+    if not isinstance(events, list):
+        return  # Already diagnosed by the event-ledger integrity audit.
+
+    intervals = []
+    for index, event in enumerate(events, start=1):
+        if not isinstance(event, dict):
+            continue  # Already diagnosed by the event-ledger integrity audit.
+        label = f"progress.events[{index}]"
+        started = _pilot_utc_instant(
+            event.get("started_at_utc"), f"{label}.started_at_utc", errors
+        )
+        finished = _pilot_utc_instant(
+            event.get("finished_at_utc"), f"{label}.finished_at_utc", errors
+        )
+        if started is None or finished is None:
+            continue
+        if finished < started:
+            errors.append(f"{label} finished before it started")
+            continue
+        if progress_start is not None and started < progress_start:
+            errors.append(f"{label} started before the pilot checkpoint")
+        if progress_finish is not None and finished > progress_finish:
+            errors.append(f"{label} finished after the pilot checkpoint")
+        intervals.append((started, finished, index))
+
+    # Pilot execution is serial; overlapping event windows contradict that
+    # execution model. Sort independently of event-list order, because the
+    # validator must not infer randomized/fixed treatment order from indexing.
+    intervals.sort()
+    for (_, earlier_finish, earlier_index), (later_start, _, later_index) in zip(
+        intervals, intervals[1:]
+    ):
+        if later_start < earlier_finish:
+            errors.append(
+                f"progress events {earlier_index} and {later_index} overlap "
+                "despite serial pilot execution"
+            )
+
+
+
 def _enumerate_pilot_traces(
     output_root: Path, selected_variants: list[str], errors: list[str]
 ) -> list[Path]:
@@ -290,6 +390,7 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
     # A correct aggregate count cannot substitute for a unique, complete
     # terminal-event ledger when the live runner records one.
     _audit_progress_events(progress, expected_pairs, errors)
+    _audit_pilot_clock_window(manifest, progress, errors)
     for field in ("attempted_runs", "completed_runs"):
         if progress_counts[field] != expected_count:
             errors.append(f"{field}={progress.get(field)} expected={expected_count}")

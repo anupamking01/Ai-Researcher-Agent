@@ -16,6 +16,7 @@ def _write_valid(root, *, versioned=True, with_events=True):
         "task_set_id": "synthetic-ledger", "variants": [variant],
         "task_ids": tasks, "smart_model": "smart", "fast_model": "fast",
         "temperature": 1.0,
+        "started_at_utc": "2026-09-07T23:59:59+00:00",
     }
     progress = {
         "task_set_id": "synthetic-ledger", "variants": [variant],
@@ -23,13 +24,17 @@ def _write_valid(root, *, versioned=True, with_events=True):
         "attempted_runs": 2, "completed_runs": 2,
         "failed_runs": 0, "timeout_runs": 0,
         "current": None,
+        "started_at_utc": "2026-09-08T00:00:00+00:00",
+        "finished_at_utc": "2026-09-08T00:03:00+00:00",
     }
     if versioned:
         progress["schema_version"] = 1
     if with_events:
         progress["events"] = [
-            {"variant": variant, "task_id": task, "status": "completed"}
-            for task in tasks
+            {"variant": variant, "task_id": task, "status": "completed",
+             "started_at_utc": f"2026-09-08T00:0{index}:00+00:00",
+             "finished_at_utc": f"2026-09-08T00:0{index + 1}:00+00:00"}
+            for index, task in enumerate(tasks)
         ]
     summary = {
         "n_trace_files": 2,
@@ -176,3 +181,109 @@ def test_event_status_cannot_disagree_with_completed_counter(tmp_path):
     progress = _write_valid(tmp_path)
     progress["completed_runs"] = 1
     _invalid(tmp_path, progress, "progress completed event count differs from completed_runs")
+
+
+# Chronology is a source-integrity assertion, not independent historical
+# authentication, evidence of randomization, or a new scientific outcome.
+def test_versioned_checkpoint_clock_window_and_serial_events_pass(tmp_path):
+    _write_valid(tmp_path)
+    assert validate_pilot(tmp_path) == []
+
+
+@pytest.mark.parametrize("field,value", [
+    ("started_at_utc", None),
+    ("started_at_utc", "2026-09-08T00:00:00"),
+    ("started_at_utc", "2026-09-08T00:00:00+05:30"),
+    ("started_at_utc", "2026-09-08T00:00:00+00:00 "),
+    ("started_at_utc", 1),
+    ("finished_at_utc", "not-a-time"),
+    ("finished_at_utc", "2026-09-08T25:00:00Z"),
+])
+def test_versioned_progress_requires_valid_utc_instants(tmp_path, field, value):
+    progress = _write_valid(tmp_path)
+    progress[field] = value
+    _invalid(tmp_path, progress, f"progress.{field} must be")
+
+
+@pytest.mark.parametrize("value", [
+    None, "2026-09-08T00:00:00", "2026-09-08T00:00:00-01:00",
+    "2026-09-08 00:00:00+00:00", True,
+])
+def test_versioned_event_rejects_missing_naive_or_invalid_time(tmp_path, value):
+    progress = _write_valid(tmp_path)
+    progress["events"][0]["started_at_utc"] = value
+    _invalid(tmp_path, progress, "progress.events[1].started_at_utc must be")
+
+
+def test_versioned_event_rejects_missing_finish_time(tmp_path):
+    progress = _write_valid(tmp_path)
+    del progress["events"][0]["finished_at_utc"]
+    _invalid(tmp_path, progress, "progress.events[1].finished_at_utc must be")
+
+
+def test_versioned_event_rejects_finish_before_start(tmp_path):
+    progress = _write_valid(tmp_path)
+    progress["events"][0]["finished_at_utc"] = "2026-09-07T23:59:59+00:00"
+    _invalid(tmp_path, progress, "progress.events[1] finished before it started")
+
+
+def test_versioned_event_rejects_start_before_pilot(tmp_path):
+    progress = _write_valid(tmp_path)
+    progress["events"][0]["started_at_utc"] = "2026-09-07T23:59:59+00:00"
+    _invalid(tmp_path, progress, "progress.events[1] started before the pilot checkpoint")
+
+
+def test_versioned_event_rejects_finish_after_pilot(tmp_path):
+    progress = _write_valid(tmp_path)
+    progress["events"][1]["finished_at_utc"] = "2026-09-08T00:04:00+00:00"
+    _invalid(tmp_path, progress, "progress.events[2] finished after the pilot checkpoint")
+
+
+def test_versioned_events_must_not_overlap_even_if_each_interval_is_valid(tmp_path):
+    progress = _write_valid(tmp_path)
+    progress["events"][1]["started_at_utc"] = "2026-09-08T00:00:30+00:00"
+    _invalid(tmp_path, progress, "overlap despite serial pilot execution")
+
+
+def test_versioned_progress_rejects_inverted_clock_window(tmp_path):
+    progress = _write_valid(tmp_path)
+    progress["finished_at_utc"] = "2026-09-07T23:59:59+00:00"
+    _invalid(tmp_path, progress, "progress finished before it started")
+
+
+def test_versioned_progress_rejects_start_before_manifest(tmp_path):
+    progress = _write_valid(tmp_path)
+    progress["started_at_utc"] = "2026-09-07T23:59:58+00:00"
+    _invalid(tmp_path, progress, "progress started before manifest creation")
+
+
+@pytest.mark.parametrize("invalid", [None, "1", True, 0, -1, 1.0])
+def test_malformed_version_marker_cannot_bypass_clock_audit(tmp_path, invalid):
+    progress = _write_valid(tmp_path)
+    progress["schema_version"] = invalid
+    _invalid(tmp_path, progress, "progress.schema_version must be a positive integer")
+
+
+def test_versioned_manifest_requires_explicit_launch_utc_time(tmp_path):
+    _write_valid(tmp_path)
+    path = tmp_path / "pilot_manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    del manifest["started_at_utc"]
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    assert "manifest.started_at_utc must be" in " | ".join(validate_pilot(tmp_path))
+
+
+def test_utc_z_designator_is_supported_for_versioned_times(tmp_path):
+    progress = _write_valid(tmp_path)
+    progress["events"][0]["started_at_utc"] = "2026-09-08T00:00:00Z"
+    _write_progress(tmp_path, progress)
+    assert validate_pilot(tmp_path) == []
+
+
+def test_unversioned_legacy_event_checkpoint_not_retroactively_upgraded(tmp_path):
+    progress = _write_valid(tmp_path, versioned=False)
+    del progress["events"][0]["started_at_utc"]
+    del progress["events"][0]["finished_at_utc"]
+    del progress["finished_at_utc"]
+    _write_progress(tmp_path, progress)
+    assert validate_pilot(tmp_path) == []
