@@ -1,0 +1,36 @@
+name: main-study-numeric-input-integrity
+
+on:
+  push:
+    branches: [research-paper-eval-2027]
+    paths:
+      - "scripts/audit_main_study_numeric_inputs.py"
+      - "tests/test_main_study_numeric_integrity.py"
+      - "outputs/main_study_runs.csv"
+      - "outputs/posthoc_support_runs.csv"
+      - "docs/MAIN_STUDY_NUMERIC_INPUT_INTEGRITY.md"
+      - ".github/workflows/main-study-numeric-input-integrity.yml"
+  pull_request:
+    paths:
+      - "scripts/audit_main_study_numeric_inputs.py"
+      - "tests/test_main_study_numeric_integrity.py"
+      - "outputs/main_study_runs.csv"
+      - "outputs/posthoc_support_runs.csv"
+      - "docs/MAIN_STUDY_NUMERIC_INPUT_INTEGRITY.md"
+      - ".github/workflows/main-study-numeric-input-integrity.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  offline-numeric-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Numeric evidence preflight (no inference or network APIs)
+        run: |
+          python -m compileall -q scripts/audit_main_study_numeric_inputs.py
+          python -m scripts.audit_main_study_numeric_inputs

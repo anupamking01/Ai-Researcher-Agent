@@ -1,50 +1,49 @@
-# Main-study paired-analysis numeric input integrity
+# Main-study CSV numeric integrity: independent offline preflight
 
-**Scope:** Defensive, offline input validity at `scripts/analyze_main_study.py`'s
-treatment/evaluator CSV join. This adds rejection rules for damaged or
-contradictory research measurements; it does **not** re-estimate the historical
-main study, revise the frozen analysis plan or canonical published outputs,
-or authenticate unavailable original reports and traces.
+**Scientific status:** Input-consistency audit only. This does not create new
+experimental, inferential, exploratory, or human-evaluation outcomes.
 
-## Source-to-analysis contract
+The frozen automated inference implementation is SHA-256-bound by the
+historical canonical-analysis receipt. **Do not edit or rebind
+`scripts/analyze_main_study.py` to add a new input rule.** This verifier
+is deliberately separate and read-only, preserving the published result
+and its ability to be independently recomputed with the exact historical
+implementation. The verifier checks CSV source-internal numeric validity
+before a reviewer or later analysis trusts an input table; it is not a new
+estimator and does not modify any frozen output.
 
-The analysis now requires finite nonnegative numeric measurements rather than
-allowing Python to propagate `NaN`, `Infinity`, negative costs or malformed
-values into means, intervals, or the descriptive cost-quality frontier.
-Evaluator claim counts must be **integral, nonnegative, bounded by the frozen
-12-claim cap**, and partition exactly into supported, partially supported,
-unsupported, and contradicted claims. Fractional values are **not rounded**
-into ostensibly observed counts. The primary `strict_support_rate` column is
-independently reconciled with `supported / claims_checked` to absolute
-tolerance `1e-12` (zero relative tolerance), so a modified but plausible
-rate cannot silently disagree with its own source counts. Where present,
-the main-study treatment CSV's `posthoc_claims_checked` and
-`posthoc_strict_support_rate` mirror fields must agree with the common
-evaluator. These are consistency checks, not new measurements.
+The preflight rejects nonfinite/negative numeric fields, fractional
+integer counts (without rounding them into observations), nonpositive
+or over-cap evaluator claim counts, count partitions that do not add up,
+missing/duplicate treatment/task cells, and rates inconsistent with
+supported/checked counts. It crosschecks the treatment CSV's mirrored
+post-hoc claim count, strict rate and evaluator cost with the common
+evaluator CSV, and verifies the frozen treatment browse-budget limits.
+Small decimal export discrepancies up to absolute `1e-12` are accepted
+for rates and cost mirrors. Each observed 10-task × four-arm cell is
+included; zero-successful-source treatments remain valid.
 
-Small representational noise from binary floating-point serialization is
-accepted. These rules do not demonstrate that the counts themselves reflect
-original reports, that evaluator policies were identical between recovery
-and earlier cells, or that outcomes were prospectively preregistered.
-They must be combined with the independent historical provenance/custody
-audits and the existing immutable input-manifest checks.
+The generated receipt contains the original input CSV byte SHA-256
+fingerprints and only counts, not scores or new treatment comparisons.
+This is **internal consistency**, not proof that the original reports
+or traces were authentically archived, nor that automated evaluator policy
+was identical across historically recovered cells.
 
-## Reproduce without rerunning experiments
+## Offline verification
 
 ```bash
+python -m scripts.audit_main_study_numeric_inputs
 python -m pytest -q tests/test_main_study_numeric_integrity.py
 ```
 
-These tests use a synthetic one-task CSV join and deliberately corrupted
-cells. They make no network or model calls and do not write the frozen
-`outputs/main_study_inference.json` or
-`paper/MAIN_STUDY_INFERENCE.md` artifacts. Do **not** invoke the
-inference command against canonical outputs merely to claim a refreshed
-statistical result; the published September results remain unchanged.
+These commands make no network/model calls, do not regenerate treatments,
+evaluator results or historical statistics, and do not edit canonical
+inference artifacts. The dedicated CI workflow runs the same read-only
+checks on subsequent source changes. The existing frozen-recomputation
+suite independently protects the **original** historical analyzer bytes.
 
-The original live-web 10-task automated main study retains its post-collection
-analysis-plan chronology, fixed-order temporal confounding, and evaluator
-recovery comparability qualifications. The five-task pilot is diagnostic.
-Retrospective envelope/sensitivity analyses remain exploratory. Blinded
-human evaluation remains unperformed pending authenticated source custody
-and real independent annotations.
+The five-task pilot remains **diagnostic**; the September automated
+main-study outcomes retain their post-collection statistical-plan
+chronology and fixed-order/evaluator-recovery qualifications; retrospective
+sensitivity analyses remain **exploratory**; and human validation remains
+pending original-source custody and two independent blinded annotators.
