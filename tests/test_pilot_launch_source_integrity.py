@@ -71,7 +71,7 @@ def test_non_object_malformed_or_missing_task_plan_does_not_pass(tmp_path, raw):
 
 def test_invalid_utf8_task_source_is_diagnostic(tmp_path):
     path = tmp_path / "tasks.json"
-    path.write_bytes(b"\\xff\\xfe")
+    path.write_bytes(bytes([0xff, 0xfe]))
     with pytest.raises(ValueError, match="invalid pilot task manifest"):
         run_pilot._load_tasks(path)
 
