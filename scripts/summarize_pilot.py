@@ -25,14 +25,14 @@ from pathlib import Path
 # validator; this offline summarizer is also routinely run on its own.
 try:
     from .validate_pilot_artifacts import (
-        _load_json as _load_strict_pilot_json,
         _parse_json_document as _parse_strict_pilot_json_document,
     )
+    from .audit_pilot_cost_summary import FROZEN_PILOT_PRICING_SHA256
 except ImportError:  # python scripts/summarize_pilot.py
     from validate_pilot_artifacts import (
-        _load_json as _load_strict_pilot_json,
         _parse_json_document as _parse_strict_pilot_json_document,
     )
+    from audit_pilot_cost_summary import FROZEN_PILOT_PRICING_SHA256
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +43,7 @@ PRICING_FILE = REPO_ROOT / "experiments" / "openai_pricing_2026-09-08.json"
 VARIANT_ORDER = ("D6", "P6", "P6V")
 PILOT_TASKS_PER_VARIANT = 5
 MAX_PILOT_TRACE_JSON_BYTES = 8 * 1024 * 1024  # cap untrusted local trace parsing
+MAX_PILOT_PRICING_JSON_BYTES = 64 * 1024  # frozen rate table is only ~1 KiB
 
 
 def _pilot_counter(trace, field):
@@ -79,14 +80,73 @@ def _mean(values):
     return statistics.mean(values) if values else None
 
 
-def _load_pricing():
+def _capture_pilot_pricing():
+    """Read one bounded, pinned pricing generation and retain its byte identity.
+
+    The standalone summarizer must cost rows and declare a SHA-256 for the
+    *same* pricing bytes. Pathname-only reads permit a rate-table swap between
+    costing, hashing, and publication. The independent postrun auditor has an
+    immutable historical pin; reuse that exact anchor here.
+    """
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise ValueError("secure no-follow frozen pricing capture is unavailable")
+    flags = (os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+             | getattr(os, "O_NONBLOCK", 0))
     try:
-        payload = _load_strict_pilot_json(PRICING_FILE)
-    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
+        fd = os.open(PRICING_FILE, flags)
+    except OSError as exc:
         raise ValueError(f"invalid frozen pricing document {PRICING_FILE}: {exc}") from exc
-    if payload.get("unit") != "per_1m_text_tokens":
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise ValueError("frozen pricing must be a single-link regular file")
+        if before.st_size > MAX_PILOT_PRICING_JSON_BYTES:
+            raise ValueError("frozen pricing document exceeds 64 KiB limit")
+        captured = bytearray()
+        while True:
+            remaining = MAX_PILOT_PRICING_JSON_BYTES + 1 - len(captured)
+            if remaining <= 0:
+                raise ValueError("frozen pricing document exceeds 64 KiB limit")
+            chunk = os.read(fd, min(65536, remaining))
+            if not chunk:
+                break
+            captured.extend(chunk)
+            if len(captured) > MAX_PILOT_PRICING_JSON_BYTES:
+                raise ValueError("frozen pricing document exceeds 64 KiB limit")
+        after = os.fstat(fd)
+        at_path = PRICING_FILE.lstat()
+        identity = _trace_snapshot_identity(before)
+        if (identity != _trace_snapshot_identity(after)
+                or identity != _trace_snapshot_identity(at_path)
+                or len(captured) != before.st_size):
+            raise ValueError("frozen pricing changed during bounded capture")
+    except OSError as exc:
+        raise ValueError(f"invalid frozen pricing document {PRICING_FILE}: {exc}") from exc
+    finally:
+        os.close(fd)
+    data = bytes(captured)
+    try:
+        pricing = _parse_strict_pilot_json_document(data.decode("utf-8"))
+    except (UnicodeError, ValueError, RecursionError) as exc:
+        raise ValueError(f"invalid frozen pricing document {PRICING_FILE}: {exc}") from exc
+    if not isinstance(pricing, dict) or pricing.get("unit") != "per_1m_text_tokens":
         raise ValueError(f"Unsupported pricing unit in {PRICING_FILE}")
-    return payload
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != FROZEN_PILOT_PRICING_SHA256:
+        raise ValueError("frozen pilot pricing bytes disagree with immutable SHA-256 pin")
+    return pricing, (identity, digest)
+
+
+def _load_pricing():
+    """Compatibility helper; use the same pinned source as the CLI."""
+    return _capture_pilot_pricing()[0]
+
+
+def _verify_pilot_pricing_snapshot(snapshot):
+    """Recheck immutable pricing bytes and file identity before each output."""
+    _, current = _capture_pilot_pricing()
+    if current != snapshot:
+        raise ValueError("frozen pilot pricing identity changed before publication")
 
 
 def _nonnegative_token_count(value, *, model, field):
@@ -710,7 +770,7 @@ def _publish_pilot_outputs(payload, rows, *, prepublish_check=None):
 
 
 def main():
-    pricing = _load_pricing()
+    pricing, pricing_metadata = _capture_pilot_pricing()
     source_metadata = _capture_pilot_source_metadata()
     rows = _load_traces(pricing, source_snapshot=source_metadata)
     if not rows:
@@ -725,7 +785,7 @@ def main():
         "n_trace_files": len(rows),
         "pricing_reference": {
             "file": str(PRICING_FILE.relative_to(REPO_ROOT)),
-            "sha256": hashlib.sha256(PRICING_FILE.read_bytes()).hexdigest(),
+            "sha256": pricing_metadata[1],
             "effective_date": pricing.get("effective_date"),
             "currency": pricing.get("currency"),
             "method": "provider-reported prompt/output tokens multiplied by frozen uncached text-token rates",
@@ -741,9 +801,12 @@ def main():
             "Long-context pricing multipliers, if triggered, require separate review before publication claims.",
         ],
     }
+    def verify_sources_before_publication():
+        _verify_pilot_source_metadata(source_metadata)
+        _verify_pilot_pricing_snapshot(pricing_metadata)
+
     _publish_pilot_outputs(
-        payload, rows,
-        prepublish_check=lambda: _verify_pilot_source_metadata(source_metadata),
+        payload, rows, prepublish_check=verify_sources_before_publication,
     )
 
     print(json.dumps(payload["variant_summary"], indent=2, sort_keys=True))

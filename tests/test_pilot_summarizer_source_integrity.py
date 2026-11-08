@@ -4,6 +4,7 @@ Only synthetic traces and frozen prices; never contacts providers or reruns runs
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -166,9 +167,10 @@ def test_malformed_inputs_leave_both_summary_destinations_unwritten(tmp_path, mo
     trace["source_count"] = "6"
     _write(tmp_path, trace)
     monkeypatch.setattr(pilot, "TRACE_ROOT", tmp_path / "traces")
-    monkeypatch.setattr(pilot, "_load_pricing", lambda: PRICES)
     monkeypatch.setattr(pilot, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(pilot, "PRICING_FILE", tmp_path / "pricing.json")
+    canonical = Path(__file__).resolve().parents[1] / "experiments" / "openai_pricing_2026-09-08.json"
+    pilot.PRICING_FILE.write_bytes(canonical.read_bytes())
     monkeypatch.setattr(pilot, "OUTPUT_JSON", tmp_path / "pilot_summary.json")
     monkeypatch.setattr(pilot, "OUTPUT_CSV", tmp_path / "pilot_runs.csv")
     with pytest.raises(ValueError, match="pilot trace source_count must be a nonnegative integer"):

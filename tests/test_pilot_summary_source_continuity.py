@@ -33,7 +33,8 @@ def _setup(tmp_path, monkeypatch):
     monkeypatch.setattr(pilot, "TRACE_ROOT", tmp_path / "traces")
     monkeypatch.setattr(pilot, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(pilot, "PRICING_FILE", tmp_path / "pricing.json")
-    pilot.PRICING_FILE.write_text("{}", encoding="utf-8")
+    pinned = Path(__file__).resolve().parents[1] / "experiments" / "openai_pricing_2026-09-08.json"
+    pilot.PRICING_FILE.write_bytes(pinned.read_bytes())
     monkeypatch.setattr(pilot, "OUTPUT_JSON", tmp_path / "pilot_summary.json")
     monkeypatch.setattr(pilot, "OUTPUT_CSV", tmp_path / "pilot_runs.csv")
     return path
@@ -84,7 +85,6 @@ def test_rejects_changed_source_roster(tmp_path, monkeypatch, mutation):
 
 def test_main_does_not_publish_after_postread_source_mutation(tmp_path, monkeypatch):
     path = _setup(tmp_path, monkeypatch)
-    monkeypatch.setattr(pilot, "_load_pricing", lambda: {"models": {}})
     original_loader = pilot._load_traces
 
     def mutate_after_load(pricing, *, source_snapshot=None):
@@ -153,7 +153,6 @@ def test_main_avoids_publication_after_same_size_edit_with_masked_metadata(
 ):
     path = _setup(tmp_path, monkeypatch)
     monkeypatch.setattr(pilot, "_trace_snapshot_identity", lambda info: (1,))
-    monkeypatch.setattr(pilot, "_load_pricing", lambda: {"models": {}})
     original_loader = pilot._load_traces
 
     def edit_after_parse(pricing, *, source_snapshot=None):
