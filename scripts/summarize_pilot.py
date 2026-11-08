@@ -25,11 +25,13 @@ from pathlib import Path
 # validator; this offline summarizer is also routinely run on its own.
 try:
     from .validate_pilot_artifacts import (
+        _load_json as _load_strict_pilot_json,
         _parse_json_document as _parse_strict_pilot_json_document,
     )
     from .audit_pilot_cost_summary import FROZEN_PILOT_PRICING_SHA256
 except ImportError:  # python scripts/summarize_pilot.py
     from validate_pilot_artifacts import (
+        _load_json as _load_strict_pilot_json,
         _parse_json_document as _parse_strict_pilot_json_document,
     )
     from audit_pilot_cost_summary import FROZEN_PILOT_PRICING_SHA256
@@ -138,8 +140,18 @@ def _capture_pilot_pricing():
 
 
 def _load_pricing():
-    """Compatibility helper; use the same pinned source as the CLI."""
-    return _capture_pilot_pricing()[0]
+    """Legacy helper retained for synthetic price-table fixtures.
+
+    The standalone CLI uses _capture_pilot_pricing instead, enforcing the
+    immutable historical pin and one source generation through publication.
+    """
+    try:
+        payload = _load_strict_pilot_json(PRICING_FILE)
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
+        raise ValueError(f"invalid frozen pricing document {PRICING_FILE}: {exc}") from exc
+    if payload.get("unit") != "per_1m_text_tokens":
+        raise ValueError(f"Unsupported pricing unit in {PRICING_FILE}")
+    return payload
 
 
 def _verify_pilot_pricing_snapshot(snapshot):

@@ -65,12 +65,13 @@ def test_missing_pilot_pair_is_explicitly_accounted_without_imputation():
 
 
 def test_main_rejects_ambiguous_inputs_before_creating_outputs(tmp_path, monkeypatch):
-    monkeypatch.setattr(pilot, "_load_pricing", lambda: {"unit": "per_1m_text_tokens"})
     monkeypatch.setattr(pilot, "_load_traces", lambda pricing, *, source_snapshot=None: [
         row("D6", "task-01"),
         row("D6", "task-01", run_id="retry"),
     ])
     monkeypatch.setattr(pilot, "PRICING_FILE", tmp_path / "pricing.json")
+    pinned = Path(__file__).resolve().parents[1] / "experiments" / "openai_pricing_2026-09-08.json"
+    pilot.PRICING_FILE.write_bytes(pinned.read_bytes())
     monkeypatch.setattr(pilot, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(pilot, "OUTPUT_JSON", tmp_path / "pilot_summary.json")
     monkeypatch.setattr(pilot, "OUTPUT_CSV", tmp_path / "pilot_runs.csv")

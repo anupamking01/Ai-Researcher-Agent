@@ -3,6 +3,7 @@
 No live providers, treatment runs, evaluators or human ratings.
 """
 import json
+from pathlib import Path
 
 import pytest
 
@@ -103,9 +104,10 @@ def test_incomplete_ledger_cannot_publish_summary_or_csv(tmp_path, monkeypatch):
     trace = _trace()
     del trace["provider_usage_by_model"]["smart"]["completion_tokens"]
     monkeypatch.setattr(pilot, "TRACE_ROOT", _write_trace(tmp_path, trace))
-    monkeypatch.setattr(pilot, "_load_pricing", lambda: PRICES)
     monkeypatch.setattr(pilot, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(pilot, "PRICING_FILE", tmp_path / "pricing.json")
+    pinned = Path(__file__).resolve().parents[1] / "experiments" / "openai_pricing_2026-09-08.json"
+    pilot.PRICING_FILE.write_bytes(pinned.read_bytes())
     monkeypatch.setattr(pilot, "OUTPUT_JSON", tmp_path / "pilot_summary.json")
     monkeypatch.setattr(pilot, "OUTPUT_CSV", tmp_path / "pilot_runs.csv")
     with pytest.raises(ValueError, match="smart.*completion_tokens.*nonnegative integer"):
