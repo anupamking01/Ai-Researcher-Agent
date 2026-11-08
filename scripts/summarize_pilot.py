@@ -234,11 +234,12 @@ def _trace_snapshot_identity(info) -> tuple[int, ...]:
 
 
 
-def _capture_pilot_source_metadata() -> dict[Path, tuple[int, ...]]:
-    """Record the selected trace roster and inode/size/time metadata before parsing.
+def _capture_pilot_source_metadata() -> dict[Path, tuple[tuple[int, ...], str]]:
+    """Capture a bounded trace roster with identity metadata and SHA-256 bytes.
 
-    This is a local continuity guard, not an authenticated source-byte archive.
-    The independent bounded descriptor loader still checks each individual read.
+    This is local source continuity, not independent historical authentication.
+    A descriptor-held read binds the snapshot to real file bytes rather than
+    trusting timestamps alone.
     """
     roster = _validate_pilot_trace_inventory()
     snapshot = {}
@@ -246,32 +247,44 @@ def _capture_pilot_source_metadata() -> dict[Path, tuple[int, ...]]:
         for path in paths:
             try:
                 info = path.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    raise ValueError(f"pilot source must be a single-link regular file: {path}")
+                if info.st_size > MAX_PILOT_TRACE_JSON_BYTES:
+                    raise ValueError(f"pilot source exceeds 8 MiB limit: {path}")
+                content = _capture_pilot_trace_bytes(path)
+                identity = _trace_snapshot_identity(info)
+                if _trace_snapshot_identity(path.lstat()) != identity:
+                    raise ValueError(f"pilot source changed during initial capture: {path}")
             except OSError as exc:
-                raise ValueError(f"pilot source vanished before capture: {path}") from exc
-            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-                raise ValueError(f"pilot source must be a single-link regular file: {path}")
-            if info.st_size > MAX_PILOT_TRACE_JSON_BYTES:
-                raise ValueError(f"pilot source exceeds 8 MiB limit: {path}")
-            snapshot[path] = _trace_snapshot_identity(info)
+                raise ValueError(f"pilot source vanished or changed before capture: {path}") from exc
+            snapshot[path] = (identity, hashlib.sha256(content).hexdigest())
     return snapshot
 
 
-def _verify_pilot_source_metadata(snapshot: dict[Path, tuple[int, ...]]) -> None:
-    """Reject additions, removals or observed changes before publishing outputs."""
+def _verify_pilot_source_metadata(
+    snapshot: dict[Path, tuple[tuple[int, ...], str]],
+) -> None:
+    """Check both roster identity and source bytes before each publication."""
     try:
         current = _validate_pilot_trace_inventory()
         current_paths = {path for paths in current.values() for path in paths}
         if current_paths != set(snapshot):
             raise ValueError("pilot source inventory changed before publication")
-        for path, expected in snapshot.items():
-            if _trace_snapshot_identity(path.lstat()) != expected:
+        for path, (expected_identity, expected_digest) in snapshot.items():
+            if _trace_snapshot_identity(path.lstat()) != expected_identity:
                 raise ValueError(f"pilot source changed before publication: {path}")
+            try:
+                digest = hashlib.sha256(_capture_pilot_trace_bytes(path)).hexdigest()
+            except (OSError, ValueError) as exc:
+                raise ValueError(f"pilot source changed before publication: {path}") from exc
+            if digest != expected_digest:
+                raise ValueError(f"pilot source bytes changed before publication: {path}")
     except OSError as exc:
         raise ValueError("pilot source disappeared before publication") from exc
 
 
-def _load_captured_pilot_trace(path: Path) -> dict:
-    """Parse one bounded, single-link, descriptor-held local source snapshot.
+def _capture_pilot_trace_bytes(path: Path) -> bytes:
+    """Capture bounded single-link source bytes from a held file descriptor.
 
     A pathname-only second read after inventory validation could follow a
     replacement/symlink or see a concurrently modified trace. Preserve the
@@ -307,17 +320,37 @@ def _load_captured_pilot_trace(path: Path) -> dict:
             raise ValueError("pilot trace changed during bounded source capture")
     finally:
         os.close(descriptor)
+    return bytes(captured)
+
+
+def _load_captured_pilot_trace(
+    path: Path, *, expected_sha256: str | None = None,
+) -> dict:
+    """Parse the exact selected source version when a snapshot was supplied."""
+    captured = _capture_pilot_trace_bytes(path)
+    if (expected_sha256 is not None
+            and hashlib.sha256(captured).hexdigest() != expected_sha256):
+        raise ValueError(f"pilot source bytes changed between snapshot and parse: {path}")
     return _parse_strict_pilot_json_document(captured.decode("utf-8"))
 
 
-def _load_traces(pricing):
+def _load_traces(pricing, *, source_snapshot=None):
     # Inventory the entire root, not only files matched by known-arm globbing.
     inventory = _validate_pilot_trace_inventory()
+    if source_snapshot is not None:
+        selected_paths = {path for paths in inventory.values() for path in paths}
+        if selected_paths != set(source_snapshot):
+            raise ValueError("pilot source inventory changed between snapshot and parse")
     rows = []
     for variant in VARIANT_ORDER:
         for path in inventory[variant]:
             try:
-                payload = _load_captured_pilot_trace(path)
+                if source_snapshot is None:
+                    payload = _load_captured_pilot_trace(path)
+                else:
+                    payload = _load_captured_pilot_trace(
+                        path, expected_sha256=source_snapshot[path][1]
+                    )
             except (UnicodeError, ValueError, OSError, RecursionError) as exc:
                 # Never silently skip an oversized, unstable or invalid source.
                 raise ValueError(
@@ -679,7 +712,7 @@ def _publish_pilot_outputs(payload, rows, *, prepublish_check=None):
 def main():
     pricing = _load_pricing()
     source_metadata = _capture_pilot_source_metadata()
-    rows = _load_traces(pricing)
+    rows = _load_traces(pricing, source_snapshot=source_metadata)
     if not rows:
         raise SystemExit(
             f"No pilot traces found under {TRACE_ROOT}. Run scripts/run_pilot.py first."

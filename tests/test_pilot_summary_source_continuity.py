@@ -87,8 +87,8 @@ def test_main_does_not_publish_after_postread_source_mutation(tmp_path, monkeypa
     monkeypatch.setattr(pilot, "_load_pricing", lambda: {"models": {}})
     original_loader = pilot._load_traces
 
-    def mutate_after_load(pricing):
-        rows = original_loader(pricing)
+    def mutate_after_load(pricing, *, source_snapshot=None):
+        rows = original_loader(pricing, source_snapshot=source_snapshot)
         path.write_text(path.read_text(encoding="utf-8") + " ", encoding="utf-8")
         return rows
 
@@ -118,6 +118,52 @@ def test_change_after_first_link_rolls_back_own_json(tmp_path, monkeypatch):
             {"schema_version": 5}, rows,
             prepublish_check=lambda: pilot._verify_pilot_source_metadata(snapshot),
         )
+    assert not pilot.OUTPUT_JSON.exists()
+    assert not pilot.OUTPUT_CSV.exists()
+    assert not list(tmp_path.glob(".pilot-publication-*.tmp"))
+
+
+def test_sha_rejects_same_size_edit_when_metadata_comparison_is_uninformative(
+    tmp_path, monkeypatch,
+):
+    path = _setup(tmp_path, monkeypatch)
+    # Simulate a hostile filesystem that reports unchanged metadata. The
+    # source-byte digest must independently reject a same-length edit.
+    monkeypatch.setattr(pilot, "_trace_snapshot_identity", lambda info: (1,))
+    snapshot = pilot._capture_pilot_source_metadata()
+    previous = path.read_bytes()
+    changed = previous.replace(b"pilot-01", b"pilot-09", 1)
+    assert changed != previous and len(changed) == len(previous)
+    path.write_bytes(changed)
+    with pytest.raises(ValueError, match="pilot source bytes changed before publication"):
+        pilot._verify_pilot_source_metadata(snapshot)
+
+
+def test_sha_binds_parsed_trace_to_original_snapshot(tmp_path, monkeypatch):
+    path = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(pilot, "_trace_snapshot_identity", lambda info: (1,))
+    snapshot = pilot._capture_pilot_source_metadata()
+    path.write_bytes(path.read_bytes().replace(b"pilot-01", b"pilot-09", 1))
+    with pytest.raises(ValueError, match="pilot source bytes changed between snapshot and parse"):
+        pilot._load_traces({"models": {}}, source_snapshot=snapshot)
+
+
+def test_main_avoids_publication_after_same_size_edit_with_masked_metadata(
+    tmp_path, monkeypatch,
+):
+    path = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(pilot, "_trace_snapshot_identity", lambda info: (1,))
+    monkeypatch.setattr(pilot, "_load_pricing", lambda: {"models": {}})
+    original_loader = pilot._load_traces
+
+    def edit_after_parse(pricing, *, source_snapshot=None):
+        rows = original_loader(pricing, source_snapshot=source_snapshot)
+        path.write_bytes(path.read_bytes().replace(b"pilot-01", b"pilot-09", 1))
+        return rows
+
+    monkeypatch.setattr(pilot, "_load_traces", edit_after_parse)
+    with pytest.raises(ValueError, match="pilot source bytes changed before publication"):
+        pilot.main()
     assert not pilot.OUTPUT_JSON.exists()
     assert not pilot.OUTPUT_CSV.exists()
     assert not list(tmp_path.glob(".pilot-publication-*.tmp"))
