@@ -245,3 +245,157 @@ def test_unversioned_legacy_summary_can_be_audited_if_pairs_are_supplied(tmp_pat
     data["paired_operational_differences"]["P6_minus_D6"]["pairs"][0]["total_tokens_delta"] = 999
     _save(tmp_path, data)
     assert "total_tokens_delta" in _errors(tmp_path)
+
+
+# Version 2 independently verifies cost and missingness against selected traces
+# and a local synthetic frozen-pricing fixture, never a provider or past run.
+from scripts import summarize_pilot as pilot_producer
+from scripts import validate_pilot_artifacts as pilot_validator
+
+
+def _v2_cost_fixture(root, monkeypatch, unpriced=None):
+    summary = _write(root)
+    pricing_file = root / "synthetic_frozen_pricing.json"
+    pricing_file.write_text(json.dumps({
+        "unit": "per_1m_text_tokens", "effective_date": "2026-09-08",
+        "currency": "USD",
+        "models": {"smart": {"input": 2.0, "output": 12.0}},
+    }), encoding="utf-8")
+    monkeypatch.setattr(pilot_validator, "PILOT_PRICING_FILE", pricing_file)
+    summary["schema_version"] = 2
+    summary["pricing_reference"] = {
+        "file": "experiments/openai_pricing_2026-09-08.json",
+        "effective_date": "2026-09-08", "currency": "USD",
+        "method": "provider-reported prompt/output tokens multiplied by frozen uncached text-token rates",
+    }
+    rows = []
+    for arm in ARMS:
+        for task in TASKS:
+            tokens, calls, successes, seconds = OBSERVED[(arm, task)]
+            missing = unpriced == (arm, task)
+            cost = None if missing else ((tokens - 20) * 2.0 + 20 * 12.0) / 1_000_000
+            status = ("unknown_model_price:unknown" if missing
+                      else "estimated_from_frozen_uncached_rates")
+            if missing:
+                source = root / "experiment_traces" / arm / f"{arm}-{task}.json"
+                payload = json.loads(source.read_text(encoding="utf-8"))
+                payload["trace"]["provider_usage_by_model"]["unknown"] = (
+                    payload["trace"]["provider_usage_by_model"].pop("smart")
+                )
+                source.write_text(json.dumps(payload), encoding="utf-8")
+            rows.append({
+                "variant_id": arm, "task_set_id": "synthetic-pairs",
+                "task_id": task, "run_id": f"{arm}-{task}", "completed": True,
+                "source_count": 6, "successful_source_count": successes,
+                "failed_source_count": 6 - successes, "search_call_count": 4,
+                "model_call_count": calls, "prompt_tokens": tokens - 20,
+                "completion_tokens": 20, "total_tokens": tokens,
+                "latency_seconds": seconds, "report_words": 30,
+                "claims_checked": 0, "claim_support_rate": 0.0,
+                "usage_accounting_status": "provider_usage_complete",
+                "estimated_cost_usd": cost, "cost_accounting_status": status,
+            })
+    variants = pilot_producer._variant_summary(rows)
+    for arm in ARMS:
+        for field in (
+            "costed_runs", "uncosted_runs", "uncosted_task_ids",
+            "cost_accounting_status_counts", "avg_estimated_cost_usd",
+        ):
+            summary["variant_summary"][arm][field] = variants[arm][field]
+    pairs = pilot_producer._paired_operational_differences(rows)
+    for name in ("P6_minus_D6", "P6V_minus_P6"):
+        target = summary["paired_operational_differences"][name]
+        for field in (
+            "n_costed_pairs", "n_uncosted_pairs", "costed_pair_task_ids",
+            "uncosted_pair_details", "avg_estimated_cost_usd_delta",
+        ):
+            target[field] = pairs[name][field]
+        for target_row, expected_row in zip(target["pairs"], pairs[name]["pairs"]):
+            target_row["estimated_cost_usd_delta"] = expected_row["estimated_cost_usd_delta"]
+    _save(root, summary)
+    return summary
+
+
+@pytest.mark.parametrize("unpriced", [None, ("P6", "pilot-02")])
+def test_version2_cost_matches_traces_and_frozen_price(tmp_path, monkeypatch, unpriced):
+    _v2_cost_fixture(tmp_path, monkeypatch, unpriced)
+    assert validate_pilot(tmp_path) == []
+
+
+@pytest.mark.parametrize("field", [
+    "n_costed_pairs", "n_uncosted_pairs", "costed_pair_task_ids",
+    "uncosted_pair_details", "avg_estimated_cost_usd_delta",
+])
+def test_version2_rejects_falsified_paired_cost_coverage(tmp_path, monkeypatch, field):
+    data = _v2_cost_fixture(tmp_path, monkeypatch, ("P6", "pilot-02"))
+    record = data["paired_operational_differences"]["P6_minus_D6"]
+    if field in ("n_costed_pairs", "n_uncosted_pairs"):
+        record[field] += 1
+    elif field == "avg_estimated_cost_usd_delta":
+        record[field] += .01
+    else:
+        record[field] = []
+    _save(tmp_path, data)
+    assert field in _errors(tmp_path)
+
+
+@pytest.mark.parametrize("field", [
+    "costed_runs", "uncosted_runs", "uncosted_task_ids",
+    "cost_accounting_status_counts", "avg_estimated_cost_usd",
+])
+def test_version2_rejects_falsified_arm_cost_coverage(tmp_path, monkeypatch, field):
+    data = _v2_cost_fixture(tmp_path, monkeypatch, ("P6", "pilot-02"))
+    arm = data["variant_summary"]["P6"]
+    if field in ("costed_runs", "uncosted_runs"):
+        arm[field] += 1
+    elif field == "avg_estimated_cost_usd":
+        arm[field] += .01
+    else:
+        arm[field] = {} if field == "cost_accounting_status_counts" else []
+    _save(tmp_path, data)
+    assert field in _errors(tmp_path)
+
+
+@pytest.mark.parametrize("replacement", [0.0, None, True, "1", 1e30])
+def test_version2_rejects_wrong_pair_cost_value(tmp_path, monkeypatch, replacement):
+    data = _v2_cost_fixture(tmp_path, monkeypatch)
+    data["paired_operational_differences"]["P6_minus_D6"]["pairs"][0][
+        "estimated_cost_usd_delta"
+    ] = replacement
+    _save(tmp_path, data)
+    assert "estimated_cost_usd_delta" in _errors(tmp_path)
+
+
+def test_version2_source_token_change_invalidates_prior_cost(tmp_path, monkeypatch):
+    _v2_cost_fixture(tmp_path, monkeypatch)
+    source = tmp_path / "experiment_traces" / "P6" / "P6-pilot-01.json"
+    data = json.loads(source.read_text(encoding="utf-8"))
+    trace = data["trace"]
+    trace["prompt_tokens"] += 10
+    trace["total_tokens"] += 10
+    trace["provider_usage_by_model"]["smart"]["prompt_tokens"] += 10
+    source.write_text(json.dumps(data), encoding="utf-8")
+    assert "total_tokens_delta" in _errors(tmp_path)
+
+
+def test_version2_bad_price_reference_fails(tmp_path, monkeypatch):
+    data = _v2_cost_fixture(tmp_path, monkeypatch)
+    data["pricing_reference"]["effective_date"] = "suspicious"
+    _save(tmp_path, data)
+    assert "pricing_reference" in _errors(tmp_path)
+
+
+def test_version2_falsified_price_table_fails_without_repricing_outcomes(tmp_path, monkeypatch):
+    data = _v2_cost_fixture(tmp_path, monkeypatch)
+    pricing = pilot_validator.PILOT_PRICING_FILE
+    altered = json.loads(pricing.read_text(encoding="utf-8"))
+    altered["models"]["smart"]["output"] = 70.0
+    pricing.write_text(json.dumps(altered), encoding="utf-8")
+    assert "source cost" in _errors(tmp_path)
+
+
+def test_version2_missing_cost_coverage_not_silently_accepted(tmp_path, monkeypatch):
+    data = _v2_cost_fixture(tmp_path, monkeypatch)
+    del data["paired_operational_differences"]["P6_minus_D6"]["costed_pair_task_ids"]
+    _save(tmp_path, data)
+    assert "costed_pair_task_ids" in _errors(tmp_path)

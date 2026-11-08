@@ -15,9 +15,15 @@ import re
 import sys
 from pathlib import Path
 
+try:
+    from .audit_pilot_cost_summary import audit_pilot_cost_summary
+except ImportError:  # python scripts/validate_pilot_artifacts.py
+    from audit_pilot_cost_summary import audit_pilot_cost_summary
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "outputs"
+PILOT_PRICING_FILE = REPO_ROOT / "experiments" / "openai_pricing_2026-09-08.json"
 
 # Independent frozen pilot assignment: a trace must not define its own treatment.
 # Keep this separate from the live runner's ExperimentConfig.from_variant()
@@ -816,12 +822,17 @@ def validate_pilot(output_root: Path = DEFAULT_OUTPUT_ROOT) -> list[str]:
     # A versioned summary may not silently omit its paired descriptive rows.
     # Legacy minimal summary fixtures without a schema marker remain compatible.
     if "schema_version" in summary:
-        if type(summary["schema_version"]) is not int or summary["schema_version"] != 1:
-            errors.append("summary.schema_version must be the supported integer 1")
+        if (type(summary["schema_version"]) is not int
+                or summary["schema_version"] not in (1, 2)):
+            errors.append("summary.schema_version must be supported integer 1 or 2")
         elif "paired_operational_differences" not in summary:
             errors.append("versioned pilot summary is missing paired operational comparisons")
     if "paired_operational_differences" in summary and not errors:
         _audit_pilot_paired_summary(summary, source_traces, variants, task_ids, errors)
+    if summary.get("schema_version") == 2 and not errors:
+        errors.extend(audit_pilot_cost_summary(
+            summary, source_traces, variants, task_ids, PILOT_PRICING_FILE
+        ))
 
     return errors
 
