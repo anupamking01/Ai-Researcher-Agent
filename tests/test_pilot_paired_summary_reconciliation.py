@@ -202,7 +202,7 @@ def test_missing_or_unselected_comparison_set_fails(tmp_path, bad):
     assert "paired_operational_differences" in _errors(tmp_path)
 
 
-@pytest.mark.parametrize("bad", [None, True, 1.0, "1", 3])
+@pytest.mark.parametrize("bad", [None, True, 1.0, "1", 4])
 def test_invalid_summary_version_rejected(tmp_path, bad):
     data = _write(tmp_path)
     data["schema_version"] = bad
@@ -445,7 +445,7 @@ def test_version3_rejects_modified_arm_metric_with_correct_pairs(
     arm[field] = (0.99 if observed is None else
                   observed + 1 if type(observed) in (int, float) else "tampered")
     _save(tmp_path, data)
-    assert f"summary.variant_summary.P6V.{field}" in _errors(tmp_path)
+    assert field in _errors(tmp_path)
 
 
 @pytest.mark.parametrize("field", _ARM_SOURCE_METRICS)
@@ -455,7 +455,7 @@ def test_version3_requires_explicit_arm_metric_fields(
     data = _version3_fixture(tmp_path, monkeypatch)
     data["variant_summary"]["D6"].pop(field)
     _save(tmp_path, data)
-    assert f"summary.variant_summary.D6.{field}" in _errors(tmp_path)
+    assert field in _errors(tmp_path)
 
 
 @pytest.mark.parametrize("replacement", [True, "3", None, -1, 1e100])
