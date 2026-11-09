@@ -50,3 +50,25 @@ is required when citing the human-evaluation plan beside automated results.
 [main-study inference report](MAIN_STUDY_INFERENCE.md) with this cover and
 [the chronology audit](../docs/MAIN_STUDY_ANALYSIS_FREEZE_CHRONOLOGY.md).
 Do not edit the immutable historical report to silently replace its wording.
+
+## Interpretation of the paired inferential reference distribution
+
+The frozen exact sign-flip p-values enumerate signs of the ten paired task
+differences. Within every historical task the treatment order was fixed:
+D3, D6, P6, then P6V. No randomized allocation of treatment to execution
+position occurred. Accordingly, the sign-flip reference distribution is
+**not justified by the design as a randomization test of causal treatment
+effects**. Its inferential calibration instead depends on assumptions such as
+sign exchangeability/symmetry of the paired differences, which the historical
+data and fixed order do not establish. Holm adjustment addresses multiplicity;
+it cannot establish exchangeability, remove temporal confounding, or repair
+the post-collection analysis-plan chronology.
+
+The paired-bootstrap confidence intervals resample the ten selected tasks.
+They do not establish representative sampling from a wider task population,
+stable live-web conditions, or coverage for a causal treatment effect.
+Neither these qualifications nor the source-recovery gap changes any saved
+estimate, exact sign-flip calculation, confidence interval, or adjusted
+p-value. Cite them as methodologically qualified calculations, not as
+randomized causal evidence or independently preregistered confirmation. See
+the [exact design-rank audit](../docs/MAIN_STUDY_DESIGN_IDENTIFIABILITY.md).
