@@ -22,6 +22,12 @@ ROOT = Path(__file__).resolve().parents[1]
 COVER = Path("paper/MAIN_STUDY_REPORTING_COVER.md")
 HISTORICAL = Path("paper/MAIN_STUDY_INFERENCE.md")
 MAX_MARKDOWN_BYTES = 256 * 1024
+# Fixed output SHA-256s retained in the historical canonical-analysis archive
+# checkout verification (artifact 10837878458). This anchors the *results*
+# separately from the published CSV input aggregate.
+CANONICAL_INFERENCE = Path("outputs/main_study_inference.json")
+ORIGINAL_JSON_SHA256 = "bbf439aabf0db38afd5430a885aff107014c6b924c05c62d6d724d16e00f450f"
+ORIGINAL_MARKDOWN_SHA256 = "9356cbad9711012850baef349c7d16a104d63987e1d7be2e53184456a8cb2f1c"
 REQUIRED_QUALIFICATIONS = (
     "prospective precollection statistical preregistration is not established",
     "outcome blinding at the september 14 freeze is not established",
@@ -84,7 +90,13 @@ def assemble_qualified_report(*, repo_root: Path = ROOT) -> str:
     source = verify_published_frozen_inputs(repo_root=root)
     verify_outputs(root=root)
     report_bytes = _capture_markdown(root / HISTORICAL)
+    json_bytes = _capture_markdown(root / CANONICAL_INFERENCE)
     cover_bytes = _capture_markdown(root / COVER)
+    if (
+        hashlib.sha256(report_bytes).hexdigest() != ORIGINAL_MARKDOWN_SHA256
+        or hashlib.sha256(json_bytes).hexdigest() != ORIGINAL_JSON_SHA256
+    ):
+        raise ValueError("frozen canonical outputs differ from archived historical fingerprints")
     report = report_bytes.decode("utf-8")
     cover = cover_bytes.decode("utf-8")
     disclosures = _disclosure_text(cover)
@@ -98,6 +110,7 @@ def assemble_qualified_report(*, repo_root: Path = ROOT) -> str:
         raise ValueError("frozen CSV fingerprint changed during report assembly")
     if (
         _capture_markdown(root / HISTORICAL) != report_bytes
+        or _capture_markdown(root / CANONICAL_INFERENCE) != json_bytes
         or _capture_markdown(root / COVER) != cover_bytes
     ):
         raise ValueError("reporting source changed before export")

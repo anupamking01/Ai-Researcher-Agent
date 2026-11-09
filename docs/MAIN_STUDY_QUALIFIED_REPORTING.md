@@ -11,7 +11,8 @@ python -m scripts.assemble_qualified_main_study_report > qualified_main_study.md
 
 The command verifies the **historically published frozen CSV aggregate**
 using the preserved fingerprint, checks the canonical inference JSON-to-Markdown
-rendering using the existing verifier, and assembles a reading copy with the
+rendering using the existing verifier, requires both canonical output SHA-256s
+from the retained historical canonical-analysis archive checkout receipt, and assembles a reading copy with the
 required reporting cover **before** the unaltered historical inference text.
 It fingerprints both Markdown inputs, rechecks the inputs before emitting any
 stdout, and fails rather than issuing an unqualified copy if a required
@@ -46,3 +47,11 @@ Offline regression:
 ~~~bash
 python -m pytest -q tests/test_qualified_main_study_report.py
 ~~~
+
+The two archived output SHA-256s are 9356cbad9711012850baef349c7d16a104d63987e1d7be2e53184456a8cb2f1c
+(manuscript Markdown) and bbf439aabf0db38afd5430a885aff107014c6b924c05c62d6d724d16e00f450f
+(canonical JSON). They are pre-existing **GitHub-retained, same-provider**
+checkout-concordance pins, not independent treatment/report source
+authentication. This additional result-byte anchor rejects a coherent,
+numerically parseable change to the canonical output that a renderer check
+alone would not detect.

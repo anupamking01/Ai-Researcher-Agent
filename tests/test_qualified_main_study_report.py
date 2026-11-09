@@ -98,3 +98,12 @@ def test_late_report_mutation_is_detected(tmp_path, monkeypatch):
     monkeypatch.setattr(qualified, "_capture_markdown", change_after_first_cover_capture)
     with pytest.raises(ValueError, match="changed before export"):
         qualified.assemble_qualified_report(repo_root=root)
+
+def test_coherently_reformatted_json_still_fails_historical_archive_pin(tmp_path):
+    # Reformatting JSON leaves its parsed statistics and Markdown rendering
+    # unchanged, so the renderer check alone cannot pin historical result bytes.
+    root = _checkout(tmp_path)
+    source = root / qualified.CANONICAL_INFERENCE
+    source.write_bytes(b" " + source.read_bytes())
+    with pytest.raises(ValueError, match="archived historical fingerprints"):
+        qualified.assemble_qualified_report(repo_root=root)
