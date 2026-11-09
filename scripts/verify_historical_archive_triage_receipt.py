@@ -164,6 +164,10 @@ def _preflight_candidate_source_claims(recorded: dict) -> None:
         provider = row.get("github_provider_zip_digest_and_size_match")
         if type(success) is not bool or type(provider) is not bool:
             raise ReceiptVerificationError(failed)
+        # JSON arrays/objects are unhashable; don't leak TypeError when a
+        # corrupt failed-row status is checked against allowed statuses.
+        if type(row.get("status")) is not str:
+            raise ReceiptVerificationError(failed)
         if set(row) != (
             _CANDIDATE_BASE_FIELDS
             | (_CANDIDATE_VERIFIED_FIELDS if success else _CANDIDATE_FAILED_FIELDS)
@@ -235,6 +239,33 @@ def _preflight_candidate_source_claims(recorded: dict) -> None:
         first_members.setdefault(members, index)
 
 
+_EXPECTED_RECEIPT_FIELDS = frozenset({
+    "schema_version",
+    "status",
+    "candidates",
+    "by_role",
+    "all_explicit_candidates_accounted_for",
+    "batch_archive_byte_budget",
+    "batch_archive_bytes_reserved",
+    "batch_candidates_not_inspected_due_to_archive_budget",
+    "batch_declared_uncompressed_byte_budget",
+    "batch_declared_uncompressed_bytes_reserved",
+    "batch_candidates_not_inspected_due_to_budget",
+    "same_regular_members_duplicate_count",
+    "verified_zip_byte_duplicate_count",
+    "other_role_provider_concordant_candidate_count",
+    "distinct_zip_bytes_establish_independent_custody",
+    "supplied_candidates_proven_exhaustive",
+    "github_service_metadata_is_independent_custody",
+    "original_treatment_evidence_authenticated",
+    "human_evaluation_ready",
+    "experimental_treatments_rerun",
+    "evaluator_rerun",
+    "human_ratings_generated",
+    "interpretation",
+})
+
+
 def _preflight_receipt_claims(recorded: dict) -> None:
     """Reject impossible research claims/accounting before costly ZIP rescans.
 
@@ -243,6 +274,14 @@ def _preflight_receipt_claims(recorded: dict) -> None:
     Full replay remains mandatory after these checks pass.
     """
     failed = "recorded triage receipt has inconsistent claims or accounting"
+    # A changed explanation, extra claims, or a missing field cannot be made
+    # trustworthy merely by rescanning the same ZIPs. Reject before I/O.
+    if (
+        set(recorded) != _EXPECTED_RECEIPT_FIELDS
+        or type(recorded.get("interpretation")) is not str
+        or recorded["interpretation"] != triage.TRIAGE_INTERPRETATION
+    ):
+        raise ReceiptVerificationError(failed)
     fixed = {
         "status": "candidate_triage_only_no_historical_authentication",
         "all_explicit_candidates_accounted_for": True,

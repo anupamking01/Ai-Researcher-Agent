@@ -84,6 +84,32 @@ def _failure_diagnostic(exc: BaseException) -> str:
     return str(exc)[:300]
 
 
+# This literal is part of the saved receipt's research-claim contract.
+# Consumers reject an altered explanation before potentially costly ZIP I/O.
+TRIAGE_INTERPRETATION = (
+            "Matching both historical GitHub job-log ZIP byte count and SHA-256 "
+            "is same-provider concordance, not independently authenticated "
+            "original trace/report custody. Every caller-supplied candidate, "
+            "including mismatches and unsafe archives, is retained. A bounded "
+            "batch-wide raw ZIP byte budget is reserved BEFORE any file read or "
+            "hash, including inputs whose parse later fails; raw-byte-budget "
+            "exhaustion leaves an explicit uninspected row. A separate bounded "
+            "batch-wide declared decompression budget is reserved BEFORE ZIP "
+            "member reads, including candidates that later fail integrity; "
+            "budget-exceeded inputs are explicitly not inspected, not "
+            "misreported as structurally invalid. Repeated "
+            "verified ZIP bytes are identified but not removed or treated as "
+            "independent backup custody. Decompressed regular-file content "
+            "equivalence is separately flagged even for different ZIP bytes; "
+            "it ignores ZIP-only metadata and proves neither historical "
+            "origin nor independent custody. A candidate matching the other "
+            "historical role's provider pin is flagged without relabelling "
+            "the caller's declaration; unsubmitted "
+            "backups cannot be inventoried. Human distribution remains blocked "
+            "until separate independent source and handoff checks pass."
+)
+
+
 def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
     """Inspect every explicitly supplied candidate; retain negative observations.
 
@@ -286,28 +312,7 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
         "experimental_treatments_rerun": False,
         "evaluator_rerun": False,
         "human_ratings_generated": False,
-        "interpretation": (
-            "Matching both historical GitHub job-log ZIP byte count and SHA-256 "
-            "is same-provider concordance, not independently authenticated "
-            "original trace/report custody. Every caller-supplied candidate, "
-            "including mismatches and unsafe archives, is retained. A bounded "
-            "batch-wide raw ZIP byte budget is reserved BEFORE any file read or "
-            "hash, including inputs whose parse later fails; raw-byte-budget "
-            "exhaustion leaves an explicit uninspected row. A separate bounded "
-            "batch-wide declared decompression budget is reserved BEFORE ZIP "
-            "member reads, including candidates that later fail integrity; "
-            "budget-exceeded inputs are explicitly not inspected, not "
-            "misreported as structurally invalid. Repeated "
-            "verified ZIP bytes are identified but not removed or treated as "
-            "independent backup custody. Decompressed regular-file content "
-            "equivalence is separately flagged even for different ZIP bytes; "
-            "it ignores ZIP-only metadata and proves neither historical "
-            "origin nor independent custody. A candidate matching the other "
-            "historical role's provider pin is flagged without relabelling "
-            "the caller's declaration; unsubmitted "
-            "backups cannot be inventoried. Human distribution remains blocked "
-            "until separate independent source and handoff checks pass."
-        ),
+        "interpretation": TRIAGE_INTERPRETATION,
     }
 
 

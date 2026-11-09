@@ -738,3 +738,24 @@ exact command and independent custody records separately. Success proves
 only present-day consistency with the recorded GitHub **same-provider** metadata,
 not independently authenticated historical reports/traces, a valid human
 evaluation handoff, or any human scores. No treatments/evaluators are rerun.
+
+## Complete receipt-schema and interpretation preflight
+
+The replay verifier now checks the **complete** top-level schema of a saved
+historical-candidate triage receipt, including the producer's exact research
+interpretation text, **before** reading candidate ZIP bytes. Missing or extra
+fields and edited, omitted, or non-string interpretations are rejected even
+if all archive hashes and counters would otherwise match. The producer's
+interpretation remains the same; it is shared with the read-side verifier to
+prevent a duplicate, drifting copy of the scientific qualification.
+
+Malformed candidate status types, including JSON objects or arrays in a failed
+candidate row, also fail with a controlled verification error before ZIP I/O.
+This keeps corrupt receipts from inducing needless bounded archive rescans or
+an uncontrolled type error. Synthetic offline tests cover both valid producer
+receipts and these altered-claim cases; no experimental or human data is used.
+
+This is **local receipt integrity**, not proof of independently retained
+historical report/trace custody. Neither a clean receipt nor its successful
+replay permits blinded distribution, establishes human ratings, or changes the
+diagnostic pilot, qualified frozen automated results, or exploratory analyses.
