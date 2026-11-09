@@ -41,6 +41,9 @@ DIMS = tuple(human_core.DIMS)
 # Frozen 10-task readiness receipts are metadata, not arbitrary-size datasets.
 # Bound untrusted JSON/contract reads before buffering them in memory.
 MAX_READINESS_INPUT_BYTES = 16 * 1024 * 1024
+# Prevent oversized JSON integer tokens from bypassing the per-file size bound
+# or causing float-conversion overflow in downstream numeric validation.
+MAX_READINESS_JSON_INTEGER_DIGITS = 128
 
 
 def _require(ok, message):
@@ -182,9 +185,29 @@ def _load(content, label):
             value[key] = member
         return value
 
+    def finite_json_float(token):
+        value = float(token)
+        if not math.isfinite(value):
+            raise ValueError(f"{label} contains non-finite JSON number")
+        return value
+
+    def bounded_json_int(token):
+        if len(token.lstrip("-")) > MAX_READINESS_JSON_INTEGER_DIGITS:
+            raise ValueError(f"{label} contains oversized JSON integer token")
+        return int(token)
+
+    def reject_json_constant(token):
+        # Python's JSON decoder accepts NaN/Infinity by default although
+        # these are not JSON numbers.
+        raise ValueError(f"{label} contains nonstandard JSON number {token}")
+
     try:
         value = json.loads(
-            content.decode("utf-8"), object_pairs_hook=unique_object_pairs
+            content.decode("utf-8"),
+            object_pairs_hook=unique_object_pairs,
+            parse_float=finite_json_float,
+            parse_int=bounded_json_int,
+            parse_constant=reject_json_constant,
         )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"{label} is not valid UTF-8 JSON") from exc
@@ -197,9 +220,15 @@ def _fingerprint(content):
 
 
 def _number(value, label):
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{label} must be a finite number")
-    return float(value)
+    try:
+        number = float(value)
+    except (OverflowError, ValueError) as exc:
+        raise ValueError(f"{label} must be a finite number") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{label} must be a finite number")
+    return number
 
 
 def _bounded_number(value, label, *, minimum, maximum):

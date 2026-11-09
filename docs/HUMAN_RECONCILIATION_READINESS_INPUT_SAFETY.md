@@ -39,3 +39,29 @@ silently accepted with an increased limit; any change to the limit must be
 separately justified and regression-tested. No result about inter-annotator
 agreement or automated–human alignment is implied while real blinded ratings
 remain outstanding.
+
+## Strict finite JSON-number decoding at reconciliation preflight
+
+The independent reconciliation-readiness reader rejects nonstandard JSON
+numeric constants (`NaN`, `Infinity`, and `-Infinity`) and decimal
+exponents that overflow to nonfinite Python floats (for example, `1e999`).
+It also rejects integer tokens exceeding **128 decimal digits** before
+converting them, keeping even a file below the 16 MiB byte bound from
+carrying an unreasonably large integer token. Numeric validation converts
+ordinary Python integers through a guarded finite-float conversion so that
+injected extreme values fail as `ValueError`, not an uncaught
+`OverflowError`. JSON `null`, booleans, ordinary finite fractions, and
+string literals containing these words remain valid at the decoder boundary.
+
+These are *readiness-layer* checks on already collected automated and human
+analysis receipts, complementary to upstream independent output verification;
+they neither authenticate original missing treatment reports nor change
+the frozen analysis. Synthetic tests in
+`tests/test_human_reconciliation_readiness_json_numbers.py` cover illegal
+constants, exponent overflow, integer-token limits, nested values, valid
+boundary values, the preserved automated snapshot, and direct numeric
+overflow. No treatments, evaluations, analyses, or human ratings were rerun
+or generated. Pilot observations remain diagnostic, frozen automated
+designated-primary findings retain post-collection plan-timing qualifications,
+retrospective sensitivity findings remain exploratory, and human validation
+is pending original-source recovery and eligible annotators.
