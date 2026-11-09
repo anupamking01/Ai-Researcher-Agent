@@ -253,6 +253,10 @@ def test_numeric_receipt_rechecks_captured_csv_after_parsing(tmp_path, monkeypat
         main.write_bytes(b"variant_id,task_id\nP6,main-01\n")
         return {"status": "synthetic_only"}
 
+    # This test intentionally uses two-column synthetic fixtures to isolate
+    # the descriptor-capture/recheck window, not frozen export schemas.
+    # Keep the production schema enforced; test it separately with full CSVs.
+    monkeypatch.setattr(audit, "EXPECTED_CSV_HEADERS", {})
     monkeypatch.setattr(audit, "audit_rows", synthetic_validator)
     with pytest.raises(audit.NumericInputError, match="changed before audit receipt"):
         audit.audit_files(tmp_path)
