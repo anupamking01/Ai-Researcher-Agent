@@ -15,6 +15,7 @@ import math
 import os
 import stat
 import json
+import unicodedata
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -252,6 +253,15 @@ def _csv_bytes(root: Path, relative: str) -> bytes:
         ) from exc
 
 
+def _unsafe_spreadsheet_text(value: str) -> bool:
+    """Reject executable-looking CSV prefixes before numeric normalization."""
+    for char in value:
+        if char.isspace() or unicodedata.category(char)[0] in ("C", "Z"):
+            continue
+        return char in "=+-@"
+    return False
+
+
 def _parse_csv(content: bytes, label: str) -> list[dict]:
     try:
         data = content.decode("utf-8-sig")
@@ -261,9 +271,20 @@ def _parse_csv(content: bytes, label: str) -> list[dict]:
             raise NumericInputError(f"{label}: absent or duplicate CSV headers")
         if not {"variant_id", "task_id"}.issubset(headers):
             raise NumericInputError(f"{label}: missing cell identity headers")
+        if any(_unsafe_spreadsheet_text(header) for header in headers):
+            raise NumericInputError(f"{label}: formula-like CSV header")
         rows = list(reader)
-        if any(None in row for row in rows):
-            raise NumericInputError(f"{label}: surplus CSV fields")
+        if any(None in row or any(value is None for value in row.values())
+               for row in rows):
+            raise NumericInputError(f"{label}: missing or surplus CSV fields")
+        for line, row in enumerate(rows, start=2):
+            # Inspect all raw exported cells, including unused metadata, before
+            # Decimal parsing can normalize formula-looking numeric tokens.
+            for column, value in row.items():
+                if _unsafe_spreadsheet_text(value):
+                    raise NumericInputError(
+                        f"{label}: formula-like CSV cell {column} in row {line}"
+                    )
     except (UnicodeDecodeError, csv.Error) as exc:
         raise NumericInputError(f"{label}: invalid UTF-8 or CSV structure") from exc
     return rows

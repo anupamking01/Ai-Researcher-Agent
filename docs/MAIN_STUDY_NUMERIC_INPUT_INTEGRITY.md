@@ -95,3 +95,31 @@ counts, and acceptance of the smallest subnormal value.
 This check is independent of, and does not replace, the frozen byte-pinned
 analysis-input verifier. It does not establish historical report/trace custody,
 preregistered confirmatory status, or human-evaluation results.
+
+
+## Formula-like CSV cell and row-shape checks
+
+Both frozen automated main-study CSVs are human-readable research exports.
+CSV quoting alone does not prevent spreadsheet applications from executing a
+cell starting with `=`, `+`, `-`, or `@`. For example, `+1.25`
+compares numerically equal to `1.25`, so numeric consistency alone cannot
+certify spreadsheet-safe source bytes. The independent verifier now rejects
+formula-like prefixes in **every exported cell and header**, including
+unconsumed metadata, after leading whitespace, Unicode separator, control,
+or format characters. It rejects missing or surplus CSV fields as well.
+No inputs are escaped, modified, or re-serialized; rejected exports fail
+closed before the verification receipt is issued.
+
+Synthetic, offline reproduction:
+
+```bash
+python -m pytest -q tests/test_main_study_csv_export_safety.py
+python -m scripts.audit_main_study_numeric_inputs
+```
+
+This is spreadsheet-import hygiene, not a guarantee about any particular
+spreadsheet engine, and not independent authentication of the original 40
+reports/traces. The five-task pilot remains diagnostic, frozen automated
+inference remains qualified by its post-collection analysis plan and
+recovery-policy differences, retrospective sensitivity remains exploratory,
+and actual human validation has not been conducted.
