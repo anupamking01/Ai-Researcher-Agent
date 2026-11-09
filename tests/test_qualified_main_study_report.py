@@ -84,17 +84,17 @@ def test_coherent_claim_relabel_with_changed_frozen_csv_fails_pin(tmp_path):
 
 def test_late_report_mutation_is_detected(tmp_path, monkeypatch):
     root = _checkout(tmp_path)
-    original = qualified.verify_outputs
-    calls = 0
+    capture = qualified._capture_markdown
+    mutated = False
 
-    def change_after_first_verification(*, root):
-        nonlocal calls
-        calls += 1
-        original(root=root)
-        if calls == 1:
-            cover = root / qualified.COVER
-            cover.write_bytes(cover.read_bytes() + b"\nNew disclosure?\n")
+    def change_after_first_cover_capture(path):
+        nonlocal mutated
+        raw = capture(path)
+        if Path(path).name == qualified.COVER.name and not mutated:
+            mutated = True
+            Path(path).write_bytes(raw + b"\nNew disclosure?\n")
+        return raw
 
-    monkeypatch.setattr(qualified, "verify_outputs", change_after_first_verification)
+    monkeypatch.setattr(qualified, "_capture_markdown", change_after_first_cover_capture)
     with pytest.raises(ValueError, match="changed before export"):
         qualified.assemble_qualified_report(repo_root=root)
