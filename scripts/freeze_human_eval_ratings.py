@@ -1072,18 +1072,23 @@ def quadratic_weighted_kappa(pairs: list[tuple[int, int]]) -> float | None:
         first[i] += 1
         second[j] += 1
 
-    max_distance_sq = 16.0
-    observed_disagreement = 0.0
-    expected_disagreement = 0.0
-    for i in range(5):
-        for j in range(5):
-            weight = ((i - j) ** 2) / max_distance_sq
-            observed_disagreement += weight * observed[i][j] / n
-            expected_disagreement += weight * (first[i] * second[j]) / (n * n)
+    # Both quadratic-weighted disagreements share the factor 1/16.
+    # Cancel it algebraically, and accumulate exact integer category counts
+    # before the single final division. This avoids platform-dependent
+    # binary64 rounding across 25 weighted cells without changing the
+    # frozen ordinal estimator or its missing-pair inclusion rule.
+    observed_distance = sum(
+        (i - j) ** 2 * observed[i][j]
+        for i in range(5) for j in range(5)
+    )
+    expected_distance = sum(
+        (i - j) ** 2 * first[i] * second[j]
+        for i in range(5) for j in range(5)
+    )
 
-    if expected_disagreement == 0.0:
+    if expected_distance == 0:
         return None
-    return 1.0 - (observed_disagreement / expected_disagreement)
+    return 1.0 - (n * observed_distance) / expected_distance
 
 
 def _validate_direct_agreement_row(row: dict) -> None:

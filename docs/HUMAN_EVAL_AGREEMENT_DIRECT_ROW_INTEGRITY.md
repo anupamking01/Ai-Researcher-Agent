@@ -30,3 +30,26 @@ authenticity. It does not prove independent human identity or human participatio
 No real annotations are created. It does not modify the frozen pilot,
 confirmatory, exploratory, or human-validation analyses and cannot replace the
 full packet, assignment, submission, freeze, or unblinding verification gates.
+
+## Exact-arithmetic audit of the frozen quadratic-weighted kappa
+
+The pre-unblinding two-rater statistic remains **quadratic-weighted Cohen's
+kappa on the 1–5 ordinal rubric**, computed only on pairs with both scores.
+Its five-category contingency table is now accumulated with **integer squared
+distances** and converted to floating point only for the final quotient.
+Algebraically, the conventional weights `(i-j)^2 / 16` cancel between the
+observed and independence-expected disagreement terms. For `n` fully
+observed pairs, the exact expression is `1 - n*O/E`, where `O` is the
+sum of observed squared distances and `E` is the sum across the Cartesian
+product of both raters' marginal score lists. `E = 0` remains **undefined**
+(`null`), not evidence of perfect reliability.
+
+`tests/test_human_eval_agreement_integer_oracle.py` compares this
+implementation to an **independent rational-number oracle** over every
+ordered 1/3/5 score-pair profile of lengths 1–3, checks rater-swap,
+item-permutation and mirrored-scale invariance, and verifies that overlapping
+but unscored dimensions remain explicitly partitioned instead of inflating
+agreement. The tests use synthetic ratings only. This changes no rubric,
+estimator, missingness inclusion rule, original research result or claim:
+actual blinded human annotations and independent original report custody
+are still unavailable.
