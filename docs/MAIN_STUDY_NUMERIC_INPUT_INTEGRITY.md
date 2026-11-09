@@ -188,3 +188,40 @@ partition. No experimental measurements, provenance pins, analysis settings,
 or human ratings are changed. The pilot is diagnostic; automated main-study
 inference remains frozen but qualified; historical status accounting is
 retrospective provenance, not a confirmatory test; human validation is pending.
+
+
+## Closed CSV column vocabulary (independent export-validity check)
+
+The standalone auditor now checks **every column name** against the exact
+published frozen treatment (16 fields) and common-evaluator (12 fields)
+schemas, **after** raw formula-prefix and row-shape validation. Previously,
+the auditor verified known numeric and provenance fields but silently accepted
+additional, unused columns. A plausible-looking extra such as
+`provider_billed_cost_usd`, `human_verified_score`, or
+`evidence_authenticated` could accompany otherwise valid numeric data,
+potentially misleading a reader about billing, independent evidence custody,
+or human validation despite never being checked by this auditor. Missing
+columns and whitespace/case-renamed headers also fail closed. Reordering the
+same complete set of headers is allowed in this semantic check; the separate
+published-input SHA-256 pin still protects original byte ordering.
+
+Reproduce offline using:
+
+```bash
+python -m scripts.verify_published_main_study_inputs
+python -m scripts.audit_main_study_numeric_inputs
+python -m pytest -q tests/test_main_study_csv_export_safety.py
+```
+
+Synthetic negative regressions cover missing fields, conflicting shadow
+metadata, noncanonical aliases, and harmless header reordering; a read-only
+regression also verifies both original 40-row frozen CSV exports. The
+dedicated numeric CI path filters now include the CSV-export safety tests,
+with a structural test enforcing that coverage.
+
+This is a schema/interpretation safeguard, **not** proof that original
+reports/traces or evaluator provider requests were authenticated. Neither
+the diagnostic pilot, frozen and chronology-qualified automated inference,
+retrospective exploratory checks, nor pending blinded human validation
+acquires a new result or status. No treatment, evaluator, analysis, or human
+rating is rerun.

@@ -71,6 +71,7 @@ def test_numeric_ci_both_event_filters_cover_source_anchor_and_dependencies():
         "outputs/main_study_runs.csv", "outputs/posthoc_support_runs.csv",
         "outputs/main_study_analysis_inputs_manifest.json",
         "tests/test_main_study_numeric_integrity.py",
+        "tests/test_main_study_csv_export_safety.py",
         "tests/test_main_study_numeric_ci_source_binding.py",
     } | _static_script_dependencies(ANCHOR)
     for event in ("push", "pull_request"):

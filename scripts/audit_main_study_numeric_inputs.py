@@ -38,6 +38,27 @@ MAX_FLOAT_DECIMAL_EXPONENT = 308
 MIN_FLOAT_DECIMAL_EXPONENT = -324
 MAX_EXACT_INTEGER = (1 << 53) - 1
 
+# The saved main-study exports have closed field vocabularies. An extra column
+# could silently advertise a conflicting score, verification status or billing
+# claim while the numeric audit checks only the known fields. Keep the
+# independent *semantic* contract distinct from the byte-pinned source audit.
+EXPECTED_CSV_HEADERS = {
+    MAIN_PATH: frozenset((
+        "variant_id", "task_id", "completed", "source_budget",
+        "successful_sources", "failed_sources", "search_calls",
+        "model_calls", "total_tokens", "treatment_cost_usd",
+        "cost_status", "latency_seconds", "report_words",
+        "posthoc_claims_checked", "posthoc_strict_support_rate",
+        "posthoc_evaluator_cost_usd",
+    )),
+    SUPPORT_PATH: frozenset((
+        "variant_id", "task_id", "run_id", "evidence_status",
+        "claims_checked", "supported", "partially_supported",
+        "unsupported", "contradicted", "strict_support_rate",
+        "total_tokens", "estimated_cost_usd",
+    )),
+}
+
 
 class NumericInputError(ValueError):
     """Frozen analysis CSVs are structurally or numerically inconsistent."""
@@ -310,6 +331,16 @@ def _parse_csv(content: bytes, label: str) -> list[dict]:
                     raise NumericInputError(
                         f"{label}: formula-like CSV cell {column} in row {line}"
                     )
+        # Check raw cell and row safety first so malformed export diagnostics
+        # remain actionable, then reject missing or shadow/extra metadata.
+        expected_headers = EXPECTED_CSV_HEADERS.get(label)
+        if expected_headers is not None and set(headers) != expected_headers:
+            actual_headers = set(headers)
+            raise NumericInputError(
+                f"{label}: frozen CSV header schema mismatch "
+                f"(missing={sorted(expected_headers - actual_headers)}, "
+                f"unexpected={sorted(actual_headers - expected_headers)})"
+            )
     except (UnicodeDecodeError, csv.Error) as exc:
         raise NumericInputError(f"{label}: invalid UTF-8 or CSV structure") from exc
     return rows

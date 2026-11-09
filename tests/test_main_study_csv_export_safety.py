@@ -77,3 +77,63 @@ def test_numeric_equivalence_alone_does_not_certify_spreadsheet_safety():
     })
     with pytest.raises(audit.NumericInputError, match="formula-like CSV cell"):
         audit._parse_csv(raw, "synthetic")
+
+
+def _synthetic_full_schema(label, headers=None):
+    """Build one synthetic CSV row; schema checks do not assess measurements."""
+    columns = sorted(audit.EXPECTED_CSV_HEADERS[label]) if headers is None else headers
+    return _export(columns, {
+        column: {"variant_id": "D3", "task_id": "main-01"}.get(column, "0")
+        for column in columns
+    })
+
+
+@pytest.mark.parametrize("label", [audit.MAIN_PATH, audit.SUPPORT_PATH])
+def test_frozen_csv_headers_are_explicitly_accounted_for(label):
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    raw = (root / label).read_bytes()
+    parsed = audit._parse_csv(raw, label)
+    assert len(parsed) == 40
+
+
+@pytest.mark.parametrize("label,missing", [
+    (audit.MAIN_PATH, "cost_status"),
+    (audit.MAIN_PATH, "posthoc_evaluator_cost_usd"),
+    (audit.SUPPORT_PATH, "evidence_status"),
+    (audit.SUPPORT_PATH, "run_id"),
+])
+def test_rejects_removed_field_even_if_unchecked_numeric_cells_remain(label, missing):
+    columns = sorted(audit.EXPECTED_CSV_HEADERS[label] - {missing})
+    with pytest.raises(audit.NumericInputError, match="header schema mismatch.*missing"):
+        audit._parse_csv(_synthetic_full_schema(label, columns), label)
+
+
+@pytest.mark.parametrize("label,shadow", [
+    (audit.MAIN_PATH, "provider_billed_cost_usd"),
+    (audit.MAIN_PATH, "actual_verified_support_rate"),
+    (audit.SUPPORT_PATH, "evidence_authenticated"),
+    (audit.SUPPORT_PATH, "human_verified_score"),
+])
+def test_rejects_shadow_columns_that_could_mislead_export_readers(label, shadow):
+    columns = sorted(audit.EXPECTED_CSV_HEADERS[label] | {shadow})
+    with pytest.raises(audit.NumericInputError, match="header schema mismatch.*unexpected"):
+        audit._parse_csv(_synthetic_full_schema(label, columns), label)
+
+
+@pytest.mark.parametrize("label,original,alias", [
+    (audit.MAIN_PATH, "cost_status", "Cost_status"),
+    (audit.MAIN_PATH, "cost_status", " cost_status"),
+    (audit.SUPPORT_PATH, "run_id", "run_id "),
+])
+def test_rejects_noncanonical_header_aliases(label, original, alias):
+    columns = sorted((audit.EXPECTED_CSV_HEADERS[label] - {original}) | {alias})
+    with pytest.raises(audit.NumericInputError, match="header schema mismatch"):
+        audit._parse_csv(_synthetic_full_schema(label, columns), label)
+
+
+@pytest.mark.parametrize("label", [audit.MAIN_PATH, audit.SUPPORT_PATH])
+def test_semantically_equivalent_field_order_remains_accepted(label):
+    raw = _synthetic_full_schema(label, list(reversed(sorted(audit.EXPECTED_CSV_HEADERS[label]))))
+    rows = audit._parse_csv(raw, label)
+    assert rows[0]["variant_id"] == "D3"
