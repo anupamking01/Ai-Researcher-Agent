@@ -149,7 +149,7 @@ _CANDIDATE_FAILED_STATUSES = frozenset({
 
 def _preflight_candidate_source_claims(recorded: dict) -> None:
     """Fail before ZIP I/O on impossible candidate digests, roles, or row types."""
-    failed = "recorded triage receipt has inconsistent candidate source claims"
+    failed = "recorded triage receipt has inconsistent claims: candidate source identity"
     first_zip: dict[str, int] = {}
     first_members: dict[str, int] = {}
 

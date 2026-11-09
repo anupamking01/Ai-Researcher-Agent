@@ -312,6 +312,6 @@ def test_source_identity_claims_rejected_before_any_archive_rescan(
 
     monkeypatch.setattr(verify.triage, "triage_candidates", no_archive_scan)
     with pytest.raises(
-        verify.ReceiptVerificationError, match="inconsistent candidate source claims"
+        verify.ReceiptVerificationError, match="inconsistent claims"
     ):
         verify.verify_receipt(receipt, assignments)
