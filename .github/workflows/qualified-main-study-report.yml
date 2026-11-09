@@ -10,6 +10,7 @@ on:
       - .github/workflows/qualified-main-study-report.yml
       - scripts/assemble_qualified_main_study_report.py
       - scripts/verify_qualified_reporting_copy.py
+      - scripts/verify_qualified_reporting_artifact.py
       - scripts/verify_published_main_study_inputs.py
       - scripts/verify_main_study_outputs.py
       - scripts/verify_research_artifact_manifest.py
@@ -17,6 +18,7 @@ on:
       - scripts/analyze_main_study.py
       - tests/test_qualified_main_study_report.py
       - tests/test_qualified_reporting_ci.py
+      - tests/test_qualified_reporting_artifact.py
       - docs/MAIN_STUDY_QUALIFIED_REPORTING.md
       - paper/MAIN_STUDY_REPORTING_COVER.md
       - paper/MAIN_STUDY_INFERENCE.md
@@ -55,6 +57,9 @@ jobs:
           python -m scripts.assemble_qualified_main_study_report \
             > "$RUNNER_TEMP/vera-qualified-report/qualified_main_study.md"
           python -m scripts.verify_qualified_reporting_copy \
+            --report "$RUNNER_TEMP/vera-qualified-report/qualified_main_study.md" \
+            --receipt "$RUNNER_TEMP/vera-qualified-report/verification_receipt.json"
+          python -m scripts.verify_qualified_reporting_artifact \
             --report "$RUNNER_TEMP/vera-qualified-report/qualified_main_study.md" \
             --receipt "$RUNNER_TEMP/vera-qualified-report/verification_receipt.json"
           git diff --exit-code

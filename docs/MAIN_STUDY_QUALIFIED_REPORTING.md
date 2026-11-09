@@ -104,3 +104,35 @@ retained CI artifact is a same-provider, time-limited *checkout-local* record,
 not an independently signed attestation or source for the missing 40 original
 reports/traces. Distribution to human raters remains blocked pending separately
 authenticated source recovery, verified blinding, and genuine independent ratings.
+
+## Verify the retained report and receipt after download
+
+The receipt generator verifies a report *while writing* its companion receipt.
+Consumers also need to check the **existing** two-file pair after transfer:
+a valid Markdown file accompanied by a rewritten JSON receipt must not be
+accepted as the verified CI output. From a checkout containing the pinned
+historical CSV and inference evidence, run:
+
+~~~bash
+python -m scripts.verify_qualified_reporting_artifact \
+  --report /path/to/downloaded/qualified_main_study.md \
+  --receipt /path/to/downloaded/verification_receipt.json
+~~~
+
+The read-only consumer verifier reassembles and checks the historical sources,
+compares the downloaded Markdown byte for byte, and requires the downloaded
+receipt to equal the producer's **exact canonical serialized JSON**. A changed
+scientific limitation, unrecorded extra claim, duplicate JSON key, altered
+boolean or number type, whitespace-only receipt rewrite, missing final LF,
+symlink, or substituted file fails closed. It does not rewrite either input,
+generate ratings, or run experiments/statistical inference. CI now verifies this
+existing pair immediately before upload, rather than testing only the receipt
+producer. Changes to the consumer verifier/tests trigger this workflow.
+
+This is **checkout-local same-provider consistency**, not an independently
+signed or timestamped GitHub artifact attestation, a guarantee of atomic
+filesystem snapshots, or a substitute for archived original treatment reports,
+traces, and source-verified human-evaluation handoff. For external audit,
+preserve the downloaded original artifact ZIP and an independently retained
+checksum/custody record; do not treat a self-consistent regenerated pair as
+proof of original report provenance or human validation.
