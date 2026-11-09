@@ -130,3 +130,32 @@ reports/traces. The five-task pilot remains diagnostic, frozen automated
 inference remains qualified by its post-collection analysis plan and
 recovery-policy differences, retrospective sensitivity remains exploratory,
 and actual human validation has not been conducted.
+
+
+## CI provenance prerequisite for the independent numeric audit
+
+The dedicated `main-study-numeric-input-integrity` workflow now executes the
+**existing** `scripts.verify_published_main_study_inputs` verifier before its
+source-internal numeric check, in one unconditional fail-closed job. Previously,
+the numeric job could pass for two coherently changed CSVs: their local
+SHA-256 receipt did not require the originally published fixed input aggregate.
+The source verifier instead compares the two frozen CSVs and their saved
+manifest with the previously preserved canonical aggregate digest. This
+reuses an established guard; it does not mint new historical provenance.
+
+Both push and pull-request path filters now cover the saved manifest and all
+static first-party script dependencies of the published-source verifier.
+An offline regression checks trigger coverage, read-only permission, and
+execution order. To reproduce the same combined gate locally:
+
+```bash
+python -m scripts.verify_published_main_study_inputs
+python -m scripts.audit_main_study_numeric_inputs
+```
+
+Passing establishes checkout-level identity with the preserved *published
+CSV input aggregate* and numerical consistency, **not** independent custody
+of original treatment traces/reports or uniform historical evaluator policy.
+The gate does not prove provider billing, prospective preregistration,
+randomization, human ratings, or source-verified human-evaluation readiness.
+It changes no canonical measurements, inferential procedures or findings.
