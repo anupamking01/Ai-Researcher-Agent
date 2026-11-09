@@ -253,3 +253,65 @@ def test_contradictory_receipt_claims_fail_before_archive_scan(
     monkeypatch.setattr(verify.triage, "triage_candidates", no_archive_scan)
     with pytest.raises(verify.ReceiptVerificationError, match="inconsistent claims"):
         verify.verify_receipt(receipt, assignments)
+
+
+@pytest.mark.parametrize("corruption", [
+    "forged_provider_match", "forged_alternate_role", "forged_status",
+    "boolean_zip_size", "missing_zip_digest", "nonhex_zip_digest",
+    "forged_duplicate_pointer", "unexpected_verified_field",
+    "failure_claims_provider", "failure_claims_success_status",
+    "failure_contains_success_field", "failure_diagnostic_not_string",
+    "success_flag_changed", "provider_flag_integer",
+])
+def test_source_identity_claims_rejected_before_any_archive_rescan(
+    tmp_path, monkeypatch, corruption,
+):
+    """A saved receipt must not spend a large ZIP budget on impossible claims."""
+    candidate = _zip(tmp_path / "synthetic.zip", b"synthetic verified candidate")
+    missing = tmp_path / "missing.zip"
+    assignments = [
+        ("original_treatment", candidate), ("evaluator_recovery", missing),
+    ]
+    receipt = _receipt(tmp_path / "receipt.json", assignments)
+    doc = json.loads(receipt.read_text(encoding="utf-8"))
+    verified, failed = doc["candidates"]
+
+    if corruption == "forged_provider_match":
+        verified["github_provider_zip_digest_and_size_match"] = True
+    elif corruption == "forged_alternate_role":
+        verified["other_role_github_provider_zip_match"] = "evaluator_recovery"
+    elif corruption == "forged_status":
+        verified["status"] = "github_provider_zip_concordant_not_authenticated"
+    elif corruption == "boolean_zip_size":
+        verified["observed_zip_bytes"] = True
+    elif corruption == "missing_zip_digest":
+        verified.pop("observed_zip_sha256")
+    elif corruption == "nonhex_zip_digest":
+        verified["observed_zip_sha256"] = "z" * 64
+    elif corruption == "forged_duplicate_pointer":
+        verified["duplicate_verified_zip_of_candidate_index"] = 1
+    elif corruption == "unexpected_verified_field":
+        verified["diagnostic"] = "synthetic"
+    elif corruption == "failure_claims_provider":
+        failed["github_provider_zip_digest_and_size_match"] = True
+    elif corruption == "failure_claims_success_status":
+        failed["status"] = "does_not_match_historical_github_provider_zip"
+    elif corruption == "failure_contains_success_field":
+        failed["observed_zip_sha256"] = "a" * 64
+    elif corruption == "failure_diagnostic_not_string":
+        failed["diagnostic"] = 1
+    elif corruption == "success_flag_changed":
+        verified["structural_preflight_succeeded"] = False
+    else:
+        verified["github_provider_zip_digest_and_size_match"] = 1
+
+    receipt.write_text(json.dumps(doc), encoding="utf-8")
+
+    def no_archive_scan(*_args, **_kwargs):
+        raise AssertionError("invalid source claims must fail before ZIP I/O")
+
+    monkeypatch.setattr(verify.triage, "triage_candidates", no_archive_scan)
+    with pytest.raises(
+        verify.ReceiptVerificationError, match="inconsistent candidate source claims"
+    ):
+        verify.verify_receipt(receipt, assignments)

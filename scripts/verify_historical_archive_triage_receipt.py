@@ -124,6 +124,117 @@ def _preflight_receipt_roster(
 
 
 
+# Validate declared source identities before a potential 1-GiB candidate rescan.
+# These checks reject internally impossible receipts; only full ZIP replay can
+# establish continuity of the present-day candidate bytes.
+_CANDIDATE_BASE_FIELDS = frozenset({
+    "candidate_index", "role", "supplied_filename", "status",
+    "structural_preflight_succeeded",
+    "github_provider_zip_digest_and_size_match",
+    "other_role_github_provider_zip_match",
+    "duplicate_verified_zip_of_candidate_index",
+    "observed_regular_member_content_sha256",
+    "same_regular_members_as_candidate_index",
+})
+_CANDIDATE_VERIFIED_FIELDS = frozenset({
+    "observed_zip_bytes", "observed_zip_sha256", "file_count",
+})
+_CANDIDATE_FAILED_FIELDS = frozenset({"diagnostic"})
+_CANDIDATE_FAILED_STATUSES = frozenset({
+    "not_inspected_batch_archive_byte_budget_exceeded",
+    "not_inspected_batch_decompression_budget_exceeded",
+    "structural_preflight_failed",
+})
+
+
+def _preflight_candidate_source_claims(recorded: dict) -> None:
+    """Fail before ZIP I/O on impossible candidate digests, roles, or row types."""
+    failed = "recorded triage receipt has inconsistent candidate source claims"
+    first_zip: dict[str, int] = {}
+    first_members: dict[str, int] = {}
+
+    def digest_valid(value) -> bool:
+        return (
+            type(value) is str and len(value) == 64
+            and all(c in "0123456789abcdef" for c in value)
+        )
+
+    for row in recorded["candidates"]:
+        success = row.get("structural_preflight_succeeded")
+        provider = row.get("github_provider_zip_digest_and_size_match")
+        if type(success) is not bool or type(provider) is not bool:
+            raise ReceiptVerificationError(failed)
+        if set(row) != (
+            _CANDIDATE_BASE_FIELDS
+            | (_CANDIDATE_VERIFIED_FIELDS if success else _CANDIDATE_FAILED_FIELDS)
+        ):
+            raise ReceiptVerificationError(failed)
+
+        if not success:
+            if (
+                row["status"] not in _CANDIDATE_FAILED_STATUSES
+                or provider
+                or row["other_role_github_provider_zip_match"] is not None
+                or row["duplicate_verified_zip_of_candidate_index"] is not None
+                or row["observed_regular_member_content_sha256"] is not None
+                or row["same_regular_members_as_candidate_index"] is not None
+                or type(row["diagnostic"]) is not str
+                or not 0 < len(row["diagnostic"]) <= 300
+            ):
+                raise ReceiptVerificationError(failed)
+            continue
+
+        size = row["observed_zip_bytes"]
+        file_count = row["file_count"]
+        digest = row["observed_zip_sha256"]
+        members = row["observed_regular_member_content_sha256"]
+        if (
+            type(size) is not int
+            or not 0 < size <= triage.zip_preflight.MAX_ARCHIVE_BYTES
+            or type(file_count) is not int
+            or not 0 <= file_count <= triage.zip_preflight.MAX_MEMBERS
+            or not digest_valid(digest)
+            or not digest_valid(members)
+        ):
+            raise ReceiptVerificationError(failed)
+
+        role = row["role"]  # The ordered-roster preflight already checks the role.
+        anchor = triage.zip_preflight.GITHUB_JOB_LOG_ARCHIVES[role]
+        matches_declared = (
+            size == anchor["size_bytes"] and digest == anchor["zip_sha256"]
+        )
+        other_role = next((
+            other for other in triage.ROLES
+            if other != role
+            and size == triage.zip_preflight.GITHUB_JOB_LOG_ARCHIVES[other]["size_bytes"]
+            and digest == triage.zip_preflight.GITHUB_JOB_LOG_ARCHIVES[other]["zip_sha256"]
+        ), None) if not matches_declared else None
+        expected_status = (
+            "github_provider_zip_concordant_not_authenticated"
+            if matches_declared else
+            "matches_other_historical_role_not_declared_role"
+            if other_role is not None else
+            "does_not_match_historical_github_provider_zip"
+        )
+        if (
+            provider is not matches_declared
+            or row["other_role_github_provider_zip_match"] != other_role
+            or row["status"] != expected_status
+        ):
+            raise ReceiptVerificationError(failed)
+
+        # Duplicate references must identify the FIRST preceding matching
+        # verified source, not an arbitrary row or a failed candidate.
+        index = row["candidate_index"]
+        if (
+            row["duplicate_verified_zip_of_candidate_index"] != first_zip.get(digest)
+            or row["same_regular_members_as_candidate_index"] != first_members.get(members)
+        ):
+            raise ReceiptVerificationError(failed)
+        first_zip.setdefault(digest, index)
+        first_members.setdefault(members, index)
+
+
 def _preflight_receipt_claims(recorded: dict) -> None:
     """Reject impossible research claims/accounting before costly ZIP rescans.
 
@@ -263,6 +374,7 @@ def verify_receipt(
         raise ReceiptVerificationError("expected schema-v3 triage receipt")
     # Malformed receipt rosters must not trigger up to a gigabyte of ZIP I/O.
     _preflight_receipt_roster(recorded, assignments)
+    _preflight_candidate_source_claims(recorded)
     _preflight_receipt_claims(recorded)
     try:
         recorded_canonical = json.dumps(

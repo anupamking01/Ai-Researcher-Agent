@@ -719,7 +719,18 @@ force avoidable batch ZIP reads or decompression merely to establish an
 already-obvious mismatch. Later full replay still independently checks every
 recorded candidate's observed status, hashes, duplicate links and budget
 accounting; the early roster check is not a historical custody proof.
-Before any ZIP rescan, the verifier now cross-checks the saved receipt's\nfixed non-authentication/readiness declarations, role-level candidate and\nprovider-concordance counts, duplicate/budget-skip counters, and bounded\nresource reservations. Boolean-as-integer substitutions and impossible\nbudget values fail closed. This avoids expensive source I/O for a receipt\nthat already contradicts its own research-integrity or accounting contract;\nfull byte-for-byte inventory replay is still required after this preflight.\nThis check does not authenticate historical execution, backup custody, or\nhuman-evaluation readiness.\nIts complete success result fingerprints the exact saved receipt bytes; it
+Before any ZIP rescan, the verifier now cross-checks the saved receipt's\nfixed non-authentication/readiness declarations, role-level candidate and\nprovider-concordance counts, duplicate/budget-skip counters, and bounded\nresource reservations. Boolean-as-integer substitutions and impossible\nbudget values fail closed. This avoids expensive source I/O for a receipt\nthat already contradicts its own research-integrity or accounting contract;\nfull byte-for-byte inventory replay is still required after this preflight.\nThis check does not authenticate historical execution, backup custody, or\nhuman-evaluation readiness.\nThe replay additionally rejects impossible candidate-level source claims **before**
+scanning any ZIP bytes. The receipt's declared ZIP size and SHA-256 must agree
+with the pinned historical GitHub-provider digest for its declared role (or
+the other role, if explicitly reported), the associated status and booleans,
+and first-seen duplicate-source indices. Verified and failed rows must carry
+their respective exact fields and numeric types. This is a fail-fast,
+resource-safety and provenance-consistency check of the *saved receipt*, not
+proof that a ZIP currently contains those bytes: the full bounded replay is
+still mandatory. It never authenticates independent original custody or
+unblocks blinded human evaluation.
+
+Its complete success result fingerprints the exact saved receipt bytes; it
 does not modify or extract candidate ZIPs.
 It requires a new bounded scan, so budget for that I/O separately. The receipt
 contains only filenames, not backup-directory paths: preserve the original
