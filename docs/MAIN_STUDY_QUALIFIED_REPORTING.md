@@ -136,3 +136,40 @@ traces, and source-verified human-evaluation handoff. For external audit,
 preserve the downloaded original artifact ZIP and an independently retained
 checksum/custody record; do not treat a self-consistent regenerated pair as
 proof of original report provenance or human validation.
+
+
+## Verify a downloaded Actions ZIP *before* unpacking
+
+The existing pair verifier checks two files after extraction, but a downloaded
+GitHub Actions ZIP can itself contain ambiguous or hazardous member paths,
+unexpected files, duplicate entries, or a replaced archive generation. Use the
+dedicated offline ZIP consumer from the repository checkout instead:
+
+~~~bash
+python -m scripts.verify_qualified_reporting_zip \
+  --zip /path/to/vera-qualified-report-<run-id>-<attempt>.zip
+~~~
+
+The command reuses the recovered-archive structural preflight to inspect
+the complete ZIP (without extraction), bounds its compressed size to 1 MiB,
+requires precisely the two published report/receipt member names with no
+extra directories, checks member CRCs/hashes and ZIP-generation continuity,
+then invokes the existing source-bound report-and-receipt verifier using only
+fixed filenames in a deleted private temporary directory. It prints the
+observed ZIP SHA-256 for an **independently retained** custody log; that digest
+is computed **now**, not a historical external fingerprint. The original ZIP,
+repository sources, and preserved analyses are never modified.
+
+For local regression without any API/model or human-evaluation calls:
+
+~~~bash
+python -m pytest -q tests/test_qualified_reporting_zip.py
+~~~
+
+A PASS means the *present* downloaded ZIP contains the expected checkout-local
+noncanonical reporting pair. It does **not** establish that these were the ZIP
+bytes originally uploaded by GitHub, supply an independently signed timestamp,
+authenticate original treatment reports/traces, or authorize blinded ratings.
+Preserve an out-of-band checksum and original archive when independent
+distribution custody is needed. Do not substitute this reporting ZIP for
+the unavailable historical experimental archives.

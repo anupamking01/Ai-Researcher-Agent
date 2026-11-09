@@ -11,6 +11,7 @@ on:
       - scripts/assemble_qualified_main_study_report.py
       - scripts/verify_qualified_reporting_copy.py
       - scripts/verify_qualified_reporting_artifact.py
+      - scripts/verify_qualified_reporting_zip.py
       - scripts/verify_published_main_study_inputs.py
       - scripts/verify_main_study_outputs.py
       - scripts/verify_research_artifact_manifest.py
@@ -19,6 +20,7 @@ on:
       - tests/test_qualified_main_study_report.py
       - tests/test_qualified_reporting_ci.py
       - tests/test_qualified_reporting_artifact.py
+      - tests/test_qualified_reporting_zip.py
       - docs/MAIN_STUDY_QUALIFIED_REPORTING.md
       - paper/MAIN_STUDY_REPORTING_COVER.md
       - paper/MAIN_STUDY_INFERENCE.md
