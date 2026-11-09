@@ -114,10 +114,46 @@ def test_accept_integral_decimal_and_binary_rounding_noise():
     assert result["n_cells"] == 1
 
 
+@pytest.mark.parametrize("status", [
+    None, "provider_authenticated", "evaluator_not_run",
+    "retrieved_evidence ", "ZERO_SUCCESSFUL_SOURCES",
+])
+def test_unrecognized_evaluator_evidence_status_rejected(status):
+    # A new provenance label cannot silently pass as historical source policy.
+    with pytest.raises(audit.NumericInputError, match="evidence_status"):
+        _check(support_change={"evidence_status": status})
+
+
+def test_blank_evaluator_status_remains_unspecified_not_retrieved():
+    receipt = _check()
+    assert receipt["evaluator_evidence_status_counts"] == {
+        "blank_unspecified": 1,
+        "retrieved_evidence": 0,
+        "zero_successful_sources": 0,
+    }
+    assert receipt["historical_evaluator_evidence_status_authenticated"] is False
+
+
+def test_explicit_retrieved_status_is_only_a_csv_declaration():
+    receipt = _check(support_change={"evidence_status": "retrieved_evidence"})
+    assert receipt["evaluator_evidence_status_counts"] == {
+        "blank_unspecified": 0,
+        "retrieved_evidence": 1,
+        "zero_successful_sources": 0,
+    }
+    assert receipt["historical_evaluator_evidence_status_authenticated"] is False
+
+
 def test_frozen_csv_inputs_have_internally_consistent_numeric_fields():
     result = audit.audit_files()
     assert result["n_cells"] == 40
     assert result["n_tasks"] == 10
+    assert result["evaluator_evidence_status_counts"] == {
+        "blank_unspecified": 37,
+        "retrieved_evidence": 2,
+        "zero_successful_sources": 1,
+    }
+    assert result["historical_evaluator_evidence_status_authenticated"] is False
     assert result["status"].endswith("not_original_source_authenticity")
     assert len(result["input_sha256"]) == 2
 

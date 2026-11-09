@@ -115,6 +115,14 @@ def audit_rows(
     main = _matrix(main_rows, "treatment", variants, tasks)
     support = _matrix(support_rows, "common evaluator", variants, tasks)
     seen_evaluator_runs: set[str] = set()
+    # Blank statuses in the 37 original evaluator-summary rows are unspecified,
+    # not positive proof of retrieved evidence. Recovery rows carry explicit
+    # declarations. Report this distinction without reclassifying measurements.
+    evidence_status_counts = {
+        "blank_unspecified": 0,
+        "retrieved_evidence": 0,
+        "zero_successful_sources": 0,
+    }
     for variant in variants:
         for task in tasks:
             label = f"{variant}/{task}"
@@ -154,6 +162,10 @@ def audit_rows(
             if sum(parts) != claims:
                 raise NumericInputError(f"{label}: evaluator claim-count partition mismatch")
             evidence_status = e.get("evidence_status", "")
+            if evidence_status not in ("", "retrieved_evidence", "zero_successful_sources"):
+                raise NumericInputError(
+                    f"{label}: unexpected evaluator evidence_status"
+                )
             if successful == 0:
                 if evidence_status != "zero_successful_sources":
                     raise NumericInputError(
@@ -167,6 +179,9 @@ def audit_rows(
                 raise NumericInputError(
                     f"{label}: zero-evidence sentinel contradicts retrieved sources"
                 )
+            evidence_status_counts[
+                "blank_unspecified" if evidence_status == "" else evidence_status
+            ] += 1
             ratio = Decimal(parts[0]) / Decimal(claims)
             _rate(e, "strict_support_rate", ratio, label)
             _rate(m, "posthoc_strict_support_rate", ratio, label)
@@ -184,6 +199,9 @@ def audit_rows(
         "n_tasks": len(tasks),
         "n_variants": len(variants),
         "frozen_evaluator_claim_cap": CLAIM_CAP,
+        "evaluator_evidence_status_counts": evidence_status_counts,
+        # These are CSV-declared statuses, not independently captured evidence.
+        "historical_evaluator_evidence_status_authenticated": False,
     }
 
 

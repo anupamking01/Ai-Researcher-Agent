@@ -159,3 +159,32 @@ of original treatment traces/reports or uniform historical evaluator policy.
 The gate does not prove provider billing, prospective preregistration,
 randomization, human ratings, or source-verified human-evaluation readiness.
 It changes no canonical measurements, inferential procedures or findings.
+
+## Historical evaluator evidence-status interpretation in the numeric receipt
+
+The independent CSV audit now restricts `evidence_status` to the three
+literal forms present in the published frozen evaluator export: blank,
+`retrieved_evidence`, and `zero_successful_sources`. Unknown or
+relabelled statuses fail validation rather than being silently accepted as
+a fourth evidence policy. A blank remains **unspecified**; it is not
+converted into `retrieved_evidence` merely because the treatment CSV records
+at least one successful source. A zero-source treatment still requires the
+explicit sentinel and all claims unsupported, as before.
+
+The read-only numeric receipt counts these *declared labels*, separately
+from numeric scores. In the unchanged 40-cell published CSV this is
+**37 blank/unspecified, 2 explicitly `retrieved_evidence`, and 1 explicit
+`zero_successful_sources`**. These correspond to the source-linked
+[historical evaluator measurement partition](HISTORICAL_EVALUATOR_MEASUREMENT_PARTITION.md);
+the new counters do not themselves prove which historical provider calls
+executed, authenticate original archives, or assert identical evaluator
+input-admissibility policies. The receipt explicitly sets
+`historical_evaluator_evidence_status_authenticated: false`.
+
+Synthetic offline regressions cover unknown/whitespace-relabelled statuses,
+acceptance of true legacy blanks, the distinction between a retrieved-evidence
+*declaration* and independent source custody, and the saved 37/2/1 label
+partition. No experimental measurements, provenance pins, analysis settings,
+or human ratings are changed. The pilot is diagnostic; automated main-study
+inference remains frozen but qualified; historical status accounting is
+retrospective provenance, not a confirmatory test; human validation is pending.
