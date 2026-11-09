@@ -69,3 +69,38 @@ checkout-concordance pins, not independent treatment/report source
 authentication. This additional result-byte anchor rejects a coherent,
 numerically parseable change to the canonical output that a renderer check
 alone would not detect.
+
+
+## Verified CI distribution of the qualified reading copy
+
+The `qualified-main-study-report` workflow executes the actual offline exporter
+on changes to the frozen data, rendering dependencies, reviewed cover, or
+verification code. It independently checks the *produced file* byte-for-byte
+against a newly source-verified assembly and retains two files together in a
+90-day GitHub Actions artifact:
+
+- `qualified_main_study.md`: a **noncanonical** manuscript reading copy,
+  with the mandatory caveats before the historically unchanged results.
+- `verification_receipt.json`: SHA-256 and byte length of that exact copy,
+  published frozen-input aggregate, frozen JSON/Markdown pins, reviewed-cover
+  pin, and explicit false flags for independent original-report custody,
+  prospective preregistration, randomized causal identification, and human
+  validation.
+
+The workflow has read-only repository permissions, pinned checkout/Python/
+artifact-upload actions, and no model-provider credentials. It performs no
+treatment, evaluator, inference, or human-rating run. A successful unit test
+alone is not substituted for actually exporting and verifying the distributable
+report. Reproduce the receipt locally after generating the report:
+
+~~~bash
+python -m scripts.assemble_qualified_main_study_report > qualified_main_study.md
+python -m scripts.verify_qualified_reporting_copy \
+  --report qualified_main_study.md --receipt qualified_receipt.json
+~~~
+
+Receipt creation is **create-only**; do not overwrite an earlier receipt. Each
+retained CI artifact is a same-provider, time-limited *checkout-local* record,
+not an independently signed attestation or source for the missing 40 original
+reports/traces. Distribution to human raters remains blocked pending separately
+authenticated source recovery, verified blinding, and genuine independent ratings.
