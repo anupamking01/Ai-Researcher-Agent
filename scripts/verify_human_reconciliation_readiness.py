@@ -209,6 +209,21 @@ def _bounded_number(value, label, *, minimum, maximum):
     return number
 
 
+def _human_half_step_difference(value, label):
+    """Validate a paired difference from one/two observed integer rubric scores.
+
+    A report score averages one or two observed 1–5 integer ratings, so its
+    value and the difference of any two report scores lie on the 0.5 lattice.
+    Reject off-lattice values before treating them as human observations.
+    """
+    number = _bounded_number(value, label, minimum=-4.0, maximum=4.0)
+    if not (2 * number).is_integer():
+        raise ValueError(
+            f"{label} is not a half-point increment from the frozen 1–5 rubric"
+        )
+    return number
+
+
 def _nonnegative_integer(value, label):
     if type(value) is not int or value < 0:
         raise ValueError(f"{label} must be a non-negative integer")
@@ -352,11 +367,9 @@ def validate_payloads(automated, human):
                 f"human {name}/{dimension} task differences mismatch",
             )
             diffs = [
-                _bounded_number(
+                _human_half_step_difference(
                     task_diffs[task],
                     f"human {name}/{dimension}/{task}",
-                    minimum=-4.0,
-                    maximum=4.0,
                 )
                 for task in included
             ]

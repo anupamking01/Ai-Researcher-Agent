@@ -262,6 +262,9 @@ def _summary(diffs):
 def _payloads():
     tasks = [f"main-{index:02d}" for index in range(1, 11)]
     base_diffs = [0.25, -0.5, 0.0, 0.25, -0.25, 0.5, 0.0, 0.25, -0.25, 0.0]
+    # Separate from fractional automated strict-support values: with at most
+    # two 1–5 integer scores per report, human differences are half-steps.
+    human_diffs = [0.5, -1.0, 0.0, 0.5, -0.5, 1.0, 0.0, 0.5, -0.5, 0.0]
     automated = {
         "schema_version": 1,
         "study_id": readiness.STUDY,
@@ -292,7 +295,7 @@ def _payloads():
     for name in readiness.CONTRASTS:
         human["paired_contrasts"][name] = {}
         for dimension in readiness.DIMS:
-            diffs = {task: base_diffs[index] for index, task in enumerate(tasks)}
+            diffs = {task: human_diffs[index] for index, task in enumerate(tasks)}
             human["paired_contrasts"][name][dimension] = {
                 **_summary(list(diffs.values())),
                 "task_ids_included": list(tasks),
@@ -419,6 +422,44 @@ def test_missing_human_pair_remains_explicit_and_is_not_imputed():
 
     receipt = readiness.validate_payloads(automated, human)
     assert receipt["status"] == "automated_human_reconciliation_identity_valid"
+
+
+@pytest.mark.parametrize("off_lattice", [0.25, -0.25, 3.75, 0.5000000001])
+def test_human_paired_differences_reject_impossible_rubric_increments(off_lattice):
+    """A self-consistent summary cannot legalize an impossible report average."""
+    automated, human = _payloads()
+    contrast = readiness.CONTRASTS[0]
+    dimension = readiness.DIMS[0]
+    block = human["paired_contrasts"][contrast][dimension]
+    block["task_differences"][human["task_ids"][0]] = off_lattice
+    block.update(_summary(list(block["task_differences"].values())))
+
+    with pytest.raises(ValueError, match="half-point increment"):
+        readiness.validate_payloads(automated, human)
+
+
+@pytest.mark.parametrize("on_lattice", [-4.0, -3.5, -0.5, 0.0, 0.5, 3.5, 4.0])
+def test_human_paired_differences_accept_frozen_rubric_half_steps(on_lattice):
+    automated, human = _payloads()
+    contrast = readiness.CONTRASTS[0]
+    dimension = readiness.DIMS[0]
+    block = human["paired_contrasts"][contrast][dimension]
+    block["task_differences"][human["task_ids"][0]] = on_lattice
+    block.update(_summary(list(block["task_differences"].values())))
+
+    result = readiness.validate_payloads(automated, human)
+    assert result["status"] == "automated_human_reconciliation_identity_valid"
+
+
+def test_automated_support_differences_do_not_inherit_human_score_lattice():
+    """Support fractions are not 1–5 human scores; keep their original domain."""
+    automated, human = _payloads()
+    block = automated["primary_contrasts"][readiness.CONTRASTS[0]]
+    block["task_differences"][0] = 0.125
+    block.update(_summary(block["task_differences"]))
+    assert readiness.validate_payloads(automated, human)[
+        "primary_outcome"
+    ] == "strict_support_rate"
 
 
 def test_ordered_task_identity_mismatch_is_rejected():
