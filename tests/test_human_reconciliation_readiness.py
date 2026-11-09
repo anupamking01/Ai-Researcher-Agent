@@ -2,6 +2,7 @@
 
 import copy
 import hashlib
+import itertools
 import json
 import os
 import statistics
@@ -261,7 +262,9 @@ def _summary(diffs):
 
 def _payloads():
     tasks = [f"main-{index:02d}" for index in range(1, 11)]
-    base_diffs = [0.25, -0.5, 0.0, 0.25, -0.25, 0.5, 0.0, 0.25, -0.25, 0.0]
+    # These repeat across three adjacent edges, so their cumulative span
+    # must remain within the strict-support score range [0, 1].
+    base_diffs = [0.25, -0.25, 0.0, 0.25, -0.25, 0.25, 0.0, 0.25, -0.25, 0.0]
     # Separate from fractional automated strict-support values: with at most
     # two 1–5 integer scores per report, human differences are half-steps.
     human_diffs = [0.5, -1.0, 0.0, 0.5, -0.5, 1.0, 0.0, 0.5, -0.5, 0.0]
@@ -731,3 +734,70 @@ def test_numeric_false_alias_cannot_mint_readiness_receipt(tmp_path, monkeypatch
             human_root=human_root,
             contract=contract,
         )
+
+
+def _set_synthetic_automated_edges(automated, task_index, values):
+    for name, difference in zip(readiness.CONTRASTS, values):
+        block = automated["primary_contrasts"][name]
+        block["task_differences"][task_index] = difference
+        block.update(_summary(block["task_differences"]))
+
+
+@pytest.mark.parametrize(
+    "edges",
+    [
+        (0.75, 0.5, 0.0),   # individually bounded; D3 -> P6 is +1.25
+        (0.4, 0.4, 0.4),    # adjacent pairs fit; all four scores span 1.2
+        (-0.75, -0.5, 0.0),
+    ],
+)
+def test_joint_automated_contrasts_reject_impossible_shared_support_scores(edges):
+    automated, human = _payloads()
+    _set_synthetic_automated_edges(automated, 0, edges)
+    with pytest.raises(ValueError, match="automated main-01 joint contrast"):
+        readiness.validate_payloads(automated, human)
+
+
+@pytest.mark.parametrize(
+    "edges",
+    [
+        (1.0, -1.0, 1.0),  # D3, D6, P6, P6V can be 0, 1, 0, 1
+        (0.5, 0.5, 0.0),   # boundary span = 1
+        (0.125, -0.25, 0.125),  # fractional support differences are valid
+        (-1.0, 1.0, -1.0),
+        (1 / 3, 1 / 3, 1 / 3),  # floating-point boundary
+    ],
+)
+def test_joint_automated_contrasts_accept_feasible_support_scores(edges):
+    automated, human = _payloads()
+    _set_synthetic_automated_edges(automated, 0, edges)
+    assert readiness.validate_payloads(automated, human)["status"] == (
+        "automated_human_reconciliation_identity_valid"
+    )
+
+
+def test_joint_automated_feasibility_accepts_all_quarter_grid_score_chains():
+    # Exhaustively generate score-derived differences from four legal source
+    # rates; this synthetic oracle does not generate study observations.
+    primary = {
+        name: {"task_differences": [0.0]}
+        for name in readiness.CONTRASTS
+    }
+    for scores in itertools.product((0.0, 0.25, 0.5, 0.75, 1.0), repeat=4):
+        for name, left, right in zip(readiness.CONTRASTS, scores, scores[1:]):
+            primary[name]["task_differences"][0] = right - left
+        readiness._validate_joint_automated_contrast_feasibility(
+            primary, ["synthetic-task"]
+        )
+
+
+def test_frozen_automated_contrasts_pass_cross_arm_score_feasibility():
+    # Read the byte-preserved historical automated output without changing it.
+    # The human payload below is synthetic; this is not human validation.
+    automated = readiness._load(
+        (readiness.ROOT / readiness.AUTO_JSON).read_bytes(),
+        "frozen automated analysis",
+    )
+    readiness._validate_joint_automated_contrast_feasibility(
+        automated["primary_contrasts"], automated["task_ids"]
+    )

@@ -310,6 +310,33 @@ def _validate_joint_human_contrast_feasibility(paired, tasks):
                     )
 
 
+def _validate_joint_automated_contrast_feasibility(primary, tasks):
+    """Require the three paired support contrasts to share four [0, 1] rates.
+
+    Per-edge bounds cannot detect contradictory differences across D3, D6,
+    P6, and P6V for the *same* task. Every task has all four automated scores,
+    and their common-evaluator support rates must lie in [0, 1].
+    """
+    for task_index, task in enumerate(tasks):
+        differences = [
+            float(primary[name]["task_differences"][task_index])
+            for name in CONTRASTS
+        ]
+        # D3's unknown score contributes only a common additive offset.
+        # Feasible source scores exist iff the cumulative offset span <= 1.
+        offsets = [0.0] + [
+            math.fsum(differences[:edge_count])
+            for edge_count in range(1, len(differences) + 1)
+        ]
+        # Finite floating-point source rates can introduce tiny subtraction
+        # errors; no rounding or repair of the recorded differences occurs.
+        if max(offsets) - min(offsets) > 1.0 + 1e-12:
+            raise ValueError(
+                f"automated {task} joint contrast differences cannot arise "
+                "from shared strict-support scores in [0, 1]"
+            )
+
+
 def validate_payloads(automated, human):
     """Validate the frozen cross-analysis identity without comparing outcomes."""
     # JSON booleans are Python integers for equality purposes (True == 1).
@@ -351,6 +378,8 @@ def validate_payloads(automated, human):
             for x in raw
         ]
         _validate_summary(result, diffs, f"automated {name}")
+
+    _validate_joint_automated_contrast_feasibility(primary, tasks)
 
     expected = {
         "schema_version": 1,

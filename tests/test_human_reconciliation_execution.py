@@ -18,7 +18,9 @@ def _summary(values):
 
 def _payloads():
     tasks = [f"main-{i:02d}" for i in range(1, 11)]
-    auto_diffs = [0.5, -0.5, 0.0, 0.5, -0.5, 0.25, -0.25, 0.0, 0.5, -0.5]
+    # Repeated across three adjacent contrasts; keep all four implied
+    # support rates jointly feasible while retaining the intended signs.
+    auto_diffs = [0.25, -0.25, 0.0, 0.25, -0.25, 0.25, -0.25, 0.0, 0.25, -0.25]
     human_diffs = [1.0, -1.0, 1.0, -1.0, 0.0, 1.0, -1.0, 0.0, 0.5, 0.5]
     automated = {
         "schema_version": 1,
