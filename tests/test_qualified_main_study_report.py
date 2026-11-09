@@ -1,6 +1,7 @@
 """Noncanonical qualified-reporting regressions; no treatment or rating calls."""
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -106,4 +107,42 @@ def test_coherently_reformatted_json_still_fails_historical_archive_pin(tmp_path
     source = root / qualified.CANONICAL_INFERENCE
     source.write_bytes(b" " + source.read_bytes())
     with pytest.raises(ValueError, match="archived historical fingerprints"):
+        qualified.assemble_qualified_report(repo_root=root)
+
+
+def test_checked_in_reporting_cover_matches_reviewed_fingerprint():
+    # A revised cover must be reviewed and deliberately re-pinned, rather than
+    # silently accepted because a few required phrases remain in the file.
+    assert hashlib.sha256((ROOT / qualified.COVER).read_bytes()).hexdigest() == (
+        qualified.REVIEWED_REPORTING_COVER_SHA256
+    )
+
+
+@pytest.mark.parametrize(
+    "rewrite",
+    [
+        lambda original: original + (
+            "\\n\\n## Final interpretation\\n\\n"
+            "Contrary to the preceding warnings, VERA demonstrates a "
+            "prospectively preregistered randomized causal treatment effect.\\n"
+        ),
+        lambda original: (
+            "<!--\\n" + original + "\\n-->\\n\\n"
+            "## Final interpretation\\n\\n"
+            "The original methodological limitations are withdrawn.\\n"
+        ),
+    ],
+    ids=["contradictory-visible-addendum", "original-caveats-concealed-in-html-comment"],
+)
+def test_retained_disclosure_phrases_cannot_mask_altered_cover(tmp_path, rewrite):
+    root = _checkout(tmp_path)
+    cover = root / qualified.COVER
+    cover.write_text(rewrite(cover.read_text(encoding="utf-8")), encoding="utf-8")
+    # Keyword checking alone would accept both malicious rewrites, since every
+    # mandatory caveat phrase remains in the modified file.
+    assert all(
+        phrase in qualified._disclosure_text(cover.read_text(encoding="utf-8"))
+        for phrase in qualified.REQUIRED_QUALIFICATIONS
+    )
+    with pytest.raises(ValueError, match="reviewed qualification fingerprint"):
         qualified.assemble_qualified_report(repo_root=root)

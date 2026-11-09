@@ -42,6 +42,20 @@ the separately required independently pinned evidence and blinded human
 handoff gates. Output redirects are user-controlled; the tool itself writes
 no files. The tool does not rerun a treatment, evaluator, or statistical test.
 
+## Reviewed reporting-cover integrity
+
+The mandatory [reporting cover](../paper/MAIN_STUDY_REPORTING_COVER.md) is now
+checked against its **complete reviewed SHA-256**, not just a list of phrases.
+The reviewed 7 November cover bytes hash to
+`a1705941a5834ab391a75f063e5ce10c08617ae2e040cfa90292b4df6b248b2e`.
+This prevents a changed cover containing contradictory visible assertions or
+caveats concealed in an HTML comment from passing merely by preserving the
+required phrase strings. A substantive future revision of the *noncanonical*
+cover remains possible, but requires full scientific review and an explicit
+matching update to the digest and tests; silently changing the wording fails
+closed. This is **checkout-local integrity**, not an externally timestamped
+signature, independent original-report custody, or human validation.
+
 Offline regression:
 
 ~~~bash

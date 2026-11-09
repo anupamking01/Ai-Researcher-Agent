@@ -28,6 +28,11 @@ MAX_MARKDOWN_BYTES = 256 * 1024
 CANONICAL_INFERENCE = Path("outputs/main_study_inference.json")
 ORIGINAL_JSON_SHA256 = "bbf439aabf0db38afd5430a885aff107014c6b924c05c62d6d724d16e00f450f"
 ORIGINAL_MARKDOWN_SHA256 = "9356cbad9711012850baef349c7d16a104d63987e1d7be2e53184456a8cb2f1c"
+# Lock the entire *reviewed qualification*, not only a few searchable phrases.
+# This is a repository-local reporting safety pin, NOT an independent archive
+# attestation. Deliberate disclosure revisions require reviewing the complete
+# replacement cover and updating this digest together.
+REVIEWED_REPORTING_COVER_SHA256 = "a1705941a5834ab391a75f063e5ce10c08617ae2e040cfa90292b4df6b248b2e"
 REQUIRED_QUALIFICATIONS = (
     "prospective precollection statistical preregistration is not established",
     "outcome blinding at the september 14 freeze is not established",
@@ -97,6 +102,8 @@ def assemble_qualified_report(*, repo_root: Path = ROOT) -> str:
         or hashlib.sha256(json_bytes).hexdigest() != ORIGINAL_JSON_SHA256
     ):
         raise ValueError("frozen canonical outputs differ from archived historical fingerprints")
+    if hashlib.sha256(cover_bytes).hexdigest() != REVIEWED_REPORTING_COVER_SHA256:
+        raise ValueError("reporting cover differs from reviewed qualification fingerprint")
     report = report_bytes.decode("utf-8")
     cover = cover_bytes.decode("utf-8")
     disclosures = _disclosure_text(cover)
