@@ -212,3 +212,22 @@ This verifies schema fidelity of **future** human-agreement evidence only.
 It does not establish the independence of annotators, authenticate the
 unavailable historical treatment reports/traces, or create human ratings or
 confirmatory research results.
+
+## JSON parsing resource boundaries
+
+Before decoding a retained \`freeze_manifest.json\` or \`agreement.json\`, the
+independent verifier now bounds JSON container nesting to **32 levels** and
+individual integer tokens to **20 decimal digits**. The scanner ignores brackets
+inside quoted JSON strings (including escaped quotes and backslashes);
+\`json.loads\` remains responsible for syntax validation. This complements the
+existing rejection of duplicate keys, NaN, Infinity, and floating-point
+exponent overflow. The limits apply uniformly in retained-input and external
+verification modes and do not alter the frozen ratings, agreement statistic,
+or analysis plan. Only malformed or implausibly deep/large custody records are
+rejected; an accepted record still requires exact fingerprint, schema, and
+independently recomputed agreement checks.
+
+Offline synthetic regression tests cover deeply nested arrays and objects,
+quoted braces, escaped quotes, and oversized positive/negative integer tokens.
+This is parser resource safety, not authentication of annotator identities or
+original treatment reports. Human ratings remain pending.

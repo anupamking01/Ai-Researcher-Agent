@@ -195,7 +195,53 @@ def _capture_freeze_inventory(freeze_root: Path):
         os.close(descriptor)
 
 
+# Freeze manifests and agreement records have shallow, fixed JSON schemas.
+# Reject deeply nested or oversized integer tokens before Python's decoder
+# can exhaust the stack or consume excess CPU on an untrusted archive.
+MAX_FREEZE_JSON_DEPTH = 32
+MAX_FREEZE_JSON_INTEGER_DIGITS = 20
+
+
+def _require_bounded_json_depth(content: bytes, *, label: str) -> None:
+    """Count JSON containers without treating quoted braces as structure.
+
+    This single bounded scan is a resource preflight, not a replacement for
+    json.loads syntax validation. Escaped quotes and backslashes inside JSON
+    strings must not change the count.
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in content:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:  # backslash
+                escaped = True
+            elif byte == 0x22:  # quote
+                in_string = False
+        elif byte == 0x22:
+            in_string = True
+        elif byte in (0x7B, 0x5B):  # { [
+            depth += 1
+            if depth > MAX_FREEZE_JSON_DEPTH:
+                raise ValueError(
+                    f"{label} exceeds {MAX_FREEZE_JSON_DEPTH}-level JSON nesting limit"
+                )
+        elif byte in (0x7D, 0x5D):  # } ]
+            depth -= 1
+
+
 def _load_json_bytes(content: bytes, *, label: str) -> dict:
+    _require_bounded_json_depth(content, label=label)
+
+    def bounded_int(token: str) -> int:
+        if len(token.lstrip("-")) > MAX_FREEZE_JSON_INTEGER_DIGITS:
+            raise ValueError(
+                f"{label} exceeds {MAX_FREEZE_JSON_INTEGER_DIGITS}-digit JSON integer limit"
+            )
+        return int(token)
+
     def unique_object(pairs):
         value = {}
         for key, child in pairs:
@@ -223,6 +269,7 @@ def _load_json_bytes(content: bytes, *, label: str) -> dict:
             object_pairs_hook=unique_object,
             parse_constant=reject_nonfinite,
             parse_float=finite_float,
+            parse_int=bounded_int,
         )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"{label} is not valid UTF-8 JSON") from exc
