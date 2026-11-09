@@ -334,6 +334,43 @@ def test_tampered_agreement_is_rejected_even_if_manifest_hash_is_updated(frozen_
         _verify(frozen_case)
 
 
+@pytest.mark.parametrize(
+    ("field_path", "replacement"),
+    [
+        (("n_annotators",), 2.0),
+        (("requires_predeclared_multi_rater_statistic",), 0),
+        (("pairwise", 0, "n_shared_items"), True),
+        (("pairwise", 0, "dimensions", "correctness_1_5", "n_double_rated"), True),
+        (("pairwise", 0, "dimensions", "correctness_1_5", "raw_exact_agreement"), True),
+        (("pairwise", 0, "dimensions", "correctness_1_5", "mean_absolute_difference"), 0),
+    ],
+)
+def test_stored_agreement_rejects_equal_value_with_wrong_json_type_even_if_rehashed(
+    frozen_case, field_path, replacement
+):
+    """Synthetic ratings: numerical/boolean coercion must not pass the freeze gate."""
+    agreement_path = frozen_case["freeze_root"] / "agreement.json"
+    agreement = json.loads(agreement_path.read_text(encoding="utf-8"))
+    original_value = _manifest_child(agreement, field_path)
+    assert original_value == replacement
+    assert type(original_value) is not type(replacement)
+
+    _manifest_child(agreement, field_path[:-1])[field_path[-1]] = replacement
+    agreement_path.write_text(
+        json.dumps(agreement, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    content = agreement_path.read_bytes()
+
+    def mutate(manifest):
+        manifest["agreement"]["bytes"] = len(content)
+        manifest["agreement"]["sha256"] = hashlib.sha256(content).hexdigest()
+
+    _rewrite_manifest(frozen_case, mutate)
+    with pytest.raises(ValueError, match="recomputed agreement.*JSON type mismatch"):
+        _verify(frozen_case)
+
+
 def test_manifest_summary_drift_is_rejected(frozen_case):
     _rewrite_manifest(
         frozen_case,

@@ -243,6 +243,36 @@ def _require_equal(actual, expected, *, label: str) -> None:
         raise ValueError(f"{label} mismatch: expected {expected!r}, got {actual!r}")
 
 
+def _require_typed_json_equal(actual, expected, *, label: str) -> None:
+    """Compare recomputed JSON recursively, never equating bool/int/float tokens.
+
+    Python treats True == 1 == 1.0 as equal, but a human-agreement
+    statistic or count has a specific producer-defined JSON type. A stored
+    receipt with self-consistently updated hashes must not change that type.
+    """
+    if type(actual) is not type(expected):
+        raise ValueError(
+            f"{label} JSON type mismatch: expected {type(expected).__name__}, "
+            f"got {type(actual).__name__}"
+        )
+    if isinstance(expected, dict):
+        if actual.keys() != expected.keys():
+            raise ValueError(f"{label} JSON member mismatch")
+        for key, expected_value in expected.items():
+            _require_typed_json_equal(
+                actual[key], expected_value, label=f"{label}.{key}"
+            )
+    elif isinstance(expected, list):
+        if len(actual) != len(expected):
+            raise ValueError(f"{label} JSON array length mismatch")
+        for index, (actual_value, expected_value) in enumerate(zip(actual, expected)):
+            _require_typed_json_equal(
+                actual_value, expected_value, label=f"{label}[{index}]"
+            )
+    elif actual != expected:
+        raise ValueError(f"{label} mismatch: expected {expected!r}, got {actual!r}")
+
+
 def _require_object_schema(
     value,
     *,
@@ -1128,7 +1158,9 @@ def verify_frozen_snapshot(
     )
     stored_agreement = _load_json_bytes(agreement_content, label="agreement output")
     recomputed_agreement = freeze.build_agreement(frozen_rows)
-    _require_equal(stored_agreement, recomputed_agreement, label="recomputed agreement")
+    _require_typed_json_equal(
+        stored_agreement, recomputed_agreement, label="recomputed agreement"
+    )
 
     if _capture_freeze_inventory(freeze_root) != initial_inventory:
         raise ValueError("freeze root changed while it was being verified")

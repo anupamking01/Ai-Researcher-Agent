@@ -188,3 +188,27 @@ This is a read-side data-integrity and cross-runtime portability check, not
 independent authentication of original experimental reports or traces and not
 proof that ratings have been collected. The original-treatment archive and
 actual human-validation gates remain outstanding.
+
+## Type-exact recomputation of blinded agreement
+
+The retained `agreement.json` must now match independently recomputed,
+pre-unblinding pairwise agreement **in both JSON values and JSON types**,
+including fields nested inside the `pairwise` array. Python normally considers
+`true == 1 == 1.0` and `false == 0`; ordinary dictionary equality could
+therefore accept a boolean in place of a numeric agreement rate or a floating
+value in place of an integer denominator, even after the archive manifest was
+self-consistently rehashed. The verifier rejects these substitutions while
+preserving valid `null` statistics and genuine finite JSON numbers.
+
+The offline synthetic regression covers integer, floating-point, and boolean
+substitutions in both root and nested pairwise records, with the corresponding
+manifest fingerprints updated. Reproduce with:
+
+```bash
+python -m pytest -q tests/test_human_eval_freeze_verification.py -k wrong_json_type
+```
+
+This verifies schema fidelity of **future** human-agreement evidence only.
+It does not establish the independence of annotators, authenticate the
+unavailable historical treatment reports/traces, or create human ratings or
+confirmatory research results.
