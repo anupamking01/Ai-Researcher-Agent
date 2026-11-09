@@ -11,7 +11,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ".github/workflows/main-study-numeric-input-integrity.yml"
-ANCHOR = "scripts/verify_published_main_study_inputs.py"
+BOUND_RUNNER = "scripts/audit_main_study_bound_inputs.py"
 
 
 def _load_workflow() -> dict:
@@ -46,7 +46,7 @@ def _static_script_dependencies(entrypoint: str) -> set[str]:
     return visited
 
 
-def test_numeric_ci_runs_immutable_source_anchor_first_and_fails_closed():
+def test_numeric_ci_requires_single_source_bound_receipt_and_fails_closed():
     data = _load_workflow()
     assert data["permissions"] == {"contents": "read"}
     jobs = data["jobs"]
@@ -57,10 +57,11 @@ def test_numeric_ci_runs_immutable_source_anchor_first_and_fails_closed():
     assert not step.get("if") and not step.get("continue-on-error")
     assert step.get("shell") in (None, "bash")
     commands = [line.strip() for line in step["run"].splitlines() if line.strip()]
-    pin = "python -m scripts.verify_published_main_study_inputs"
-    numeric = "python -m scripts.audit_main_study_numeric_inputs"
-    assert commands.count(pin) == commands.count(numeric) == 1
-    assert commands.index(pin) < commands.index(numeric)
+    runner = "python -m scripts.audit_main_study_bound_inputs"
+    assert commands.count(runner) == 1
+    # Separate processes could pass on different CSV generations.
+    assert "python -m scripts.verify_published_main_study_inputs" not in commands
+    assert "python -m scripts.audit_main_study_numeric_inputs" not in commands
     assert all("|| true" not in command and "; true" not in command for command in commands)
 
 
@@ -73,7 +74,8 @@ def test_numeric_ci_both_event_filters_cover_source_anchor_and_dependencies():
         "tests/test_main_study_numeric_integrity.py",
         "tests/test_main_study_csv_export_safety.py",
         "tests/test_main_study_numeric_ci_source_binding.py",
-    } | _static_script_dependencies(ANCHOR)
+        "tests/test_main_study_bound_input_receipt.py",
+    } | _static_script_dependencies(BOUND_RUNNER)
     for event in ("push", "pull_request"):
         paths = data["on"][event]["paths"]
         assert len(paths) == len(set(paths))

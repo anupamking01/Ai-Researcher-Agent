@@ -149,8 +149,7 @@ An offline regression checks trigger coverage, read-only permission, and
 execution order. To reproduce the same combined gate locally:
 
 ```bash
-python -m scripts.verify_published_main_study_inputs
-python -m scripts.audit_main_study_numeric_inputs
+python -m scripts.audit_main_study_bound_inputs
 ```
 
 Passing establishes checkout-level identity with the preserved *published
@@ -225,3 +224,30 @@ the diagnostic pilot, frozen and chronology-qualified automated inference,
 retrospective exploratory checks, nor pending blinded human validation
 acquires a new result or status. No treatment, evaluator, analysis, or human
 rating is rerun.
+
+
+## Published-source and numeric audit bound to one file generation
+
+Running source-fingerprint validation and numeric consistency as **separate**
+CLI processes could yield two passes on *different* CSV file generations if
+the checkout changed between commands. A new read-only combined entry point,
+audit_main_study_bound_inputs, consumes the already verified per-file SHA-256
+digests from the existing published-aggregate checker and refuses a receipt
+unless they exactly match the bytes actually captured by the numeric auditor.
+It does not introduce a new or mutable research anchor. CI now uses this one
+combined command, while the independent checks are still available separately.
+
+```bash
+python -m scripts.audit_main_study_bound_inputs
+python -m pytest -q tests/test_main_study_bound_input_receipt.py
+```
+
+Synthetic offline regressions verify that a numerically valid count edit
+*after* published verification still fails the bound receipt, and that a
+preserved input copy passes without changing bytes. This protects against
+different observed generations between the checks; it does **not** provide a
+globally atomic filesystem snapshot or independently authenticate historical
+treatment reports, traces or provider calls. Pilot results remain diagnostic,
+frozen automated inference retains post-collection-plan and evaluator-policy
+qualifications, retrospective analyses remain exploratory, and genuine
+blinded human ratings are still pending.

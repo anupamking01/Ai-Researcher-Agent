@@ -64,6 +64,8 @@ def verify_published_frozen_inputs(
         "status": "published_frozen_input_fingerprint_matches",
         "n_input_artifacts": len(entries),
         "published_aggregate_sha256": FROZEN_INPUT_AGGREGATE_SHA256,
+        # Bind subsequent semantic auditing to precisely these source bytes.
+        "verified_input_sha256": {entry["path"]: entry["sha256"] for entry in entries},
         "experimental_treatments_rerun": False,
         "human_ratings_used": False,
         "interpretation": (

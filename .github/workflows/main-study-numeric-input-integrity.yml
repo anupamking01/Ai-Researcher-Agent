@@ -5,6 +5,8 @@ on:
     branches: [research-paper-eval-2027]
     paths:
       - "scripts/audit_main_study_numeric_inputs.py"
+      - "scripts/audit_main_study_bound_inputs.py"
+      - "tests/test_main_study_bound_input_receipt.py"
       - "scripts/verify_published_main_study_inputs.py"
       - "scripts/verify_research_artifact_manifest.py"
       - "scripts/fingerprint_research_artifacts.py"
@@ -19,6 +21,8 @@ on:
   pull_request:
     paths:
       - "scripts/audit_main_study_numeric_inputs.py"
+      - "scripts/audit_main_study_bound_inputs.py"
+      - "tests/test_main_study_bound_input_receipt.py"
       - "scripts/verify_published_main_study_inputs.py"
       - "scripts/verify_research_artifact_manifest.py"
       - "scripts/fingerprint_research_artifacts.py"
@@ -47,6 +51,5 @@ jobs:
           python-version: "3.11.17"
       - name: Numeric evidence preflight (no inference or network APIs)
         run: |
-          python -m compileall -q scripts/audit_main_study_numeric_inputs.py scripts/verify_published_main_study_inputs.py
-          python -m scripts.verify_published_main_study_inputs
-          python -m scripts.audit_main_study_numeric_inputs
+          python -m compileall -q scripts/audit_main_study_numeric_inputs.py scripts/verify_published_main_study_inputs.py scripts/audit_main_study_bound_inputs.py
+          python -m scripts.audit_main_study_bound_inputs
