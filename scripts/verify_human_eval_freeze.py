@@ -44,24 +44,69 @@ def _entry_identity(metadata) -> tuple[int, int, int, int, int, int]:
     )
 
 
-def _capture_directory_inventory(descriptor: int, *, label: str):
-    """Capture one stable recursive tree inventory without reading file bytes."""
+# The standalone pre-unblinding verifier inventories untrusted freeze directories
+# before opening or validating manifest paths. Bound enumeration and recursion
+# independently of the later human-analysis scratch-snapshot safeguards.
+MAX_FREEZE_INVENTORY_ENTRIES = 256
+MAX_FREEZE_INVENTORY_BYTES = 64 * 1024 * 1024
+MAX_FREEZE_INVENTORY_DEPTH = 8
+
+
+def _bounded_inventory_names(
+    descriptor: int, *, maximum: int, label: str, stability_check: bool = False
+) -> tuple[str, ...]:
+    """Read no more than the permitted entry count before sorting filenames."""
+    names = []
+    try:
+        with os.scandir(descriptor) as entries:
+            for entry in entries:
+                if len(names) >= maximum:
+                    if stability_check:
+                        raise ValueError(f"{label} changed while it was being verified")
+                    raise ValueError(
+                        f"{label} exceeds {MAX_FREEZE_INVENTORY_ENTRIES}-entry "
+                        "pre-unblinding freeze inventory limit"
+                    )
+                names.append(entry.name)
+    except OSError as exc:
+        raise ValueError(f"{label} changed while it was being verified") from exc
+    return tuple(sorted(names))
+
+
+def _capture_directory_inventory(
+    descriptor: int, *, label: str, budget: dict | None = None, depth: int = 0
+):
+    """Capture a bounded stable inventory without reading arbitrary file bytes."""
+    if budget is None:
+        budget = {"entries": 0, "bytes": 0}
+    if depth > MAX_FREEZE_INVENTORY_DEPTH:
+        raise ValueError(
+            f"{label} exceeds {MAX_FREEZE_INVENTORY_DEPTH}-level "
+            "pre-unblinding freeze inventory depth limit"
+        )
     opened = os.fstat(descriptor)
     if not stat.S_ISDIR(opened.st_mode):
         raise ValueError(f"{label} must be a regular directory")
-    try:
-        names = tuple(sorted(os.listdir(descriptor)))
-    except OSError as exc:
-        raise ValueError(f"{label} changed while it was being verified") from exc
+    names = _bounded_inventory_names(
+        descriptor, maximum=MAX_FREEZE_INVENTORY_ENTRIES - budget["entries"],
+        label=label,
+    )
 
     metadata = {}
     for name in names:
         try:
-            metadata[name] = os.stat(
-                name, dir_fd=descriptor, follow_symlinks=False
-            )
+            child = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
         except OSError as exc:
             raise ValueError(f"{label} changed while it was being verified") from exc
+        budget["entries"] += 1
+        if stat.S_ISREG(child.st_mode):
+            budget["bytes"] += child.st_size
+            if budget["bytes"] > MAX_FREEZE_INVENTORY_BYTES:
+                raise ValueError(
+                    f"{label} exceeds {MAX_FREEZE_INVENTORY_BYTES}-byte "
+                    "aggregate pre-unblinding freeze inventory limit"
+                )
+        metadata[name] = child
 
     entries = []
     directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
@@ -75,8 +120,7 @@ def _capture_directory_inventory(descriptor: int, *, label: str):
             entries.append((name, "file", identity))
             continue
         if not stat.S_ISDIR(child.st_mode):
-            # Record invalid/special entries so the established path-specific
-            # validators can retain their more actionable diagnostics.
+            # Retain path-specific validation errors for unsupported entries.
             entries.append((name, "special", identity))
             continue
         try:
@@ -87,14 +131,17 @@ def _capture_directory_inventory(descriptor: int, *, label: str):
             if _entry_identity(os.fstat(child_descriptor)) != identity:
                 raise ValueError(f"{label} changed while it was being verified")
             child_inventory = _capture_directory_inventory(
-                child_descriptor, label=f"{label}/{name}"
+                child_descriptor, label=f"{label}/{name}",
+                budget=budget, depth=depth + 1,
             )
         finally:
             os.close(child_descriptor)
         entries.append((name, "directory", identity, child_inventory))
 
+    names_after = _bounded_inventory_names(
+        descriptor, maximum=len(names), label=label, stability_check=True,
+    )
     try:
-        names_after = tuple(sorted(os.listdir(descriptor)))
         current = {
             name: os.stat(name, dir_fd=descriptor, follow_symlinks=False)
             for name in names
