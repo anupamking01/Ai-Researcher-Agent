@@ -39,6 +39,7 @@ def test_original_two_file_zip_is_verified_without_extraction_or_modification(
 ):
     path = _write_zip(tmp_path / "download.zip", list(source_pair.items()))
     original = path.read_bytes()
+    starting_entries = sorted(p.name for p in tmp_path.iterdir())
     result = verified_zip.verify_qualified_zip(zip_path=path)
     assert result["status"] == "downloaded_zip_matches_source_bound_qualified_reporting_pair"
     assert result["downloaded_zip_sha256"] == hashlib.sha256(original).hexdigest()
@@ -47,7 +48,7 @@ def test_original_two_file_zip_is_verified_without_extraction_or_modification(
     assert result["original_reports_and_traces_independently_authenticated"] is False
     assert result["human_validation_performed"] is False
     assert path.read_bytes() == original
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["download.zip"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == starting_entries
 
 
 @pytest.mark.parametrize("change", [
