@@ -20,7 +20,14 @@ supported/checked counts. It crosschecks the treatment CSV's mirrored
 post-hoc claim count, strict rate and evaluator cost with the common
 evaluator CSV, and verifies the frozen treatment browse-budget limits.
 The source budget applies to **successful plus failed** retrieval slots, not
-only successful ones. Each evaluator record must have a nonempty run ID unique
+only successful ones. The recorded treatment `cost_status` must match the
+historical summarizer's literal `estimated_from_frozen_uncached_rates` label:
+these costs are token-based estimates under frozen uncached rates, **not
+provider invoices or observed billing**. Numerically identical costs cannot
+be relabeled as billed amounts or as a different pricing methodology while
+still receiving an independent consistency receipt. This categorical check
+is source-internal and does not authenticate the original pricing source,
+provider billing, or missing treatment traces. Each evaluator record must have a nonempty run ID unique
 across all 40 cells. A treatment with zero successful sources must carry the
 `zero_successful_sources` evaluator sentinel and classify every checked claim
 as unsupported, never as supported, partially supported, or contradicted;

@@ -25,6 +25,9 @@ VARIANTS = ("D3", "D6", "P6", "P6V")
 TASKS = tuple(f"main-{index:02d}" for index in range(1, 11))
 BUDGETS = {"D3": 3, "D6": 6, "P6": 6, "P6V": 6}
 CLAIM_CAP = 12
+# Historical study costs are model-token estimates, not provider invoices.
+# The exact provenance label was emitted by the preserved September summarizer.
+FROZEN_TREATMENT_COST_STATUS = "estimated_from_frozen_uncached_rates"
 TOL = Decimal("0.000000000001")
 MAX_CSV_BYTES = 2 * 1024 * 1024
 # Guard the independent Decimal parser against tiny exponent-bomb tokens and
@@ -137,6 +140,10 @@ def audit_rows(
                 )
             for key in ("treatment_cost_usd", "latency_seconds"):
                 _number(m, key, label)
+            if m.get("cost_status") != FROZEN_TREATMENT_COST_STATUS:
+                raise NumericInputError(
+                    f"{label}: cost_status differs from frozen estimated-cost provenance"
+                )
 
             claims = _count(e, "claims_checked", label)
             if not 1 <= claims <= CLAIM_CAP:

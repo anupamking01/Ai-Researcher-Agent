@@ -15,6 +15,7 @@ def _rows():
         "successful_sources": "1", "failed_sources": "2", "search_calls": "1",
         "model_calls": "2", "total_tokens": "100",
         "treatment_cost_usd": "0.01", "latency_seconds": "3.5",
+        "cost_status": audit.FROZEN_TREATMENT_COST_STATUS,
         "report_words": "120", "posthoc_claims_checked": "4",
         "posthoc_strict_support_rate": "0.5",
         "posthoc_evaluator_cost_usd": "0.004",
@@ -44,6 +45,17 @@ def _check(*, main_change=None, support_change=None):
 
 def test_valid_synthetic_data():
     assert _check()["n_cells"] == 1
+
+
+@pytest.mark.parametrize("status", [
+    "", None, "provider_billed", "estimated_from_frozen_cached_rates",
+    " estimated_from_frozen_uncached_rates",
+])
+def test_treatment_cost_provenance_relabeling_is_rejected(status):
+    # A numerically identical cost is not proof of provider billing or of a
+    # different price methodology. This tests provenance, not study outcomes.
+    with pytest.raises(audit.NumericInputError, match="cost_status"):
+        _check(main_change={"cost_status": status})
 
 
 @pytest.mark.parametrize("bad", ["nan", "inf", "-inf", "-0.1", "not-a-number"])
