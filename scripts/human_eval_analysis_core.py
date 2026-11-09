@@ -130,25 +130,15 @@ def _snapshot_file(source, destination, *, label):
             before = os.fstat(descriptor)
             if not stat.S_ISREG(before.st_mode):
                 raise ValueError(f"{label} must be a regular file: {source}")
+            if before.st_nlink != 1:
+                raise ValueError(f"{label} must be a single-link regular file: {source}")
 
             content = _bounded_snapshot_bytes(
                 descriptor, before.st_size, label=label
             )
             after = os.fstat(descriptor)
-            before_identity = (
-                before.st_dev,
-                before.st_ino,
-                before.st_size,
-                before.st_mtime_ns,
-                before.st_ctime_ns,
-            )
-            after_identity = (
-                after.st_dev,
-                after.st_ino,
-                after.st_size,
-                after.st_mtime_ns,
-                after.st_ctime_ns,
-            )
+            before_identity = _snapshot_entry_identity(before)
+            after_identity = _snapshot_entry_identity(after)
             if before_identity != after_identity:
                 raise ValueError(f"{label} changed while it was being read")
 
@@ -168,15 +158,7 @@ def _snapshot_file(source, destination, *, label):
                 # The final pathname check must bind the same file generation
                 # as the descriptor's final fstat. In-place edits can preserve
                 # device/inode (and even byte count) between those two checks.
-                or (
-                    current.st_dev,
-                    current.st_ino,
-                    current.st_size,
-                    current.st_mtime_ns,
-                    current.st_ctime_ns,
-                ) != after_identity
-                or current.st_mode != after.st_mode
-                or current.st_nlink != after.st_nlink
+                or _snapshot_entry_identity(current) != after_identity
                 or not stat.S_ISDIR(current_parent.st_mode)
                 or (current_parent.st_dev, current_parent.st_ino)
                 != (parent.st_dev, parent.st_ino)
@@ -242,6 +224,7 @@ def _snapshot_entry_identity(metadata):
         metadata.st_size,
         metadata.st_mtime_ns,
         metadata.st_ctime_ns,
+        metadata.st_nlink,
     )
 
 
@@ -261,25 +244,15 @@ def _snapshot_tree_file(directory_descriptor, name, destination, *, label, expec
             or (before.st_dev, before.st_ino) != expected_identity
         ):
             raise ValueError(f"{label} changed while it was being snapshotted")
+        if expected.st_nlink != 1 or before.st_nlink != 1:
+            raise ValueError(f"{label} must be a single-link regular file")
 
         content = _bounded_snapshot_bytes(
             descriptor, before.st_size, label=label
         )
         after = os.fstat(descriptor)
-        before_identity = (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_ctime_ns,
-        )
-        after_identity = (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-            after.st_ctime_ns,
-        )
+        before_identity = _snapshot_entry_identity(before)
+        after_identity = _snapshot_entry_identity(after)
         if before_identity != after_identity:
             raise ValueError(f"{label} changed while it was being read")
         try:
@@ -294,7 +267,7 @@ def _snapshot_tree_file(directory_descriptor, name, destination, *, label, expec
             ) from exc
         if (
             not stat.S_ISREG(current.st_mode)
-            or (current.st_dev, current.st_ino) != after_identity[:2]
+            or _snapshot_entry_identity(current) != after_identity
         ):
             raise ValueError(f"{label} changed while it was being snapshotted")
     finally:

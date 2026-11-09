@@ -71,3 +71,21 @@ same-size in-place edits remain subject to observable metadata checks.
 This hardening uses synthetic-only regression fixtures. No ratings, paired
 effects, agreement statistics, treatment runs, or existing published results
 are generated or changed.
+
+## Hardlink alias custody boundary
+
+For both direct rating/packet snapshots and recursive retained-freeze inputs,
+source files must be regular files with **exactly one filesystem hardlink**.
+The snapshotter now compares link counts alongside file mode, device/inode,
+size, and modification/change timestamps before and after content capture, and
+also includes link counts in the recursive final inventory recheck. This
+rejects an otherwise invisible hardlink outside the inventoried freeze tree
+that can modify the same source inode through an untracked path. An alias
+created during capture is treated as source-generation drift, not as an
+additional valid rating or a reason to repeat scoring. Ordinary single-link
+freeze files remain supported.
+
+These filesystem checks are bounded, best-effort local custody observations:
+they cannot prevent subsequent edits, prove immutable storage, independently
+authenticate historical treatment reports, or replace eligible annotators,
+consent, and genuine blinded human scores. No frozen plan or ratings change.
