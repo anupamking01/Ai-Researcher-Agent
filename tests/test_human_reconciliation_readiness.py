@@ -446,6 +446,12 @@ def test_human_paired_differences_accept_frozen_rubric_half_steps(on_lattice):
     block = human["paired_contrasts"][contrast][dimension]
     block["task_differences"][human["task_ids"][0]] = on_lattice
     block.update(_summary(list(block["task_differences"].values())))
+    # A single extreme edge can be valid with compatible shared reports;
+    # neutralize neighboring edges so the whole synthetic chain remains valid.
+    for other in readiness.CONTRASTS[1:]:
+        neighbor = human["paired_contrasts"][other][dimension]
+        neighbor["task_differences"][human["task_ids"][0]] = 0.0
+        neighbor.update(_summary(list(neighbor["task_differences"].values())))
 
     result = readiness.validate_payloads(automated, human)
     assert result["status"] == "automated_human_reconciliation_identity_valid"
@@ -460,6 +466,79 @@ def test_automated_support_differences_do_not_inherit_human_score_lattice():
     assert readiness.validate_payloads(automated, human)[
         "primary_outcome"
     ] == "strict_support_rate"
+
+
+def _set_synthetic_human_edge(human, edge_index, dimension, task, value):
+    block = human["paired_contrasts"][readiness.CONTRASTS[edge_index]][dimension]
+    block["task_differences"][task] = value
+    block.update(_summary(list(block["task_differences"].values())))
+
+
+def _omit_synthetic_human_edge(human, edge_index, dimension, task):
+    block = human["paired_contrasts"][readiness.CONTRASTS[edge_index]][dimension]
+    block["task_ids_included"].remove(task)
+    block["missing_pair_tasks"].append(task)
+    block["missing_pair_tasks"].sort(key=human["task_ids"].index)
+    block["task_differences"].pop(task)
+    block.update(_summary(list(block["task_differences"].values())))
+
+
+@pytest.mark.parametrize(
+    "edge_values",
+    [
+        (3.5, 1.0, 0.0),  # each edge valid; first two require a 4.5-point span
+        (1.5, 1.5, 1.5),  # both adjacent sums fit but four reports span 4.5
+        (-1.5, -1.5, -1.5),
+    ],
+)
+def test_joint_human_contrasts_reject_impossible_shared_report_scores(edge_values):
+    automated, human = _payloads()
+    dimension, task = readiness.DIMS[0], human["task_ids"][0]
+    for edge_index, difference in enumerate(edge_values):
+        _set_synthetic_human_edge(human, edge_index, dimension, task, difference)
+
+    with pytest.raises(ValueError, match="joint contrast differences"):
+        readiness.validate_payloads(automated, human)
+
+
+@pytest.mark.parametrize(
+    "edge_values",
+    [
+        (4.0, -4.0, 4.0),  # realizable as 1 -> 5 -> 1 -> 5
+        (2.0, 1.0, 1.0),   # realizable as 1 -> 3 -> 4 -> 5
+        (-4.0, 4.0, 0.0), # realizable as 5 -> 1 -> 5 -> 5
+    ],
+)
+def test_joint_human_contrasts_accept_feasible_extrema_and_boundaries(edge_values):
+    automated, human = _payloads()
+    dimension, task = readiness.DIMS[0], human["task_ids"][0]
+    for edge_index, difference in enumerate(edge_values):
+        _set_synthetic_human_edge(human, edge_index, dimension, task, difference)
+    assert readiness.validate_payloads(automated, human)["analysis_scope"] == (
+        "descriptive_reconciliation_only"
+    )
+
+
+@pytest.mark.parametrize("dimension", readiness.DIMS)
+def test_joint_human_missingness_rejects_gap_between_observed_shared_reports(dimension):
+    automated, human = _payloads()
+    task = human["task_ids"][0]
+    # D3–D6 and P6–P6V each has observed scores. Thus D6 and P6
+    # are both observed; their frozen adjacent contrast cannot be missing.
+    _omit_synthetic_human_edge(human, 1, dimension, task)
+    with pytest.raises(ValueError, match="cross-contrast missingness"):
+        readiness.validate_payloads(automated, human)
+
+
+def test_joint_human_missingness_permits_truly_unobserved_right_endpoints():
+    automated, human = _payloads()
+    dimension, task = readiness.DIMS[0], human["task_ids"][0]
+    # Only D3–D6 is paired; P6 and P6V may genuinely have no observed score.
+    _omit_synthetic_human_edge(human, 1, dimension, task)
+    _omit_synthetic_human_edge(human, 2, dimension, task)
+    assert readiness.validate_payloads(automated, human)["status"] == (
+        "automated_human_reconciliation_identity_valid"
+    )
 
 
 def test_ordered_task_identity_mismatch_is_rejected():

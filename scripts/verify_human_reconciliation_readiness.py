@@ -263,6 +263,53 @@ def _validate_summary(result, diffs, label):
         _require(result.get("mean_difference") is None, f"{label} empty mean must be null")
 
 
+def _validate_joint_human_contrast_feasibility(paired, tasks):
+    """Ensure adjacent contrasts could share 1–5 report-level rubric scores.
+
+    The contrasts form D3 -> D6 -> P6 -> P6V. Each included edge implies
+    both endpoint report scores exist; missing an edge between known reports
+    is inconsistent. A connected sequence of differences must fit within
+    the rubric's four-point score span, allowing one common score offset.
+    This is feasibility only, not independent source-row authentication.
+    """
+    for dimension in DIMS:
+        for task in tasks:
+            differences = [
+                paired[name][dimension]["task_differences"].get(task)
+                for name in CONTRASTS
+            ]
+            observed_nodes = set()
+            for index, difference in enumerate(differences):
+                if difference is not None:
+                    observed_nodes.update((index, index + 1))
+
+            for index, difference in enumerate(differences):
+                if (
+                    difference is None
+                    and index in observed_nodes
+                    and index + 1 in observed_nodes
+                ):
+                    raise ValueError(
+                        f"human {dimension}/{task} cross-contrast missingness "
+                        "contradicts observed shared report scores"
+                    )
+
+            # For each contiguous observed run, cumulative offsets determine
+            # scores up to a common shift. Such a shift into [1, 5] exists
+            # exactly when the range of cumulative offsets is at most four.
+            offsets = [0.0]
+            for difference in differences:
+                if difference is None:
+                    offsets = [0.0]
+                    continue
+                offsets.append(offsets[-1] + difference)
+                if max(offsets) - min(offsets) > 4.0:
+                    raise ValueError(
+                        f"human {dimension}/{task} joint contrast differences "
+                        "cannot arise from report scores in [1, 5]"
+                    )
+
+
 def validate_payloads(automated, human):
     """Validate the frozen cross-analysis identity without comparing outcomes."""
     # JSON booleans are Python integers for equality purposes (True == 1).
@@ -374,6 +421,8 @@ def validate_payloads(automated, human):
                 for task in included
             ]
             _validate_summary(result, diffs, f"human {name}/{dimension}")
+
+    _validate_joint_human_contrast_feasibility(paired, tasks)
 
     return {
         "schema_version": 1,
