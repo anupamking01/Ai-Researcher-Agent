@@ -11,11 +11,11 @@ from scripts import verify_human_reconciliation_readiness as readiness
 @pytest.mark.parametrize(
     ("literal", "error"),
     [
-        (b"NaN", "nonstandard JSON number"),
-        (b"Infinity", "nonstandard JSON number"),
-        (b"-Infinity", "nonstandard JSON number"),
-        (b"1e999", "non-finite JSON number"),
-        (b"-1e999", "non-finite JSON number"),
+        (b"NaN", "non-finite JSON numbers"),
+        (b"Infinity", "non-finite JSON numbers"),
+        (b"-Infinity", "non-finite JSON numbers"),
+        (b"1e999", "non-finite JSON numbers"),
+        (b"-1e999", "non-finite JSON numbers"),
         (b"9" * 129, "oversized JSON integer token"),
         (b"-" + b"9" * 129, "oversized JSON integer token"),
     ],
@@ -31,7 +31,7 @@ def test_reconciliation_readiness_rejects_nonfinite_or_oversized_numbers(
 
 
 def test_nested_invalid_number_is_rejected_before_field_selection():
-    with pytest.raises(ValueError, match="nonstandard JSON number"):
+    with pytest.raises(ValueError, match="non-finite JSON numbers"):
         readiness._load(
             b'{"unused":[{"extra":{"value":NaN}}]}',
             "synthetic human analysis",

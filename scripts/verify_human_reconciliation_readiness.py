@@ -188,7 +188,7 @@ def _load(content, label):
     def finite_json_float(token):
         value = float(token)
         if not math.isfinite(value):
-            raise ValueError(f"{label} contains non-finite JSON number")
+            raise ValueError(f"{label} contains non-finite JSON numbers (float overflow)")
         return value
 
     def bounded_json_int(token):
@@ -199,7 +199,7 @@ def _load(content, label):
     def reject_json_constant(token):
         # Python's JSON decoder accepts NaN/Infinity by default although
         # these are not JSON numbers.
-        raise ValueError(f"{label} contains nonstandard JSON number {token}")
+        raise ValueError(f"{label} contains non-finite JSON numbers ({token})")
 
     try:
         value = json.loads(
