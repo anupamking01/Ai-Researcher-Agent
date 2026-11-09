@@ -122,14 +122,14 @@ def test_checked_in_reporting_cover_matches_reviewed_fingerprint():
     "rewrite",
     [
         lambda original: original + (
-            "\\n\\n## Final interpretation\\n\\n"
+            "\n\n## Final interpretation\n\n"
             "Contrary to the preceding warnings, VERA demonstrates a "
-            "prospectively preregistered randomized causal treatment effect.\\n"
+            "prospectively preregistered randomized causal treatment effect.\n"
         ),
         lambda original: (
-            "<!--\\n" + original + "\\n-->\\n\\n"
-            "## Final interpretation\\n\\n"
-            "The original methodological limitations are withdrawn.\\n"
+            "<!--\n" + original + "\n-->\n\n"
+            "## Final interpretation\n\n"
+            "The original methodological limitations are withdrawn.\n"
         ),
     ],
     ids=["contradictory-visible-addendum", "original-caveats-concealed-in-html-comment"],
