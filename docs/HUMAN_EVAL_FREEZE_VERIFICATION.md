@@ -165,3 +165,26 @@ single-receipt flow. These are denial-of-service and custody safeguards, not
 human ratings, proof of annotator independence, or historical archive
 authentication. The frozen protocol, automated confirmatory measurements,
 pilot, and exploratory findings are unchanged.
+
+## Finite JSON numbers in the pre-unblinding custody gate
+
+The independent freeze verifier now rejects non-standard `NaN`, `Infinity`,
+`-Infinity`, and finite-looking exponent tokens such as `1e999` that Python
+would otherwise decode as infinity. This applies to both the retained freeze
+manifest and agreement output, through their shared JSON reader. Finite
+numeric values (including ordinary decimal agreement statistics), duplicate-key
+rejection, and existing typed manifest validation remain unchanged. The frozen
+ratings producer does not require non-finite numbers for valid human scores or
+agreement: undefined statistics must be represented by `null`, not an invented
+infinite value.
+
+Reproduce without human data:
+
+```bash
+python -m pytest -q tests/test_human_eval_freeze_json_number_integrity.py
+```
+
+This is a read-side data-integrity and cross-runtime portability check, not
+independent authentication of original experimental reports or traces and not
+proof that ratings have been collected. The original-treatment archive and
+actual human-validation gates remain outstanding.

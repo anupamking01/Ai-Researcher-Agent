@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import stat
 from pathlib import Path
@@ -203,8 +204,26 @@ def _load_json_bytes(content: bytes, *, label: str) -> dict:
             value[key] = child
         return value
 
+    def reject_nonfinite(_token: str) -> float:
+        # Python accepts NaN and Infinity despite their absence from RFC 8259.
+        # Do not accept them in a pre-unblinding custody record.
+        raise ValueError(f"{label} contains a non-finite JSON number")
+
+    def finite_float(token: str) -> float:
+        # JSON exponent notation such as 1e999 is syntactically legal but
+        # Python rounds it to infinity; it is not a reproducible rating value.
+        number = float(token)
+        if not math.isfinite(number):
+            raise ValueError(f"{label} contains a non-finite JSON number")
+        return number
+
     try:
-        value = json.loads(content.decode("utf-8"), object_pairs_hook=unique_object)
+        value = json.loads(
+            content.decode("utf-8"),
+            object_pairs_hook=unique_object,
+            parse_constant=reject_nonfinite,
+            parse_float=finite_float,
+        )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"{label} is not valid UTF-8 JSON") from exc
     if not isinstance(value, dict):
