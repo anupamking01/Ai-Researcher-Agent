@@ -33,7 +33,7 @@ def _require_regular_file(path: Path, *, label: str) -> bytes:
     return freeze._capture_regular_input(path, label=label)
 
 
-def _entry_identity(metadata) -> tuple[int, int, int, int, int, int]:
+def _entry_identity(metadata) -> tuple[int, int, int, int, int, int, int]:
     return (
         metadata.st_dev,
         metadata.st_ino,
@@ -41,6 +41,7 @@ def _entry_identity(metadata) -> tuple[int, int, int, int, int, int]:
         metadata.st_size,
         metadata.st_mtime_ns,
         metadata.st_ctime_ns,
+        metadata.st_nlink,
     )
 
 
@@ -100,6 +101,12 @@ def _capture_directory_inventory(
             raise ValueError(f"{label} changed while it was being verified") from exc
         budget["entries"] += 1
         if stat.S_ISREG(child.st_mode):
+            # An out-of-tree hardlink shares this inode but is invisible to
+            # the archive inventory; reject it before accepting any freeze.
+            if child.st_nlink != 1:
+                raise ValueError(
+                    f"{label}/{name} must be a single-link regular freeze file"
+                )
             budget["bytes"] += child.st_size
             if budget["bytes"] > MAX_FREEZE_INVENTORY_BYTES:
                 raise ValueError(
