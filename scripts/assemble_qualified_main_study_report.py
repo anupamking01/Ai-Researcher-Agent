@@ -102,13 +102,13 @@ def assemble_qualified_report(*, repo_root: Path = ROOT) -> str:
         or hashlib.sha256(json_bytes).hexdigest() != ORIGINAL_JSON_SHA256
     ):
         raise ValueError("frozen canonical outputs differ from archived historical fingerprints")
-    if hashlib.sha256(cover_bytes).hexdigest() != REVIEWED_REPORTING_COVER_SHA256:
-        raise ValueError("reporting cover differs from reviewed qualification fingerprint")
     report = report_bytes.decode("utf-8")
     cover = cover_bytes.decode("utf-8")
     disclosures = _disclosure_text(cover)
     if any(phrase not in disclosures for phrase in REQUIRED_QUALIFICATIONS):
         raise ValueError("reporting cover is missing a required scientific limitation")
+    if hashlib.sha256(cover_bytes).hexdigest() != REVIEWED_REPORTING_COVER_SHA256:
+        raise ValueError("reporting cover differs from reviewed qualification fingerprint")
     # A second complete check and exact capture comparison reject observed
     # pathname/content substitution between verification and publication.
     verify_outputs(root=root)
