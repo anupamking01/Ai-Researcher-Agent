@@ -16,6 +16,7 @@ import argparse
 from functools import lru_cache
 from contextlib import ExitStack
 import hashlib
+from itertools import product
 import json
 import math
 import statistics
@@ -1194,6 +1195,36 @@ def _validate_cross_contrast_task_score_feasibility(payload: dict) -> None:
                 attainable = scores
 
 
+
+@lru_cache(maxsize=128)
+def _attainable_sparse_weighted_kappas(
+    n: int, n_matching: int, total_absolute_gap: int
+) -> frozenset[float | None]:
+    """Enumerate only tiny ordinal contingency samples, independently of the producer.
+
+    For at most three double-rated reports, exhaust the 1-5 integer pairs.
+    Match both the published number of exact agreements and the integer total
+    absolute gap before calculating quadratic-weighted Cohen's kappa from the
+    resulting two marginal category counts. This is a necessary feasibility
+    constraint on published summaries, not a claim about actual rating rows.
+    """
+    if not 1 <= n <= 3:
+        raise ValueError("sparse kappa enumeration requires one to three pairs")
+    possible = set()
+    for values in product(range(1, 6), repeat=2 * n):
+        first, second = values[::2], values[1::2]
+        if (
+            sum(a == b for a, b in zip(first, second)) != n_matching
+            or sum(abs(a - b) for a, b in zip(first, second))
+            != total_absolute_gap
+        ):
+            continue
+        observed = sum((a - b) ** 2 for a, b in zip(first, second))
+        expected = sum((a - b) ** 2 for a in first for b in second)
+        possible.add(None if expected == 0 else 1.0 - n * observed / expected)
+    return frozenset(possible)
+
+
 def _validate_blinded_agreement_arithmetic(payload: dict) -> None:
     """Audit published ordinal agreement numbers without inferring raw ratings.
 
@@ -1262,6 +1293,48 @@ def _validate_blinded_agreement_arithmetic(payload: dict) -> None:
             raise ValueError(f"{label}: perfect agreement requires kappa 1 or null")
         elif n_different and kappa >= 1:
             raise ValueError(f"{label}: disagreements cannot have perfect weighted kappa")
+
+        # At tiny overlap counts, agreement, mean absolute gap, and kappa
+        # cannot vary independently. Enumerate every possible 1-5 rating
+        # contingency (at most 5**6 cases), not a fabricated set of ratings.
+        if n <= 3:
+            reachable = _attainable_sparse_weighted_kappas(
+                n, n_matching, sum_distance
+            )
+            if not any(
+                (candidate is None and kappa is None)
+                or (
+                    candidate is not None and kappa is not None
+                    and math.isclose(candidate, kappa, rel_tol=0, abs_tol=1e-12)
+                )
+                for candidate in reachable
+            ):
+                raise ValueError(
+                    f"{label}: quadratic-weighted kappa is unattainable for "
+                    "the published sparse pair counts and absolute gaps"
+                )
+
+        # If all original reports were double-rated and exact agreement is
+        # perfect, each raw rating occurs in an identical annotator pair.
+        # Kappa is undefined only when EVERY pair uses the same category;
+        # with any category variation the expected disagreement is positive.
+        if (
+            n_different == 0
+            and n == len(payload["task_ids"]) * len(core.VARIANTS)
+        ):
+            categories = {
+                category
+                for variant in core.VARIANTS
+                for category, count in payload["variant_summary"][variant][
+                    field
+                ]["raw_score_distribution"].items()
+                if count > 0
+            }
+            if (kappa is None) != (len(categories) == 1):
+                raise ValueError(
+                    f"{label}: perfect agreement kappa contradicts "
+                    "fully double-rated raw-score category diversity"
+                )
 
 
 def _validate_analysis_identity(payload: dict, source_snapshots=None) -> None:

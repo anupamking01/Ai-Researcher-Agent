@@ -349,3 +349,33 @@ scores still require independent recomputation from authenticated retained
 ratings. Synthetic regressions exercise both reachable boundary chains,
 impossible but locally feasible effects, missingness, and a fully rehashed
 publication; no frozen estimates or experiments were altered.
+
+
+## Sparse-pair reliability and perfect-agreement identifiability
+
+The standalone verifier additionally checks **quadratic-weighted Cohen's
+kappa** against the published exact-agreement rate and mean absolute
+ordinal disagreement for one, two, or three double-rated reports. On this
+small domain it exhaustively enumerates possible integer 1–5 rater pairs,
+retaining only those with the reported agreement count and total absolute
+gap, and independently calculates the resulting possible kappas. A
+plausible-looking kappa that none of these samples could produce fails even
+if JSON, Markdown, and hashes have all been rewritten consistently.
+Undefined kappa remains distinct from a numeric zero, and the enumeration
+is capped at three overlaps to keep verification bounded.
+
+For **complete original double-rater coverage** with perfect exact agreement,
+the raw-score histograms impose an additional necessary identity: if all
+ratings occupy a single ordinal category, expected quadratic disagreement is
+zero and kappa must be null; if the ratings span multiple categories, the
+expected disagreement is positive and kappa must equal 1. Partial coverage
+does not trigger this histogram-based identity because singleton ratings
+cannot establish the two annotators' paired marginal distributions.
+
+These are cross-field arithmetic constraints, not evidence of participant
+identity, independent annotation, or authentic source ratings. Larger
+nonperfect-agreement samples still require independent recomputation from
+the archived, verified blinded ratings. Synthetic regressions and a
+rehash-tampering test exercise the guards without changing the frozen
+rubric, estimator, statistical plan, treatment results, or human-validation
+status.

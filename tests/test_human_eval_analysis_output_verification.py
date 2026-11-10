@@ -1823,8 +1823,77 @@ def test_ordinal_agreement_allows_unrated_and_perfect_rater_cases():
         mean_absolute_difference=0.0, quadratic_weighted_cohen_kappa=None,
     )
     verify._validate_blinded_agreement_arithmetic(payload)
+    # For full double-rating with all raw scores equal to 3, expected
+    # disagreement is exactly zero, so a defined kappa is impossible.
     block["quadratic_weighted_cohen_kappa"] = 1.0
+    with pytest.raises(ValueError, match="fully double-rated raw-score category"):
+        verify._validate_blinded_agreement_arithmetic(payload)
+
+    # Mixed ordinal categories make expected disagreement positive even
+    # though every rater pair agrees exactly; kappa must then be 1.
+    summary = payload["variant_summary"][core.VARIANTS[0]][core.DIMS[0]]
+    summary["raw_score_distribution"] = {
+        "1": 0, "2": 2, "3": 0, "4": 2, "5": 0,
+    }
     verify._validate_blinded_agreement_arithmetic(payload)
+    block["quadratic_weighted_cohen_kappa"] = None
+    with pytest.raises(ValueError, match="fully double-rated raw-score category"):
+        verify._validate_blinded_agreement_arithmetic(payload)
+
+
+@pytest.mark.parametrize(
+    ("n", "n_matching", "total_gap", "kappa", "valid"),
+    [
+        (1, 0, 1, 0.0, True),
+        (1, 0, 1, 0.5, False),
+        (1, 1, 0, None, True),
+        (1, 1, 0, 1.0, False),
+        (2, 1, 1, 2 / 3, True),
+        (2, 1, 1, 0.5, False),
+        (2, 0, 2, 0.75, False),
+        (3, 2, 1, 2 / 3, True),
+        (3, 2, 1, 0.123, False),
+    ],
+)
+def test_sparse_blinded_kappa_must_be_attainable_from_integer_ratings(
+    n, n_matching, total_gap, kappa, valid
+):
+    """Synthetic small-overlap constraints; no actual human scores are used."""
+    payload = _payload()
+    block = payload["pre_unblinding_agreement"]["pairwise"][0]["dimensions"][
+        core.DIMS[0]
+    ]
+    block.update(
+        n_double_rated=n,
+        raw_exact_agreement=n_matching / n,
+        mean_absolute_difference=total_gap / n,
+        quadratic_weighted_cohen_kappa=kappa,
+    )
+    if valid:
+        verify._validate_blinded_agreement_arithmetic(payload)
+    else:
+        with pytest.raises(ValueError, match="analysis blinded ordinal agreement arithmetic"):
+            verify._validate_blinded_agreement_arithmetic(payload)
+
+
+def test_rehashed_perfect_agreement_cannot_claim_defined_kappa_on_constant_ratings(
+    tmp_path,
+):
+    """A consistent rewrite of JSON/Markdown/digests cannot override this identity."""
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    payload = _payload()
+    block = payload["pre_unblinding_agreement"]["pairwise"][0]["dimensions"][
+        core.DIMS[0]
+    ]
+    block.update(
+        raw_exact_agreement=1.0,
+        mean_absolute_difference=0.0,
+        quadratic_weighted_cohen_kappa=1.0,
+    )
+    _rewrite_and_rehash(output, payload)
+    with pytest.raises(ValueError, match="fully double-rated raw-score category"):
+        verify.verify_bundle(output)
 
 
 def test_ordinal_agreement_rejects_defined_reliability_with_zero_overlap():
