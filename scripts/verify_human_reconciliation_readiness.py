@@ -407,6 +407,13 @@ def _validate_joint_automated_contrast_feasibility(primary, tasks):
 
 def validate_payloads(automated, human):
     """Validate the frozen cross-analysis identity without comparing outcomes."""
+    # Source-bound JSON may still have malformed array/scalar containers.
+    # Reject them before any .get access; never mint a readiness receipt
+    # from an incompletely parsed automated/human analysis object.
+    _require(
+        isinstance(automated, dict) and isinstance(human, dict),
+        "reconciliation inputs must be JSON objects",
+    )
     # JSON booleans are Python integers for equality purposes (True == 1).
     # Freeze/version identity must not be satisfied by a coerced boolean.
     _require(
@@ -431,6 +438,10 @@ def validate_payloads(automated, human):
     )
     for name in CONTRASTS:
         result = primary[name]
+        _require(
+            isinstance(result, dict),
+            f"automated {name} contrast must be an object",
+        )
         raw = result.get("task_differences")
         _require(
             isinstance(raw, list) and len(raw) == len(tasks),
@@ -485,11 +496,24 @@ def validate_payloads(automated, human):
         )
         for dimension in DIMS:
             result = block[dimension]
+            _require(
+                isinstance(result, dict),
+                f"human {name}/{dimension} contrast must be an object",
+            )
             included = result.get("task_ids_included")
             missing = result.get("missing_pair_tasks")
             _require(
                 isinstance(included, list) and isinstance(missing, list),
                 f"human {name}/{dimension} must declare included/missing tasks",
+            )
+            # Reject nested JSON lists/objects and unknown identifiers *before*
+            # set conversion; otherwise a malformed retained analysis can
+            # raise an uncontrolled TypeError instead of a scientific gate
+            # failure. Both lists must use the frozen task ID domain.
+            _require(
+                all(type(task_id) is str and task_id in all_tasks
+                    for task_id in included + missing),
+                f"human {name}/{dimension} included/missing task ids invalid",
             )
             inc, miss = set(included), set(missing)
             _require(

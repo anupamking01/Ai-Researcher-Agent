@@ -801,3 +801,71 @@ def test_frozen_automated_contrasts_pass_cross_arm_score_feasibility():
     readiness._validate_joint_automated_contrast_feasibility(
         automated["primary_contrasts"], automated["task_ids"]
     )
+
+
+# Schema-shape regressions are synthetic: no human ratings or outcomes are added.
+@pytest.mark.parametrize(
+    "which, malformed",
+    [
+        ("automated", []),
+        ("automated", None),
+        ("automated", True),
+        ("human", []),
+        ("human", None),
+        ("human", "not an analysis"),
+    ],
+)
+def test_reconciliation_readiness_rejects_nonobject_analysis_payload(which, malformed):
+    automated, human = _payloads()
+    if which == "automated":
+        automated = malformed
+    else:
+        human = malformed
+    with pytest.raises(ValueError, match="reconciliation inputs must be JSON objects"):
+        readiness.validate_payloads(automated, human)
+
+
+@pytest.mark.parametrize("malformed", [[], None, 5, True, "not a contrast"])
+def test_readiness_rejects_malformed_automated_contrast_container(malformed):
+    automated, human = _payloads()
+    automated["primary_contrasts"][readiness.CONTRASTS[0]] = malformed
+    with pytest.raises(ValueError, match="automated .* contrast must be an object"):
+        readiness.validate_payloads(automated, human)
+
+
+@pytest.mark.parametrize("malformed", [[], None, 5, True, "not a contrast"])
+def test_readiness_rejects_malformed_human_dimension_container(malformed):
+    automated, human = _payloads()
+    human["paired_contrasts"][readiness.CONTRASTS[0]][readiness.DIMS[0]] = malformed
+    with pytest.raises(ValueError, match="human .* contrast must be an object"):
+        readiness.validate_payloads(automated, human)
+
+
+@pytest.mark.parametrize(
+    "field, invalid_task",
+    [
+        ("task_ids_included", []),
+        ("task_ids_included", {"id": "main-01"}),
+        ("task_ids_included", None),
+        ("task_ids_included", 7),
+        ("missing_pair_tasks", []),
+        ("missing_pair_tasks", {"id": "main-01"}),
+        ("missing_pair_tasks", None),
+        ("missing_pair_tasks", "unknown-task"),
+    ],
+)
+def test_readiness_rejects_malformed_or_unknown_included_missing_identifiers(
+    field, invalid_task
+):
+    automated, human = _payloads()
+    block = human["paired_contrasts"][readiness.CONTRASTS[0]][readiness.DIMS[0]]
+    block[field].append(invalid_task)
+    with pytest.raises(ValueError, match="included/missing task ids invalid"):
+        readiness.validate_payloads(automated, human)
+
+
+def test_readiness_baseline_well_formed_synthetic_payload_still_passes():
+    automated, human = _payloads()
+    assert readiness.validate_payloads(automated, human)["status"] == (
+        "automated_human_reconciliation_identity_valid"
+    )

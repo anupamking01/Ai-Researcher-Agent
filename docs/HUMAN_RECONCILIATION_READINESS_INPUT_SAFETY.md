@@ -88,3 +88,23 @@ floating-point token limits, normal syntax failures, and the preserved
 automated-analysis receipt. These tests use synthetic documents and retained
 automated bytes only; they are not new treatment, confirmatory, exploratory,
 or human-validation results.
+
+
+## Malformed nested analysis containers fail before reconciliation
+
+The readiness validator now requires the two parsed analysis payloads and
+every designated automated contrast and human contrast/dimension block to
+be JSON objects before accessing their fields. Included/missing human task
+identifiers must be strings from the same frozen ten-task universe before
+they are converted to sets. This prevents a malformed retained analysis
+(such as a nested JSON list in place of a contrast, or an object inside a
+task-ID list) from escaping with a Python `AttributeError` or `TypeError`
+instead of a controlled, descriptive readiness validation failure.
+
+The changes are schema-hardening only; they do not modify, synthesize,
+impute, or rerun automated measurements or human ratings. Synthetic
+regressions in `tests/test_human_reconciliation_readiness.py` exercise
+malformed top-level and nested containers, unhashable/unknown task IDs,
+and the unchanged well-formed path. A passed readiness check still requires
+independent source verification; it does not establish original-report
+custody or human validation without genuine retained blinded submissions.
