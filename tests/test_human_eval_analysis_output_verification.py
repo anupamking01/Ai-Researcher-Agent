@@ -1514,6 +1514,52 @@ def test_standalone_verifier_rejects_rehashed_effect_size_and_bootstrap_bounds(
         verify.verify_bundle(output)
 
 
+@pytest.mark.parametrize(
+    ("differences", "left_mean", "attainable"),
+    [
+        ([1.0, 0.0], 2.5, True),
+        ([4.0, -2.0], 2.0, True),   # minimum feasible left sum
+        ([4.0, -2.0], 3.0, True),   # maximum feasible left sum
+        ([4.0, -2.0], 2.5, True),   # interior half-point allocation
+        ([4.0, -2.0], 3.5, False),  # right mean still in [1, 5], but impossible
+        ([4.0, -2.0], 1.5, False),  # below attainable left-score support
+        ([1.0, 0.0], 2.1, False),   # impossible aggregate half-point lattice
+        ([1.0], 2.25, False),       # single report cannot have quarter score
+    ],
+)
+def test_paired_arm_means_are_jointly_feasible_for_task_effects(
+    differences, left_mean, attainable
+):
+    """Only synthetic score pairs; no human rater observations are inferred."""
+    if attainable:
+        verify._validate_paired_arm_mean_feasibility(
+            differences, left_mean, label="synthetic paired arm"
+        )
+    else:
+        with pytest.raises(ValueError, match="paired arm means cannot arise"):
+            verify._validate_paired_arm_mean_feasibility(
+                differences, left_mean, label="synthetic paired arm"
+            )
+
+
+def test_rehashed_paired_arm_means_fail_when_no_half_point_pairs_can_yield_them(
+    tmp_path,
+):
+    """Consistent hashes and the correct paired difference cannot bless impossible arm means."""
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    payload = _payload()
+    block = payload["paired_contrasts"][core.CONTRASTS[0][2]][core.DIMS[0]]
+    block["left_mean"] = 2.1
+    block["right_mean"] = 2.6
+    assert block["right_mean"] - block["left_mean"] == pytest.approx(
+        block["mean_difference"]
+    )
+    _rewrite_and_rehash(output, payload)
+    with pytest.raises(ValueError, match="paired arm means cannot arise"):
+        verify.verify_bundle(output)
+
+
 @pytest.mark.parametrize("differences", [[1.0], [1.0, 1.0], [0.0, 0.0]])
 def test_paired_arithmetic_accepts_null_effect_size_and_degenerate_bootstrap(differences):
     """Single-pair and zero-variance cases have no finite standardized effect."""

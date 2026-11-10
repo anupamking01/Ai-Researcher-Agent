@@ -239,7 +239,14 @@ lie on the achievable half-point lattice within [-4, 4]; positive, negative,
 and tied task counts must agree with the differences; and their mean and
 median must match the reported values. The two arm means must have the same
 paired mean difference. A zero-pair cell cannot claim non-null inference
-statistics. These checks also run before create-only publication.
+statistics. The verifier also checks **joint paired-arm feasibility**: even when
+the left and right means have the correct difference, their totals must be
+attainable from the *same* published task differences using report scores in
+the frozen 1–5 half-point lattice. Each task difference bounds its possible
+left score; the summed bounds and half-point total are necessary and sufficient
+for the existence of anonymous paired scores. This catches rehashed
+internally impossible arm means without assigning ratings to particular people
+or modifying any original observation. These checks also run before create-only publication.
 
 Seven synthetic rehashed tampering cases and a no-pair case exercise this
 cross-field check. This is a **published-data consistency audit only**: it

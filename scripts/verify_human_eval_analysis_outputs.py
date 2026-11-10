@@ -927,6 +927,32 @@ def _replay_paired_bootstrap_ci(
     return tuple(bounds)
 
 
+def _validate_paired_arm_mean_feasibility(
+    differences: list[float], left_mean: float, *, label: str
+) -> None:
+    """Require the aggregate arm mean to be attainable for the task effects.
+
+    Each paired task contains two report means on the 1–5 half-point lattice.
+    For a fixed difference d = right - left, the left score must lie in
+    [max(1, 1-d), min(5, 5-d)]. Every half-point in this interval is possible.
+    Thus the sum of the doubled left scores must be an integer between the
+    summed lower and upper limits. This is an exact existence check over
+    anonymous task scores, not a reconstruction of original human ratings.
+    """
+    lower = sum(max(2, 2 - int(2 * effect)) for effect in differences)
+    upper = sum(min(10, 10 - int(2 * effect)) for effect in differences)
+    doubled_left_total = 2 * len(differences) * left_mean
+    nearest = round(doubled_left_total)
+    if (
+        not math.isclose(doubled_left_total, nearest, rel_tol=0, abs_tol=1e-9)
+        or not lower <= nearest <= upper
+    ):
+        raise ValueError(
+            f"{label}: paired arm means cannot arise from the published "
+            "task differences on the frozen half-point rubric"
+        )
+
+
 def _validate_paired_effect_arithmetic(payload: dict) -> None:
     """Check published per-task effects independently of retained ratings.
 
@@ -1000,6 +1026,11 @@ def _validate_paired_effect_arithmetic(payload: dict) -> None:
                 )
             ):
                 raise ValueError(f"{label}: arm means disagree with paired effects")
+
+            # A mathematically consistent arm-mean difference is not enough:
+            # both arm means must be achievable by the SAME per-task pairs
+            # on the frozen 1–5 half-point report-score lattice.
+            _validate_paired_arm_mean_feasibility(values, left_mean, label=label)
 
             # The paired standardized effect is the mean task difference
             # divided by the SAMPLE standard deviation of those differences.
