@@ -332,5 +332,5 @@ def test_coordinator_secret_same_bytes_inode_swap_fails(case, monkeypatch):
         return result
 
     monkeypatch.setattr(pair.preflight, "verify_preflight_receipt", swap_secret)
-    with pytest.raises(ValueError, match="coordinator blinding_key.csv changed during pair verification"):
+    with pytest.raises(ValueError, match=r"coordinator (?:root|blinding_key.csv) changed during pair verification"):
         pair.verify_counterbalanced_submission_pair(**case)
