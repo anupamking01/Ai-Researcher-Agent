@@ -1480,12 +1480,12 @@ def test_empty_paired_effects_require_null_statistics_without_imputing_scores():
     [
         "false_paired_dz",
         "missing_paired_dz",
-        "non_numeric_paired_dz",
+
         "outside_bootstrap_support",
         "reversed_bootstrap_interval",
         "missing_bootstrap_interval",
         "non_finite_bootstrap_endpoint",
-        "wrong_bootstrap_shape",
+
     ],
 )
 def test_standalone_verifier_rejects_rehashed_effect_size_and_bootstrap_bounds(
@@ -1500,8 +1500,6 @@ def test_standalone_verifier_rejects_rehashed_effect_size_and_bootstrap_bounds(
         block["paired_dz"] = -0.7071067811865476
     elif mutation == "missing_paired_dz":
         block["paired_dz"] = None
-    elif mutation == "non_numeric_paired_dz":
-        block["paired_dz"] = "0.7071067811865476"
     elif mutation == "outside_bootstrap_support":
         block["bootstrap_95pct_ci_mean_difference"] = [-0.1, 1.0]
     elif mutation == "reversed_bootstrap_interval":
@@ -1511,8 +1509,6 @@ def test_standalone_verifier_rejects_rehashed_effect_size_and_bootstrap_bounds(
     elif mutation == "non_finite_bootstrap_endpoint":
         # Exponent overflow is valid JSON syntax; the verifier must reject it.
         block["bootstrap_95pct_ci_mean_difference"] = [0.0, float("inf")]
-    elif mutation == "wrong_bootstrap_shape":
-        block["bootstrap_95pct_ci_mean_difference"] = [0.0]
     _rewrite_and_rehash(output, payload)
     with pytest.raises(ValueError, match="non-finite numeric|analysis paired effect arithmetic"):
         verify.verify_bundle(output)
@@ -1563,4 +1559,20 @@ def test_paired_arithmetic_rejects_non_degenerate_single_pair_interval():
         bootstrap_95pct_ci_mean_difference=[0.0, 1.0],
     )
     with pytest.raises(ValueError, match="bootstrap CI violates paired task support"):
+        verify._validate_paired_effect_arithmetic(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid", "error"),
+    [
+        ("paired_dz", "0.7071067811865476", "paired_dz disagrees"),
+        ("bootstrap_95pct_ci_mean_difference", [0.0], "bootstrap CI violates"),
+    ],
+)
+def test_paired_arithmetic_rejects_unrenderable_invalid_values(field, invalid, error):
+    """Exercise verifier arithmetic directly when the Markdown renderer cannot format bad types."""
+    payload = _payload()
+    block = payload["paired_contrasts"][core.CONTRASTS[0][2]][core.DIMS[0]]
+    block[field] = invalid
+    with pytest.raises(ValueError, match=error):
         verify._validate_paired_effect_arithmetic(payload)
