@@ -17,6 +17,7 @@ from contextlib import ExitStack
 import hashlib
 import json
 import math
+import statistics
 import os
 import stat
 from pathlib import Path
@@ -702,6 +703,81 @@ def _validate_rating_denominator_lineage(payload: dict) -> None:
             )
 
 
+def _validate_paired_effect_arithmetic(payload: dict) -> None:
+    """Check published per-task effects independently of retained ratings.
+
+    An output manifest binds bytes, not arithmetic truth. This inexpensive
+    gate catches contradictory rehashed summaries even when the retained
+    human-rating archive is unavailable. It is not a substitute for the full
+    independent recomputation from independently verified frozen ratings.
+    """
+    for _, _, contrast in core.CONTRASTS:
+        for field in core.DIMS:
+            label = f"analysis paired effect arithmetic {contrast}/{field}"
+            block = payload["paired_contrasts"][contrast][field]
+            included = block["task_ids_included"]
+            differences = block.get("task_differences")
+            if not isinstance(differences, dict) or set(differences) != set(included):
+                raise ValueError(f"{label}: task-level difference IDs mismatch")
+            values = [differences[task] for task in included]
+            if any(
+                type(value) not in (int, float)
+                or not math.isfinite(value)
+                or not -4 <= value <= 4
+                or value * 2 != int(value * 2)
+                for value in values
+            ):
+                raise ValueError(f"{label}: task-level differences violate the frozen rubric")
+            positive = sum(value > 0 for value in values)
+            negative = sum(value < 0 for value in values)
+            tied = sum(value == 0 for value in values)
+            if any(
+                type(block.get(name)) is not int or block[name] != expected
+                for name, expected in (
+                    ("positive_tasks", positive),
+                    ("negative_tasks", negative),
+                    ("tied_tasks", tied),
+                )
+            ):
+                raise ValueError(f"{label}: direction counts disagree with task differences")
+            if not values:
+                if any(
+                    block.get(name) is not None
+                    for name in (
+                        "left_mean", "right_mean", "mean_difference",
+                        "median_difference", "paired_dz",
+                        "bootstrap_95pct_ci_mean_difference",
+                    )
+                ):
+                    raise ValueError(f"{label}: empty paired sample has non-null statistics")
+                continue
+            expected_mean = statistics.mean(values)
+            expected_median = statistics.median(values)
+            for name, expected in (
+                ("mean_difference", expected_mean),
+                ("median_difference", expected_median),
+            ):
+                observed = block.get(name)
+                if (
+                    type(observed) not in (int, float)
+                    or not math.isfinite(observed)
+                    or not math.isclose(observed, expected, rel_tol=0, abs_tol=1e-12)
+                ):
+                    raise ValueError(f"{label}: {name} disagrees with task differences")
+            left_mean = block.get("left_mean")
+            right_mean = block.get("right_mean")
+            if (
+                type(left_mean) not in (int, float)
+                or type(right_mean) not in (int, float)
+                or not (1 <= left_mean <= 5 and 1 <= right_mean <= 5)
+                or not math.isclose(
+                    right_mean - left_mean, expected_mean,
+                    rel_tol=0, abs_tol=1e-12,
+                )
+            ):
+                raise ValueError(f"{label}: arm means disagree with paired effects")
+
+
 def _validate_analysis_identity(payload: dict, source_snapshots=None) -> None:
     required = {
         "schema_version": 1,
@@ -722,6 +798,7 @@ def _validate_analysis_identity(payload: dict, source_snapshots=None) -> None:
     _require_equal(payload.get("dimensions"), list(core.DIMS), label="analysis dimensions")
     _validate_paired_rater_coverage(payload)
     _validate_rating_denominator_lineage(payload)
+    _validate_paired_effect_arithmetic(payload)
 
     verification = payload.get("verification")
     if not isinstance(verification, dict):

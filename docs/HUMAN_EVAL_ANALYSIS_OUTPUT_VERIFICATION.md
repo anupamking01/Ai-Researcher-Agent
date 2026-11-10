@@ -197,3 +197,24 @@ All synthetic tests use temporary source files; no treatments, automated
 support evaluations, or human scores are produced. Pilot results, frozen
 automated confirmatory inference, exploratory analyses, and pending human
 validation remain separate.
+
+## Rehashed paired-effect arithmetic checks
+
+The standalone bundle verifier now independently checks the **internal**
+arithmetic of each published human paired-contrast block before accepting a
+manifest whose JSON/Markdown and SHA-256 values agree. For the frozen task IDs
+declared as included, task-difference keys must match exactly; effects must
+lie on the achievable half-point lattice within [-4, 4]; positive, negative,
+and tied task counts must agree with the differences; and their mean and
+median must match the reported values. The two arm means must have the same
+paired mean difference. A zero-pair cell cannot claim non-null inference
+statistics. These checks also run before create-only publication.
+
+Seven synthetic rehashed tampering cases and a no-pair case exercise this
+cross-field check. This is a **structural arithmetic audit only**: it does not
+establish that source ratings were authentic or independently provided, or
+certify a particular bootstrap interval from the report alone. The existing
+`verify_bundle_against_inputs` continues to independently recompute the full
+payload (including bootstrap) from the retained frozen ratings; the ordinary
+`verify_bundle` receipt explicitly reports that recomputation as *not* done.
+No human ratings were generated or evaluated for this check.

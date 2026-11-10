@@ -1411,3 +1411,65 @@ def test_unchanged_candidate_remains_publishable_with_second_verifier(tmp_path):
     )
     assert receipt["status"] == "human_validation_analysis_bundle_verified"
     assert verify.verify_bundle(output)["status"] == receipt["status"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "changed_task_effect",
+        "extra_task_effect",
+        "off_lattice_effect",
+        "false_mean",
+        "false_median",
+        "false_direction_count",
+        "false_arm_mean",
+    ],
+)
+def test_standalone_verifier_rejects_rehashed_paired_arithmetic_drift(
+    tmp_path, mutation
+):
+    # Synthetic publication bundle; this does not create human ratings.
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    payload = _payload()
+    block = payload["paired_contrasts"][core.CONTRASTS[0][2]][core.DIMS[0]]
+    if mutation == "changed_task_effect":
+        block["task_differences"]["task-a"] = -1.0
+    elif mutation == "extra_task_effect":
+        block["task_differences"]["unknown-task"] = 0.0
+    elif mutation == "off_lattice_effect":
+        block["task_differences"]["task-a"] = 1.25
+    elif mutation == "false_mean":
+        block["mean_difference"] = 0.25
+    elif mutation == "false_median":
+        block["median_difference"] = 1.0
+    elif mutation == "false_direction_count":
+        block["positive_tasks"] = 0
+    elif mutation == "false_arm_mean":
+        block["right_mean"] = 4.0
+    _rewrite_and_rehash(output, payload)
+    with pytest.raises(ValueError, match="analysis paired effect arithmetic"):
+        verify.verify_bundle(output)
+
+
+def test_empty_paired_effects_require_null_statistics_without_imputing_scores():
+    payload = _payload()
+    block = payload["paired_contrasts"][core.CONTRASTS[0][2]][core.DIMS[0]]
+    block.update(
+        task_ids_included=[],
+        missing_pair_tasks=payload["task_ids"],
+        task_differences={},
+        positive_tasks=0,
+        negative_tasks=0,
+        tied_tasks=0,
+        left_mean=None,
+        right_mean=None,
+        mean_difference=None,
+        median_difference=None,
+        paired_dz=None,
+        bootstrap_95pct_ci_mean_difference=None,
+    )
+    verify._validate_paired_effect_arithmetic(payload)
+    block["mean_difference"] = 0.0
+    with pytest.raises(ValueError, match="empty paired sample"):
+        verify._validate_paired_effect_arithmetic(payload)
