@@ -75,7 +75,7 @@ def _payload():
                 "mean_difference": 0.5,
                 "median_difference": 0.5,
                 "bootstrap_95pct_ci_mean_difference": [0.0, 1.0],
-                "paired_dz": 0.707,
+                "paired_dz": 2 ** -0.5,
                 "positive_tasks": 1,
                 "negative_tasks": 0,
                 "tied_tasks": 1,
@@ -1472,4 +1472,95 @@ def test_empty_paired_effects_require_null_statistics_without_imputing_scores():
     verify._validate_paired_effect_arithmetic(payload)
     block["mean_difference"] = 0.0
     with pytest.raises(ValueError, match="empty paired sample"):
+        verify._validate_paired_effect_arithmetic(payload)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "false_paired_dz",
+        "missing_paired_dz",
+        "non_numeric_paired_dz",
+        "outside_bootstrap_support",
+        "reversed_bootstrap_interval",
+        "missing_bootstrap_interval",
+        "non_finite_bootstrap_endpoint",
+        "wrong_bootstrap_shape",
+    ],
+)
+def test_standalone_verifier_rejects_rehashed_effect_size_and_bootstrap_bounds(
+    tmp_path, mutation
+):
+    """A rehashed result cannot invent standardized effects or impossible CIs."""
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    payload = _payload()
+    block = payload["paired_contrasts"][core.CONTRASTS[0][2]][core.DIMS[0]]
+    if mutation == "false_paired_dz":
+        block["paired_dz"] = -0.7071067811865476
+    elif mutation == "missing_paired_dz":
+        block["paired_dz"] = None
+    elif mutation == "non_numeric_paired_dz":
+        block["paired_dz"] = "0.7071067811865476"
+    elif mutation == "outside_bootstrap_support":
+        block["bootstrap_95pct_ci_mean_difference"] = [-0.1, 1.0]
+    elif mutation == "reversed_bootstrap_interval":
+        block["bootstrap_95pct_ci_mean_difference"] = [1.0, 0.0]
+    elif mutation == "missing_bootstrap_interval":
+        block["bootstrap_95pct_ci_mean_difference"] = None
+    elif mutation == "non_finite_bootstrap_endpoint":
+        # Exponent overflow is valid JSON syntax; the verifier must reject it.
+        block["bootstrap_95pct_ci_mean_difference"] = [0.0, float("inf")]
+    elif mutation == "wrong_bootstrap_shape":
+        block["bootstrap_95pct_ci_mean_difference"] = [0.0]
+    _rewrite_and_rehash(output, payload)
+    with pytest.raises(ValueError, match="non-finite numeric|analysis paired effect arithmetic"):
+        verify.verify_bundle(output)
+
+
+@pytest.mark.parametrize("differences", [[1.0], [1.0, 1.0], [0.0, 0.0]])
+def test_paired_arithmetic_accepts_null_effect_size_and_degenerate_bootstrap(differences):
+    """Single-pair and zero-variance cases have no finite standardized effect."""
+    payload = _payload()
+    block = payload["paired_contrasts"][core.CONTRASTS[0][2]][core.DIMS[0]]
+    tasks = ["task-a", "task-b"][: len(differences)]
+    effect = differences[0]
+    block.update(
+        n_pairs=len(differences),
+        task_ids_included=tasks,
+        task_differences=dict(zip(tasks, differences)),
+        positive_tasks=sum(v > 0 for v in differences),
+        negative_tasks=sum(v < 0 for v in differences),
+        tied_tasks=sum(v == 0 for v in differences),
+        left_mean=2.5,
+        right_mean=2.5 + effect,
+        mean_difference=effect,
+        median_difference=effect,
+        paired_dz=None,
+        bootstrap_95pct_ci_mean_difference=[effect, effect],
+    )
+    verify._validate_paired_effect_arithmetic(payload)
+    block["paired_dz"] = 0.0
+    with pytest.raises(ValueError, match="paired_dz must be null"):
+        verify._validate_paired_effect_arithmetic(payload)
+
+
+def test_paired_arithmetic_rejects_non_degenerate_single_pair_interval():
+    payload = _payload()
+    block = payload["paired_contrasts"][core.CONTRASTS[0][2]][core.DIMS[0]]
+    block.update(
+        n_pairs=1,
+        task_ids_included=["task-a"],
+        task_differences={"task-a": 1.0},
+        positive_tasks=1,
+        negative_tasks=0,
+        tied_tasks=0,
+        left_mean=2.5,
+        right_mean=3.5,
+        mean_difference=1.0,
+        median_difference=1.0,
+        paired_dz=None,
+        bootstrap_95pct_ci_mean_difference=[0.0, 1.0],
+    )
+    with pytest.raises(ValueError, match="bootstrap CI violates paired task support"):
         verify._validate_paired_effect_arithmetic(payload)

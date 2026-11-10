@@ -777,6 +777,41 @@ def _validate_paired_effect_arithmetic(payload: dict) -> None:
             ):
                 raise ValueError(f"{label}: arm means disagree with paired effects")
 
+            # The paired standardized effect is the mean task difference
+            # divided by the SAMPLE standard deviation of those differences.
+            # With one pair or zero variance the frozen producer emits null,
+            # not infinity or a manufactured zero effect size.
+            sd = statistics.stdev(values) if len(values) > 1 else 0.0
+            expected_dz = expected_mean / sd if sd > 0 else None
+            observed_dz = block.get("paired_dz")
+            if expected_dz is None:
+                if observed_dz is not None:
+                    raise ValueError(f"{label}: paired_dz must be null for zero variance")
+            elif (
+                type(observed_dz) not in (int, float)
+                or not math.isfinite(observed_dz)
+                or not math.isclose(
+                    observed_dz, expected_dz, rel_tol=1e-12, abs_tol=1e-12
+                )
+            ):
+                raise ValueError(f"{label}: paired_dz disagrees with task differences")
+
+            # A nonparametric bootstrap resamples ONLY observed paired task
+            # differences. Every resampled mean, and therefore both percentile
+            # endpoints, must lie inside their observed support envelope.
+            # This is an input-free plausibility check, not independent replay
+            # of the frozen 20,000 bootstrap draws.
+            ci = block.get("bootstrap_95pct_ci_mean_difference")
+            if (
+                type(ci) is not list
+                or len(ci) != 2
+                or any(type(end) not in (int, float) or not math.isfinite(end) for end in ci)
+                or ci[0] > ci[1]
+                or ci[0] < min(values) - 1e-12
+                or ci[1] > max(values) + 1e-12
+            ):
+                raise ValueError(f"{label}: bootstrap CI violates paired task support")
+
 
 def _validate_analysis_identity(payload: dict, source_snapshots=None) -> None:
     required = {

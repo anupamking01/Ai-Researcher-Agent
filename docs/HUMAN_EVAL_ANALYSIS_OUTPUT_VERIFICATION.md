@@ -218,3 +218,25 @@ certify a particular bootstrap interval from the report alone. The existing
 payload (including bootstrap) from the retained frozen ratings; the ordinary
 `verify_bundle` receipt explicitly reports that recomputation as *not* done.
 No human ratings were generated or evaluated for this check.
+
+
+## Standardized-effect and bootstrap-support integrity
+
+The standalone result-bundle verifier also recomputes the **paired standardized
+mean difference (\\(d_z\\))** directly from the published per-task effects,
+using their sample standard deviation. A one-task sample or constant task
+differences must report a null `paired_dz`; an invented finite estimate,
+wrong sign, or nonnumeric standardized effect fails verification even if the
+bundle's hashes and Markdown are regenerated. For nonconstant task differences,
+the recorded value must agree with the calculated standardized effect within a
+strict numerical tolerance.
+
+Each published bootstrap confidence interval must consist of two ordered finite
+numeric endpoints inside the range of the observed paired task differences.
+The bound is mathematical: resampling paired task differences cannot yield a
+mean smaller than the smallest observed difference or larger than the largest.
+For one pair or constant paired differences, the confidence interval is
+necessarily degenerate. This guard does **not** claim to independently replay
+the seed or the 20,000 bootstrap draws; the existing full source-bound
+recomputation remains the stronger check. All cases are synthetic. This adds no
+human annotations, new outcome estimates, or statistical procedures.
