@@ -13,6 +13,7 @@ import random
 import stat
 import statistics
 import tempfile
+from collections.abc import Mapping, MappingView, Set as AbstractSet
 from itertools import islice
 from pathlib import Path
 
@@ -926,13 +927,35 @@ def _bootstrap_mean_ci(diffs, *, seed):
     return [_percentile(draws, 0.025), _percentile(draws, 0.975)]
 
 
+def _capture_paired_score_vector(values, *, label):
+    """Capture one ordered score stream once, with the frozen task-count bound.
+
+    Mappings and unordered containers do not establish positional pairing
+    between the two report-score vectors and their optional task labels.
+    Copying a one-shot iterable once also prevents a later iteration from
+    silently consuming different observations.
+    """
+    if isinstance(
+        values, (str, bytes, bytearray, memoryview, Mapping, MappingView, AbstractSet)
+    ):
+        raise ValueError(f"{label} paired score vector must be an ordered iterable")
+    try:
+        values = tuple(islice(iter(values), MAX_FROZEN_HUMAN_TASK_PAIRS + 1))
+    except TypeError as exc:
+        raise ValueError(f"{label} paired score vector must be an ordered iterable") from exc
+    if len(values) > MAX_FROZEN_HUMAN_TASK_PAIRS:
+        raise ValueError("paired vectors exceed the frozen ten-task analysis unit")
+    return values
+
+
 def _paired_summary(left, right, *, seed, task_ids=None):
+    # Each positional vector must come from an explicit ordered score stream.
+    # In particular a dict indexed by 0..n-1 previously appeared to work but
+    # could conceal unrelated key/order semantics and misalign task pairs.
+    left = _capture_paired_score_vector(left, label="left")
+    right = _capture_paired_score_vector(right, label="right")
     if len(left) != len(right) or not left:
         raise ValueError("paired vectors must be non-empty and equal length")
-    # A report/task is the analysis unit. More than ten entries in a frozen
-    # contrast necessarily repeat tasks or import extra, non-frozen units.
-    if len(left) > MAX_FROZEN_HUMAN_TASK_PAIRS:
-        raise ValueError("paired vectors exceed the frozen ten-task analysis unit")
     # The canonical analysis supplies the exact included frozen task IDs.
     # Validate their one-to-one alignment before bootstrapping: duplicated
     # IDs would overweight a task and produce misleading uncertainty.

@@ -106,3 +106,56 @@ def test_legacy_unlabelled_helper_preserves_original_positional_order():
     legacy = core._paired_summary(left, right, seed=core.SEED)
     assert legacy["task_differences"] == [2.0, 1.0, 2.5]
     assert legacy["n_pairs"] == 3
+
+
+@pytest.mark.parametrize(
+    "bad_vector",
+    [
+        {0: 1.0, 1: 2.0},
+        {0: 1.0, 1: 2.0}.values(),
+        {1.0, 2.0},
+        frozenset((1.0, 2.0)),
+        "12",
+        b"\\x01\\x02",
+        bytearray((1, 2)),
+        memoryview(b"\\x01\\x02"),
+    ],
+)
+@pytest.mark.parametrize("side", ["left", "right"])
+def test_paired_score_vectors_reject_unordered_or_nonpositional_inputs(bad_vector, side):
+    # Integer-keyed mappings were previously accepted via positional indexing,
+    # despite lacking an explicit paired-score-vector contract.
+    left = bad_vector if side == "left" else [1.0, 2.0]
+    right = bad_vector if side == "right" else [2.0, 3.0]
+    with pytest.raises(ValueError, match="paired score vector must be an ordered iterable"):
+        core._paired_summary(left, right, seed=core.SEED)
+
+
+def test_paired_score_vectors_capture_aligned_one_shot_iterators_once():
+    ids = ["main-03", "main-01", "main-02"]
+    left = [2.5, 1.0, 4.0]
+    right = [3.0, 2.0, 3.5]
+    expected = core._paired_summary(left, right, seed=core.SEED, task_ids=ids)
+    observed = core._paired_summary(
+        (score for score in left),
+        (score for score in right),
+        seed=core.SEED,
+        task_ids=(task for task in ids),
+    )
+    assert observed == expected
+    assert observed["task_differences"] == [1.0, -0.5, 0.5]
+
+
+def test_oversized_paired_score_stream_is_bounded_before_bootstrap(monkeypatch):
+    draws = []
+    def unbounded_scores():
+        while True:
+            draws.append(1)
+            yield 3.0
+    monkeypatch.setattr(
+        core, "_bootstrap_mean_ci",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("bootstrap reached")),
+    )
+    with pytest.raises(ValueError, match="frozen ten-task analysis unit"):
+        core._paired_summary(unbounded_scores(), [3.0], seed=core.SEED)
+    assert len(draws) == core.MAX_FROZEN_HUMAN_TASK_PAIRS + 1

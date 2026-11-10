@@ -18,6 +18,16 @@ Per-score 1–5 and half-point lattice checks cannot detect pseudoreplication.
 
 * `_paired_summary(left, right, *, seed, task_ids=None)` rejects more than ten
   paired entries. This applies even to legacy ID-free direct calls.
+* Both left/right report-score vectors are likewise captured as bounded **ordered**
+  iterables (at most eleven items inspected for the ten-task limit) before
+  task-ID pairing or bootstrap. Mapping objects, dictionary views, sets,
+  text, and byte sequences cannot silently supply positional scores. An
+  integer-keyed dictionary previously happened to work by numeric indexing,
+  but its key semantics were not an explicitly aligned observation sequence.
+  One-shot numeric generators are consumed once and retained as a snapshot.
+  Existing canonical lists and frozen 20,000-draw results are unchanged.
+* This is a direct-helper input-contract safeguard, not atomic capture of two
+  concurrently edited external files or independent task/report authentication.
 * When task IDs are supplied, they must be a bounded **ordered** iterable
   with exactly one nonempty, trimmed **string** ID for each aligned vector
   position, without duplicates. Unordered sets and mappings are rejected;
