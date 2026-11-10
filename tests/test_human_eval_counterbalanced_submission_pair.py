@@ -229,3 +229,42 @@ def test_first_receipt_mutated_during_second_preflight_fails(case, monkeypatch):
     monkeypatch.setattr(pair.preflight, "verify_preflight_receipt", mutate_first_receipt)
     with pytest.raises(ValueError, match="changed during pair verification"):
         pair.verify_counterbalanced_submission_pair(**case)
+
+def test_first_bundle_edit_during_reverse_submission_verification_fails(case, monkeypatch):
+    """A verified earlier handoff must not authorize a changed canonical bundle."""
+    original = pair.preflight.verify_preflight_receipt
+
+    def modify_first_bundle(*, receipt_root, rating_path, annotator_bundle_root):
+        verified = original(
+            receipt_root=receipt_root, rating_path=rating_path,
+            annotator_bundle_root=annotator_bundle_root,
+        )
+        if Path(annotator_bundle_root) == case["reverse_root"]:
+            target = case["canonical_root"] / "packet.jsonl"
+            target.write_bytes(target.read_bytes() + b"X")
+        return verified
+
+    monkeypatch.setattr(pair.preflight, "verify_preflight_receipt", modify_first_bundle)
+    with pytest.raises(ValueError, match="canonical packet.jsonl changed during combined paired handoff"):
+        pair.verify_counterbalanced_submission_pair(**case)
+
+
+def test_first_bundle_same_bytes_replaced_during_reverse_preflight_fails(case, monkeypatch):
+    """Fingerprint equality alone cannot hide a bundle file inode replacement."""
+    original = pair.preflight.verify_preflight_receipt
+
+    def replace_first_bundle(*, receipt_root, rating_path, annotator_bundle_root):
+        verified = original(
+            receipt_root=receipt_root, rating_path=rating_path,
+            annotator_bundle_root=annotator_bundle_root,
+        )
+        if Path(annotator_bundle_root) == case["reverse_root"]:
+            first = case["canonical_root"] / "ratings_template.csv"
+            old = case["canonical_root"].parent / "old-ratings-template.csv"
+            first.rename(old)
+            first.write_bytes(old.read_bytes())
+        return verified
+
+    monkeypatch.setattr(pair.preflight, "verify_preflight_receipt", replace_first_bundle)
+    with pytest.raises(ValueError, match="canonical ratings_template.csv changed during combined paired handoff"):
+        pair.verify_counterbalanced_submission_pair(**case)

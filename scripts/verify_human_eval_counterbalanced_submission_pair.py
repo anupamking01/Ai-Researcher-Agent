@@ -78,6 +78,8 @@ def _retained_pair_window(
     reverse_submission: Path,
     canonical_receipt_root: Path,
     reverse_receipt_root: Path,
+    canonical_bundle_root: Path,
+    reverse_bundle_root: Path,
 ):
     """Detect observable rewrites/replacements across the serial two-order audit.
 
@@ -100,8 +102,15 @@ def _retained_pair_window(
         file_pins = {label: _pin_original_file(path) for label, path in sources.items()}
         return directory_pins, file_pins
 
+    # Handoff verification itself pins both bundle revisions, but previously
+    # released those pins before checking the separately submitted ratings.
+    # Keep that same source-bound inventory stable through BOTH preflights.
+    bundle_sources = handoff._snapshot_bundle_pair_sources(
+        Path(canonical_bundle_root), Path(reverse_bundle_root)
+    )
     original = snapshot()
     yield
+    handoff._require_bundle_pair_sources_unchanged(bundle_sources)
     if snapshot() != original:
         raise ValueError(
             "counterbalanced submission/receipt sources changed during pair verification"
@@ -134,6 +143,7 @@ def verify_counterbalanced_submission_pair(
     with _retained_pair_window(
         canonical_submission, reverse_submission,
         canonical_receipt_root, reverse_receipt_root,
+        canonical_root, reverse_root,
     ):
         verified_handoff = handoff.verify_counterbalanced_handoff(
             packet_root=packet_root,

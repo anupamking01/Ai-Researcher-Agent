@@ -51,3 +51,27 @@ snapshot, tamper-proof storage, external SHA-256 escrow, or human identity
 authentication; changes made and fully restored between observations can
 escape detection. Retain originals and independently pinned fingerprints
 until blinded freeze/archival.
+
+## Cross-stage bundle-custody window (pre-freeze)
+
+The source-bound **counterbalanced handoff** already snapshots and verifies both
+annotator-facing bundle revisions while comparing the two presentation orders.
+Previously, however, those bundle snapshots stopped at the end of the handoff
+call, before the **two separate submission-preflight receipt checks**. A
+canonical bundle changed after its earlier verification, during the reverse
+submission check, could therefore leave a stale paired handoff claim even if
+both submitted CSVs and retained receipts were unchanged.
+
+The pair verifier now extends the existing bounded, inode-and-digest
+snapshot/recheck of **both complete annotator bundle inventories** across the
+whole handoff-to-submission window. A persistent changed byte, file replacement,
+or changed bundle-root identity fails closed before any successful pair receipt.
+Synthetic offline regressions inject a late canonical packet edit and a
+byte-identical ratings-template inode replacement during reverse preflight;
+neither represents an actual annotation or historical experiment.
+
+This is observational source custody, not an atomic filesystem transaction,
+independent evidence authentication, proof of annotator independence, or
+authorization to distribute or unblind packets. The original source-archive
+recovery and real-human evaluation gates remain blocked; no experimental or
+human-evaluation outcomes are changed.
