@@ -243,10 +243,18 @@ statistics. The verifier also checks **joint paired-arm feasibility**: even when
 the left and right means have the correct difference, their totals must be
 attainable from the *same* published task differences using report scores in
 the frozen 1–5 half-point lattice. Each task difference bounds its possible
-left score; the summed bounds and half-point total are necessary and sufficient
-for the existence of anonymous paired scores. This catches rehashed
-internally impossible arm means without assigning ratings to particular people
-or modifying any original observation. These checks also run before create-only publication.
+left score, but those bounds alone are not sufficient when a report has
+only one original rater. The verifier now also consults each included task's
+published **left/right original-rating coverage**: a one-rater report must have
+an integer mean, while a two-rater report can have a half-integer mean. It
+enumerates compatible task-pair scores on a doubled-integer lattice and uses
+bounded dynamic programming to require that their sum equals the published
+arm total. This rejects rehashed arm means that pass the earlier broad bounds
+but are impossible for the reported single-/double-rated task cells, without
+assigning ratings to people or changing any observation. The same checks run
+before create-only publication. This per-task score-lattice audit does **not**
+reconcile the original raw-score histogram to individual task scores; only
+independent recomputation from retained ratings can fully establish that link.
 
 Seven synthetic rehashed tampering cases and a no-pair case exercise this
 cross-field check. This is a **published-data consistency audit only**: it

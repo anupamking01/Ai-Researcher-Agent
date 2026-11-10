@@ -928,28 +928,64 @@ def _replay_paired_bootstrap_ci(
 
 
 def _validate_paired_arm_mean_feasibility(
-    differences: list[float], left_mean: float, *, label: str
+    differences: list[float],
+    left_mean: float,
+    *,
+    label: str,
+    rating_counts: list[tuple[int, int]] | None = None,
 ) -> None:
-    """Require the aggregate arm mean to be attainable for the task effects.
+    """Require paired means to respect the ORIGINAL rater count for each task.
 
-    Each paired task contains two report means on the 1–5 half-point lattice.
-    For a fixed difference d = right - left, the left score must lie in
-    [max(1, 1-d), min(5, 5-d)]. Every half-point in this interval is possible.
-    Thus the sum of the doubled left scores must be an integer between the
-    summed lower and upper limits. This is an exact existence check over
-    anonymous task scores, not a reconstruction of original human ratings.
+    A report scored by one annotator must have an integer mean; a report
+    scored by two can have a half-integer mean. For each observed difference
+    enumerate all admissible doubled left scores whose corresponding right
+    scores obey the other arm's count. Bounded integer-sum dynamic programming
+    tests whether those same task pairs can produce the published arm total.
+
+    This is anonymous score feasibility, not reconstruction of individual
+    ratings, a histogram assignment, or authentication of human submissions.
     """
-    lower = sum(max(2, 2 - int(2 * effect)) for effect in differences)
-    upper = sum(min(10, 10 - int(2 * effect)) for effect in differences)
+    if rating_counts is None:
+        # Preserve direct helper callers that have only effects, not coverage.
+        rating_counts = [(2, 2)] * len(differences)
+    if (
+        len(differences) > core.MAX_FROZEN_HUMAN_TASK_PAIRS
+        or len(rating_counts) != len(differences)
+        or any(
+            type(pair) not in (list, tuple)
+            or len(pair) != 2
+            or any(type(count) is not int or count not in (1, 2) for count in pair)
+            for pair in rating_counts
+        )
+    ):
+        raise ValueError(f"{label}: invalid per-task original-rater coverage")
+
+    possible_doubled_totals = {0}
+    for effect, (left_count, right_count) in zip(differences, rating_counts):
+        doubled_effect = int(2 * effect)
+        candidate_left_scores = [
+            score for score in range(2, 11)
+            if (left_count == 2 or score % 2 == 0)
+            and 2 <= score + doubled_effect <= 10
+            and (right_count == 2 or (score + doubled_effect) % 2 == 0)
+        ]
+        possible_doubled_totals = {
+            total + score
+            for total in possible_doubled_totals
+            for score in candidate_left_scores
+        }
+        if not possible_doubled_totals:
+            break
+
     doubled_left_total = 2 * len(differences) * left_mean
     nearest = round(doubled_left_total)
     if (
         not math.isclose(doubled_left_total, nearest, rel_tol=0, abs_tol=1e-9)
-        or not lower <= nearest <= upper
+        or nearest not in possible_doubled_totals
     ):
         raise ValueError(
             f"{label}: paired arm means cannot arise from the published "
-            "task differences on the frozen half-point rubric"
+            "task differences and per-report one-/two-rater rubric coverage"
         )
 
 
@@ -1030,7 +1066,22 @@ def _validate_paired_effect_arithmetic(payload: dict) -> None:
             # A mathematically consistent arm-mean difference is not enough:
             # both arm means must be achievable by the SAME per-task pairs
             # on the frozen 1–5 half-point report-score lattice.
-            _validate_paired_arm_mean_feasibility(values, left_mean, label=label)
+            # One original rating yields an integer report score; two ratings
+            # may yield a half-integer. Enforce both arms' recorded per-task
+            # denominators instead of assuming every report is double-rated.
+            by_task_counts = {
+                task: tuple(int(count) for count in cell.split("/"))
+                for cell, tasks in block["rater_coverage"][
+                    "task_ids_by_rater_pair"
+                ].items()
+                for task in tasks
+            }
+            _validate_paired_arm_mean_feasibility(
+                values,
+                left_mean,
+                label=label,
+                rating_counts=[by_task_counts[task] for task in included],
+            )
 
             # The paired standardized effect is the mean task difference
             # divided by the SAMPLE standard deviation of those differences.

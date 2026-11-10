@@ -1542,6 +1542,91 @@ def test_paired_arm_means_are_jointly_feasible_for_task_effects(
             )
 
 
+@pytest.mark.parametrize(
+    ("differences", "left_mean", "coverage", "attainable"),
+    [
+        ([0.5], 3.0, [(1, 1)], False),  # two single ratings differ by an integer
+        ([0.5], 3.0, [(1, 2)], True),
+        ([0.5], 3.5, [(2, 1)], True),
+        ([0.0], 3.5, [(1, 1)], False),
+        ([0.0], 3.5, [(2, 2)], True),
+        ([1.0, 0.0], 2.25, [(1, 1), (1, 1)], False),
+        ([1.0, 0.0], 2.25, [(2, 2), (2, 2)], True),
+        ([0.5, -0.5], 2.25, [(1, 2), (2, 1)], True),
+        ([0.5, -0.5], 2.25, [(1, 2), (1, 2)], False),
+    ],
+)
+def test_paired_arm_feasibility_respects_each_original_rater_count(
+    differences, left_mean, coverage, attainable
+):
+    """Synthetic score lattices, not reconstructed or collected human ratings."""
+    if attainable:
+        verify._validate_paired_arm_mean_feasibility(
+            differences, left_mean, label="synthetic pair", rating_counts=coverage
+        )
+    else:
+        with pytest.raises(ValueError, match="paired arm means cannot arise"):
+            verify._validate_paired_arm_mean_feasibility(
+                differences, left_mean, label="synthetic pair", rating_counts=coverage
+            )
+
+
+def test_paired_effect_arithmetic_checks_published_task_rater_coverage():
+    """A half-point-compatible arm mean can still violate singleton ratings."""
+    payload = _payload()
+    block = payload["paired_contrasts"][core.CONTRASTS[0][2]][core.DIMS[0]]
+    block["left_mean"] = 2.25
+    block["right_mean"] = 2.75
+    # Two double-rated reports can attain these means with effects [1, 0].
+    verify._validate_paired_effect_arithmetic(payload)
+    coverage = block["rater_coverage"]
+    coverage["task_ids_by_rater_pair"]["1/1"] = ["task-a", "task-b"]
+    coverage["task_ids_by_rater_pair"]["2/2"] = []
+    coverage["count_by_rater_pair"]["1/1"] = 2
+    coverage["count_by_rater_pair"]["2/2"] = 0
+    with pytest.raises(ValueError, match="paired arm means cannot arise"):
+        verify._validate_paired_effect_arithmetic(payload)
+
+
+def test_rehashed_human_bundle_rejects_singleton_incompatible_arm_means(tmp_path):
+    """Hash-consistent publications must honor recorded per-report denominators."""
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    payload = _payload()
+    # Keep shared-arm counts, raw histograms and blinded missingness coherent.
+    # Only the published paired arm means are impossible for singleton reports.
+    for _, _, contrast in core.CONTRASTS:
+        for field in core.DIMS:
+            coverage = payload["paired_contrasts"][contrast][field]["rater_coverage"]
+            coverage["task_ids_by_rater_pair"]["1/1"] = ["task-a", "task-b"]
+            coverage["task_ids_by_rater_pair"]["2/2"] = []
+            coverage["count_by_rater_pair"]["1/1"] = 2
+            coverage["count_by_rater_pair"]["2/2"] = 0
+    for variant in core.VARIANTS:
+        for field in core.DIMS:
+            summary = payload["variant_summary"][variant][field]
+            summary["n_raw_scores"] = 2
+            summary["raw_score_distribution"]["3"] = 2
+    for field in core.DIMS:
+        agreement = payload["pre_unblinding_agreement"]["pairwise"][0]["dimensions"][field]
+        agreement.update(
+            n_double_rated=0,
+            n_annotator_a_only_rated=8,
+            n_annotator_b_only_rated=0,
+            n_neither_rated=0,
+            raw_exact_agreement=None,
+            mean_absolute_difference=None,
+            quadratic_weighted_cohen_kappa=None,
+        )
+    block = payload["paired_contrasts"][core.CONTRASTS[0][2]][core.DIMS[0]]
+    block["left_mean"] = 2.25
+    block["right_mean"] = 2.75
+    assert block["right_mean"] - block["left_mean"] == block["mean_difference"]
+    _rewrite_and_rehash(output, payload)
+    with pytest.raises(ValueError, match="paired arm means cannot arise"):
+        verify.verify_bundle(output)
+
+
 def test_rehashed_paired_arm_means_fail_when_no_half_point_pairs_can_yield_them(
     tmp_path,
 ):
