@@ -52,6 +52,9 @@ MAX_HUMAN_ANALYSIS_SNAPSHOT_FILE_BYTES = 16 * 1024 * 1024
 # Frozen 40-report packet x exactly two annotators for treatment-level analysis.
 # Direct helper streams are capped before any partial aggregates are produced.
 MAX_DIRECT_RATING_ROWS = 80
+# Each frozen treatment arm contains exactly ten tasks. Direct paired helpers
+# must not silently bootstrap an oversized or repeated task sample.
+MAX_FROZEN_HUMAN_TASK_PAIRS = 10
 # A valid two-rater freeze has a small, finite archive. Bound the recursive
 # inventory and copied scratch footprint independently of the per-file ceiling.
 # These are defensive capture limits, not changes to the frozen rating protocol.
@@ -923,9 +926,31 @@ def _bootstrap_mean_ci(diffs, *, seed):
     return [_percentile(draws, 0.025), _percentile(draws, 0.975)]
 
 
-def _paired_summary(left, right, *, seed):
+def _paired_summary(left, right, *, seed, task_ids=None):
     if len(left) != len(right) or not left:
         raise ValueError("paired vectors must be non-empty and equal length")
+    # A report/task is the analysis unit. More than ten entries in a frozen
+    # contrast necessarily repeat tasks or import extra, non-frozen units.
+    if len(left) > MAX_FROZEN_HUMAN_TASK_PAIRS:
+        raise ValueError("paired vectors exceed the frozen ten-task analysis unit")
+    # The canonical analysis supplies the exact included frozen task IDs.
+    # Validate their one-to-one alignment before bootstrapping: duplicated
+    # IDs would overweight a task and produce misleading uncertainty.
+    # An optional ID-free direct call retains backward compatibility, but
+    # cannot certify uniqueness (only the ten-pair upper bound).
+    if task_ids is not None:
+        if isinstance(task_ids, (str, bytes)):
+            raise ValueError("paired task IDs must be an iterable of distinct task IDs")
+        try:
+            ids = tuple(islice(iter(task_ids), MAX_FROZEN_HUMAN_TASK_PAIRS + 1))
+        except TypeError as exc:
+            raise ValueError("paired task IDs must be an iterable of distinct task IDs") from exc
+        if (
+            len(ids) != len(left)
+            or any(type(task_id) is not str or not task_id or task_id != task_id.strip() for task_id in ids)
+            or len(set(ids)) != len(ids)
+        ):
+            raise ValueError("paired task IDs must uniquely identify each aligned frozen task")
     # The analysis unit is a report mean of observed 1–5 scores. This also
     # guards direct/offline helper callers that bypass the ratings freeze.
     for label, values in (("left", left), ("right", right)):
@@ -1324,6 +1349,7 @@ def analyze(
                         [scores[(cells[(left, task_id)], field)] for task_id in complete],
                         [scores[(cells[(right, task_id)], field)] for task_id in complete],
                         seed=SEED + contrast_index * 100 + dimension_index,
+                        task_ids=complete,
                     )
                     result["task_differences"] = dict(
                         zip(complete, result["task_differences"])
