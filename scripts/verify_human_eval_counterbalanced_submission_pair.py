@@ -191,7 +191,13 @@ def _retained_pair_window(
         packet_root, task_manifest_path, annotator_guide_path
     )
     original = snapshot()
-    yield
+    # Expose pins for the exact retained JSON bytes, not only their parsed fields.
+    # The final snapshot also rejects persistent intervening source rewrites.
+    receipt_hashes = {
+        order: original[1][f"{order}_receipt"][-1]
+        for order in ("canonical", "reverse")
+    }
+    yield receipt_hashes
     handoff._require_bundle_pair_sources_unchanged(bundle_sources)
     _require_governing_coordinator_sources_unchanged(governing_sources)
     if snapshot() != original:
@@ -228,7 +234,7 @@ def verify_counterbalanced_submission_pair(
         canonical_receipt_root, reverse_receipt_root,
         canonical_root, reverse_root,
         packet_root, task_manifest_path, annotator_guide_path,
-    ):
+    ) as retained_receipt_hashes:
         verified_handoff = handoff.verify_counterbalanced_handoff(
             packet_root=packet_root,
             canonical_root=canonical_root,
@@ -265,6 +271,7 @@ def verify_counterbalanced_submission_pair(
             # Return only provenance, not annotator IDs or score/note contents.
             submissions[order] = {
                 "submission_sha256": verified["submission"]["sha256"],
+                "preflight_receipt_sha256": retained_receipt_hashes[order],
                 "annotator_manifest_sha256": verified["annotator_manifest_sha256"],
                 "n_reports": verified["n_reports"],
                 "n_missing_dimension_values": verified["n_missing_dimension_values"],

@@ -88,6 +88,35 @@ def test_valid_pair_is_source_bound_and_receipt_is_score_free(case):
     assert "correctness_1_5" not in json.dumps(result)
 
 
+
+def test_pair_receipt_binds_raw_preflight_receipt_bytes(case):
+    """Both retained JSON revisions remain identifiable after pair verification."""
+    result = pair.verify_counterbalanced_submission_pair(**case)
+    for order in ("canonical", "reverse"):
+        path = case[f"{order}_receipt_root"] / "preflight_receipt.json"
+        expected = hashlib.sha256(path.read_bytes()).hexdigest()
+        assert result["submissions"][order]["preflight_receipt_sha256"] == expected
+        assert len(expected) == 64
+
+
+def test_semantically_equivalent_receipt_json_has_distinct_byte_pin(case):
+    """JSON formatting changes exact provenance without changing validity."""
+    path = case["canonical_receipt_root"] / "preflight_receipt.json"
+    original = hashlib.sha256(path.read_bytes()).hexdigest()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                    encoding="utf-8")
+    altered = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert altered != original
+
+    result = pair.verify_counterbalanced_submission_pair(**case)
+    assert result["submissions"]["canonical"]["preflight_receipt_sha256"] == altered
+    assert result["submissions"]["reverse"]["preflight_receipt_sha256"] == (
+        hashlib.sha256((case["reverse_receipt_root"] / "preflight_receipt.json")
+                       .read_bytes()).hexdigest()
+    )
+
+
 def test_wrong_independent_manifest_pin_fails(case):
     case["expected_coordinator_manifest_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="independently pinned"):

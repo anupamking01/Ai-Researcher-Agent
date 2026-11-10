@@ -31,6 +31,25 @@ The actual blinded freeze still requires the frozen eligibility/independence att
 A passing result establishes consistency between the *declared* pair of submissions and source-bound, counterordered packet evidence under the existing validators. SHA-256 means byte identity, not human authorship, consent, eligibility, independent scoring, or continued blinding. Validation is serial, not an atomic filesystem lock over all evidence; changes restored between checks can escape detection. Retain exact input bytes and revalidate before use. This receipt is **not** a human-validation result, reliability estimate, treatment effect, or permission to open the blinding key. Pilot, frozen automated confirmatory, exploratory, and pending human-evaluation findings remain separate.
 
 
+## Durable preflight-receipt byte bindings
+
+The pair-level provenance summary now records `preflight_receipt_sha256` for
+each canonical/reverse submission. This binds the *exact UTF-8 JSON bytes*
+of the separately retained, treatment-blind preflight receipt, in addition
+to the rating CSV and annotator-manifest fingerprints already recorded.
+The verifier takes these two hashes from its initial bounded receipt snapshots;
+the full pair-wide window requires both original files to remain unchanged
+after both serial preflight checks. Semantically equivalent receipt JSON with
+different whitespace thus has a distinguishable source revision, without
+changing the validation outcome. Neither receipt contents nor annotator IDs
+are emitted into the pair summary.
+
+Retain both original preflight receipt files with the pair summary. A hash
+identifies the checked bytes, but does not independently authenticate their
+author, prove rater independence, or guard against a rewritten unescrowed
+summary. These are synthetic provenance tests only; historical source recovery
+and genuine human scoring remain outstanding.
+
 ## Pair-wide submission and retained-receipt observation window
 
 The verifier now pins **both** original rating CSVs and **both** retained
