@@ -1225,6 +1225,31 @@ def _attainable_sparse_weighted_kappas(
     return frozenset(possible)
 
 
+@lru_cache(maxsize=128)
+def _attainable_observed_squared_gaps(
+    n_different: int, total_absolute_gap: int
+) -> frozenset[int]:
+    """Possible integer squared-gap totals for 1–5 ordinal disagreements.
+
+    A mismatch has absolute gap 1, 2, 3, or 4; its contribution to
+    observed quadratic disagreement is the square of that gap. The bounded
+    dynamic program keeps only (absolute total, squared total) states.
+    It computes necessary published-data arithmetic, not missing ratings.
+    """
+    states = {(0, 0)}
+    for _ in range(n_different):
+        states = {
+            (absolute + gap, squared + gap * gap)
+            for absolute, squared in states
+            for gap in (1, 2, 3, 4)
+            if absolute + gap <= total_absolute_gap
+        }
+    return frozenset(
+        squared for absolute, squared in states
+        if absolute == total_absolute_gap
+    )
+
+
 def _validate_blinded_agreement_arithmetic(payload: dict) -> None:
     """Audit published ordinal agreement numbers without inferring raw ratings.
 
@@ -1312,6 +1337,46 @@ def _validate_blinded_agreement_arithmetic(payload: dict) -> None:
                 raise ValueError(
                     f"{label}: quadratic-weighted kappa is unattainable for "
                     "the published sparse pair counts and absolute gaps"
+                )
+
+        # For four or more overlapping pairs, full contingency enumeration
+        # is too expensive. The frozen quadratic-weighted kappa estimator
+        # nevertheless has an exact integer structure: kappa = 1 - n*S/E,
+        # where S is the sum of squared paired ordinal gaps, and E is
+        # the sum of squared distances across the two rater marginals.
+        # Both S and E are integers; positive E cannot exceed 16*n*n.
+        # Derive admissible S values from the separately published count
+        # of disagreements and total absolute gap, then check for ANY
+        # integer E compatible with the published kappa. This is a
+        # necessary condition, not a sufficient reconstruction of ratings.
+        if n >= 4 and n_different:
+            possible_squared = _attainable_observed_squared_gaps(
+                n_different, sum_distance
+            )
+            consistent = False
+            for squared in possible_squared:
+                expected_distance = n * squared / (1.0 - kappa)
+                if (
+                    not math.isfinite(expected_distance)
+                    or not 1 <= expected_distance <= 16 * n * n
+                ):
+                    continue
+                integer_expected = round(expected_distance)
+                if (
+                    1 <= integer_expected <= 16 * n * n
+                    and math.isclose(
+                        1.0 - n * squared / integer_expected,
+                        kappa,
+                        rel_tol=0,
+                        abs_tol=1e-12,
+                    )
+                ):
+                    consistent = True
+                    break
+            if not consistent:
+                raise ValueError(
+                    f"{label}: quadratic-weighted kappa cannot arise from "
+                    "integer squared ordinal gaps and rater marginals"
                 )
 
         # If all original reports were double-rated and exact agreement is

@@ -379,3 +379,28 @@ the archived, verified blinded ratings. Synthetic regressions and a
 rehash-tampering test exercise the guards without changing the frozen
 rubric, estimator, statistical plan, treatment results, or human-validation
 status.
+
+## Larger-overlap weighted-kappa arithmetic lattice
+
+For **four or more** double-rated reports, exhaustive 5-by-5 contingency
+enumeration is no longer practical. The standalone verifier now applies an
+independent **necessary integer-lattice check** to the published
+quadratic-weighted Cohen's kappa. The frozen estimator has the exact form
+`1 - n*S/E`: `S` is the integer sum of squared within-pair ordinal
+differences and `E` the integer sum of squared cross-rater marginal
+differences. The reported exact-agreement count and total absolute gap
+restrict which `S` values are possible with integer 1–5 ratings.
+For each possible `S`, the verifier requires an integer
+`1 <= E <= 16*n*n` that reproduces the published kappa to floating-point
+precision. A finite kappa inside [-1, 1] is **not enough**.
+
+This dynamic program is bounded by the frozen maximum of 40 double-rated
+reports and does not enumerate or invent participant responses. It catches
+some impossible rehashed reliability claims for larger overlaps, but it is
+**not sufficient** to prove that a particular contingency table exists;
+retained-input recomputation is required. The earlier complete enumeration
+for one to three overlaps and the perfect-agreement histogram rule remain
+in place. Synthetic true-pair cases, fabricated-kappa cases, and one fully
+rehashed publication regression exercise the added check. The frozen
+human protocol, automated treatment results, pilot classification,
+exploratory analyses, and pending genuine human evaluation are unchanged.

@@ -2070,3 +2070,75 @@ def test_rehashed_publication_rejects_incompatible_shared_arm_task_effects(tmp_p
     _rewrite_and_rehash(output, payload)
     with pytest.raises(ValueError, match="cross-contrast task-score feasibility"):
         verify.verify_bundle(output)
+
+
+@pytest.mark.parametrize(
+    "pairs",
+    [
+        [(1, 1), (2, 2), (3, 3), (4, 5)],
+        [(1, 1), (2, 2), (3, 3), (4, 5), (2, 3)],
+        [(1, 1)] * 7 + [(1, 2)],
+        [(1, 1)] * 6 + [(2, 3), (4, 5)],
+        [(1, 1)] * 39 + [(1, 2)],
+    ],
+)
+def test_large_overlap_kappa_lattice_accepts_genuine_synthetic_pair_arithmetic(pairs):
+    """The necessary integer-lattice check must not reject valid ordinal samples.
+
+    These are constructed score pairs only, not human observations.
+    """
+    payload = _payload()
+    field = core.DIMS[0]
+    block = payload["pre_unblinding_agreement"]["pairwise"][0]["dimensions"][field]
+    n = len(pairs)
+    block.update(
+        n_double_rated=n,
+        raw_exact_agreement=sum(a == b for a, b in pairs) / n,
+        mean_absolute_difference=sum(abs(a - b) for a, b in pairs) / n,
+        quadratic_weighted_cohen_kappa=freeze.quadratic_weighted_kappa(pairs),
+    )
+    verify._validate_blinded_agreement_arithmetic(payload)
+
+
+@pytest.mark.parametrize(
+    ("n", "n_matching", "total_gap", "fabricated_kappa"),
+    [
+        (4, 3, 1, 0.93),
+        (8, 6, 2, 0.81),
+        (8, 7, 1, 0.10),
+        (40, 39, 1, 0.999),
+    ],
+)
+def test_large_overlap_kappa_lattice_rejects_impossible_reliability(
+    n, n_matching, total_gap, fabricated_kappa
+):
+    """A bounded, numerical kappa can still be unattainable on the integer rubric."""
+    payload = _payload()
+    field = core.DIMS[0]
+    block = payload["pre_unblinding_agreement"]["pairwise"][0]["dimensions"][field]
+    block.update(
+        n_double_rated=n,
+        raw_exact_agreement=n_matching / n,
+        mean_absolute_difference=total_gap / n,
+        quadratic_weighted_cohen_kappa=fabricated_kappa,
+    )
+    with pytest.raises(ValueError, match="integer squared ordinal gaps"):
+        verify._validate_blinded_agreement_arithmetic(payload)
+
+
+def test_rehashed_analysis_bundle_rejects_large_overlap_kappa_lattice_violation(
+    tmp_path,
+):
+    """Consistent regenerated publication hashes cannot hide impossible kappa."""
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    payload = _payload()
+    block = payload["pre_unblinding_agreement"]["pairwise"][0]["dimensions"][
+        core.DIMS[0]
+    ]
+    # 8 overlaps, six exact matches, total absolute gap two: kappa 0.81
+    # would demand a noninteger expected squared marginal disagreement.
+    block["quadratic_weighted_cohen_kappa"] = 0.81
+    _rewrite_and_rehash(output, payload)
+    with pytest.raises(ValueError, match="integer squared ordinal gaps"):
+        verify.verify_bundle(output)
