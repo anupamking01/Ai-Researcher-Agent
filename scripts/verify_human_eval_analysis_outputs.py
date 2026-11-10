@@ -575,6 +575,79 @@ def _validate_paired_rater_coverage(payload: dict) -> None:
 
 
 
+
+def _validate_report_score_summary(summary: dict, counts: list[int], *, label: str) -> None:
+    """Check report means against raw-score totals without assigning rater identities.
+
+    Each scored report contains one integer rating or the mean of two integer
+    ratings on the frozen 1–5 rubric. The raw histogram and per-report rating
+    counts therefore constrain the *exact attainable* published mean: select
+    the 2*n_double raw scores allocated to double-rated reports, then halve
+    their contribution. This bounded subset-sum check does not reconstruct
+    original ratings or authenticate annotators.
+    """
+    if any(type(count) is not int or count not in (0, 1, 2) for count in counts):
+        raise ValueError(f"{label}: invalid original-rater count")
+    distribution = summary["raw_score_distribution"]
+    raw_scores = [
+        rating for rating in range(1, 6)
+        for _ in range(distribution[str(rating)])
+    ]
+    if len(raw_scores) != sum(counts):
+        raise ValueError(f"{label}: raw-score distribution contradicts rater counts")
+
+    scored = sum(count > 0 for count in counts)
+    mean = summary.get("mean_report_score")
+    median = summary.get("median_report_score")
+    if scored == 0:
+        if mean is not None or median is not None:
+            raise ValueError(f"{label}: unscored reports require null summaries")
+        return
+    if (
+        type(mean) not in (int, float)
+        or type(median) not in (int, float)
+        or not math.isfinite(mean)
+        or not math.isfinite(median)
+        or not (1 <= mean <= 5 and 1 <= median <= 5)
+    ):
+        raise ValueError(f"{label}: report mean and median must be finite rubric scores")
+
+    double_slots = 2 * sum(count == 2 for count in counts)
+    # At most 20 ordinal ratings for one variant/dimension in the frozen
+    # ten-task human study. Descending updates consume each raw score once.
+    possible_double_sums = [set() for _ in range(double_slots + 1)]
+    possible_double_sums[0].add(0)
+    for rating in raw_scores:
+        for slots in range(double_slots, 0, -1):
+            possible_double_sums[slots].update(
+                previous + rating for previous in possible_double_sums[slots - 1]
+            )
+    twice_report_sum = 2 * scored * mean
+    total_raw = sum(raw_scores)
+    if not any(
+        math.isclose(twice_report_sum, 2 * total_raw - double_sum,
+                     rel_tol=0, abs_tol=1e-9)
+        for double_sum in possible_double_sums[double_slots]
+    ):
+        raise ValueError(
+            f"{label}: report mean cannot arise from the raw-score distribution "
+            "and observed one-/two-rater coverage"
+        )
+
+    # The median of an odd number of half-integer report means is a
+    # half-integer; with an even number it can be a quarter-integer.
+    median_factor = 2 if scored % 2 else 4
+    if (
+        not min(raw_scores) - 1e-12 <= median <= max(raw_scores) + 1e-12
+        or not math.isclose(
+            median * median_factor, round(median * median_factor),
+            rel_tol=0, abs_tol=1e-9
+        )
+        or (scored == 1 and not math.isclose(median, mean, rel_tol=0, abs_tol=1e-12))
+    ):
+        raise ValueError(f"{label}: report median violates frozen rubric support")
+
+
 def _validate_rating_denominator_lineage(payload: dict) -> None:
     """Reconcile original-rating counts across the blinded and unblinded layers.
 
@@ -667,6 +740,9 @@ def _validate_rating_denominator_lineage(payload: dict) -> None:
                     f"analysis rating lineage variant summary raw-score distribution "
                     f"disagrees with coverage: {variant}/{field}"
                 )
+            _validate_report_score_summary(
+                summary, counts, label=f"analysis variant score arithmetic {variant}/{field}"
+            )
             observed_counts.extend(counts)
 
         try:

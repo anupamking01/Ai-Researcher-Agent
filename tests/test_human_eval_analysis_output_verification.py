@@ -1705,3 +1705,67 @@ def test_ordinal_agreement_rejects_defined_reliability_with_zero_overlap():
     )
     with pytest.raises(ValueError, match="no double-rated items require null"):
         verify._validate_blinded_agreement_arithmetic(payload)
+
+
+@pytest.mark.parametrize(
+    ("counts", "distribution", "mean", "median", "valid"),
+    [
+        # One-and-two rater mix: [1, 5, 5] can yield mean 3 or 4.
+        ([1, 2], {"1": 1, "5": 2}, 3.0, 3.0, True),
+        ([1, 2], {"1": 1, "5": 2}, 4.0, 4.0, True),
+        # This sits *inside* the coarse possible range but is unattainable.
+        ([1, 2], {"1": 1, "5": 2}, 3.5, 3.5, False),
+        ([2, 2], {"2": 2, "4": 2}, 3.0, 3.0, True),
+        ([2, 2], {"2": 2, "4": 2}, 2.5, 2.5, False),
+        ([1, 1], {"1": 1, "2": 1}, 1.5, 1.5, True),
+        ([1, 2], {"1": 2, "2": 1}, 1.25, 1.25, True),
+        ([1, 1], {"1": 1, "2": 1}, 1.5, 1.125, False),
+        ([2], {"2": 1, "4": 1}, 3.0, 3.0, True),
+        ([2], {"2": 1, "4": 1}, 3.0, 3.5, False),
+        ([0, 0], {}, None, None, True),
+        ([0, 0], {}, 3.0, None, False),
+        ([1], {"3": 1}, True, 3.0, False),
+        ([1], {"3": 1}, 3.0, float("inf"), False),
+    ],
+)
+def test_report_summary_arithmetic_constrains_observed_rating_counts(
+    counts, distribution, mean, median, valid
+):
+    """Synthetic ordinal histograms only; no original human ratings are inferred."""
+    histogram = {str(rating): distribution.get(str(rating), 0) for rating in range(1, 6)}
+    summary = {
+        "raw_score_distribution": histogram,
+        "mean_report_score": mean,
+        "median_report_score": median,
+    }
+    if valid:
+        verify._validate_report_score_summary(
+            summary, counts, label="synthetic report arithmetic"
+        )
+    else:
+        with pytest.raises(ValueError, match="synthetic report arithmetic"):
+            verify._validate_report_score_summary(
+                summary, counts, label="synthetic report arithmetic"
+            )
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [
+        ("mean_report_score", 3.5),
+        ("median_report_score", 3.125),
+        ("median_report_score", 2.5),
+        ("mean_report_score", None),
+    ],
+)
+def test_standalone_verifier_rejects_rehashed_variant_score_inconsistency(
+    tmp_path, field, invalid
+):
+    """A rewritten JSON/Markdown/manifest must not override the raw histogram."""
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    payload = _payload()
+    payload["variant_summary"][core.VARIANTS[0]][core.DIMS[0]][field] = invalid
+    _rewrite_and_rehash(output, payload)
+    with pytest.raises(ValueError, match="analysis variant score arithmetic"):
+        verify.verify_bundle(output)

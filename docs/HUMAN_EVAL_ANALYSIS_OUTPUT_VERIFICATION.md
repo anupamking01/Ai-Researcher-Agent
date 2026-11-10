@@ -150,6 +150,29 @@ Verification fails closed when:
 A successful receipt is a publication-integrity check, not a new scientific
 result.
 
+## Independent raw-score to report-score consistency
+
+The standalone verifier checks each published variant/dimension's
+`mean_report_score` against the reported integer 1–5 raw-score histogram and
+the **original one-/two-annotator count for each report**, recovered from the
+paired-contrast coverage matrix. Because a double-rated report contributes the
+average of its two integer scores, a raw rating on such a report carries
+half the weight of a singly rated report in the report-level mean. A bounded
+exact subset-sum check enumerates attainable allocations of raw scores to
+double-rated report slots; it rejects a reported mean that cannot arise under
+**any** assignment, even if the mean lies inside plausible numerical bounds.
+The check is at most 20 scores per variant/dimension on the ten-task study.
+
+The verifier additionally requires a null mean/median when no report is scored,
+finite rubric-range summary values when reports are scored, a report-median
+half-point lattice for odd sample sizes (quarter-point for even samples), and
+mean–median equality for a single scored report. These are necessary arithmetic
+conditions. They do **not** reconstruct original per-report ratings, prove a
+specific median is attainable for a given histogram, authenticate original
+annotator submissions, or establish blinded human validation. Complete source
+recomputation remains the stronger check once independently verified rating
+archives are available. No frozen analysis settings or results change.
+
 ## Archive and checkout rule
 
 Keep the analysis bundle together with the exact repository commit that produced
