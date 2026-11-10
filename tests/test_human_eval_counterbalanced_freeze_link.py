@@ -235,3 +235,86 @@ def test_deeply_nested_pinned_receipt_fails_with_controlled_error(tmp_path):
     pinned = hashlib.sha256(source.read_bytes()).hexdigest()
     with pytest.raises(ValueError, match="pair receipt JSON nesting"):
         link._pinned_pair(source, pinned)
+
+
+def _original_preflight_paths(case):
+    return {
+        "canonical_preflight_receipt_path": (
+            case["canonical_receipt_root"] / "preflight_receipt.json"
+        ),
+        "reverse_preflight_receipt_path": (
+            case["reverse_receipt_root"] / "preflight_receipt.json"
+        ),
+    }
+
+
+def test_original_receipt_bytes_are_bound_to_frozen_copies(frozen_case, case):
+    result = link.verify_counterbalanced_freeze_link(
+        **frozen_case, **_original_preflight_paths(case)
+    )
+    assert result["original_preflight_receipts_byte_verified"] is True
+    assert result["blinding_key_used"] is False
+
+
+def test_existing_unpinned_call_makes_no_original_receipt_claim(frozen_case):
+    result = link.verify_counterbalanced_freeze_link(**frozen_case)
+    assert result["original_preflight_receipts_byte_verified"] is False
+
+
+def test_original_preflight_receipts_must_be_supplied_together(frozen_case, case):
+    paths = _original_preflight_paths(case)
+    with pytest.raises(ValueError, match="both original preflight receipt paths"):
+        link.verify_counterbalanced_freeze_link(
+            **frozen_case,
+            canonical_preflight_receipt_path=paths[
+                "canonical_preflight_receipt_path"
+            ],
+        )
+
+
+def test_swapped_original_receipts_fail_exact_byte_binding(frozen_case, case):
+    paths = _original_preflight_paths(case)
+    paths["canonical_preflight_receipt_path"], paths[
+        "reverse_preflight_receipt_path"
+    ] = paths["reverse_preflight_receipt_path"], paths[
+        "canonical_preflight_receipt_path"
+    ]
+    with pytest.raises(ValueError, match="original preflight receipt differs"):
+        link.verify_counterbalanced_freeze_link(**frozen_case, **paths)
+
+
+def test_modified_original_receipt_fails_even_with_same_json_fields(
+    frozen_case, case
+):
+    paths = _original_preflight_paths(case)
+    source = paths["canonical_preflight_receipt_path"]
+    original = json.loads(source.read_text())
+    source.write_text(json.dumps(original, sort_keys=True, separators=(",", ":")))
+    with pytest.raises(ValueError, match="original preflight receipt differs"):
+        link.verify_counterbalanced_freeze_link(**frozen_case, **paths)
+
+
+def test_same_original_receipt_cannot_support_two_orders(frozen_case, case):
+    paths = _original_preflight_paths(case)
+    paths["reverse_preflight_receipt_path"] = paths[
+        "canonical_preflight_receipt_path"
+    ]
+    with pytest.raises(ValueError, match="distinct files"):
+        link.verify_counterbalanced_freeze_link(**frozen_case, **paths)
+
+
+def test_original_receipt_modified_mid_archive_audit_is_rejected(
+    frozen_case, case, monkeypatch
+):
+    paths = _original_preflight_paths(case)
+    original_verify = link.freeze_verify.verify_frozen_snapshot
+
+    def rewrite_original(*args, **kwargs):
+        result = original_verify(*args, **kwargs)
+        source = paths["reverse_preflight_receipt_path"]
+        source.write_bytes(source.read_bytes() + b" ")
+        return result
+
+    monkeypatch.setattr(link.freeze_verify, "verify_frozen_snapshot", rewrite_original)
+    with pytest.raises(ValueError, match="original preflight receipt changed"):
+        link.verify_counterbalanced_freeze_link(**frozen_case, **paths)

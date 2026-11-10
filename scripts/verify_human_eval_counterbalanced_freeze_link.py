@@ -100,12 +100,60 @@ def _pinned_pair(path: Path, independently_pinned_sha256: str):
     return data, pair
 
 
+def _capture_original_preflight_receipts(
+    pair: dict,
+    canonical_path: Path | None,
+    reverse_path: Path | None,
+) -> dict:
+    """Optionally bind original pre-freeze receipt bytes to archived copies.
+
+    The freezer normalizes only submitted-file names in retained receipt
+    copies. The original bytes must match hashes from the pinned pair record.
+    """
+    if canonical_path is None and reverse_path is None:
+        return {}
+    _require(
+        canonical_path is not None and reverse_path is not None,
+        "both original preflight receipt paths are required together",
+    )
+    paths = {"canonical": Path(canonical_path), "reverse": Path(reverse_path)}
+    try:
+        _require(
+            not paths["canonical"].samefile(paths["reverse"]),
+            "original preflight receipts must be distinct files",
+        )
+    except FileNotFoundError:
+        pass
+
+    observed = {}
+    for order, path in paths.items():
+        raw = freeze._capture_regular_input(
+            path, label=f"{order} original preflight receipt",
+            max_bytes=MAX_RECEIPT_BYTES,
+        )
+        _require(
+            hashlib.sha256(raw).hexdigest()
+            == pair["submissions"][order]["preflight_receipt_sha256"],
+            f"{order} original preflight receipt differs from pinned pair bytes",
+        )
+        original = _object(raw, f"{order} original preflight receipt")
+        _require(
+            type(original.get("submission")) is dict
+            and type(original["submission"].get("name")) is str,
+            f"{order} original preflight receipt has invalid submission structure",
+        )
+        observed[order] = (path, raw, original)
+    return observed
+
+
 def verify_counterbalanced_freeze_link(
     *,
     freeze_root: Path,
     pair_receipt_path: Path,
     expected_pair_receipt_sha256: str,
     expected_n_reports: int = 40,
+    canonical_preflight_receipt_path: Path | None = None,
+    reverse_preflight_receipt_path: Path | None = None,
 ) -> dict:
     """Require exact pre-freeze submission hashes and orders in the verified archive."""
     _require(type(expected_n_reports) is int and expected_n_reports >= 2,
@@ -115,6 +163,9 @@ def verify_counterbalanced_freeze_link(
     prior_bytes, pair = _pinned_pair(pair_receipt_path, expected_pair_receipt_sha256)
     _require(pair["n_reports"] == expected_n_reports,
              "pair receipt report count disagrees with expected count")
+    original_preflights = _capture_original_preflight_receipts(
+        pair, canonical_preflight_receipt_path, reverse_preflight_receipt_path
+    )
     initial = freeze_verify._capture_freeze_inventory(freeze_root)
     verified = freeze_verify.verify_frozen_snapshot(
         freeze_root=freeze_root, use_retained_inputs=True
@@ -158,6 +209,17 @@ def verify_counterbalanced_freeze_link(
             freeze._capture_regular_input(stored_path, label=f"{order} retained receipt"),
             f"{order} retained receipt",
         )
+        if original_preflights:
+            original = original_preflights[order][2]
+            # Only the source filename is neutralized by the freeze producer.
+            # Preserve all other original receipt declarations exactly.
+            neutralized_original = json.loads(json.dumps(original))
+            neutralized_original["submission"]["name"] = f"{index:04d}.csv"
+            _require(
+                retained == neutralized_original,
+                f"{order} archived preflight differs from pinned original "
+                "after filename neutralization",
+            )
         submitted = retained.get("submission")
         _require(
             type(submitted) is dict
@@ -181,6 +243,14 @@ def verify_counterbalanced_freeze_link(
     ) == prior_bytes, "pair receipt changed during verification")
     _require(freeze_verify._capture_freeze_inventory(freeze_root) == initial,
              "freeze archive changed during verification")
+    for order, (path, original_bytes, _) in original_preflights.items():
+        _require(
+            freeze._capture_regular_input(
+                path, label=f"{order} original preflight receipt recheck",
+                max_bytes=MAX_RECEIPT_BYTES,
+            ) == original_bytes,
+            f"{order} original preflight receipt changed during verification",
+        )
     return {
         "schema_version": 1,
         "study_id": "budget-main-v1",
@@ -188,6 +258,7 @@ def verify_counterbalanced_freeze_link(
         "n_reports": expected_n_reports,
         "n_raw_submissions": 2,
         "both_presentation_orders_preserved": True,
+        "original_preflight_receipts_byte_verified": bool(original_preflights),
         "blinding_key_used": False,
         "pair_receipt_sha256": expected_pair_receipt_sha256,
         "freeze_manifest_sha256": hashlib.sha256(raw_manifest).hexdigest(),
@@ -204,12 +275,16 @@ def main() -> int:
     parser.add_argument("--pair-receipt", required=True, type=Path)
     parser.add_argument("--pair-receipt-sha256", required=True)
     parser.add_argument("--expected-n-reports", default=40, type=int)
+    parser.add_argument("--canonical-original-preflight-receipt", type=Path)
+    parser.add_argument("--reverse-original-preflight-receipt", type=Path)
     args = parser.parse_args()
     try:
         result = verify_counterbalanced_freeze_link(
             freeze_root=args.freeze_root, pair_receipt_path=args.pair_receipt,
             expected_pair_receipt_sha256=args.pair_receipt_sha256,
             expected_n_reports=args.expected_n_reports,
+            canonical_preflight_receipt_path=args.canonical_original_preflight_receipt,
+            reverse_preflight_receipt_path=args.reverse_original_preflight_receipt,
         )
     except (ValueError, OSError) as exc:
         parser.exit(1, f"COUNTERBALANCED FREEZE LINK: FAIL: {exc}\n")

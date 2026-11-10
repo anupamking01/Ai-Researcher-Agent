@@ -52,3 +52,35 @@ the exact size boundary, concurrent growth and invalid caller limits.
 This is a resource-safety and integrity safeguard on a future coordinator
 receipt, not evidence that human ratings were collected or that historical
 treatment reports were authenticated.
+
+## Optional exact original preflight-receipt custody
+
+The version-2 pair receipt binds SHA-256 hashes of **both original pre-freeze
+preflight receipt JSON files**, but the frozen archive intentionally stores
+filename-neutralized copies. A matching archived receipt alone cannot prove
+the exact original JSON bytes without examining those retained source files.
+
+When both original receipts are available, run the ordinary freeze-link command
+with the two additional options:
+
+~~~bash
+  --canonical-original-preflight-receipt /retained/canonical/preflight_receipt.json \
+  --reverse-original-preflight-receipt /retained/reverse/preflight_receipt.json
+~~~
+
+Both paths must be supplied together. The audit captures each original under
+a 64-KiB regular-file limit, checks its **exact byte hash** against the
+independently pinned pair receipt, and requires all original receipt fields
+to match the archived counterpart after **only** replacing the intentionally
+neutralized submission filename (e.g., `0001.csv`). A final recheck detects
+observable mutations during the intervening archive verification window.
+The returned `original_preflight_receipts_byte_verified` is `true` only for
+two successfully verified originals; when not supplied it is explicitly
+`false`. The original source receipts are neither rewritten nor distributed.
+
+This closes a previously optional/unverified byte-continuity link, but it
+does not establish independent human identity, submission timestamps,
+eligibility, rating independence, or authentic custody of historical treatment
+reports and traces. Source fingerprints do not prevent transient changes
+fully reversed between observations, and caller-supplied evidence is not
+an external timestamp. All tests for this feature are synthetic.
