@@ -65,3 +65,26 @@ or generated. Pilot observations remain diagnostic, frozen automated
 designated-primary findings retain post-collection plan-timing qualifications,
 retrospective sensitivity findings remain exploratory, and human validation
 is pending original-source recovery and eligible annotators.
+
+
+## JSON structural and float-token resource bounds
+
+The same independent readiness reader now rejects JSON nested more than
+**64 array/object levels** and decimal/exponent number tokens longer than
+**128 characters**. This complements the existing 128-decimal-digit integer
+limit and 16 MiB per-input bound: a file below the byte cap can still contain
+pathologically deep JSON or a very long but numerically finite float token.
+Depth is checked with a linear preflight that ignores braces/brackets inside
+quoted strings, including escaped quotes and backslashes. Python's JSON
+decoder still performs the complete syntax and duplicate-key validation;
+malformed/deep structures fail with controlled errors rather than uncaught
+recursion errors. Exactly bounded finite numbers and normal nested receipts
+remain accepted. No historical observation, human score, or inference method
+was changed.
+
+`tests/test_human_reconciliation_readiness_json_structure_bounds.py` exercises
+depth-limit boundaries for arrays and objects, escaped quoted punctuation,
+floating-point token limits, normal syntax failures, and the preserved
+automated-analysis receipt. These tests use synthetic documents and retained
+automated bytes only; they are not new treatment, confirmatory, exploratory,
+or human-validation results.

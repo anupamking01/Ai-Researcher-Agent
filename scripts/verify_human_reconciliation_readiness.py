@@ -44,6 +44,10 @@ MAX_READINESS_INPUT_BYTES = 16 * 1024 * 1024
 # Prevent oversized JSON integer tokens from bypassing the per-file size bound
 # or causing float-conversion overflow in downstream numeric validation.
 MAX_READINESS_JSON_INTEGER_DIGITS = 128
+# Reconciliation receipts are bounded metadata, not arbitrary recursive JSON.
+# Bound float-token parsing and nesting as well as integer token conversion.
+MAX_READINESS_JSON_FLOAT_TOKEN_CHARS = 128
+MAX_READINESS_JSON_NESTING_DEPTH = 64
 
 
 def _require(ok, message):
@@ -176,6 +180,37 @@ def _capture_regular_inputs(paths):
                 _require_bound_input_stable(snapshot, label=label)
 
 
+def _check_json_nesting_bound(document: str, label: str) -> None:
+    """Bound JSON array/object nesting without counting punctuation in strings.
+
+    This single linear scan is a resource preflight, not a replacement for
+    json.loads syntax validation. Escaped quotes and backslashes must not let
+    braces inside a JSON string masquerade as structural delimiters.
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    for char in document:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char in "[{":
+            depth += 1
+            if depth > MAX_READINESS_JSON_NESTING_DEPTH:
+                raise ValueError(
+                    f"{label} exceeds {MAX_READINESS_JSON_NESTING_DEPTH}-level "
+                    "JSON nesting limit"
+                )
+        elif char in "]}" and depth > 0:
+            depth -= 1
+
+
 def _load(content, label):
     def unique_object_pairs(pairs):
         value = {}
@@ -186,6 +221,8 @@ def _load(content, label):
         return value
 
     def finite_json_float(token):
+        if len(token) > MAX_READINESS_JSON_FLOAT_TOKEN_CHARS:
+            raise ValueError(f"{label} contains oversized JSON float token")
         value = float(token)
         if not math.isfinite(value):
             raise ValueError(f"{label} contains non-finite JSON numbers (float overflow)")
@@ -202,14 +239,16 @@ def _load(content, label):
         raise ValueError(f"{label} contains non-finite JSON numbers ({token})")
 
     try:
+        document = content.decode("utf-8")
+        _check_json_nesting_bound(document, label)
         value = json.loads(
-            content.decode("utf-8"),
+            document,
             object_pairs_hook=unique_object_pairs,
             parse_float=finite_json_float,
             parse_int=bounded_json_int,
             parse_constant=reject_json_constant,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ValueError(f"{label} is not valid UTF-8 JSON") from exc
     _require(isinstance(value, dict), f"{label} must contain an object")
     return value
