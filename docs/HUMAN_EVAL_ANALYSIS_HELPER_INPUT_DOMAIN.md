@@ -23,9 +23,18 @@ without satisfying the frozen input contract.
   annotator-identity check, and rejects duplicate annotator/blind-ID pairs
   instead of weighting the repeated row.
 * `_paired_summary` accepts only finite numeric report-level means in the
-  closed interval [1, 5] and an integer bootstrap seed. Fractional means
-  (from averaging independent rubric scores) and wholly missing dimensions
-  retain the already-frozen behavior.
+  closed interval [1, 5] **on the integer/half-integer lattice** and an integer
+  bootstrap seed. For the frozen two-rater protocol, every observed report mean
+  must average one or two independent integer 1–5 ratings; quarter-point values
+  are impossible. No rounding or tolerance permits off-lattice inputs.
+  Wholly missing dimensions retain the already-frozen behavior.
+* `report_scores` rejects a third distinct canonical annotator identity across
+  the direct rating set, even if those three pseudonyms appear on different
+  reports. Exactly two global annotators are predeclared for treatment-level
+  analysis; the separate *blinded agreement diagnostic* still supports
+  reporting multi-rater data pending a prospectively declared method.
+  Direct callers may analyze a partial one- or two-rater input for diagnostics,
+  but must not mistake this helper for the independent full-freeze coverage gate.
 
 These controls are defense in depth for library/direct-helper use. They
 cannot authenticate human raters or replace the coordinator's complete

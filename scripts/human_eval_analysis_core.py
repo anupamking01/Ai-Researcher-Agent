@@ -932,11 +932,19 @@ def _paired_summary(left, right, *, seed):
         for index, value in enumerate(values):
             if (
                 type(value) not in (int, float)
-                or not math.isfinite(value)
                 or not 1 <= value <= 5
+                or not math.isfinite(value)
             ):
                 raise ValueError(
                     f"{label} report score {index} must be finite and within the 1–5 rubric"
+                )
+            # The frozen analysis averages at most two integer 1–5 ratings.
+            # A report-level mean can only be an integer or a half-integer.
+            # Reject fabricated quarter steps rather than rounding them into
+            # apparently valid paired human effects.
+            if value * 2 != int(value * 2):
+                raise ValueError(
+                    f"{label} report score {index} must lie on the frozen half-point rubric lattice"
                 )
     if type(seed) is not int:
         raise ValueError("paired bootstrap seed must be an integer")
@@ -1040,6 +1048,7 @@ def report_scores(rows):
     freeze._validate_annotator_identity_spellings(rows)
     grouped = {}
     seen = set()
+    independent_raters = set()
     for row in rows:
         identity = (freeze._annotator_identity_key(row["annotator_id"]), row["blind_id"])
         if identity in seen:
@@ -1049,7 +1058,16 @@ def report_scores(rows):
             )
         seen.add(identity)
         _validate_direct_rating_row(row)
+        independent_raters.add(identity[0])
         grouped.setdefault(row["blind_id"], []).append(row)
+    # The pre-unblinding agreement helper may diagnose more than two raters,
+    # but this *treatment-level* helper implements the frozen exactly-two-rater
+    # analysis. A third pseudonym must not produce a three-rater mean or
+    # silently change the unit and numerical domain of the paired contrasts.
+    if len(independent_raters) > 2:
+        raise ValueError(
+            "direct report scores exceed the frozen two-annotator analysis plan"
+        )
     scores, counts = {}, {}
     for blind_id, items in grouped.items():
         for field in DIMS:
