@@ -72,6 +72,82 @@ def _pin_receipt_directory(path: Path) -> tuple:
     return snapshot.st_dev, snapshot.st_ino, snapshot.st_mtime_ns, snapshot.st_ctime_ns
 
 
+
+def _snapshot_governing_coordinator_sources(
+    packet_root: Path, task_manifest_path: Path, annotator_guide_path: Path
+) -> tuple[dict[str, Path], dict[str, tuple], dict[str, str]]:
+    """Pin live coordinator inputs across the entire submission-pair audit.
+
+    Each per-order handoff already checks these sources while it runs. The
+    submission phase must not certify that earlier proof after the sources
+    have changed. Only digests are retained; no blinding key is disclosed.
+    """
+    packet_root = Path(packet_root)
+    paths = {
+        "coordinator root": packet_root,
+        "task manifest": Path(task_manifest_path),
+        "annotator guide": Path(annotator_guide_path),
+    }
+    paths.update({
+        f"coordinator {name}": packet_root / name
+        for name in exporter.COORDINATOR_ARTIFACTS
+    })
+
+    def identities() -> dict[str, tuple]:
+        return {
+            label: exporter._evidence_stat_signature(path)
+            for label, path in paths.items()
+        }
+
+    try:
+        original = identities()
+        digests = {
+            label: hashlib.sha256(
+                exporter._regular_bytes(
+                    path, label=f"counterbalanced pair governing source {label}"
+                )
+            ).hexdigest()
+            for label, path in paths.items()
+            if label != "coordinator root"
+        }
+        if identities() != original:
+            raise ValueError("governing coordinator source changed during capture")
+    except OSError as exc:
+        raise ValueError("governing coordinator source unavailable during pair verification") from exc
+    return paths, original, digests
+
+
+def _require_governing_coordinator_sources_unchanged(
+    observed: tuple[dict[str, Path], dict[str, tuple], dict[str, str]]
+) -> None:
+    paths, original, digests = observed
+
+    def check_identities() -> None:
+        for label, path in paths.items():
+            try:
+                current = exporter._evidence_stat_signature(path)
+            except OSError as exc:
+                raise ValueError(
+                    f"{label} unavailable during pair verification"
+                ) from exc
+            if current != original[label]:
+                raise ValueError(f"{label} changed during pair verification")
+
+    check_identities()
+    for label, expected in digests.items():
+        try:
+            actual = hashlib.sha256(
+                exporter._regular_bytes(
+                    paths[label], label=f"counterbalanced pair source recheck {label}"
+                )
+            ).hexdigest()
+        except OSError as exc:
+            raise ValueError(f"{label} unavailable during pair verification") from exc
+        if actual != expected:
+            raise ValueError(f"{label} bytes changed during pair verification")
+    check_identities()
+
+
 @contextmanager
 def _retained_pair_window(
     canonical_submission: Path,
@@ -80,6 +156,9 @@ def _retained_pair_window(
     reverse_receipt_root: Path,
     canonical_bundle_root: Path,
     reverse_bundle_root: Path,
+    packet_root: Path,
+    task_manifest_path: Path,
+    annotator_guide_path: Path,
 ):
     """Detect observable rewrites/replacements across the serial two-order audit.
 
@@ -108,9 +187,13 @@ def _retained_pair_window(
     bundle_sources = handoff._snapshot_bundle_pair_sources(
         Path(canonical_bundle_root), Path(reverse_bundle_root)
     )
+    governing_sources = _snapshot_governing_coordinator_sources(
+        packet_root, task_manifest_path, annotator_guide_path
+    )
     original = snapshot()
     yield
     handoff._require_bundle_pair_sources_unchanged(bundle_sources)
+    _require_governing_coordinator_sources_unchanged(governing_sources)
     if snapshot() != original:
         raise ValueError(
             "counterbalanced submission/receipt sources changed during pair verification"
@@ -144,6 +227,7 @@ def verify_counterbalanced_submission_pair(
         canonical_submission, reverse_submission,
         canonical_receipt_root, reverse_receipt_root,
         canonical_root, reverse_root,
+        packet_root, task_manifest_path, annotator_guide_path,
     ):
         verified_handoff = handoff.verify_counterbalanced_handoff(
             packet_root=packet_root,

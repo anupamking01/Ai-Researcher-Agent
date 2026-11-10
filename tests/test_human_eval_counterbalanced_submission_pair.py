@@ -268,3 +268,69 @@ def test_first_bundle_same_bytes_replaced_during_reverse_preflight_fails(case, m
     monkeypatch.setattr(pair.preflight, "verify_preflight_receipt", replace_first_bundle)
     with pytest.raises(ValueError, match="canonical (?:bundle root|ratings_template.csv) changed during combined paired handoff"):
         pair.verify_counterbalanced_submission_pair(**case)
+
+
+@pytest.mark.parametrize("filename", exporter.COORDINATOR_ARTIFACTS)
+def test_coordinator_source_modified_during_reverse_preflight_fails(
+    case, monkeypatch, filename
+):
+    """A valid handoff cannot certify original coordinator bytes changed later."""
+    original = pair.preflight.verify_preflight_receipt
+
+    def modify_after_handoff(*, receipt_root, rating_path, annotator_bundle_root):
+        result = original(
+            receipt_root=receipt_root, rating_path=rating_path,
+            annotator_bundle_root=annotator_bundle_root,
+        )
+        if Path(annotator_bundle_root) == case["reverse_root"]:
+            target = case["packet_root"] / filename
+            target.write_bytes(target.read_bytes() + b"\\n")
+        return result
+
+    monkeypatch.setattr(pair.preflight, "verify_preflight_receipt", modify_after_handoff)
+    with pytest.raises(ValueError, match="coordinator .* changed during pair verification"):
+        pair.verify_counterbalanced_submission_pair(**case)
+
+
+def test_governing_task_manifest_modified_during_reverse_preflight_fails(
+    case, monkeypatch
+):
+    """The task manifest verified at handoff must remain the same generation."""
+    original = pair.preflight.verify_preflight_receipt
+
+    def modify_task_manifest(*, receipt_root, rating_path, annotator_bundle_root):
+        result = original(
+            receipt_root=receipt_root, rating_path=rating_path,
+            annotator_bundle_root=annotator_bundle_root,
+        )
+        if Path(annotator_bundle_root) == case["reverse_root"]:
+            target = case["task_manifest_path"]
+            target.write_bytes(target.read_bytes() + b"\\n")
+        return result
+
+    monkeypatch.setattr(pair.preflight, "verify_preflight_receipt", modify_task_manifest)
+    with pytest.raises(ValueError, match="task manifest changed during pair verification"):
+        pair.verify_counterbalanced_submission_pair(**case)
+
+
+def test_coordinator_secret_same_bytes_inode_swap_fails(case, monkeypatch):
+    """A replaced private key file must not inherit a source-custody claim."""
+    original = pair.preflight.verify_preflight_receipt
+
+    def swap_secret(*, receipt_root, rating_path, annotator_bundle_root):
+        result = original(
+            receipt_root=receipt_root, rating_path=rating_path,
+            annotator_bundle_root=annotator_bundle_root,
+        )
+        if Path(annotator_bundle_root) == case["reverse_root"]:
+            source = case["packet_root"] / "blinding_key.csv"
+            previous = source.with_name("superseded-blinding-key.csv")
+            previous_mode = source.stat().st_mode & 0o777
+            source.rename(previous)
+            source.write_bytes(previous.read_bytes())
+            source.chmod(previous_mode)
+        return result
+
+    monkeypatch.setattr(pair.preflight, "verify_preflight_receipt", swap_secret)
+    with pytest.raises(ValueError, match="coordinator blinding_key.csv changed during pair verification"):
+        pair.verify_counterbalanced_submission_pair(**case)

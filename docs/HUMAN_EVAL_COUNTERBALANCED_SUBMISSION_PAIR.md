@@ -75,3 +75,28 @@ independent evidence authentication, proof of annotator independence, or
 authorization to distribute or unblind packets. The original source-archive
 recovery and real-human evaluation gates remain blocked; no experimental or
 human-evaluation outcomes are changed.
+
+
+## Cross-stage coordinator and governing-input custody
+
+The original coordinator packet's four artifacts (including the private
+blinding key), frozen task manifest, and frozen annotator guide are verified
+during each handoff-source check. Previously, these original sources could
+change **after** handoff verification while the two returned submissions were
+being checked, without altering either annotator-facing bundle or the retained
+preflight receipts. A stale coordinator-source claim could then be returned.
+
+The submission-pair verifier now records source inode/metadata signatures and
+bounded SHA-256 digests for those exact governing inputs before the serial audit,
+then rechecks identities and bytes after both order-specific preflights. It
+retains only source digests in memory, does not expose the private key, and
+does not change, unblind, or recreate any evidence. Synthetic regressions
+modify every coordinator artifact and the task manifest after the handoff;
+another swaps the private blinding-key file for identical bytes under a
+different inode. All must fail closed.
+
+This observational check does **not** authenticate original treatment
+reports/traces, track filesystem mutations that are fully restored between
+observations, implement atomic locking, or establish actual annotator identity,
+eligibility, independence, or agreement. It is a pre-freeze custody guard,
+not new human-evaluation evidence or a change to frozen analysis.
