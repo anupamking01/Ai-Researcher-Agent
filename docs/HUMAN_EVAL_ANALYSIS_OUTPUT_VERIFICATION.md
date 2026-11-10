@@ -323,3 +323,29 @@ ratings remains mandatory for human-validation claims. Regression cases
 use rehashed synthetic bundles and no actual human observations. No rubric,
 analysis procedure, primary automated result, pilot classification, or
 exploratory inference is changed.
+
+
+## Shared report identity across adjacent human-evaluation contrasts
+
+Each task/variant/dimension denotes **one** human-rated report. The same D6
+report participates in both retrieval and planning contrasts, and the same
+P6 report participates in both planning and verification contrasts. A hash-
+consistent publication could previously report per-contrast task differences
+and arm means that were individually feasible, yet required a shared report
+to take **different incompatible scores** in adjacent comparisons.
+
+The standalone verifier now propagates attainable report scores on the exact
+doubled-integer 1–5 rubric lattice across D3 → D6 → P6 → P6V, separately
+for every frozen task and each predeclared dimension. One original annotator
+permits integer report scores; two permit half-integers. A missing report
+breaks the chain without imputing a score. If no common assignment can explain
+all adjacent reported task effects, publication verification fails even when
+each pair separately passes its own score/mean/bootstrap checks.
+
+This is a necessary **cross-contrast internal-consistency** check, not an
+allocation of the published raw-score histogram to task cells, proof of source
+rating provenance, or genuine human validation. Exact task-level report
+scores still require independent recomputation from authenticated retained
+ratings. Synthetic regressions exercise both reachable boundary chains,
+impossible but locally feasible effects, missingness, and a fully rehashed
+publication; no frozen estimates or experiments were altered.

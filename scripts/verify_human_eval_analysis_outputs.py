@@ -1136,6 +1136,64 @@ def _validate_paired_effect_arithmetic(payload: dict) -> None:
                 )
 
 
+
+def _validate_cross_contrast_task_score_feasibility(payload: dict) -> None:
+    """Require each report's score to be reusable across adjacent contrasts.
+
+    Each task/variant/dimension denotes one report, so a shared D6 or P6
+    report cannot take a different score in its two adjacent contrasts.
+    Carry attainable doubled report scores along the fixed contrast chain,
+    using integer scores for one rater and half-integers for two. Missing
+    reports break the chain rather than being imputed. This is a necessary
+    published-summary constraint, NOT reconstruction of individual ratings.
+    """
+    arms = (core.CONTRASTS[0][0],) + tuple(
+        right for _, right, _ in core.CONTRASTS
+    )
+    for field in core.DIMS:
+        for task in payload["task_ids"]:
+            counts_by_arm = {}
+            for left, right, contrast in core.CONTRASTS:
+                groups = payload["paired_contrasts"][contrast][field][
+                    "rater_coverage"
+                ]["task_ids_by_rater_pair"]
+                # The earlier coverage gate guarantees a unique category for
+                # every frozen task and agrees on repeated arm denominators.
+                category = next(
+                    cell for cell in core.RATER_COVERAGE_CELLS
+                    if task in groups[cell]
+                )
+                left_count, right_count = map(int, category.split("/"))
+                counts_by_arm[left] = left_count
+                counts_by_arm[right] = right_count
+
+            attainable = None
+            for index, arm in enumerate(arms):
+                count = counts_by_arm[arm]
+                if count == 0:
+                    # Unscored report: no hidden score or effect is inferred.
+                    attainable = None
+                    continue
+                scores = set(range(2, 11, 2 if count == 1 else 1))
+                if attainable is not None:
+                    contrast = core.CONTRASTS[index - 1][2]
+                    difference = payload["paired_contrasts"][contrast][field][
+                        "task_differences"
+                    ][task]
+                    doubled_difference = int(2 * difference)
+                    scores = {
+                        score for score in scores
+                        if score - doubled_difference in attainable
+                    }
+                if not scores:
+                    raise ValueError(
+                        "analysis cross-contrast task-score feasibility mismatch: "
+                        f"{task}/{field} has no single admissible report-score "
+                        "assignment across shared treatment arms"
+                    )
+                attainable = scores
+
+
 def _validate_blinded_agreement_arithmetic(payload: dict) -> None:
     """Audit published ordinal agreement numbers without inferring raw ratings.
 
@@ -1228,6 +1286,7 @@ def _validate_analysis_identity(payload: dict, source_snapshots=None) -> None:
     _validate_rating_denominator_lineage(payload)
     _validate_blinded_agreement_arithmetic(payload)
     _validate_paired_effect_arithmetic(payload)
+    _validate_cross_contrast_task_score_feasibility(payload)
 
     verification = payload.get("verification")
     if not isinstance(verification, dict):

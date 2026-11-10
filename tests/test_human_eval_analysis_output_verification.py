@@ -1926,3 +1926,78 @@ def test_standalone_verifier_rejects_rehashed_unattainable_report_median(tmp_pat
     _rewrite_and_rehash(output, payload)
     with pytest.raises(ValueError, match="report median cannot arise jointly"):
         verify.verify_bundle(output)
+
+
+@pytest.mark.parametrize(
+    ("task_a_effects", "attainable"),
+    [
+        ((1.0, 1.0, 1.0), True),
+        ((2.0, 1.0, 1.0), True),    # report scores 1 -> 3 -> 4 -> 5
+        ((-1.0, -2.0, -1.0), True),  # report scores 5 -> 4 -> 2 -> 1
+        ((4.0, 0.0, 0.0), True),
+        ((4.0, 4.0, 4.0), False),  # each pair is feasible alone
+        ((2.0, 2.0, 1.0), False),  # total chain exceeds 1-5 support
+        ((-2.0, -2.0, -1.0), False),
+        ((4.0, 0.5, 0.0), False),
+    ],
+)
+def test_cross_contrast_shared_task_scores_must_be_jointly_attainable(
+    task_a_effects, attainable
+):
+    """Synthetic chain; all individual task effects lie on the valid rubric lattice."""
+    payload = _payload()
+    for (_, _, contrast), effect in zip(core.CONTRASTS, task_a_effects):
+        payload["paired_contrasts"][contrast][core.DIMS[0]][
+            "task_differences"
+        ]["task-a"] = effect
+    if attainable:
+        verify._validate_cross_contrast_task_score_feasibility(payload)
+    else:
+        with pytest.raises(ValueError, match="cross-contrast task-score feasibility"):
+            verify._validate_cross_contrast_task_score_feasibility(payload)
+
+
+def test_cross_contrast_missing_report_breaks_chain_without_imputation():
+    """A genuinely missing P6 report cannot constrain the later P6V score."""
+    payload = _payload()
+    field = core.DIMS[0]
+    for contrast, category in (
+        (core.CONTRASTS[1][2], "2/0"),
+        (core.CONTRASTS[2][2], "0/2"),
+    ):
+        block = payload["paired_contrasts"][contrast][field]
+        coverage = block["rater_coverage"]
+        coverage["task_ids_by_rater_pair"]["2/2"].remove("task-a")
+        coverage["task_ids_by_rater_pair"][category].append("task-a")
+        coverage["count_by_rater_pair"]["2/2"] -= 1
+        coverage["count_by_rater_pair"][category] += 1
+        del block["task_differences"]["task-a"]
+    # D3 -> D6 can jump from 1 to 5, then P6 is missing.
+    payload["paired_contrasts"][core.CONTRASTS[0][2]][field][
+        "task_differences"
+    ]["task-a"] = 4.0
+    verify._validate_cross_contrast_task_score_feasibility(payload)
+
+
+def test_rehashed_publication_rejects_incompatible_shared_arm_task_effects(tmp_path):
+    """Every contrast can pass in isolation yet no common 4-arm score path exists."""
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    payload = _payload()
+    field = core.DIMS[0]
+    for _, _, contrast in core.CONTRASTS:
+        block = payload["paired_contrasts"][contrast][field]
+        # Two synthetic tasks: effects [4, 0], individually attainable via
+        # left report scores [1, 2] and right scores [5, 2].
+        block["task_differences"]["task-a"] = 4.0
+        block.update(
+            left_mean=1.5,
+            right_mean=3.5,
+            mean_difference=2.0,
+            median_difference=2.0,
+            paired_dz=2 ** -0.5,
+            bootstrap_95pct_ci_mean_difference=[0.0, 4.0],
+        )
+    _rewrite_and_rehash(output, payload)
+    with pytest.raises(ValueError, match="cross-contrast task-score feasibility"):
+        verify.verify_bundle(output)
