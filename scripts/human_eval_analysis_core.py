@@ -939,8 +939,11 @@ def _paired_summary(left, right, *, seed, task_ids=None):
     # An optional ID-free direct call retains backward compatibility, but
     # cannot certify uniqueness (only the ten-pair upper bound).
     if task_ids is not None:
-        if isinstance(task_ids, (str, bytes)):
-            raise ValueError("paired task IDs must be an iterable of distinct task IDs")
+        # Positional score vectors cannot be paired reliably with an
+        # unordered container (or a mapping whose keys are not an explicit
+        # aligned sequence). Require an ordered ID stream instead.
+        if isinstance(task_ids, (str, bytes, dict, set, frozenset)):
+            raise ValueError("paired task IDs must be an ordered iterable of distinct task IDs")
         try:
             ids = tuple(islice(iter(task_ids), MAX_FROZEN_HUMAN_TASK_PAIRS + 1))
         except TypeError as exc:
@@ -951,6 +954,14 @@ def _paired_summary(left, right, *, seed, task_ids=None):
             or len(set(ids)) != len(ids)
         ):
             raise ValueError("paired task IDs must uniquely identify each aligned frozen task")
+        # Finite seeded bootstrap resampling is sensitive to vector position:
+        # reordering the same task pairs can produce a different Monte Carlo
+        # percentile CI. Canonicalize by frozen task identity, moving both
+        # score vectors together, before any bootstrap draw. Production
+        # analyze() already supplies sorted IDs, so frozen results are intact.
+        order = sorted(range(len(ids)), key=lambda index: ids[index])
+        left = [left[index] for index in order]
+        right = [right[index] for index in order]
     # The analysis unit is a report mean of observed 1–5 scores. This also
     # guards direct/offline helper callers that bypass the ratings freeze.
     for label, values in (("left", left), ("right", right)):
