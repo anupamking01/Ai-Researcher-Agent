@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import re
+import stat
 from pathlib import Path
 
 from scripts import freeze_human_eval_ratings as freeze
@@ -46,12 +47,40 @@ def _digest(value) -> bool:
     return type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
 
+def _capture_receipt_identity(path: Path, *, label: str) -> tuple[bytes, tuple]:
+    """Pin bounded receipt bytes *and* source-file identity across audit stages.
+
+    Two separately valid byte captures can miss a same-byte inode replacement
+    or an intervening rename of the containing directory. Observe the parent
+    and file before and after the descriptor/path-safe bounded capture.
+    """
+    path = Path(path)
+
+    def identity() -> tuple:
+        parent = path.parent.lstat()
+        source = path.lstat()
+        _require(
+            stat.S_ISDIR(parent.st_mode) and stat.S_ISREG(source.st_mode),
+            f"{label} must be a regular file under a regular directory",
+        )
+        return (
+            parent.st_dev, parent.st_ino,
+            source.st_dev, source.st_ino, source.st_size,
+            source.st_mtime_ns, source.st_ctime_ns,
+        )
+
+    before = identity()
+    data = freeze._capture_regular_input(
+        path, label=label, max_bytes=MAX_RECEIPT_BYTES
+    )
+    _require(identity() == before, f"{label} changed during source capture")
+    return data, before
+
+
 def _pinned_pair(path: Path, independently_pinned_sha256: str):
     _require(_digest(independently_pinned_sha256),
              "independent pair receipt SHA-256 must be lowercase 64-hex")
-    data = freeze._capture_regular_input(
-        path, label="pair receipt", max_bytes=MAX_RECEIPT_BYTES
-    )
+    data, source_identity = _capture_receipt_identity(path, label="pair receipt")
     _require(len(data) <= MAX_RECEIPT_BYTES, "pair receipt exceeds resource bound")
     _require(hashlib.sha256(data).hexdigest() == independently_pinned_sha256,
              "pair receipt does not match independent SHA-256")
@@ -97,7 +126,7 @@ def _pinned_pair(path: Path, independently_pinned_sha256: str):
         != submissions["reverse"]["submission_sha256"],
         "pair must represent distinct submitted bytes",
     )
-    return data, pair
+    return data, pair, source_identity
 
 
 def _capture_original_preflight_receipts(
@@ -127,9 +156,8 @@ def _capture_original_preflight_receipts(
 
     observed = {}
     for order, path in paths.items():
-        raw = freeze._capture_regular_input(
-            path, label=f"{order} original preflight receipt",
-            max_bytes=MAX_RECEIPT_BYTES,
+        raw, source_identity = _capture_receipt_identity(
+            path, label=f"{order} original preflight receipt"
         )
         _require(
             hashlib.sha256(raw).hexdigest()
@@ -142,7 +170,7 @@ def _capture_original_preflight_receipts(
             and type(original["submission"].get("name")) is str,
             f"{order} original preflight receipt has invalid submission structure",
         )
-        observed[order] = (path, raw, original)
+        observed[order] = (path, raw, original, source_identity)
     return observed
 
 
@@ -160,7 +188,9 @@ def verify_counterbalanced_freeze_link(
              "expected report count must be an integer >= 2")
     freeze_root = Path(freeze_root)
     pair_receipt_path = Path(pair_receipt_path)
-    prior_bytes, pair = _pinned_pair(pair_receipt_path, expected_pair_receipt_sha256)
+    prior_bytes, pair, pair_identity = _pinned_pair(
+        pair_receipt_path, expected_pair_receipt_sha256
+    )
     _require(pair["n_reports"] == expected_n_reports,
              "pair receipt report count disagrees with expected count")
     original_preflights = _capture_original_preflight_receipts(
@@ -237,18 +267,21 @@ def verify_counterbalanced_freeze_link(
     _require(observed == set(ORDERS), "both presentation orders not archived")
     _require(packet.get("sha256") == canonical_packet,
              "frozen governing packet differs from canonical distribution")
-    _require(freeze._capture_regular_input(
-        pair_receipt_path, label="pair receipt recheck",
-        max_bytes=MAX_RECEIPT_BYTES,
-    ) == prior_bytes, "pair receipt changed during verification")
+    pair_recheck, pair_recheck_identity = _capture_receipt_identity(
+        pair_receipt_path, label="pair receipt recheck"
+    )
+    _require(
+        pair_recheck == prior_bytes and pair_recheck_identity == pair_identity,
+        "pair receipt changed during verification",
+    )
     _require(freeze_verify._capture_freeze_inventory(freeze_root) == initial,
              "freeze archive changed during verification")
-    for order, (path, original_bytes, _) in original_preflights.items():
+    for order, (path, original_bytes, _, original_identity) in original_preflights.items():
+        rechecked, rechecked_identity = _capture_receipt_identity(
+            path, label=f"{order} original preflight receipt recheck"
+        )
         _require(
-            freeze._capture_regular_input(
-                path, label=f"{order} original preflight receipt recheck",
-                max_bytes=MAX_RECEIPT_BYTES,
-            ) == original_bytes,
+            rechecked == original_bytes and rechecked_identity == original_identity,
             f"{order} original preflight receipt changed during verification",
         )
     return {

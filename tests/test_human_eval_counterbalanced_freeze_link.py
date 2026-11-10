@@ -318,3 +318,51 @@ def test_original_receipt_modified_mid_archive_audit_is_rejected(
     monkeypatch.setattr(link.freeze_verify, "verify_frozen_snapshot", rewrite_original)
     with pytest.raises(ValueError, match="original preflight receipt changed"):
         link.verify_counterbalanced_freeze_link(**frozen_case, **paths)
+
+
+@pytest.mark.parametrize("source", ["pair", "canonical", "reverse"])
+def test_same_byte_receipt_replacement_during_freeze_audit_is_rejected(
+    frozen_case, case, monkeypatch, source
+):
+    """Byte equality alone must not certify continuity of the retained inode."""
+    paths = _original_preflight_paths(case)
+    receipt_path = (
+        frozen_case["pair_receipt_path"]
+        if source == "pair"
+        else paths[f"{source}_preflight_receipt_path"]
+    )
+    original_verify = link.freeze_verify.verify_frozen_snapshot
+
+    def replace_with_identical_bytes(*args, **kwargs):
+        result = original_verify(*args, **kwargs)
+        replacement = receipt_path.with_name(receipt_path.name + ".same-bytes-replacement")
+        replacement.write_bytes(receipt_path.read_bytes())
+        replacement.replace(receipt_path)
+        return result
+
+    monkeypatch.setattr(
+        link.freeze_verify, "verify_frozen_snapshot", replace_with_identical_bytes
+    )
+    with pytest.raises(ValueError, match="receipt changed during verification"):
+        link.verify_counterbalanced_freeze_link(**frozen_case, **paths)
+
+
+def test_same_bytes_receipt_metadata_rewrite_during_audit_is_rejected(
+    frozen_case, case, monkeypatch
+):
+    """An in-place metadata rewrite also breaks the observed custody window."""
+    source = _original_preflight_paths(case)["canonical_preflight_receipt_path"]
+    original_verify = link.freeze_verify.verify_frozen_snapshot
+
+    def touch_source(*args, **kwargs):
+        result = original_verify(*args, **kwargs)
+        prior = source.stat()
+        import os
+        os.utime(source, ns=(prior.st_atime_ns, prior.st_mtime_ns + 1_000_000_000))
+        return result
+
+    monkeypatch.setattr(link.freeze_verify, "verify_frozen_snapshot", touch_source)
+    with pytest.raises(ValueError, match="original preflight receipt changed during"):
+        link.verify_counterbalanced_freeze_link(
+            **frozen_case, **_original_preflight_paths(case)
+        )

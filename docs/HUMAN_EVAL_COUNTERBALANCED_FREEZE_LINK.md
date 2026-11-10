@@ -84,3 +84,25 @@ eligibility, rating independence, or authentic custody of historical treatment
 reports and traces. Source fingerprints do not prevent transient changes
 fully reversed between observations, and caller-supplied evidence is not
 an external timestamp. All tests for this feature are synthetic.
+
+## Receipt source identity across the verification window
+
+When the optional original preflight receipts are supplied, the link now
+preserves **both their exact bytes and their observed file/parent-directory
+identities** from first capture through final recheck. The independently
+pinned pair receipt receives the same protection even when original receipts
+are not supplied. Byte equality alone was insufficient: replacing a receipt
+with a distinct inode containing identical JSON during the blinded-freeze
+audit previously passed both hash and end-of-window byte checks.
+
+The bounded 64-KiB descriptor-based capture now also observes the immediate
+parent directory device/inode and each receipt's device/inode, size, mtime
+and ctime, checking that observation on both sides of each capture and again
+at the end of verification. A visible same-byte file replacement, parent
+replacement or metadata rewrite therefore fails closed. The historical
+pair schema, optional original-receipt behavior, rating values, statistical
+methods and published results are unchanged. Synthetic tests exercise
+byte-identical pair/canonical/reverse replacements and a same-byte metadata
+rewrite. This is an **observational** custody check, not a filesystem lock,
+external timestamp, proof of annotator identity or independent source archive;
+changes completely reversed between observations may escape detection.
