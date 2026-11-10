@@ -868,6 +868,76 @@ def _validate_paired_effect_arithmetic(payload: dict) -> None:
                 )
 
 
+def _validate_blinded_agreement_arithmetic(payload: dict) -> None:
+    """Audit published ordinal agreement numbers without inferring raw ratings.
+
+    For n double-rated reports on the frozen integer 1-5 rubric, exact
+    agreements and the sum of absolute rater gaps must both be integers.
+    Each disagreement contributes an integer gap between 1 and 4. These
+    necessary constraints catch self-consistently rehashed impossible
+    reliability summaries; they cannot authenticate the original raters.
+    """
+    pair = payload["pre_unblinding_agreement"]["pairwise"][0]
+    for field in core.DIMS:
+        dimension = pair["dimensions"][field]
+        n = dimension["n_double_rated"]
+        exact = dimension.get("raw_exact_agreement")
+        mad = dimension.get("mean_absolute_difference")
+        kappa = dimension.get("quadratic_weighted_cohen_kappa")
+        label = f"analysis blinded ordinal agreement arithmetic {field}"
+
+        # Denominator lineage has already checked that n is an integer >= 0.
+        # The frozen producer emits null statistics when no pairs overlap.
+        if n == 0:
+            if exact is not None or mad is not None or kappa is not None:
+                raise ValueError(f"{label}: no double-rated items require null metrics")
+            continue
+
+        if (
+            type(exact) not in (int, float)
+            or not math.isfinite(exact)
+            or not 0 <= exact <= 1
+            or type(mad) not in (int, float)
+            or not math.isfinite(mad)
+            or not 0 <= mad <= 4
+        ):
+            raise ValueError(f"{label}: exact agreement and absolute gap must be finite rubric metrics")
+
+        matching = n * exact
+        distance = n * mad
+        n_matching = round(matching)
+        sum_distance = round(distance)
+        if (
+            not math.isclose(matching, n_matching, rel_tol=0, abs_tol=1e-10)
+            or not math.isclose(distance, sum_distance, rel_tol=0, abs_tol=1e-10)
+        ):
+            raise ValueError(f"{label}: reported rates cannot arise from integer ratings")
+
+        n_different = n - n_matching
+        if not n_different <= sum_distance <= 4 * n_different:
+            raise ValueError(f"{label}: absolute gaps contradict exact agreements")
+
+        # Weighted kappa is undefined only when expected disagreement is
+        # zero. Any actually disagreeing pair makes its denominator positive.
+        # With perfect observed agreement it must be 1 or undefined (all
+        # raters used the same single category).
+        if kappa is None:
+            if n_different:
+                raise ValueError(f"{label}: disagreements require defined weighted kappa")
+        elif (
+            type(kappa) not in (int, float)
+            or not math.isfinite(kappa)
+            or not -1 - 1e-12 <= kappa <= 1 + 1e-12
+        ):
+            raise ValueError(f"{label}: weighted kappa outside the ordinal range")
+        elif n_different == 0 and not math.isclose(
+            kappa, 1.0, rel_tol=0, abs_tol=1e-12
+        ):
+            raise ValueError(f"{label}: perfect agreement requires kappa 1 or null")
+        elif n_different and kappa >= 1:
+            raise ValueError(f"{label}: disagreements cannot have perfect weighted kappa")
+
+
 def _validate_analysis_identity(payload: dict, source_snapshots=None) -> None:
     required = {
         "schema_version": 1,
@@ -888,6 +958,7 @@ def _validate_analysis_identity(payload: dict, source_snapshots=None) -> None:
     _require_equal(payload.get("dimensions"), list(core.DIMS), label="analysis dimensions")
     _validate_paired_rater_coverage(payload)
     _validate_rating_denominator_lineage(payload)
+    _validate_blinded_agreement_arithmetic(payload)
     _validate_paired_effect_arithmetic(payload)
 
     verification = payload.get("verification")

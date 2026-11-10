@@ -252,3 +252,28 @@ human participants from summary values alone. All added cases are synthetic.
 This produces no human annotations, experimental outcomes, or new statistical
 procedures, and does not promote pilot or exploratory findings to confirmatory
 or human-validation results.
+
+
+## Published ordinal agreement arithmetic feasibility
+
+Before accepting a separately rehashed human-analysis publication, the
+standalone verifier now checks whether the **pre-unblinding** agreement numbers
+could arise from the frozen integer 1–5 rubric. For each dimension with
+`n_double_rated = n > 0`, both `n * raw_exact_agreement` (number of
+matching rater pairs) and `n * mean_absolute_difference` (sum of absolute
+score gaps) must be integers. If `d` pairs disagree, the score-gap sum
+must be between `d` and `4d`; every mismatch contributes a gap in [1,4].
+The verifier also rejects missing/nonfinite metrics and impossible
+quadratic-weighted-kappa states: kappa must lie within [-1,1], cannot be
+undefined if any pair disagrees, and is 1 (or undefined for a constant
+shared rating category) if all pairs agree. With zero overlapping pairs,
+all three reliability statistics must be null.
+
+These are **necessary arithmetic constraints**, not a reverse-engineering
+of the annotators' contingency table or a proof that any annotations are
+authentic. A plausible but fabricated agreement table can still pass this
+standalone check; full recomputation against independently retained frozen
+ratings remains mandatory for human-validation claims. Regression cases
+use rehashed synthetic bundles and no actual human observations. No rubric,
+analysis procedure, primary automated result, pilot classification, or
+exploratory inference is changed.

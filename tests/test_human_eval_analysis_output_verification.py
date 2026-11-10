@@ -1619,3 +1619,89 @@ def test_seeded_replay_is_bound_to_canonical_task_identity_order():
         assert verify._replay_paired_bootstrap_ci(
             ordered, seed=core.SEED, draws=core.BOOTSTRAP_DRAWS
         ) == pytest.approx(expected, rel=0, abs=1e-12)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "fractional_exact_count",
+        "fractional_total_gap",
+        "impossible_small_gap",
+        "impossible_large_gap",
+        "exact_beyond_rubric",
+        "negative_absolute_gap",
+        "missing_exact",
+        "missing_gap",
+        "undefined_kappa_with_disagreement",
+        "kappa_above_one",
+        "kappa_below_minus_one",
+        "perfect_kappa_with_disagreement",
+        "perfect_agreement_with_nonperfect_kappa",
+    ],
+)
+def test_rehashed_publication_rejects_impossible_ordinal_agreement(tmp_path, mutation):
+    """No participant ratings: only deliberately corrupted synthetic JSON."""
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    payload = _payload()
+    block = payload["pre_unblinding_agreement"]["pairwise"][0]["dimensions"][core.DIMS[0]]
+    if mutation == "fractional_exact_count":
+        block["raw_exact_agreement"] = 0.7       # 8 * .7 is not an integer
+    elif mutation == "fractional_total_gap":
+        block["mean_absolute_difference"] = 0.3  # 8 * .3 is not an integer
+    elif mutation == "impossible_small_gap":
+        block["mean_absolute_difference"] = 0.125  # 1 unit cannot cover 2 disagreements
+    elif mutation == "impossible_large_gap":
+        block["mean_absolute_difference"] = 1.125  # 9 units exceed 2 * 4
+    elif mutation == "exact_beyond_rubric":
+        block["raw_exact_agreement"] = 1.25
+    elif mutation == "negative_absolute_gap":
+        block["mean_absolute_difference"] = -0.25
+    elif mutation == "missing_exact":
+        block["raw_exact_agreement"] = None
+    elif mutation == "missing_gap":
+        block["mean_absolute_difference"] = None
+    elif mutation == "undefined_kappa_with_disagreement":
+        block["quadratic_weighted_cohen_kappa"] = None
+    elif mutation == "kappa_above_one":
+        block["quadratic_weighted_cohen_kappa"] = 1.2
+    elif mutation == "kappa_below_minus_one":
+        block["quadratic_weighted_cohen_kappa"] = -1.2
+    elif mutation == "perfect_kappa_with_disagreement":
+        block["quadratic_weighted_cohen_kappa"] = 1.0
+    elif mutation == "perfect_agreement_with_nonperfect_kappa":
+        block["raw_exact_agreement"] = 1.0
+        block["mean_absolute_difference"] = 0.0
+        block["quadratic_weighted_cohen_kappa"] = 0.8
+    _rewrite_and_rehash(output, payload)
+    with pytest.raises(ValueError, match="analysis blinded ordinal agreement arithmetic"):
+        verify.verify_bundle(output)
+
+
+def test_ordinal_agreement_allows_unrated_and_perfect_rater_cases():
+    """Undefined reliability for zero overlap or a constant shared category is legitimate."""
+    payload = _payload()
+    block = payload["pre_unblinding_agreement"]["pairwise"][0]["dimensions"][core.DIMS[0]]
+    block.update(
+        n_double_rated=0, raw_exact_agreement=None,
+        mean_absolute_difference=None, quadratic_weighted_cohen_kappa=None,
+    )
+    verify._validate_blinded_agreement_arithmetic(payload)
+    block.update(
+        n_double_rated=8, raw_exact_agreement=1.0,
+        mean_absolute_difference=0.0, quadratic_weighted_cohen_kappa=None,
+    )
+    verify._validate_blinded_agreement_arithmetic(payload)
+    block["quadratic_weighted_cohen_kappa"] = 1.0
+    verify._validate_blinded_agreement_arithmetic(payload)
+
+
+def test_ordinal_agreement_rejects_defined_reliability_with_zero_overlap():
+    payload = _payload()
+    block = payload["pre_unblinding_agreement"]["pairwise"][0]["dimensions"][core.DIMS[0]]
+    block.update(
+        n_double_rated=0, raw_exact_agreement=None,
+        mean_absolute_difference=None, quadratic_weighted_cohen_kappa=0.0,
+    )
+    with pytest.raises(ValueError, match="no double-rated items require null"):
+        verify._validate_blinded_agreement_arithmetic(payload)
