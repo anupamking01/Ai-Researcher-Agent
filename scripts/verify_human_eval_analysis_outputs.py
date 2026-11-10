@@ -1364,6 +1364,11 @@ def _validate_blinded_agreement_arithmetic(payload: dict) -> None:
                 integer_expected = round(expected_distance)
                 if (
                     1 <= integer_expected <= 16 * n * n
+                    # E = n*sum(a_i**2 + b_i**2) - 2*sum(a_i)*sum(b_i).
+                    # Since a_i**2 + b_i**2 has the parity of (a_i-b_i)**2,
+                    # E must have the same parity as n*S, even when the
+                    # original rater marginals are unavailable.
+                    and integer_expected % 2 == (n * squared) % 2
                     and math.isclose(
                         1.0 - n * squared / integer_expected,
                         kappa,

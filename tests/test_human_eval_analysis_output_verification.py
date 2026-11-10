@@ -2142,3 +2142,69 @@ def test_rehashed_analysis_bundle_rejects_large_overlap_kappa_lattice_violation(
     _rewrite_and_rehash(output, payload)
     with pytest.raises(ValueError, match="integer squared ordinal gaps"):
         verify.verify_bundle(output)
+
+
+@pytest.mark.parametrize(
+    ("n", "n_matching", "total_gap", "fabricated_kappa"),
+    [
+        (4, 3, 1, 1 - 4 / 3),
+        (5, 4, 1, 1 - 5 / 4),
+        (8, 7, 1, 1 - 8 / 5),
+        (40, 39, 1, 1 - 40 / 21),
+    ],
+)
+def test_large_overlap_kappa_rejects_impossible_marginal_parity(
+    n, n_matching, total_gap, fabricated_kappa
+):
+    """An integral E can still violate E = n*Q - 2*A*B modulo two.
+
+    These self-consistent-looking values pass the older integer-only lattice,
+    but no frozen 1–5 ordinal rater sample can produce them.
+    """
+    payload = _payload()
+    field = core.DIMS[0]
+    block = payload["pre_unblinding_agreement"]["pairwise"][0]["dimensions"][field]
+    block.update(
+        n_double_rated=n,
+        raw_exact_agreement=n_matching / n,
+        mean_absolute_difference=total_gap / n,
+        quadratic_weighted_cohen_kappa=fabricated_kappa,
+    )
+    with pytest.raises(ValueError, match="integer squared ordinal gaps"):
+        verify._validate_blinded_agreement_arithmetic(payload)
+
+
+def test_large_overlap_kappa_accepts_genuine_odd_marginal_distance():
+    """Odd E is possible for odd n and S; reject only parity mismatch."""
+    pairs = [(5, 4), (4, 4), (2, 5), (2, 3), (1, 1)]
+    n = len(pairs)
+    observed = sum((a - b) ** 2 for a, b in pairs)
+    expected = sum((a - b) ** 2 for a, _ in pairs for _, b in pairs)
+    assert (observed, expected) == (11, 109)
+    assert expected % 2 == (n * observed) % 2 == 1
+    payload = _payload()
+    field = core.DIMS[0]
+    block = payload["pre_unblinding_agreement"]["pairwise"][0]["dimensions"][field]
+    block.update(
+        n_double_rated=n,
+        raw_exact_agreement=sum(a == b for a, b in pairs) / n,
+        mean_absolute_difference=sum(abs(a - b) for a, b in pairs) / n,
+        quadratic_weighted_cohen_kappa=freeze.quadratic_weighted_kappa(pairs),
+    )
+    verify._validate_blinded_agreement_arithmetic(payload)
+
+
+def test_rehashed_analysis_bundle_rejects_wrong_kappa_marginal_parity(tmp_path):
+    """Rehashing every publication layer cannot override ordinal arithmetic."""
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    payload = _payload()
+    block = payload["pre_unblinding_agreement"]["pairwise"][0]["dimensions"][
+        core.DIMS[0]
+    ]
+    # n=8, two unit disagreements -> S=2.  E=15 would yield this
+    # in-range kappa but E must be even when n*S is even.
+    block["quadratic_weighted_cohen_kappa"] = 1 - 16 / 15
+    _rewrite_and_rehash(output, payload)
+    with pytest.raises(ValueError, match="integer squared ordinal gaps"):
+        verify.verify_bundle(output)

@@ -404,3 +404,30 @@ in place. Synthetic true-pair cases, fabricated-kappa cases, and one fully
 rehashed publication regression exercise the added check. The frozen
 human protocol, automated treatment results, pilot classification,
 exploratory analyses, and pending genuine human evaluation are unchanged.
+
+
+## Marginal-distance parity for published weighted kappa
+
+The larger-overlap integer-lattice check also enforces a necessary parity
+identity that is independent of the unpublished rater contingency table.
+For the frozen ordinal rubric, let `a_i` and `b_i` be the two integer
+scores on each of `n` double-rated items, `S = sum((a_i-b_i)^2)`, and
+`E = sum_{i,j}((a_i-b_j)^2)`. The latter has the exact expansion
+
+`E = n * sum_i(a_i^2 + b_i^2) - 2 * sum_i(a_i) * sum_i(b_i)`.
+
+Every integer square has the same parity as its base, so the identity
+implies **`E % 2 == (n*S) % 2`**. The standalone verifier now rejects
+published kappas requiring an integer `E` with the wrong parity, even if
+that `E` otherwise passes the earlier bounded integer-lattice check.
+The guard is applied only where the larger-overlap kappa is defined and
+at least one original double-rated pair disagrees. An odd `E` remains
+possible and valid when `n*S` is odd.
+
+Synthetic regressions cover impossible even/odd combinations, a genuine
+constructed five-pair example with odd `E`, and consistently rehashed
+JSON/Markdown/manifest tampering. This is a **necessary** mathematical
+constraint, not reconstruction of which scores individual annotators
+supplied, independent source authentication, human validation, or a new
+confirmatory statistical test. Frozen automated outcomes and protocols
+remain unchanged.
