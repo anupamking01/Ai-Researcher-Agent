@@ -13,12 +13,14 @@ remains an external publication control.
 from __future__ import annotations
 
 import argparse
+from functools import lru_cache
 from contextlib import ExitStack
 import hashlib
 import json
 import math
 import statistics
 import os
+import random
 import stat
 from pathlib import Path
 
@@ -703,6 +705,42 @@ def _validate_rating_denominator_lineage(payload: dict) -> None:
             )
 
 
+@lru_cache(maxsize=128)
+def _replay_paired_bootstrap_ci(
+    ordered_differences: tuple[float, ...], *, seed: int, draws: int
+) -> tuple[float, float]:
+    """Replay the frozen seeded bootstrap using published task-level effects.
+
+    The caller supplies effects in sorted task-ID order, matching the canonical
+    analysis. Cache only bounded, validated tuples: the same 10-task contrasts
+    are checked repeatedly by publication and offline regression tests.
+    """
+    if not ordered_differences or draws < 1:
+        raise ValueError("paired bootstrap replay requires nonempty effects and draws")
+    rng = random.Random(seed)
+    count = len(ordered_differences)
+    samples = [
+        statistics.mean(
+            [ordered_differences[rng.randrange(count)] for _ in range(count)]
+        )
+        for _ in range(draws)
+    ]
+    samples.sort()
+    bounds = []
+    for quantile in (0.025, 0.975):
+        position = (draws - 1) * quantile
+        lower = math.floor(position)
+        upper = math.ceil(position)
+        if lower == upper:
+            bounds.append(samples[lower])
+        else:
+            weight = position - lower
+            bounds.append(
+                samples[lower] * (1.0 - weight) + samples[upper] * weight
+            )
+    return tuple(bounds)
+
+
 def _validate_paired_effect_arithmetic(payload: dict) -> None:
     """Check published per-task effects independently of retained ratings.
 
@@ -711,8 +749,8 @@ def _validate_paired_effect_arithmetic(payload: dict) -> None:
     human-rating archive is unavailable. It is not a substitute for the full
     independent recomputation from independently verified frozen ratings.
     """
-    for _, _, contrast in core.CONTRASTS:
-        for field in core.DIMS:
+    for contrast_index, (_, _, contrast) in enumerate(core.CONTRASTS):
+        for dimension_index, field in enumerate(core.DIMS):
             label = f"analysis paired effect arithmetic {contrast}/{field}"
             block = payload["paired_contrasts"][contrast][field]
             included = block["task_ids_included"]
@@ -799,8 +837,8 @@ def _validate_paired_effect_arithmetic(payload: dict) -> None:
             # A nonparametric bootstrap resamples ONLY observed paired task
             # differences. Every resampled mean, and therefore both percentile
             # endpoints, must lie inside their observed support envelope.
-            # This is an input-free plausibility check, not independent replay
-            # of the frozen 20,000 bootstrap draws.
+            # First reject structurally impossible intervals before spending
+            # work on the frozen seeded bootstrap replay.
             ci = block.get("bootstrap_95pct_ci_mean_difference")
             if (
                 type(ci) is not list
@@ -811,6 +849,23 @@ def _validate_paired_effect_arithmetic(payload: dict) -> None:
                 or ci[1] > max(values) + 1e-12
             ):
                 raise ValueError(f"{label}: bootstrap CI violates paired task support")
+
+            # Rehashed bounds can still be plausible but numerically false.
+            # Replay the exact 20,000 draws from the canonical task-ID ordering
+            # and the frozen contrast/dimension seed, without reading ratings
+            # or changing the study's original analysis or results.
+            expected_ci = _replay_paired_bootstrap_ci(
+                tuple(differences[task] for task in sorted(included)),
+                seed=core.SEED + contrast_index * 100 + dimension_index,
+                draws=core.BOOTSTRAP_DRAWS,
+            )
+            if any(
+                not math.isclose(actual, expected, rel_tol=0, abs_tol=1e-12)
+                for actual, expected in zip(ci, expected_ci)
+            ):
+                raise ValueError(
+                    f"{label}: bootstrap CI disagrees with seeded task-level replay"
+                )
 
 
 def _validate_analysis_identity(payload: dict, source_snapshots=None) -> None:

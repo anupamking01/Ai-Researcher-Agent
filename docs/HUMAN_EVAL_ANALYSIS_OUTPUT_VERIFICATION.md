@@ -211,9 +211,9 @@ paired mean difference. A zero-pair cell cannot claim non-null inference
 statistics. These checks also run before create-only publication.
 
 Seven synthetic rehashed tampering cases and a no-pair case exercise this
-cross-field check. This is a **structural arithmetic audit only**: it does not
-establish that source ratings were authentic or independently provided, or
-certify a particular bootstrap interval from the report alone. The existing
+cross-field check. This is a **published-data consistency audit only**: it
+does not establish that source ratings were authentic or independently provided,
+or that task-level effects reflect genuine observations. The existing
 `verify_bundle_against_inputs` continues to independently recompute the full
 payload (including bootstrap) from the retained frozen ratings; the ordinary
 `verify_bundle` receipt explicitly reports that recomputation as *not* done.
@@ -236,7 +236,19 @@ numeric endpoints inside the range of the observed paired task differences.
 The bound is mathematical: resampling paired task differences cannot yield a
 mean smaller than the smallest observed difference or larger than the largest.
 For one pair or constant paired differences, the confidence interval is
-necessarily degenerate. This guard does **not** claim to independently replay
-the seed or the 20,000 bootstrap draws; the existing full source-bound
-recomputation remains the stronger check. All cases are synthetic. This adds no
-human annotations, new outcome estimates, or statistical procedures.
+necessarily degenerate.
+
+The verifier now also **replays the frozen 20,000-draw paired bootstrap** from
+the published per-task effects, lexically sorted by frozen task identity and
+using the exact per-contrast/per-dimension seed offset. It independently
+implements the seeded resampling and linear percentile interpolation rather
+than trusting a claimed interval inside the mathematically possible range.
+This rejects self-consistently rehashed but numerically fabricated confidence
+intervals even without an archived ratings directory. A small bounded cache
+makes repeated verification of the same ten-or-fewer task values practical.
+The stronger source-bound verifier still recomputes the entire payload from
+independently verified frozen ratings; neither path authenticates the original
+human participants from summary values alone. All added cases are synthetic.
+This produces no human annotations, experimental outcomes, or new statistical
+procedures, and does not promote pilot or exploratory findings to confirmatory
+or human-validation results.

@@ -1576,3 +1576,46 @@ def test_paired_arithmetic_rejects_unrenderable_invalid_values(field, invalid, e
     block[field] = invalid
     with pytest.raises(ValueError, match=error):
         verify._validate_paired_effect_arithmetic(payload)
+
+@pytest.mark.parametrize(
+    "fabricated_bounds",
+    [[0.0, 0.5], [0.5, 1.0], [0.25, 0.75]],
+)
+def test_rehashed_plausible_but_incorrect_bootstrap_interval_fails(
+    tmp_path, fabricated_bounds
+):
+    """An in-support rehashed CI must match frozen seeded resampling exactly."""
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    payload = _payload()
+    block = payload["paired_contrasts"][core.CONTRASTS[0][2]][core.DIMS[0]]
+    block["bootstrap_95pct_ci_mean_difference"] = fabricated_bounds
+    _rewrite_and_rehash(output, payload)
+    with pytest.raises(ValueError, match="bootstrap CI disagrees with seeded task-level replay"):
+        verify.verify_bundle(output)
+
+
+@pytest.mark.parametrize("seed_offset", [0, 1, 100, 201])
+def test_seeded_replay_matches_frozen_producer_for_heterogeneous_effects(seed_offset):
+    """Synthetic effects exercise actual percentile interpolation and seed mapping."""
+    differences = (0.0, 0.5, 1.0, 2.0, 3.5)
+    seed = core.SEED + seed_offset
+    expected = core._bootstrap_mean_ci(differences, seed=seed)
+    replayed = verify._replay_paired_bootstrap_ci(
+        differences, seed=seed, draws=core.BOOTSTRAP_DRAWS
+    )
+    assert replayed == pytest.approx(expected, rel=0, abs=1e-12)
+
+
+def test_seeded_replay_is_bound_to_canonical_task_identity_order():
+    """Presentation order cannot silently change the accepted resampling order."""
+    differences = {"task-z": 2.0, "task-a": 0.0, "task-m": 0.5}
+    expected = core._bootstrap_mean_ci([0.0, 0.5, 2.0], seed=core.SEED)
+    for displayed in (
+        ["task-z", "task-a", "task-m"],
+        ["task-m", "task-z", "task-a"],
+    ):
+        ordered = tuple(differences[task] for task in sorted(displayed))
+        assert verify._replay_paired_bootstrap_ci(
+            ordered, seed=core.SEED, draws=core.BOOTSTRAP_DRAWS
+        ) == pytest.approx(expected, rel=0, abs=1e-12)
