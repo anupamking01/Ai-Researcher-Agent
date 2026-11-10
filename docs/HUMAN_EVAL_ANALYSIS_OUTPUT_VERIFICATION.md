@@ -166,12 +166,20 @@ The check is at most 20 scores per variant/dimension on the ten-task study.
 The verifier additionally requires a null mean/median when no report is scored,
 finite rubric-range summary values when reports are scored, a report-median
 half-point lattice for odd sample sizes (quarter-point for even samples), and
-mean–median equality for a single scored report. These are necessary arithmetic
-conditions. They do **not** reconstruct original per-report ratings, prove a
-specific median is attainable for a given histogram, authenticate original
-annotator submissions, or establish blinded human validation. Complete source
-recomputation remains the stronger check once independently verified rating
-archives are available. No frozen analysis settings or results change.
+mean–median equality for a single scored report. It now also checks **joint
+mean–median feasibility**: a bounded exhaustive search allocates the anonymous
+integer ratings to single-rated reports and pairs the remaining ratings for
+double-rated reports. The published median must be attainable *together with*
+the already-verified mean, histogram, and one-/two-rater counts, not merely lie
+on a permissible score lattice. At most ten reports and five ordinal score
+categories are considered, and pairing equivalent rater permutations is
+unnecessary.
+
+These are necessary arithmetic conditions, not reconstruction or
+authentication of the actual per-report ratings or annotators. The gate cannot
+establish which valid allocation actually occurred or authenticate original
+annotator submissions; verified retained-input recomputation remains the
+stronger check. No frozen analysis settings or results change.
 
 ## Archive and checkout rule
 

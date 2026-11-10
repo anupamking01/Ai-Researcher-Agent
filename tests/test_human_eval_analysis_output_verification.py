@@ -1718,6 +1718,15 @@ def test_ordinal_agreement_rejects_defined_reliability_with_zero_overlap():
         ([2, 2], {"2": 2, "4": 2}, 3.0, 3.0, True),
         ([2, 2], {"2": 2, "4": 2}, 2.5, 2.5, False),
         ([1, 1], {"1": 1, "2": 1}, 1.5, 1.5, True),
+        # Feasible mean, but impossible median despite valid bounds and lattice.
+        ([1, 1], {"1": 1, "5": 1}, 3.0, 2.5, False),
+        ([1, 1], {"1": 1, "5": 1}, 3.0, 3.0, True),
+        # Each marginal can occur, but not this mean/median *together*.
+        ([1, 2], {"1": 2, "5": 1}, 2.0, 3.0, False),
+        ([1, 2], {"1": 2, "5": 1}, 2.0, 2.0, True),
+        ([1, 2], {"1": 2, "5": 1}, 3.0, 3.0, True),
+        ([2, 2, 2], {"1": 3, "5": 3}, 3.0, 2.5, False),
+        ([2, 2, 2], {"1": 3, "5": 3}, 3.0, 3.0, True),
         ([1, 2], {"1": 2, "2": 1}, 1.25, 1.25, True),
         ([1, 1], {"1": 1, "2": 1}, 1.5, 1.125, False),
         ([2], {"2": 1, "4": 1}, 3.0, 3.0, True),
@@ -1768,4 +1777,21 @@ def test_standalone_verifier_rejects_rehashed_variant_score_inconsistency(
     payload["variant_summary"][core.VARIANTS[0]][core.DIMS[0]][field] = invalid
     _rewrite_and_rehash(output, payload)
     with pytest.raises(ValueError, match="analysis variant score arithmetic"):
+        verify.verify_bundle(output)
+
+
+def test_standalone_verifier_rejects_rehashed_unattainable_report_median(tmp_path):
+    """A plausible median cannot be asserted by a rehashed publication."""
+    output = tmp_path / "analysis"
+    analyze_human_eval.write_bundle(_payload(), output)
+    payload = _payload()
+    summary = payload["variant_summary"][core.VARIANTS[0]][core.DIMS[0]]
+    summary["raw_score_distribution"] = {
+        "1": 2, "2": 0, "3": 0, "4": 0, "5": 2
+    }
+    summary["median_report_score"] = 2.5
+    # Two double-rated reports have mean 3, whatever the pairing.
+    # For exactly two reports, the median must also be 3.
+    _rewrite_and_rehash(output, payload)
+    with pytest.raises(ValueError, match="report median cannot arise jointly"):
         verify.verify_bundle(output)

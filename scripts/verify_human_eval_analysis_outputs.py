@@ -576,6 +576,79 @@ def _validate_paired_rater_coverage(payload: dict) -> None:
 
 
 
+def _report_median_feasible(
+    distribution: dict, counts: list[int], mean: float, median: float
+) -> bool:
+    """Find an attainable joint mean/median from anonymous ordinal ratings.
+
+    Enumerate score *multisets*, not people or task assignments. First allocate
+    the singly rated reports, constrained by the already-published mean. Then
+    enumerate unordered pairings of the remaining scores for double-rated
+    reports. Pairing the lowest remaining score first is exhaustive without
+    enumerating rater permutations. With at most ten reports and five possible
+    raw scores, the search is finite and offline.
+    """
+    remaining = [distribution[str(score)] for score in range(1, 6)]
+    n_single = sum(count == 1 for count in counts)
+    n_reports = sum(count > 0 for count in counts)
+    raw_total = sum(score * remaining[score - 1] for score in range(1, 6))
+    target_single_sum = 2 * n_reports * mean - raw_total
+    doubled_singles = []
+    doubled_pairs = []
+
+    def pair_remaining() -> bool:
+        first = next((index for index, count in enumerate(remaining) if count), None)
+        if first is None:
+            ordered = sorted(doubled_singles + doubled_pairs)
+            middle = n_reports // 2
+            attainable = (
+                ordered[middle] / 2
+                if n_reports % 2
+                else (ordered[middle - 1] + ordered[middle]) / 4
+            )
+            return math.isclose(attainable, median, rel_tol=0, abs_tol=1e-9)
+
+        remaining[first] -= 1
+        try:
+            for second in range(first, 5):
+                if not remaining[second]:
+                    continue
+                remaining[second] -= 1
+                doubled_pairs.append(first + second + 2)
+                try:
+                    if pair_remaining():
+                        return True
+                finally:
+                    doubled_pairs.pop()
+                    remaining[second] += 1
+            return False
+        finally:
+            remaining[first] += 1
+
+    def allocate_singletons(index: int, slots: int, single_sum: int) -> bool:
+        if index == 5:
+            return (
+                slots == 0
+                and math.isclose(single_sum, target_single_sum, rel_tol=0, abs_tol=1e-9)
+                and pair_remaining()
+            )
+        for chosen in range(min(remaining[index], slots) + 1):
+            remaining[index] -= chosen
+            doubled_singles.extend([2 * (index + 1)] * chosen)
+            try:
+                if allocate_singletons(
+                    index + 1, slots - chosen, single_sum + (index + 1) * chosen
+                ):
+                    return True
+            finally:
+                if chosen:
+                    del doubled_singles[-chosen:]
+                remaining[index] += chosen
+        return False
+
+    return allocate_singletons(0, n_single, 0)
+
+
 def _validate_report_score_summary(summary: dict, counts: list[int], *, label: str) -> None:
     """Check report means against raw-score totals without assigning rater identities.
 
@@ -586,6 +659,8 @@ def _validate_report_score_summary(summary: dict, counts: list[int], *, label: s
     their contribution. This bounded subset-sum check does not reconstruct
     original ratings or authenticate annotators.
     """
+    if len(counts) > 10:
+        raise ValueError(f"{label}: exceeds frozen ten-task report limit")
     if any(type(count) is not int or count not in (0, 1, 2) for count in counts):
         raise ValueError(f"{label}: invalid original-rater count")
     distribution = summary["raw_score_distribution"]
@@ -646,6 +721,11 @@ def _validate_report_score_summary(summary: dict, counts: list[int], *, label: s
         or (scored == 1 and not math.isclose(median, mean, rel_tol=0, abs_tol=1e-12))
     ):
         raise ValueError(f"{label}: report median violates frozen rubric support")
+    if not _report_median_feasible(distribution, counts, mean, median):
+        raise ValueError(
+            f"{label}: report median cannot arise jointly with the published mean, "
+            "raw-score distribution, and original one-/two-rater coverage"
+        )
 
 
 def _validate_rating_denominator_lineage(payload: dict) -> None:
