@@ -41,7 +41,6 @@ jobs:
       contents: read
       actions: write
     env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       SMART_LLM_MODEL: ${{ github.event.inputs.smart_model }}
       FAST_LLM_MODEL: ${{ github.event.inputs.fast_model }}
       TEMPERATURE: ${{ github.event.inputs.temperature }}
@@ -76,6 +75,8 @@ jobs:
 
       - name: Validate API secret is configured
         shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           if [ -z "$OPENAI_API_KEY" ]; then
             echo "OPENAI_API_KEY repository secret is not configured."
@@ -105,10 +106,14 @@ jobs:
           python -m pytest -q
 
       - name: Preflight live search and concurrent browser extraction
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         timeout-minutes: 5
         run: python scripts/preflight_live_pilot.py
 
       - name: Run frozen live pilot
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         timeout-minutes: 125
         shell: bash
         run: |

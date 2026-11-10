@@ -39,7 +39,6 @@ jobs:
     permissions:
       contents: read
     env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       SMART_LLM_MODEL: ${{ github.event.inputs.smart_model || 'gpt-5.6-terra' }}
       FAST_LLM_MODEL: ${{ github.event.inputs.fast_model || 'gpt-5.6-luna' }}
       TEMPERATURE: "1"
@@ -59,6 +58,8 @@ jobs:
 
       - name: Validate live-test secret
         shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           if [ -z "$OPENAI_API_KEY" ]; then
             echo "OPENAI_API_KEY repository secret is not configured."
@@ -84,6 +85,8 @@ jobs:
 
       - name: Start FastAPI application
         shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           python -m uvicorn app:app --host 127.0.0.1 --port 8000 > /tmp/live-app.log 2>&1 &
           echo $! > /tmp/live-app.pid

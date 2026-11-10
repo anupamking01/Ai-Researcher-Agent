@@ -16,6 +16,15 @@ ALLOWED = {
         "Validate API secret",
         "Resume common post-hoc evaluator only",
     }),
+    "live-app-smoke.yml": frozenset({
+        "Validate live-test secret",
+        "Start FastAPI application",
+    }),
+    "live-pilot.yml": frozenset({
+        "Validate API secret is configured",
+        "Preflight live search and concurrent browser extraction",
+        "Run frozen live pilot",
+    }),
 }
 
 
@@ -85,6 +94,37 @@ def test_live_research_secrets_restricted_to_authorized_steps(name):
         (WORKFLOWS / name).read_text(encoding="utf-8"),
         allowed=ALLOWED[name],
     ) == []
+
+
+
+def test_other_workflows_cannot_inherit_research_provider_secret():
+    """A newly added offline workflow must not silently gain live API access."""
+    workflow_files = sorted(
+        path for path in WORKFLOWS.iterdir()
+        if path.suffix in {".yml", ".yaml"}
+    )
+    assert workflow_files
+    for path in workflow_files:
+        if path.name not in ALLOWED:
+            assert "secrets.OPENAI_API_KEY" not in path.read_text(
+                encoding="utf-8"
+            ), f"{path.name}: unexpected live research provider credential"
+
+
+@pytest.mark.parametrize("name", ["live-app-smoke.yml", "live-pilot.yml"])
+def test_existing_live_workflows_reject_job_wide_secret_regression(name):
+    """Offline pytest/install steps in live jobs must not inherit provider keys."""
+    source = (WORKFLOWS / name).read_text(encoding="utf-8")
+    tampered = source.replace(
+        "    env:\n",
+        "    env:\n      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}\n",
+        1,
+    )
+    assert tampered != source
+    assert any(
+        "job-global secret exposure" in problem
+        for problem in problems(tampered, allowed=ALLOWED[name])
+    )
 
 
 BASE = """name: synthetic
