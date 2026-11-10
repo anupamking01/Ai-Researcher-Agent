@@ -96,9 +96,11 @@ def test_reject_false_pre_freeze_claim_even_if_digest_repinned(frozen_case, muta
 def test_duplicate_json_key_is_rejected(frozen_case):
     path = frozen_case["pair_receipt_path"]
     proof = path.read_text()
-    path.write_text(proof.replace(
-        '"schema_version": 1,', '"schema_version": 1, "schema_version": 1,', 1
-    ))
+    altered = proof.replace(
+        '"schema_version": 2,', '"schema_version": 2, "schema_version": 2,', 1
+    )
+    assert altered != proof  # Fail if a future schema change makes this a no-op.
+    path.write_text(altered)
     frozen_case["expected_pair_receipt_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     with pytest.raises(ValueError, match="duplicate JSON key"):
         link.verify_counterbalanced_freeze_link(**frozen_case)
