@@ -62,7 +62,7 @@ def _pinned_pair(path: Path, independently_pinned_sha256: str):
         "distinct_annotator_pseudonyms", "submissions", "interpretation",
     }, "pair receipt has missing or unexpected fields")
     _require(
-        type(pair["schema_version"]) is int and pair["schema_version"] == 1
+        type(pair["schema_version"]) is int and pair["schema_version"] == 2
         and pair["study_id"] == "budget-main-v1"
         and pair["status"] == "human_eval_counterbalanced_submissions_source_bound"
         and pair["presentation_orders"] == list(ORDERS)
@@ -79,12 +79,13 @@ def _pinned_pair(path: Path, independently_pinned_sha256: str):
     for order in ORDERS:
         sub = submissions[order]
         _require(type(sub) is dict and set(sub) == {
-            "submission_sha256", "annotator_manifest_sha256",
-            "n_reports", "n_missing_dimension_values",
+            "submission_sha256", "preflight_receipt_sha256",
+            "annotator_manifest_sha256", "n_reports", "n_missing_dimension_values",
         }, f"{order} submission receipt schema mismatch")
         missing = sub["n_missing_dimension_values"]
         _require(
             _digest(sub["submission_sha256"])
+            and _digest(sub["preflight_receipt_sha256"])
             and _digest(sub["annotator_manifest_sha256"])
             and type(sub["n_reports"]) is int and sub["n_reports"] == count
             and type(missing) is int

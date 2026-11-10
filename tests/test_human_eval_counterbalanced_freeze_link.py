@@ -61,6 +61,8 @@ def test_wrong_external_digest_is_rejected(frozen_case):
     ("reverse_sha", "reverse archived raw rating"),
     ("reverse_bundle", "reverse retained preflight"),
     ("missing_count", "reverse retained preflight"),
+    ("malformed_preflight_hash", "canonical submission receipt values invalid"),
+    ("omitted_preflight_hash", "canonical submission receipt schema mismatch"),
     ("same_order", "counterbalance contract"),
     ("wrong_report_count", "report count"),
 ])
@@ -75,6 +77,10 @@ def test_reject_false_pre_freeze_claim_even_if_digest_repinned(frozen_case, muta
         proof["submissions"]["reverse"]["annotator_manifest_sha256"] = "0" * 64
     elif mutation == "missing_count":
         proof["submissions"]["reverse"]["n_missing_dimension_values"] = 1
+    elif mutation == "malformed_preflight_hash":
+        proof["submissions"]["canonical"]["preflight_receipt_sha256"] = "not-a-sha256"
+    elif mutation == "omitted_preflight_hash":
+        del proof["submissions"]["canonical"]["preflight_receipt_sha256"]
     elif mutation == "same_order":
         proof["presentation_orders"] = ["canonical", "canonical"]
     else:

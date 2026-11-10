@@ -278,7 +278,7 @@ def verify_counterbalanced_submission_pair(
             }
 
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "study_id": "budget-main-v1",
             "status": "human_eval_counterbalanced_submissions_source_bound",
             "n_reports": expected_n_reports,

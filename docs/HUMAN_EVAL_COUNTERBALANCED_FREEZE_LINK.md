@@ -18,7 +18,13 @@ Only after obtaining genuine, eligible independent human ratings under the froze
 
     python -m scripts.verify_human_eval_counterbalanced_freeze_link --freeze-root outputs/human_eval/frozen-v1 --pair-receipt path/to/paired-proof.json --pair-receipt-sha256 INDEPENDENT_SHA256 --expected-n-reports 40
 
-The command independently verifies the retained blinded freeze first. It then links the archived rating-input SHA-256 values to the pinned pre-freeze pair by canonical/reverse order, verifies archived preflight source-bundle fingerprints and missingness counts, requires one of each order, and checks the canonical packet fingerprint against the governing frozen packet. No originals are mutated, and the coordinator-only blinding key is not read.
+The command requires the **version-2** pair receipt with both original
+preflight-receipt SHA-256 fields, rejecting older or incomplete pair receipts.
+It validates those digests' syntax but does **not** compare them directly with
+the freeze's archived receipts: freezing deliberately neutralizes sensitive
+source filenames in retained receipt copies, so their raw JSON bytes can differ.
+The original pre-freeze receipt files and their byte hashes must be retained
+separately. The command independently verifies the retained blinded freeze first. It then links the archived rating-input SHA-256 values to the pinned pre-freeze pair by canonical/reverse order, verifies archived preflight source-bundle fingerprints and missingness counts, requires one of each order, and checks the canonical packet fingerprint against the governing frozen packet. No originals are mutated, and the coordinator-only blinding key is not read.
 
 ## Limitations
 

@@ -78,6 +78,7 @@ def case(tmp_path):
 def test_valid_pair_is_source_bound_and_receipt_is_score_free(case):
     result = pair.verify_counterbalanced_submission_pair(**case)
     assert result["status"] == "human_eval_counterbalanced_submissions_source_bound"
+    assert result["schema_version"] == 2
     assert result["n_reports"] == 8
     assert result["distinct_annotator_pseudonyms"] is True
     assert result["presentation_orders"] == ["canonical", "reverse"]

@@ -33,7 +33,7 @@ A passing result establishes consistency between the *declared* pair of submissi
 
 ## Durable preflight-receipt byte bindings
 
-The pair-level provenance summary now records `preflight_receipt_sha256` for
+The **version-2** pair-level provenance summary now records `preflight_receipt_sha256` for
 each canonical/reverse submission. This binds the *exact UTF-8 JSON bytes*
 of the separately retained, treatment-blind preflight receipt, in addition
 to the rating CSV and annotator-manifest fingerprints already recorded.
@@ -42,7 +42,9 @@ the full pair-wide window requires both original files to remain unchanged
 after both serial preflight checks. Semantically equivalent receipt JSON with
 different whitespace thus has a distinguishable source revision, without
 changing the validation outcome. Neither receipt contents nor annotator IDs
-are emitted into the pair summary.
+are emitted into the pair summary. Version 1 contained no exact preflight-receipt
+byte fingerprints; it is not silently accepted as version 2 by the subsequent
+pair-to-freeze link verifier.
 
 Retain both original preflight receipt files with the pair summary. A hash
 identifies the checked bytes, but does not independently authenticate their
