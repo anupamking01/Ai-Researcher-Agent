@@ -266,5 +266,5 @@ def test_first_bundle_same_bytes_replaced_during_reverse_preflight_fails(case, m
         return verified
 
     monkeypatch.setattr(pair.preflight, "verify_preflight_receipt", replace_first_bundle)
-    with pytest.raises(ValueError, match="canonical ratings_template.csv changed during combined paired handoff"):
+    with pytest.raises(ValueError, match="canonical (?:bundle root|ratings_template.csv) changed during combined paired handoff"):
         pair.verify_counterbalanced_submission_pair(**case)
