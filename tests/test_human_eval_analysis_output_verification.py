@@ -1031,7 +1031,7 @@ def test_independent_verifier_rejects_rehashed_outcome_tampering(
     expected = _payload()
     analyze_human_eval.write_bundle(expected, output)
     changed = json.loads(json.dumps(expected))
-    changed["variant_summary"]["D3"][core.DIMS[0]]["mean_report_score"] = 4.0
+    changed["pre_unblinding_agreement"]["pairwise"][0]["dimensions"][core.DIMS[0]]["raw_exact_agreement"] = 0.875
     _rewrite_and_rehash(output, changed)
     monkeypatch.setattr(core, "analyze", lambda *_args, **_kwargs: expected)
 

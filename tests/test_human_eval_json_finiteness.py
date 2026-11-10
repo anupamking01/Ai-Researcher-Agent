@@ -173,11 +173,12 @@ def test_json_exponent_overflow_is_rejected_even_after_rehash(tmp_path):
         verifier.verify_bundle(output_root)
 
 
-def test_missing_human_score_uses_json_null_and_roundtrips(tmp_path):
+def test_null_summary_cannot_claim_an_observed_score(tmp_path):
+    """JSON null roundtrips, but a scored report cannot have a null mean."""
     payload = _synthetic_payload()
     payload["variant_summary"]["D3"][core.DIMS[0]]["mean_report_score"] = None
+    assert '"mean_report_score": null' in json.dumps(payload)
     output_root = tmp_path / "human-analysis"
-    receipt = publisher.write_bundle(payload, output_root)
-    assert receipt["status"] == "human_validation_analysis_bundle_verified"
-    stored = (output_root / publisher.ANALYSIS_JSON).read_text(encoding="utf-8")
-    assert '"mean_report_score": null' in stored
+    with pytest.raises(ValueError, match="report mean and median"):
+        publisher.write_bundle(payload, output_root)
+    assert not output_root.exists()

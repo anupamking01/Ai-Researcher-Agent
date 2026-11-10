@@ -740,9 +740,6 @@ def _validate_rating_denominator_lineage(payload: dict) -> None:
                     f"analysis rating lineage variant summary raw-score distribution "
                     f"disagrees with coverage: {variant}/{field}"
                 )
-            _validate_report_score_summary(
-                summary, counts, label=f"analysis variant score arithmetic {variant}/{field}"
-            )
             observed_counts.extend(counts)
 
         try:
@@ -778,6 +775,39 @@ def _validate_rating_denominator_lineage(payload: dict) -> None:
             raise ValueError(
                 f"analysis rating lineage pre-unblinding agreement missingness "
                 f"disagrees with post-unblinding coverage: {field}"
+            )
+
+
+
+def _validate_variant_score_publication(payload: dict) -> None:
+    """Check published score arithmetic after manifest and identity verification.
+
+    The preceding rating-denominator gate checks the same coverage matrix but
+    deliberately does not require numeric score summaries. This separate
+    publication gate therefore preserves denominator-only diagnostic callers
+    and allows fingerprint errors to take precedence over semantic drift.
+    """
+    counts_by_report = {}
+    for left, right, contrast in core.CONTRASTS:
+        for field in core.DIMS:
+            groups = payload["paired_contrasts"][contrast][field][
+                "rater_coverage"
+            ]["task_ids_by_rater_pair"]
+            for cell in core.RATER_COVERAGE_CELLS:
+                left_count, right_count = (int(value) for value in cell.split("/"))
+                for task in groups[cell]:
+                    counts_by_report[(left, task, field)] = left_count
+                    counts_by_report[(right, task, field)] = right_count
+    for variant in core.VARIANTS:
+        for field in core.DIMS:
+            counts = [
+                counts_by_report[(variant, task, field)]
+                for task in payload["task_ids"]
+            ]
+            _validate_report_score_summary(
+                payload["variant_summary"][variant][field],
+                counts,
+                label=f"analysis variant score arithmetic {variant}/{field}",
             )
 
 
@@ -1325,6 +1355,8 @@ def _verify_captured_bundle(
         content=markdown_bytes,
         label="manuscript rendering",
     )
+
+    _validate_variant_score_publication(payload)
 
     return {
         "schema_version": 1,
