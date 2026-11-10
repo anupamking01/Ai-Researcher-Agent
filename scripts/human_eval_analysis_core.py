@@ -1030,6 +1030,25 @@ def _paired_summary(left, right, *, seed, task_ids=None):
     }
 
 
+
+def _label_paired_task_differences(summary, task_ids):
+    """Label sorted differences with sorted task IDs, not original positions.
+
+    _paired_summary canonicalizes labelled pairs before bootstrap. When a
+    valid task manifest is permuted, zipping its original order with the
+    returned differences would silently misattribute the task-level effects.
+    """
+    canonical_ids = sorted(task_ids)
+    differences = summary["task_differences"]
+    if (
+        len(canonical_ids) != summary["n_pairs"]
+        or len(canonical_ids) != len(differences)
+        or len(set(canonical_ids)) != len(canonical_ids)
+    ):
+        raise ValueError("paired task difference identity mismatch")
+    return dict(zip(canonical_ids, differences))
+
+
 def _validate_direct_rating_row(row):
     """Enforce the frozen CSV row contract for direct/notebook aggregation.
 
@@ -1391,8 +1410,8 @@ def analyze(
                         seed=SEED + contrast_index * 100 + dimension_index,
                         task_ids=complete,
                     )
-                    result["task_differences"] = dict(
-                        zip(complete, result["task_differences"])
+                    result["task_differences"] = _label_paired_task_differences(
+                        result, complete
                     )
                 else:
                     result = _empty_pair()

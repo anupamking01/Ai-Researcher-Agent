@@ -61,3 +61,21 @@ duplicate/missing/overlong/unordered identity streams, permutation-stable
 labelled pairs, valid aligned pairs, and the
 ten-task boundary. This does not provide human-validation evidence or repair
 the unavailable original treatment-report and trace artifacts.
+
+
+## Verified task-level attribution under reordered manifests
+
+`_paired_summary` canonicalizes task-labelled score pairs by lexicographic
+task ID. Its returned positional `task_differences` are therefore already
+sorted even when the verified task manifest arrived in a different order.
+Previously canonical `analyze()` zipped the sorted differences with its
+**original** `complete` task list: a permuted manifest could silently
+assign the right numerical effect to the wrong task in publication JSON.
+
+The consumer now binds to the same canonical ordering using
+`_label_paired_task_differences`, with explicit cardinality and unique-ID
+checks. Synthetic reversed-order, distinct-effect cases verify that labels
+remain attached to the correct tasks, and inconsistent label counts fail
+closed. The normally sorted frozen manifest produces unchanged estimates,
+bootstrap, inclusion, and output schema. This does not independently
+authenticate original reports/traces or establish any human-validation result.

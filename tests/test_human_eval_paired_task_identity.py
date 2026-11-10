@@ -195,3 +195,40 @@ def test_custom_set_task_ids_rejected_even_if_iteration_looks_ordered():
             [1.0, 2.0], [2.0, 3.0], seed=core.SEED,
             task_ids=PseudoOrderedSet(),
         )
+
+
+def test_task_level_human_differences_bound_to_canonical_ids_not_manifest_order():
+    # _paired_summary sorts labelled observations before the bootstrap.
+    # Downstream output must bind the sorted results to the sorted IDs.
+    ids = ["main-03", "main-01", "main-02"]
+    left, right = [4.0, 1.0, 2.0], [3.0, 3.0, 2.5]
+    summary = core._paired_summary(left, right, seed=core.SEED, task_ids=ids)
+    assert summary["task_differences"] == [2.0, 0.5, -1.0]
+    labelled = core._label_paired_task_differences(summary, ids)
+    assert labelled == {"main-01": 2.0, "main-02": 0.5, "main-03": -1.0}
+    assert list(labelled) == ["main-01", "main-02", "main-03"]
+
+    indices = [1, 2, 0]
+    sorted_summary = core._paired_summary(
+        [left[i] for i in indices], [right[i] for i in indices],
+        seed=core.SEED, task_ids=[ids[i] for i in indices],
+    )
+    assert sorted_summary == summary
+    assert core._label_paired_task_differences(sorted_summary, sorted(ids)) == labelled
+
+
+@pytest.mark.parametrize(
+    "identities, differences, n_pairs",
+    [
+        (["main-01", "main-01"], [1.0, 2.0], 2),
+        (["main-01"], [1.0, 2.0], 2),
+        (["main-01", "main-02"], [1.0], 2),
+    ],
+)
+def test_task_difference_binding_rejects_mismatched_identity_counts(
+    identities, differences, n_pairs
+):
+    with pytest.raises(ValueError, match="paired task difference identity mismatch"):
+        core._label_paired_task_differences(
+            {"task_differences": differences, "n_pairs": n_pairs}, identities
+        )
