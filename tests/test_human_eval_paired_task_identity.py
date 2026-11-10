@@ -159,3 +159,39 @@ def test_oversized_paired_score_stream_is_bounded_before_bootstrap(monkeypatch):
     with pytest.raises(ValueError, match="frozen ten-task analysis unit"):
         core._paired_summary(unbounded_scores(), [3.0], seed=core.SEED)
     assert len(draws) == core.MAX_FROZEN_HUMAN_TASK_PAIRS + 1
+
+
+@pytest.mark.parametrize(
+    "ids",
+    [
+        {"main-01": 1, "main-02": 2}.keys(),
+        {"first": "main-01", "second": "main-02"}.values(),
+        __import__("types").MappingProxyType({"main-01": 1, "main-02": 2}),
+        __import__("collections").UserDict({"main-01": 1, "main-02": 2}),
+    ],
+)
+def test_task_id_mapping_views_and_non_dict_mappings_cannot_claim_pair_alignment(ids):
+    # These all previously passed with plausible, distinct string labels
+    # despite deriving their iteration order from unrelated mapping keys.
+    with pytest.raises(ValueError, match="paired task IDs must be an ordered iterable"):
+        core._paired_summary([1.0, 2.0], [2.0, 3.0], seed=core.SEED, task_ids=ids)
+
+
+def test_custom_set_task_ids_rejected_even_if_iteration_looks_ordered():
+    from collections.abc import Set
+
+    class PseudoOrderedSet(Set):
+        def __contains__(self, value):
+            return value in {"main-01", "main-02"}
+
+        def __len__(self):
+            return 2
+
+        def __iter__(self):
+            return iter(("main-01", "main-02"))
+
+    with pytest.raises(ValueError, match="paired task IDs must be an ordered iterable"):
+        core._paired_summary(
+            [1.0, 2.0], [2.0, 3.0], seed=core.SEED,
+            task_ids=PseudoOrderedSet(),
+        )

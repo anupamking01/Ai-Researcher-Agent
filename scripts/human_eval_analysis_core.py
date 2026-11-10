@@ -965,7 +965,13 @@ def _paired_summary(left, right, *, seed, task_ids=None):
         # Positional score vectors cannot be paired reliably with an
         # unordered container (or a mapping whose keys are not an explicit
         # aligned sequence). Require an ordered ID stream instead.
-        if isinstance(task_ids, (str, bytes, dict, set, frozenset)):
+        # A mapping or mapping view can yield plausible string labels in
+        # incidental key/value insertion order, without providing a trusted
+        # positional alignment to the already-captured score vectors. This
+        # includes non-dict Mapping implementations and custom Set classes.
+        if isinstance(
+            task_ids, (str, bytes, bytearray, memoryview, Mapping, MappingView, AbstractSet)
+        ):
             raise ValueError("paired task IDs must be an ordered iterable of distinct task IDs")
         try:
             ids = tuple(islice(iter(task_ids), MAX_FROZEN_HUMAN_TASK_PAIRS + 1))

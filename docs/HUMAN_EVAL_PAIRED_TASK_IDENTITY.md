@@ -32,6 +32,10 @@ Per-score 1–5 and half-point lattice checks cannot detect pseudoreplication.
   with exactly one nonempty, trimmed **string** ID for each aligned vector
   position, without duplicates. Unordered sets and mappings are rejected;
   one-shot generators are consumed once, up to eleven elements.
+  Mapping **views** (including `dict.keys()` / `dict.values()`),
+  non-`dict` mapping implementations and custom set types are rejected too:
+  their incidental iteration order does not establish positional score
+  alignment, even if they yield distinct, well-formed string IDs.
   Identity validation happens before the frozen bootstrap.
 * The paired task labels and both aligned score vectors are sorted together
   lexicographically by task ID **before** seeded bootstrap resampling. The
