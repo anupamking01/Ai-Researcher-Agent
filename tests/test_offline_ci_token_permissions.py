@@ -104,3 +104,107 @@ def test_missing_checkout_is_rejected():
         "",
     )
     assert "unit-tests: missing explicit checkout" in _offline_ci_token_problems(modified)
+
+# The four opt-in provider-backed workflows also execute offline validation.
+# Their read-only checkout token must not remain in checkout-managed Git
+# authentication for tests or the later diagnostic processes to inherit.
+LIVE_RESEARCH_CHECKOUT_JOBS = {
+    "budget-main-study.yml": ("study", {"contents": "read"}),
+    "evaluator-recovery.yml": (
+        "recover-evaluator", {"actions": "read", "contents": "read"}
+    ),
+    "live-app-smoke.yml": ("live-smoke", {"contents": "read"}),
+    "live-pilot.yml": ("pilot", {"contents": "read"}),
+}
+LIVE_WORKFLOWS = WORKFLOW.parent
+
+
+def _live_checkout_token_problems(source: str, *, job_name: str, permissions: dict):
+    """Check checkout-token isolation without invoking a live workflow."""
+    try:
+        document = yaml.load(source, Loader=yaml.BaseLoader)
+    except yaml.YAMLError:
+        return ["invalid live workflow YAML"]
+    if not isinstance(document, dict):
+        return ["invalid live workflow mapping"]
+    faults = []
+    if document.get("permissions") not in (None, {"contents": "read"}):
+        faults.append("live workflow has elevated top-level token permissions")
+    jobs = document.get("jobs")
+    if not isinstance(jobs, dict) or set(jobs) != {job_name}:
+        return faults + ["unexpected live workflow jobs"]
+    job = jobs[job_name]
+    if not isinstance(job, dict) or job.get("permissions") != permissions:
+        return faults + ["live job token permissions changed"]
+    steps = job.get("steps")
+    if not isinstance(steps, list):
+        return faults + ["missing live workflow steps"]
+    checkouts = [
+        step for step in steps
+        if isinstance(step, dict)
+        and str(step.get("uses", "")).startswith("actions/checkout@")
+    ]
+    if len(checkouts) != 1:
+        faults.append("expected exactly one live workflow checkout")
+    for step in checkouts:
+        opts = step.get("with")
+        if not isinstance(opts, dict) or opts.get("persist-credentials") != "false":
+            faults.append("live checkout must disable persisted credentials")
+    return faults
+
+
+@pytest.mark.parametrize("name", sorted(LIVE_RESEARCH_CHECKOUT_JOBS))
+def test_live_research_checkout_token_is_not_persisted(name):
+    job_name, permissions = LIVE_RESEARCH_CHECKOUT_JOBS[name]
+    source = (LIVE_WORKFLOWS / name).read_text(encoding="utf-8")
+    assert _live_checkout_token_problems(
+        source, job_name=job_name, permissions=permissions
+    ) == []
+
+
+@pytest.mark.parametrize("name", sorted(LIVE_RESEARCH_CHECKOUT_JOBS))
+@pytest.mark.parametrize("replacement", ["persist-credentials: true", "fetch-depth: 1"])
+def test_live_research_rejects_persisted_or_implicit_checkout_token(name, replacement):
+    job_name, permissions = LIVE_RESEARCH_CHECKOUT_JOBS[name]
+    source = (LIVE_WORKFLOWS / name).read_text(encoding="utf-8")
+    changed = source.replace("persist-credentials: false", replacement, 1)
+    assert changed != source
+    assert "live checkout must disable persisted credentials" in (
+        _live_checkout_token_problems(
+            changed, job_name=job_name, permissions=permissions
+        )
+    )
+
+
+@pytest.mark.parametrize("name", sorted(LIVE_RESEARCH_CHECKOUT_JOBS))
+def test_live_research_rejects_second_credential_persisting_checkout(name):
+    job_name, permissions = LIVE_RESEARCH_CHECKOUT_JOBS[name]
+    source = (LIVE_WORKFLOWS / name).read_text(encoding="utf-8")
+    marker = "      - name: Set up Python\n"
+    assert marker in source
+    changed = source.replace(
+        marker,
+        "      - name: Unexpected second checkout\n"
+        "        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803\n"
+        + marker,
+        1,
+    )
+    assert "expected exactly one live workflow checkout" in (
+        _live_checkout_token_problems(
+            changed, job_name=job_name, permissions=permissions
+        )
+    )
+
+
+@pytest.mark.parametrize("name", sorted(LIVE_RESEARCH_CHECKOUT_JOBS))
+def test_live_research_rejects_job_token_write_escalation(name):
+    job_name, permissions = LIVE_RESEARCH_CHECKOUT_JOBS[name]
+    source = (LIVE_WORKFLOWS / name).read_text(encoding="utf-8")
+    marker = "      contents: read\n"
+    assert marker in source
+    changed = source.replace(marker, "      contents: write\n", 1)
+    assert "live job token permissions changed" in (
+        _live_checkout_token_problems(
+            changed, job_name=job_name, permissions=permissions
+        )
+    )

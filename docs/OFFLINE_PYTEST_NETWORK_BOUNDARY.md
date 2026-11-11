@@ -164,3 +164,30 @@ remain online; the wrapper removes its rules after pytest. These are
 execution-safety and reproducibility safeguards, **not** additional pilot
 data, prospective confirmation, exploratory evidence, recovery of the
 original 40 report/trace files, or human-validation results.
+
+## Opt-in live workflow checkout credential isolation
+
+The four manual-only provider-backed workflows
+(`budget-main-study.yml`, `evaluator-recovery.yml`, `live-pilot.yml`,
+and `live-app-smoke.yml`) previously used SHA-pinned `actions/checkout`
+without `persist-credentials: false`. As a result, checkout-managed
+GitHub authentication could remain available to offline unit tests and later
+diagnostic subprocesses even though their steps did not need it. The
+provider API key was separately step-scoped, but that did not remove checkout
+authentication.
+
+All four checkouts now explicitly disable credential persistence. Their job
+tokens retain only their previously declared read permissions; evaluator
+recovery keeps its required Actions read permission to retrieve its historical
+artifact by run ID. The offline
+`tests/test_offline_ci_token_permissions.py` contract checks each actual
+workflow and rejects missing or re-enabled persistence, added second
+checkouts, and write permission escalation. These assertions exercise YAML
+only; they do not launch live providers, change old evidence, or reconstruct
+historical reports.
+
+This is least-privilege hardening, not a sandbox: an explicitly authorized
+workflow step could still request a GitHub token through a new expression,
+and `persist-credentials: false` does not block all other credential
+sources or authenticated artifact downloads. It supplies no new pilot,
+designated-primary automated, exploratory, or human-evaluation observations.
