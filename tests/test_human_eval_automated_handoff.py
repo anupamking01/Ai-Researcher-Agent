@@ -584,3 +584,43 @@ def test_joint_handoff_rejects_identical_byte_inode_replacement_after_component(
     monkeypatch.setattr(combined.handoff, "verify_counterbalanced_handoff", swapped_after_pair)
     with pytest.raises(ValueError, match=f"{order} distribution inventory or file identity changed"):
         combined.verify_automated_handoff(**case)
+
+
+@pytest.mark.parametrize("source", [
+    "coordinator_blinding_key",
+    "coordinator_manifest",
+    "research_manifest",
+    "frozen_tasks",
+    "treatment_csv",
+    "evaluator_csv",
+])
+def test_joint_handoff_rejects_same_byte_replacement_of_nondistribution_source(
+    case, monkeypatch, source,
+):
+    """SHA-256 still matches, but the original handoff source inode was swapped."""
+    targets = {
+        "coordinator_blinding_key": case["packet_root"] / "blinding_key.csv",
+        "coordinator_manifest": case["packet_root"] / "manifest.json",
+        "research_manifest": case["research_manifest_path"],
+        "frozen_tasks": case["task_manifest_path"],
+        "treatment_csv": case["repo_root"] / lineage.MAIN_REL,
+        "evaluator_csv": case["repo_root"] / lineage.SUPPORT_REL,
+    }
+    target = targets[source]
+    actual = combined.handoff.verify_counterbalanced_handoff
+
+    def replaced_after_component(**kwargs):
+        receipt = actual(**kwargs)
+        retained = target.read_bytes()
+        replacement = target.with_name(target.name + ".synthetic-replacement")
+        replacement.write_bytes(retained)
+        replacement.replace(target)
+        assert target.read_bytes() == retained
+        return receipt
+
+    monkeypatch.setattr(
+        combined.handoff, "verify_counterbalanced_handoff",
+        replaced_after_component,
+    )
+    with pytest.raises(ValueError, match="file identity changed during combined handoff"):
+        combined.verify_automated_handoff(**case)

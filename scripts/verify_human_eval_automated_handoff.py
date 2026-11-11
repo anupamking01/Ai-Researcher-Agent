@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import re
+import stat
 from pathlib import Path
 
 from scripts import build_human_eval_packet as packet_builder
@@ -38,6 +39,36 @@ def _capture_sources(paths: dict[str, Path]) -> dict[str, str]:
         ).hexdigest()
         for label, path in paths.items()
     }
+
+
+def _source_path_generation(path: Path, *, label: str) -> tuple[int, ...]:
+    """Snapshot a non-distribution source's visible file identity.
+
+    Content hashes alone cannot detect a same-byte replacement of a retained
+    coordinator key, archived manifest, frozen task file, guide or study CSV.
+    Include inode, mode, hardlink count, timestamps and size; the existing
+    descriptor-held byte capture separately verifies content.
+    """
+    try:
+        metadata = Path(path).lstat()
+    except OSError as exc:
+        raise ValueError(f"{label} unavailable during combined handoff") from exc
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(f"{label} must remain a regular non-symlink source")
+    return (
+        metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_nlink,
+        metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns,
+    )
+
+
+def _require_source_path_generations_unchanged(
+    sources: dict[str, Path], generations: dict[str, tuple[int, ...]],
+) -> None:
+    for label, path in sources.items():
+        if _source_path_generation(path, label=label) != generations[label]:
+            raise ValueError(
+                f"{label} file identity changed during combined handoff verification"
+            )
 
 
 def _capture_bundle_windows(
@@ -122,12 +153,21 @@ def verify_automated_handoff(
     # the first verified bundle could change while the second is checked.
     for name in exporter.COORDINATOR_ARTIFACTS:
         critical_paths[f"coordinator {name}"] = packet_root / name
+    # The two distribution inventories have their own full-window identity
+    # guards. Keep the coordinator/published inputs separately to detect
+    # same-byte replacement of the blinding key or other critical sources.
+    source_paths = dict(critical_paths)
     for order, root in (("canonical", canonical_root), ("reverse", reverse_root)):
         for name in exporter.ANNOTATOR_ARTIFACTS:
             critical_paths[f"{order} {name}"] = Path(root) / name
 
+    source_generations = {
+        label: _source_path_generation(path, label=label)
+        for label, path in source_paths.items()
+    }
     bundle_windows = _capture_bundle_windows(Path(canonical_root), Path(reverse_root))
     initial = _capture_sources(critical_paths)
+    _require_source_path_generations_unchanged(source_paths, source_generations)
     if initial["research manifest"] != expected_research_manifest_sha256:
         raise ValueError("research manifest does not match independently retained pin")
     if initial["coordinator manifest.json"] != expected_coordinator_manifest_sha256:
@@ -235,6 +275,7 @@ def verify_automated_handoff(
         if final[label] != initial[label]:
             raise ValueError(f"{label} changed during combined handoff verification")
 
+    _require_source_path_generations_unchanged(source_paths, source_generations)
     _require_bundle_windows_unchanged(bundle_windows)
 
     return {

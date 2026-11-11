@@ -202,3 +202,33 @@ This is an observable same-filesystem verification-window safeguard, **not**
 an atomic snapshot, proof of trusted archives, or protection against mutations
 after a receipt has been issued. The separately pinned delivered-copy check
 remains mandatory before releasing a bundle to an eligible annotator.
+
+
+## Coordinator and published-source same-byte replacement guard (11 November 2026)
+
+The combined verifier's two bounded content captures already compared SHA-256
+values across the full handoff window. Unlike the annotator distribution
+bundles, however, coordinator-only files and the upstream frozen/published
+inputs were not protected against *same-byte pathname replacement*. A changed
+blinding-key inode, independently pinned manifest, frozen task source, guide or
+measurement CSV could retain an identical digest while no longer being the
+file observed at the start of verification.
+
+The joint gate now snapshots each nondistribution source's pathname identity
+(device/inode, mode, link count, size, mtime and ctime) before the combined
+checks and requires it unchanged after the initial and final descriptor-held
+byte captures. This supplements, rather than replaces, the original digest
+checks and the full-inventory guard for the two annotator bundles. Synthetic
+offline regressions replace coordinator keys/manifests, the source manifest,
+and both automated CSVs with **byte-identical new inodes** after the paired
+distribution component returns. All are rejected without touching original
+research evidence or collecting ratings.
+
+This establishes only observable local verification-window consistency, not
+an atomic snapshot or independent custody of September's original reports.
+It cannot detect transient mutations fully reversed between observations,
+prove trusted timestamps or authentic annotator identities, or enable human
+validation without independently authenticated original evidence and actual
+independent ratings. Diagnostic pilot, post-collection designated-primary
+automated analyses, exploratory robustness analyses and future genuine human
+validation remain separate.
