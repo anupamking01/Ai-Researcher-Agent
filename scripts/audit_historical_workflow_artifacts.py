@@ -7,7 +7,7 @@ Only the exact historically named artifacts count as candidates.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -28,6 +28,8 @@ MAX_PAGES = 20
 MAX_RESPONSE_BYTES = 512 * 1024
 MAX_API_JSON_DEPTH = 64
 MAX_API_INTEGER_DIGITS = 20
+# An as-of receipt must describe this audit execution, not a historical replay.
+MAX_OBSERVATION_BACKDATE = timedelta(seconds=60)
 # Immutable GitHub repository ID, captured from the original historical runs.
 HISTORICAL_REPOSITORY_ID = 812439224
 HISTORICAL_BRANCH = "research-paper-eval-2027"
@@ -288,7 +290,8 @@ def _parse_expiry_utc(value: object) -> datetime:
 
 def _listed_artifacts(
     run_id: int, *, expected_head_sha: str, started_at: datetime,
-    last_updated_at: datetime, fetch_json: Callable[[str], object],
+    last_updated_at: datetime, checked_at: datetime,
+    fetch_json: Callable[[str], object],
 ) -> list[dict]:
     """Read every page; never interpret a partial listing as a missing archive."""
     seen_ids = set()
@@ -334,6 +337,10 @@ def _listed_artifacts(
                 )
             if updated_at < created_at:
                 raise ArtifactInventoryError("artifact update precedes creation")
+            if updated_at > checked_at:
+                raise ArtifactInventoryError(
+                    "artifact metadata updated_at postdates inventory observation"
+                )
             if _parse_expiry_utc(artifact.get("expires_at")) <= created_at:
                 raise ArtifactInventoryError("artifact expiry must follow creation")
             if type(artifact.get("size_in_bytes")) is not int or artifact["size_in_bytes"] <= 0:
@@ -410,19 +417,34 @@ def _workflow_snapshot_identity(run: dict) -> tuple:
     return tuple((type(run.get(name)), run.get(name)) for name in fields)
 
 
+def _utc_now() -> datetime:
+    """Single local UTC clock sample, injectable by deterministic offline tests."""
+    return datetime.now(timezone.utc)
+
+
 def audit_historical_artifact_inventory(
     *,
     fetch_json: Callable[[str], object] = _fetch_json,
     checked_at: datetime | None = None,
 ) -> dict:
     """Pin run identity and single UTC inventory time before interpreting listings."""
+    audit_started_at = _utc_now()
     if checked_at is None:
-        checked_at = datetime.now(timezone.utc)
+        checked_at = audit_started_at
     if not isinstance(checked_at, datetime) or checked_at.tzinfo is None or (
         checked_at.utcoffset() is None
     ):
         raise ArtifactInventoryError("inventory checked_at must be timezone-aware")
     checked_at = checked_at.astimezone(timezone.utc)
+    # Refuse retrospective or future labels before any GitHub metadata requests.
+    if checked_at > audit_started_at:
+        raise ArtifactInventoryError(
+            "inventory observation time is in the future relative to audit start"
+        )
+    if checked_at < audit_started_at - MAX_OBSERVATION_BACKDATE:
+        raise ArtifactInventoryError(
+            "inventory observation time is stale relative to audit start"
+        )
     # Check our retained provider snapshot before any live GitHub metadata read;
     # otherwise stale or modified local evidence could escape notice when an
     # artifact is absent and the hard-coded candidate identity is never used.
@@ -455,16 +477,22 @@ def audit_historical_artifact_inventory(
         )
         if last_updated_at < started_at:
             raise ArtifactInventoryError(f"{role} workflow last update precedes start")
+        if last_updated_at > checked_at:
+            raise ArtifactInventoryError(
+                f"{role} workflow updated_at postdates inventory observation"
+            )
         artifacts = _listed_artifacts(
             run_id, expected_head_sha=commit, started_at=started_at,
-            last_updated_at=last_updated_at, fetch_json=fetch_json,
+            last_updated_at=last_updated_at, checked_at=checked_at,
+            fetch_json=fetch_json,
         )
         # GitHub's page totals alone cannot detect an ID replacement or changed
         # custody metadata between page reads. Reconcile a second complete scan
         # before asserting that a historical artifact is absent or available.
         second_scan = _listed_artifacts(
             run_id, expected_head_sha=commit, started_at=started_at,
-            last_updated_at=last_updated_at, fetch_json=fetch_json,
+            last_updated_at=last_updated_at, checked_at=checked_at,
+            fetch_json=fetch_json,
         )
         if _listing_identity(artifacts) != _listing_identity(second_scan):
             raise ArtifactInventoryError(

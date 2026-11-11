@@ -3,6 +3,25 @@
 **Status (2026-11-05): blocked on original report and handoff custody.**
 This is an operational inventory and recovery plan, not an experiment or human-evaluation result.
 
+## Run-scoped inventory as-of chronology gate (2026-11-11)
+
+The read-only run-scoped auditor `scripts/audit_historical_workflow_artifacts.py`
+now samples the local UTC start clock once and rejects explicitly supplied
+`checked_at` timestamps in the future or more than 60 seconds older. These
+checks occur before any GitHub API request, including both-empty-listing
+cases. It additionally rejects a historical workflow or listed artifact whose
+provider `updated_at` postdates the recorded observation. This prevents
+a current missing/present ZIP from receiving a fictional future or historical
+availability timestamp despite matching IDs, digests, and double scans.
+Deterministic offline tests inject the observation clock for historical
+expiry scenarios; they are not retrospective API observations.
+
+This safeguard depends on the local system clock and same-provider timestamps;
+it is not independent timestamp attestation, proof of original report/trace
+custody, successful ZIP download or human-evaluation authorization. Missing
+GitHub artifacts do not rule out authorized offline backups. No treatment,
+evaluator, or human rating was generated or changed.
+
 ## Run-scoped GitHub metadata origin boundary
 
 The read-only historical **run-scoped** workflow/artifact inventory now rejects

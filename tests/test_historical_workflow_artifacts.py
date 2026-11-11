@@ -5,7 +5,7 @@ No GitHub network requests, experiments, artifacts or human ratings are used.
 from __future__ import annotations
 
 import copy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import pytest
 
 from scripts import audit_historical_workflow_artifacts as audit
@@ -261,11 +261,14 @@ def test_source_unavailability_is_an_error_not_a_missing_archive_claim():
         audit.audit_historical_artifact_inventory(fetch_json=inaccessible)
 
 
-def test_listed_original_zip_metadata_is_explicitly_unverified():
+def test_listed_original_zip_metadata_is_explicitly_unverified(monkeypatch):
     matches = {
         run_id: [_artifact(run_id, expected)]
         for _, run_id, _, _, _, expected in audit.HISTORICAL_RUNS
     }
+    monkeypatch.setattr(
+        audit, "_utc_now", lambda: datetime(2026, 10, 28, tzinfo=timezone.utc)
+    )
     inventory = audit.audit_historical_artifact_inventory(
         fetch_json=_client(_responses(matches)),
         checked_at=datetime(2026, 10, 28, tzinfo=timezone.utc),
@@ -286,10 +289,13 @@ def test_listed_original_zip_metadata_is_explicitly_unverified():
     assert inventory["human_evaluation_ready"] is False
 
 
-def test_elapsed_expiry_flag_cannot_claim_downloadable_candidate():
+def test_elapsed_expiry_flag_cannot_claim_downloadable_candidate(monkeypatch):
     role, run_id, _, _, _, expected = audit.HISTORICAL_RUNS[0]
     candidate = _artifact(run_id, expected)
     candidate["expires_at"] = "2026-10-28T12:00:00Z"
+    monkeypatch.setattr(
+        audit, "_utc_now", lambda: datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc)
+    )
     inventory = audit.audit_historical_artifact_inventory(
         fetch_json=_client(_responses({run_id: [candidate]})),
         checked_at=datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc),
@@ -354,6 +360,83 @@ def test_unscoped_download_endpoint_fails_closed():
     with pytest.raises(audit.ArtifactInventoryError, match="download URL"):
         audit.audit_historical_artifact_inventory(
             fetch_json=_client(_responses({run_id: [candidate]}))
+        )
+
+
+def test_inventory_default_observation_uses_single_clock_sample(monkeypatch):
+    now = datetime(2026, 11, 11, 18, tzinfo=timezone.utc)
+    samples = []
+    def clock():
+        samples.append(now)
+        return now
+    monkeypatch.setattr(audit, "_utc_now", clock)
+    receipt = audit.audit_historical_artifact_inventory(fetch_json=_client(_responses()))
+    assert samples == [now]
+    assert receipt["checked_at_utc"] == now.isoformat()
+    assert receipt["human_evaluation_ready"] is False
+
+
+@pytest.mark.parametrize("offset", [-8, 0, 9])
+def test_inventory_rejects_future_as_of_before_network(monkeypatch, offset):
+    now = datetime(2026, 11, 11, 18, tzinfo=timezone.utc)
+    monkeypatch.setattr(audit, "_utc_now", lambda: now)
+    future = (now + timedelta(microseconds=1)).astimezone(
+        timezone(timedelta(hours=offset))
+    )
+    def no_network(_):
+        raise AssertionError("no API call allowed for future as-of")
+    with pytest.raises(audit.ArtifactInventoryError, match="future"):
+        audit.audit_historical_artifact_inventory(
+            checked_at=future, fetch_json=no_network
+        )
+
+
+@pytest.mark.parametrize("seconds", [60.000001, 600])
+def test_inventory_rejects_stale_as_of_before_network(monkeypatch, seconds):
+    now = datetime(2026, 11, 11, 18, tzinfo=timezone.utc)
+    monkeypatch.setattr(audit, "_utc_now", lambda: now)
+    def no_network(_):
+        raise AssertionError("no API call allowed for backdated as-of")
+    with pytest.raises(audit.ArtifactInventoryError, match="stale"):
+        audit.audit_historical_artifact_inventory(
+            checked_at=now - timedelta(seconds=seconds), fetch_json=no_network
+        )
+
+
+def test_inventory_accepts_exact_freshness_boundary(monkeypatch):
+    now = datetime(2026, 11, 11, 18, tzinfo=timezone.utc)
+    monkeypatch.setattr(audit, "_utc_now", lambda: now)
+    receipt = audit.audit_historical_artifact_inventory(
+        checked_at=now - timedelta(seconds=60), fetch_json=_client(_responses())
+    )
+    assert receipt["checked_at_utc"] == (now - timedelta(seconds=60)).isoformat()
+
+
+def test_inventory_rejects_future_workflow_update(monkeypatch):
+    now = datetime(2026, 11, 11, 18, tzinfo=timezone.utc)
+    monkeypatch.setattr(audit, "_utc_now", lambda: now)
+    responses = _responses()
+    run = audit.HISTORICAL_RUNS[0][1]
+    path = f"/repos/{audit.REPOSITORY}/actions/runs/{run}"
+    responses[path]["updated_at"] = "2026-11-11T18:00:01Z"
+    calls = []
+    def fetch(path):
+        calls.append(path)
+        return copy.deepcopy(responses[path])
+    with pytest.raises(audit.ArtifactInventoryError, match="workflow updated_at postdates"):
+        audit.audit_historical_artifact_inventory(fetch_json=fetch)
+    assert calls == [path]
+
+
+def test_inventory_rejects_future_artifact_update(monkeypatch):
+    now = datetime(2026, 11, 11, 18, tzinfo=timezone.utc)
+    monkeypatch.setattr(audit, "_utc_now", lambda: now)
+    role, run, _, _, _, name = audit.HISTORICAL_RUNS[0]
+    artifact = _artifact(run, name)
+    artifact["updated_at"] = "2026-11-11T18:00:01Z"
+    with pytest.raises(audit.ArtifactInventoryError, match="artifact metadata updated_at postdates"):
+        audit.audit_historical_artifact_inventory(
+            fetch_json=_client(_responses({run: [artifact]}))
         )
 
 
