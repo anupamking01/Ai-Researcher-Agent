@@ -121,6 +121,28 @@ an added treatment label, coordinator field, redirected source identity, or
 misleading integrity claim cannot produce a verified freeze even when every
 artifact fingerprint remains unchanged.
 
+## Single-link custody of captured blinded inputs
+
+The shared descriptor-bound reader used by blinded ratings freeze and retained
+freeze verification now requires every source input to have **exactly one
+filesystem hardlink** before reading. It includes file mode and link count,
+alongside inode, size, modification time and metadata-change time, in the
+before/after/visible-path identity comparison. This detects a pre-existing
+alternate hardlink and an observed link or permission change during capture,
+even when the bytes and SHA-256 remain identical. Synthetic offline tests cover
+ordinary single-link inputs, hardlinked source aliases, and an alias introduced
+during the byte-read window.
+
+This protects the custody of submitted ratings and coordinator attestations in
+addition to other retained source documents. Existing hardlinked inputs must be
+retained as evidence of a custody deviation; use separately obtained,
+single-link copies only under the documented blinded correction and archival
+policy, never silently replace or rewrite historical submissions. Link-count
+checks cannot prove human identity or scoring independence, detect an alias
+created and removed entirely between observations, independently timestamp
+the inputs, or recover missing original treatment reports. No ratings,
+experimental outputs, or frozen inference have been changed.
+
 ## Raw submission identity gate
 
 The importer enforces the already-frozen assignment rule: every raw submitted
