@@ -222,8 +222,12 @@ def audit_direct_artifact_ids(
     checked_at: datetime | None = None,
 ) -> dict:
     """Two read-only observations per pinned ID; fail on any access inconsistency."""
+    # Capture execution time once so a default receipt uses precisely the
+    # same UTC clock sample that bounds caller-supplied as-of timestamps.
+    # This is a local-clock consistency check, not a trusted time authority.
+    audit_started_at = datetime.now(timezone.utc)
     if checked_at is None:
-        checked_at = datetime.now(timezone.utc)
+        checked_at = audit_started_at
     if (
         not isinstance(checked_at, datetime)
         or checked_at.tzinfo is None
@@ -231,6 +235,13 @@ def audit_direct_artifact_ids(
     ):
         raise DirectArtifactAuditError("checked_at must be timezone-aware")
     checked_at = checked_at.astimezone(timezone.utc)
+    # A future as-of date could falsely describe a present-day HTTP 404 or
+    # listed ZIP as an observation that has not occurred. Reject it before
+    # requesting either metadata endpoint, including both-404 receipts.
+    if checked_at > audit_started_at:
+        raise DirectArtifactAuditError(
+            "observation time is in the future relative to audit execution"
+        )
     # The run's updated_at timestamp has only whole-second precision, while
     # upload-artifact log events can occur later within its final second.
     # An observation dated before both historical uploads were complete cannot

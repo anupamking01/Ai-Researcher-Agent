@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from urllib.error import HTTPError
 
@@ -335,5 +335,42 @@ def test_direct_id_metadata_update_at_observation_boundary_is_allowed(role):
         fetch_artifact=_client(originals), checked_at=NOW
     )
     assert receipt["historical_artifacts"][role]["github_upload_log_id_size_concordance"]
+    assert receipt["historical_evidence_authenticated"] is False
+    assert receipt["human_evaluation_ready"] is False
+
+
+@pytest.mark.parametrize("offset_hours", [0, 5, -7])
+def test_direct_id_future_observation_rejected_before_any_api_access(offset_hours):
+    """Do not let today's 404 or ZIP metadata be presented as a future observation."""
+    looked_up = []
+    future_utc = datetime.now(timezone.utc) + timedelta(days=30)
+    supplied = future_utc.astimezone(timezone(timedelta(hours=offset_hours)))
+
+    def lookup(ident):
+        looked_up.append(ident)
+        return None
+
+    with pytest.raises(audit.DirectArtifactAuditError, match="future relative to audit execution"):
+        audit.audit_direct_artifact_ids(fetch_artifact=lookup, checked_at=supplied)
+    assert looked_up == []
+
+
+def test_valid_recent_past_observation_still_accepts_unavailable_artifacts():
+    """The upper time bound preserves legitimate historical as-of diagnostics."""
+    checked_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+    calls = []
+
+    def lookup(ident):
+        calls.append(ident)
+        return None
+
+    receipt = audit.audit_direct_artifact_ids(fetch_artifact=lookup, checked_at=checked_at)
+    assert receipt["checked_at_utc"] == checked_at.isoformat()
+    assert calls == [
+        audit.ORIGINAL_PINS[0]["artifact_id"],
+        audit.ORIGINAL_PINS[0]["artifact_id"],
+        audit.ORIGINAL_PINS[1]["artifact_id"],
+        audit.ORIGINAL_PINS[1]["artifact_id"],
+    ]
     assert receipt["historical_evidence_authenticated"] is False
     assert receipt["human_evaluation_ready"] is False

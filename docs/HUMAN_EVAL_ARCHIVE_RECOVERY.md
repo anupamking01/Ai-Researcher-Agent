@@ -73,6 +73,23 @@ reports or traces, recover missing ZIPs, or make human annotation ready.
 An ordinary direct-ID 404 remains an access observation only, not proof
 of destruction or of a missing backup.
 
+## Direct-ID observation timestamps cannot be future-dated
+
+The direct-ID auditor now captures its local UTC audit-start time before any
+metadata request. A caller-supplied `checked_at` later than that timestamp
+fails **before either endpoint is contacted**; default runs reuse that same
+captured instant. This prevents a current 404 or accessible metadata object
+from being labelled as an observation made in the future. Synthetic offline
+regressions cover future timestamps expressed in different UTC offsets and a
+legitimate past observation. Earlier post-upload and metadata-update chronology
+checks remain in force.
+
+This check uses the auditor's local clock, **not** an independent timestamp
+authority. It does not verify backdated caller-supplied timestamps, authenticate
+original ZIP custody, or prove that an unavailable archive was destroyed.
+Source-bound original report/trace recovery and blinded human-evaluation gates
+remain unresolved.
+
 ## Blinded packet physical-record integrity across handoffs
 
 The coordinator packet verifier requires the packet builder's exact canonical
