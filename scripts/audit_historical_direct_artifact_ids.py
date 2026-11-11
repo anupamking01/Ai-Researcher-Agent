@@ -7,7 +7,7 @@ A listed ID is metadata only: no ZIP is downloaded or evidence authenticated.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import re
@@ -213,6 +213,19 @@ def audit_direct_artifact_ids(
     ):
         raise DirectArtifactAuditError("checked_at must be timezone-aware")
     checked_at = checked_at.astimezone(timezone.utc)
+    # The run's updated_at timestamp has only whole-second precision, while
+    # upload-artifact log events can occur later within its final second.
+    # An observation dated before both historical uploads were complete cannot
+    # establish *post-collection* artifact accessibility. Reject it before
+    # making either network request, including when both endpoints give 404.
+    latest_run_end = max(
+        inventory._parse_utc_timestamp(end, label=f"{role} original run end")
+        for role, (_start, end) in RUN_CREATION_WINDOWS_UTC.items()
+    )
+    if checked_at < latest_run_end + timedelta(seconds=1):
+        raise DirectArtifactAuditError(
+            "observation time predates completion of historical evidence uploads"
+        )
     results = {}
     for pin in ORIGINAL_PINS:
         first = fetch_artifact(pin["artifact_id"])
