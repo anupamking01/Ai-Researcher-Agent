@@ -35,20 +35,28 @@ qualification, exploratory analyses, or pending blinded human validation.
 ## Live diagnostic dispatch authorization
 
 The manual `.github/workflows/live-pilot.yml` entrypoint can incur live
-provider charges, cancel older pilot jobs, and select task subsets. New pilot
-execution must **not** be confused with September 2026's original diagnostic
-pilot or used to cherry-pick outcomes. A nondefault manual input
-`pilot_ack=NONCANONICAL_LIVE_PILOT` is required. An unconditional first-step
-guard rejects missing/incorrect acknowledgement before checkout, credentials
-or API-based cancellation. `concurrency.cancel-in-progress: false` prevents
-unacknowledged dispatch from automatically cancelling an active run before
-that guard; the existing explicit stale-run cancellation is permitted only
-after valid acknowledgement.
+provider charges and select task subsets. New pilot execution must **not** be
+confused with September 2026's original diagnostic pilot or used to cherry-pick
+outcomes. A nondefault manual input `pilot_ack=NONCANONICAL_LIVE_PILOT` is
+required. An unconditional first-step guard rejects missing/incorrect
+acknowledgement before checkout or credential access.
+
+**An acknowledged dispatch no longer cancels other already-running pilot
+jobs.** The previous `Cancel older live-pilot runs` step called the Actions
+cancel API after acknowledgement; this could terminate a separately approved,
+still-active paid run, discard its partial evidence, and waste provider budget.
+It has been removed along with the now-unnecessary `actions: write` job
+permission and `GH_TOKEN` access. The job requires only `contents: read`.
+The existing `concurrency.cancel-in-progress: false` remains in force for
+in-progress runs; GitHub Actions may still replace *pending* runs within a
+shared concurrency group. This safeguard does not promise preservation of
+queued dispatches or prevent an authorized actor cancelling a run elsewhere.
 
 Any newly uploaded run bundle is named
 `noncanonical-diagnostic-pilot-<run_id>`. Offline YAML regression tests
-protect manual-only execution, the guard, non-bypassable live steps, controlled
-cancellation, and archive labelling. This change does not authenticate
-original artifacts, change the pilot's diagnostic status, establish prospective
-precollection preregistration, modify frozen automated results, promote
-exploratory analyses, or create human-validation evidence.
+protect manual-only execution, the guard, non-bypassable live steps,
+lack of workflow-initiated cancellation/API write access, and archive labelling.
+This is prospective execution safety, not authentication of original
+artifacts, a change to pilot diagnostic status, prospective precollection
+preregistration, revision of frozen automated results, promotion of exploratory
+analyses, or evidence of human validation.

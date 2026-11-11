@@ -8,7 +8,6 @@ import yaml
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/live-pilot.yml"
 ACK = "NONCANONICAL_LIVE_PILOT"
 GUARD = "Require explicit noncanonical live-pilot acknowledgement"
-CANCEL = "Cancel older live-pilot runs"
 SECRET = "Validate API secret is configured"
 PREFLIGHT = "Preflight live search and concurrent browser extraction"
 TREATMENT = "Run frozen live pilot"
@@ -66,8 +65,24 @@ def dispatch_gate_problems(source: str) -> list[str]:
     ):
         faults.append("guard must fail closed and label pilot diagnostic")
 
-    # No cancellation or provider-backed work may bypass a failed guard.
-    ordered = [CANCEL, SECRET, PREFLIGHT, TREATMENT]
+    # A newly acknowledged diagnostic must not cancel other approved runs.
+    # Restrict the job to read-only repository access.
+    if job.get("permissions") != {"contents": "read"}:
+        faults.append("pilot job requires read-only contents permission")
+    if spec.get("permissions") not in (None, {"contents": "read"}):
+        faults.append("pilot workflow must not elevate permissions")
+    if any(
+        isinstance(step, dict) and (
+            "/cancel" in str(step.get("run", ""))
+            or "gh run cancel" in str(step.get("run", ""))
+            or "GH_TOKEN" in str(step.get("env", {}))
+        )
+        for step in steps
+    ):
+        faults.append("pilot must not cancel other authorized runs")
+
+    # Provider-backed steps must not bypass a failed acknowledgement.
+    ordered = [SECRET, PREFLIGHT, TREATMENT]
     positions: list[int] = []
     for label in ordered:
         matches = [
@@ -84,7 +99,7 @@ def dispatch_gate_problems(source: str) -> list[str]:
         ):
             faults.append(f"{label}: step bypasses failed acknowledgement")
     if len(positions) == len(ordered) and positions != sorted(positions):
-        faults.append("live pilot and cancellation step order changed")
+        faults.append("live pilot authorization step order changed")
 
     live_entries = [
         step for step in steps if isinstance(step, dict)
@@ -130,7 +145,7 @@ def test_unsafe_dispatch_or_evidence_mutations_rejected(old, new, expected):
     assert any(expected in problem for problem in dispatch_gate_problems(changed))
 
 
-def test_guard_precedes_checkout_or_cancellation():
+def test_guard_precedes_checkout_or_provider_access():
     source = WORKFLOW.read_text(encoding="utf-8")
     changed = source.replace(
         "      - name: " + GUARD,
@@ -140,9 +155,9 @@ def test_guard_precedes_checkout_or_cancellation():
     assert any("first step" in p for p in dispatch_gate_problems(changed))
 
 
-@pytest.mark.parametrize("label", [CANCEL, SECRET, PREFLIGHT, TREATMENT])
+@pytest.mark.parametrize("label", [SECRET, PREFLIGHT, TREATMENT])
 @pytest.mark.parametrize("option", ["if: always()", "continue-on-error: true"])
-def test_paid_and_cancellation_steps_cannot_override_guard(label, option):
+def test_paid_steps_cannot_override_guard(label, option):
     source = WORKFLOW.read_text(encoding="utf-8")
     marker = "      - name: " + label + "\n"
     assert marker in source
@@ -160,13 +175,67 @@ def test_job_must_not_mask_guard_failure():
                for p in dispatch_gate_problems(changed))
 
 
-def test_cancellation_and_live_steps_keep_gated_order():
+def test_live_steps_keep_gated_order():
     source = WORKFLOW.read_text(encoding="utf-8")
     changed = source.replace(
-        "- name: " + CANCEL, "- name: SWAP_NAME", 1
+        "- name: " + SECRET, "- name: SWAP_NAME", 1
     ).replace(
-        "- name: " + TREATMENT, "- name: " + CANCEL, 1
+        "- name: " + TREATMENT, "- name: " + SECRET, 1
     ).replace(
         "- name: SWAP_NAME", "- name: " + TREATMENT, 1
     )
     assert any("order changed" in p for p in dispatch_gate_problems(changed))
+
+
+@pytest.mark.parametrize(
+    "shell_command",
+    [
+        'gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/cancel"',
+        "gh run cancel 123456",
+        "curl -X POST https://api.github.com/repos/example/repo/actions/runs/123/cancel",
+    ],
+)
+def test_reintroduced_cancellation_rejected(shell_command):
+    source = WORKFLOW.read_text(encoding="utf-8")
+    marker = "      - name: Set up Python\n"
+    assert marker in source
+    changed = source.replace(
+        marker,
+        "      - name: Unexpected cancellation\n"
+        "        run: |\n"
+        f"          {shell_command}\n"
+        + marker,
+        1,
+    )
+    assert any("must not cancel other authorized runs" in p
+               for p in dispatch_gate_problems(changed))
+
+
+@pytest.mark.parametrize(
+    "permission",
+    ["      actions: write\n", "      contents: write\n"],
+)
+def test_privilege_escalation_rejected(permission):
+    source = WORKFLOW.read_text(encoding="utf-8")
+    marker = "      contents: read\n"
+    assert marker in source
+    changed = source.replace(marker, marker + permission, 1)
+    assert any("read-only contents permission" in p
+               for p in dispatch_gate_problems(changed))
+
+
+def test_reintroduced_actions_token_rejected():
+    source = WORKFLOW.read_text(encoding="utf-8")
+    marker = "      - name: Set up Python\n"
+    assert marker in source
+    changed = source.replace(
+        marker,
+        "      - name: Unexpected token\n"
+        "        env:\n"
+        "          GH_TOKEN: secret-token-placeholder\n"
+        "        run: echo token-is-not-needed\n"
+        + marker,
+        1,
+    )
+    assert any("must not cancel other authorized runs" in p
+               for p in dispatch_gate_problems(changed))
