@@ -3,6 +3,10 @@ name: live-research-pilot
 on:
   workflow_dispatch:
     inputs:
+      pilot_ack:
+        description: "Type NONCANONICAL_LIVE_PILOT to authorize a paid diagnostic; this cannot reproduce frozen original evidence"
+        required: true
+        type: string
       smart_model:
         description: Exact OpenAI model ID for planning/report/verifier calls
         required: true
@@ -31,7 +35,7 @@ on:
 
 concurrency:
   group: live-research-pilot-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   pilot:
@@ -50,6 +54,19 @@ jobs:
       PYTHONUNBUFFERED: "1"
 
     steps:
+      # Gate before checkout, credential use, or API-based cancellation.
+      - name: Require explicit noncanonical live-pilot acknowledgement
+        shell: bash
+        env:
+          VERA_PILOT_ACK: ${{ inputs.pilot_ack }}
+        run: |
+          if [ "$VERA_PILOT_ACK" != "NONCANONICAL_LIVE_PILOT" ]; then
+            echo "::error::Paid diagnostic pilot requires NONCANONICAL_LIVE_PILOT acknowledgement."
+            exit 1
+          fi
+          echo "## NONCANONICAL DIAGNOSTIC PILOT" >> "$GITHUB_STEP_SUMMARY"
+          echo "Not the original five-task pilot, a prospectively confirmatory experiment, archival recovery, or human validation." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Check out research branch
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
@@ -144,7 +161,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: research-pilot-${{ github.run_id }}
+          name: noncanonical-diagnostic-pilot-${{ github.run_id }}
           path: |
             outputs/pilot_manifest.json
             outputs/pilot_progress.json
