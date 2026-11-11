@@ -545,3 +545,42 @@ def test_composite_rejects_malformed_distribution_bundle_receipt(
     monkeypatch.setattr(combined.handoff, "verify_counterbalanced_handoff", altered)
     with pytest.raises(ValueError, match="distribution component bundle"):
         combined.verify_automated_handoff(**case)
+
+
+@pytest.mark.parametrize("order", ["canonical", "reverse"])
+def test_joint_handoff_rejects_secret_injected_after_distribution_component(
+    case, monkeypatch, order,
+):
+    """Final digest checks alone miss a newly added coordinator-only file."""
+    actual = combined.handoff.verify_counterbalanced_handoff
+
+    def injected_after_pair(**kwargs):
+        receipt = actual(**kwargs)
+        (case[f"{order}_root"] / "blinding_key.csv").write_text(
+            "coordinator-only secret -- synthetic sentinel", encoding="utf-8"
+        )
+        return receipt
+
+    monkeypatch.setattr(combined.handoff, "verify_counterbalanced_handoff", injected_after_pair)
+    with pytest.raises(ValueError, match="annotator bundle artifact set mismatch"):
+        combined.verify_automated_handoff(**case)
+
+
+@pytest.mark.parametrize("order", ["canonical", "reverse"])
+def test_joint_handoff_rejects_identical_byte_inode_replacement_after_component(
+    case, monkeypatch, order,
+):
+    """A replaced distribution file is not the one checked by the component."""
+    actual = combined.handoff.verify_counterbalanced_handoff
+
+    def swapped_after_pair(**kwargs):
+        receipt = actual(**kwargs)
+        guide = case[f"{order}_root"] / "annotator_instructions.md"
+        original = guide.read_bytes()
+        guide.unlink()
+        guide.write_bytes(original)
+        return receipt
+
+    monkeypatch.setattr(combined.handoff, "verify_counterbalanced_handoff", swapped_after_pair)
+    with pytest.raises(ValueError, match=f"{order} distribution inventory or file identity changed"):
+        combined.verify_automated_handoff(**case)

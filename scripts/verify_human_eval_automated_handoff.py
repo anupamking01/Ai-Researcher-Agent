@@ -40,6 +40,42 @@ def _capture_sources(paths: dict[str, Path]) -> dict[str, str]:
     }
 
 
+def _capture_bundle_windows(
+    canonical_root: Path, reverse_root: Path,
+) -> dict[str, tuple[Path, tuple[tuple[int, ...], ...]]]:
+    """Pin complete distribution inventories and inode metadata across both checks.
+
+    The paired distribution verifier checks its own window, but a file can be
+    injected or replaced after that component returns and before this joint
+    verifier issues its receipt. Digests of *expected* files alone miss an
+    injected coordinator secret and a same-byte inode replacement.
+    """
+    observed = {}
+    for order, root in (("canonical", canonical_root), ("reverse", reverse_root)):
+        root = Path(root)
+        exporter._require_annotator_artifact_set(root)
+        paths = (root, *(root / name for name in exporter.ANNOTATOR_ARTIFACTS))
+        observed[order] = (
+            root,
+            tuple(exporter._evidence_stat_signature(path) for path in paths),
+        )
+    return observed
+
+
+def _require_bundle_windows_unchanged(
+    observed: dict[str, tuple[Path, tuple[tuple[int, ...], ...]]],
+) -> None:
+    for order, (root, initial) in observed.items():
+        exporter._require_annotator_artifact_set(root)
+        paths = (root, *(root / name for name in exporter.ANNOTATOR_ARTIFACTS))
+        current = tuple(exporter._evidence_stat_signature(path) for path in paths)
+        if current != initial:
+            raise ValueError(
+                f"{order} distribution inventory or file identity changed "
+                "during combined handoff verification"
+            )
+
+
 def verify_automated_handoff(
     *,
     repo_root: Path,
@@ -90,6 +126,7 @@ def verify_automated_handoff(
         for name in exporter.ANNOTATOR_ARTIFACTS:
             critical_paths[f"{order} {name}"] = Path(root) / name
 
+    bundle_windows = _capture_bundle_windows(Path(canonical_root), Path(reverse_root))
     initial = _capture_sources(critical_paths)
     if initial["research manifest"] != expected_research_manifest_sha256:
         raise ValueError("research manifest does not match independently retained pin")
@@ -197,6 +234,8 @@ def verify_automated_handoff(
     for label in critical_paths:
         if final[label] != initial[label]:
             raise ValueError(f"{label} changed during combined handoff verification")
+
+    _require_bundle_windows_unchanged(bundle_windows)
 
     return {
         "schema_version": 1,

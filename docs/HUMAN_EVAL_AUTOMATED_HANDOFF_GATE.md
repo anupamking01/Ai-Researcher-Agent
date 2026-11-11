@@ -178,3 +178,27 @@ blinded human procedures or collection status. Original treatment/recovery
 archive recovery, independent source authentication and genuine human ratings
 remain prerequisite gates; a valid local composite receipt alone does not
 establish research completion or participant independence.
+
+
+## Combined-window bundle inventory and identity check (11 November 2026)
+
+The paired counterbalance verifier already checks its bundle inventory during
+its own run, but the joint automated-to-human gate previously checked only
+named file digests *after* that verifier returned. An extra coordinator-only
+file inserted into an annotator directory in this gap could escape the final
+hash comparison, exposing a blinding secret despite a successful joint receipt.
+An existing file also could be replaced with identical bytes, leaving the
+joint gate's content-only comparison unchanged.
+
+The joint gate now snapshots the complete canonical and reverse distribution
+inventories and each root/file inode/stat identity before its component checks.
+After the two components return, it validates named bytes as before and then
+requires both complete inventories and identities to match the starting
+snapshots. Synthetic tests inject an extra secret-named file and replace the
+same-byte annotator guide in each order after the paired component returns;
+all must be rejected. No original study evidence or human ratings are touched.
+
+This is an observable same-filesystem verification-window safeguard, **not**
+an atomic snapshot, proof of trusted archives, or protection against mutations
+after a receipt has been issued. The separately pinned delivered-copy check
+remains mandatory before releasing a bundle to an eligible annotator.
