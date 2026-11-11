@@ -49,7 +49,7 @@ def _file_generation(path: Path, *, label: str) -> tuple[int, ...]:
         raise ValueError(f"packet evidence changed during verification: {label}")
     return (
         entry.st_dev, entry.st_ino, entry.st_mode, entry.st_size,
-        entry.st_mtime_ns, entry.st_ctime_ns,
+        entry.st_mtime_ns, entry.st_ctime_ns, entry.st_nlink,
     )
 
 
@@ -76,8 +76,9 @@ def _capture_window_file(
 def _require_private_coordinator_generations(snapshots: dict, output_root: Path) -> None:
     """Only certify blinding secrets whose captured file modes remain private.
 
-    Read permissions from the same generation already pinned alongside the
-    verified bytes, rather than making a separate vulnerable pathname check.
+    Read permissions and link count from the same generation already pinned
+    alongside the verified bytes, rather than a separate pathname check.
+    A hard-linked private file can be shared through an unexpected alias.
     The final full-window recheck rejects any later mode or inode change.
     """
     for filename in sorted(build.COORDINATOR_PRIVATE_ARTIFACTS):
@@ -90,6 +91,11 @@ def _require_private_coordinator_generations(snapshots: dict, output_root: Path)
             raise ValueError(
                 f"coordinator-only artifact permissions are unsafe: {filename}; "
                 "a byte-valid packet is not proof that blinding secrets were protected"
+            )
+        if generation[6] != 1:
+            raise ValueError(
+                f"coordinator-only artifact is hard-linked: {filename}; "
+                "blinding secrets must have exclusive local file identity"
             )
 
 

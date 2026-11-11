@@ -197,7 +197,8 @@ def _snapshot_coordinator_bundle(packet_root: Path, snapshot_root: Path) -> dict
         if name in build.COORDINATOR_PRIVATE_ARTIFACTS:
             # Check the live source before copying it into a private temporary
             # snapshot. A verified payload is not proof its key stayed secret.
-            source_mode = path.lstat().st_mode
+            source_stat = path.lstat()
+            source_mode = source_stat.st_mode
             if (
                 not stat.S_ISREG(source_mode)
                 or stat.S_IMODE(source_mode) & 0o077
@@ -205,6 +206,11 @@ def _snapshot_coordinator_bundle(packet_root: Path, snapshot_root: Path) -> dict
                 raise ValueError(
                     f"coordinator-only artifact permissions are unsafe: {name}; "
                     "do not distribute a packet whose blinding secrets may have been exposed"
+                )
+            if source_stat.st_nlink != 1:
+                raise ValueError(
+                    f"coordinator-only artifact is hard-linked: {name}; "
+                    "do not distribute a packet with a shared blinding-secret inode"
                 )
         content = _regular_bytes(path, label=f"coordinator {name}")
         captured[name] = content

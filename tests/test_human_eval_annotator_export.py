@@ -12,6 +12,7 @@ import pytest
 
 from scripts import build_human_eval_packet as build
 from scripts import export_human_eval_annotator_bundle as exporter
+from scripts import verify_human_eval_packet as packet_verifier
 
 
 def _task_manifest(root: Path) -> Path:
@@ -113,6 +114,45 @@ def test_source_bound_verification_rejects_exposed_coordinator_artifacts(
     _export(packet_case)
     (packet_case["packet_root"] / artifact_name).chmod(0o644)
     with pytest.raises(ValueError, match="coordinator-only artifact permissions are unsafe"):
+        exporter.verify_annotator_bundle_against_source(
+            packet_root=packet_case["packet_root"],
+            output_root=packet_case["export_root"],
+            task_manifest_path=packet_case["task_manifest"],
+            repo_root=packet_case["repo_root"],
+            expected_presentation_order="canonical",
+        )
+
+
+
+@pytest.mark.parametrize("artifact_name", sorted(build.COORDINATOR_PRIVATE_ARTIFACTS))
+def test_packet_verifier_rejects_hardlinked_coordinator_secret(packet_case, artifact_name):
+    source = packet_case["packet_root"] / artifact_name
+    os.link(source, packet_case["repo_root"] / f"alternate-{artifact_name}")
+    with pytest.raises(ValueError, match="coordinator-only artifact is hard-linked"):
+        packet_verifier.verify_packet(
+            output_root=packet_case["packet_root"],
+            task_manifest_path=packet_case["task_manifest"],
+            repo_root=packet_case["repo_root"],
+        )
+
+
+@pytest.mark.parametrize("artifact_name", sorted(build.COORDINATOR_PRIVATE_ARTIFACTS))
+def test_export_rejects_hardlinked_coordinator_secret(packet_case, artifact_name):
+    source = packet_case["packet_root"] / artifact_name
+    os.link(source, packet_case["repo_root"] / f"alternate-{artifact_name}")
+    with pytest.raises(ValueError, match="coordinator-only artifact is hard-linked"):
+        _export(packet_case)
+    assert not packet_case["export_root"].exists()
+
+
+@pytest.mark.parametrize("artifact_name", sorted(build.COORDINATOR_PRIVATE_ARTIFACTS))
+def test_source_bound_verification_rejects_hardlinked_coordinator_secret(
+    packet_case, artifact_name,
+):
+    _export(packet_case)
+    source = packet_case["packet_root"] / artifact_name
+    os.link(source, packet_case["repo_root"] / f"alternate-{artifact_name}")
+    with pytest.raises(ValueError, match="coordinator-only artifact is hard-linked"):
         exporter.verify_annotator_bundle_against_source(
             packet_root=packet_case["packet_root"],
             output_root=packet_case["export_root"],

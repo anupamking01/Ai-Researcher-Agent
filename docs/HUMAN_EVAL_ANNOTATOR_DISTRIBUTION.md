@@ -93,6 +93,20 @@ assignment, or human-validation claim changes.
 
 The exporter fails closed if the coordinator packet does not pass its existing
 source/mapping verifier or if the guide no longer matches its frozen SHA-256.
+The coordinator packet verifier and both source-bound distribution paths
+now require the private `blinding_key.csv` and `manifest.json` each to have
+**exactly one filesystem hard link**, in addition to their existing private
+permission modes. A byte-valid, mode-`0600` blinding key may still have an
+unexpected second name outside the coordinator directory; a copy of that
+alias could expose treatment mappings even though the intended distributor
+only selects approved files. The verifier records link count in its file-generation
+snapshot and checks it again at the end of verification. The exporter rejects
+shared private inodes before copying them into its restricted staging directory.
+Synthetic offline tests exercise packet verification, initial export, and
+source-bound re-verification for both private artifacts. These checks detect
+observable local aliases, not already leaked copies, transient create/remove
+attacks that leave no observed trace, or independently authenticated custody.
+
 It snapshots packet artifacts before verification, so a change to the live
 coordinator packet after verification cannot silently change the bytes copied
 to the annotator bundle. The guide contains the full five-dimension rubric and
