@@ -155,3 +155,26 @@ itself establishes an independently authenticated original report archive,
 genuine annotator identities, human ratings or human-validation outcomes.
 The missing September treatment/recovery source ZIPs remain an external
 blocker; this change neither recreates them nor alters any frozen results.
+
+
+## Component-receipt identity and byte reconciliation (11 November 2026)
+
+The joint gate now requires both component PASS receipts to identify the same
+schema version and study, and checks the automated task count and explicit
+no-ratings/no-rerun flags. It also requires the counterbalanced verifier's
+coordinator-manifest digest to equal the independently retained coordinator
+pin and its declared presentation orders to be canonical then reverse.
+Before issuing the final joint receipt it compares each component-reported
+packet, ratings-template and annotator-guide SHA-256 value **for both bundles**
+to its own earlier descriptor-captured bytes. A stale or incorrectly composed
+upstream receipt therefore cannot supply a seemingly approved delivery digest
+that differs from the actual files, even when the upstream component reports
+success. Offline synthetic tests cover both orderings, all three digests,
+contradictory component claims and malformed bundle maps.
+
+These are cross-checks of the combined verifier's contract, not independent
+archival attestation. They do not change original reports, automated outcomes,
+blinded human procedures or collection status. Original treatment/recovery
+archive recovery, independent source authentication and genuine human ratings
+remain prerequisite gates; a valid local composite receipt alone does not
+establish research completion or participant independence.

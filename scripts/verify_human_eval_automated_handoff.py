@@ -135,6 +135,17 @@ def verify_automated_handoff(
         repo_root=repo_root,
         annotator_guide_path=Path(annotator_guide_path),
     )
+    # A component's status/count alone cannot authenticate the *claims* that
+    # become part of the combined receipt. Reconcile source and bundle digests
+    # to our own bounded capture, not only to the component's reported values.
+    for component_name, receipt in (("automated lineage", aligned), ("distribution", distributed)):
+        if (
+            type(receipt) is not dict
+            or type(receipt.get("schema_version")) is not int
+            or receipt["schema_version"] != 1
+            or receipt.get("study_id") != "budget-main-v1"
+        ):
+            raise ValueError(f"{component_name} component receipt identity differs")
     # Never promote a partial, contradictory, or non-verifying component receipt
     # to a successful joint handoff. A matching short count from *both*
     # components was previously enough to pass this composition layer.
@@ -156,6 +167,31 @@ def verify_automated_handoff(
             )
     if aligned.get("archival_manifest_externally_pinned") is not True:
         raise ValueError("automated lineage was not independently archive-pinned")
+    if type(aligned.get("n_tasks")) is not int or aligned["n_tasks"] != len(expected_tasks):
+        raise ValueError("automated lineage task count differs from expected matrix")
+    for flag in ("human_ratings_read", "treatment_outputs_rerun", "evaluator_outputs_rerun"):
+        if aligned.get(flag) is not False:
+            raise ValueError(f"automated lineage {flag} receipt contract differs")
+    if distributed.get("coordinator_manifest_sha256") != expected_coordinator_manifest_sha256:
+        raise ValueError("distribution component does not match the pinned coordinator manifest")
+    if distributed.get("presentation_orders") != ["canonical", "reverse"]:
+        raise ValueError("distribution component presentation-order contract differs")
+    bundles = distributed.get("bundles")
+    if type(bundles) is not dict or set(bundles) != {"canonical", "reverse"}:
+        raise ValueError("distribution component bundle identities differ")
+    for order in ("canonical", "reverse"):
+        bundle = bundles[order]
+        if type(bundle) is not dict:
+            raise ValueError(f"{order} distribution component bundle receipt is invalid")
+        for field, artifact in (
+            ("packet_sha256", "packet.jsonl"),
+            ("ratings_template_sha256", "ratings_template.csv"),
+            ("annotator_guide_sha256", "annotator_instructions.md"),
+        ):
+            if bundle.get(field) != initial[f"{order} {artifact}"]:
+                raise ValueError(
+                    f"{order} distribution {field} does not match captured source bytes"
+                )
 
     final = _capture_sources(critical_paths)
     for label in critical_paths:

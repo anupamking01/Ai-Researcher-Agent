@@ -379,19 +379,36 @@ def test_canonical_receipt_records_both_independent_source_checks(
     monkeypatch.setattr(
         combined.lineage, "audit_files",
         lambda **_kwargs: {
+            "schema_version": 1, "study_id": "budget-main-v1",
             "status": "human_packet_automated_run_lineage_consistent",
-            "n_reports": 40, "run_ids_matched": 40,
+            "n_tasks": 10, "n_reports": 40, "run_ids_matched": 40,
             "archival_manifest_externally_pinned": True,
+            "human_ratings_read": False, "treatment_outputs_rerun": False,
+            "evaluator_outputs_rerun": False,
         },
     )
     monkeypatch.setattr(
         combined.handoff, "verify_counterbalanced_handoff",
         lambda **_kwargs: {
+            "schema_version": 1, "study_id": "budget-main-v1",
             "status": "human_eval_counterbalanced_handoff_verified",
             "n_reports": 40,
+            "coordinator_manifest_sha256": case["expected_coordinator_manifest_sha256"],
+            "presentation_orders": ["canonical", "reverse"],
             "bundles": {
-                "canonical": {"packet_sha256": "synthetic-canonical"},
-                "reverse": {"packet_sha256": "synthetic-reverse"},
+                order: {
+                    field: hashlib.sha256(
+                        (case[root_key] / filename).read_bytes()
+                    ).hexdigest()
+                    for field, filename in (
+                        ("packet_sha256", "packet.jsonl"),
+                        ("ratings_template_sha256", "ratings_template.csv"),
+                        ("annotator_guide_sha256", "annotator_instructions.md"),
+                    )
+                }
+                for order, root_key in (
+                    ("canonical", "canonical_root"), ("reverse", "reverse_root")
+                )
             },
         },
     )
@@ -453,4 +470,78 @@ def test_joint_handoff_rejects_matching_but_incomplete_component_counts(
         combined.handoff, "verify_counterbalanced_handoff", short_distribution
     )
     with pytest.raises(ValueError, match="expected 8 reports"):
+        combined.verify_automated_handoff(**case)
+
+
+@pytest.mark.parametrize(("component", "field", "replacement", "message"), [
+    ("lineage", "schema_version", 2, "automated lineage component receipt identity"),
+    ("distribution", "study_id", "other-study", "distribution component receipt identity"),
+    ("lineage", "n_tasks", 1, "automated lineage task count"),
+    ("lineage", "human_ratings_read", True, "human_ratings_read receipt contract"),
+    ("lineage", "treatment_outputs_rerun", True, "treatment_outputs_rerun receipt contract"),
+    ("lineage", "evaluator_outputs_rerun", True, "evaluator_outputs_rerun receipt contract"),
+    ("distribution", "coordinator_manifest_sha256", "0" * 64, "pinned coordinator manifest"),
+    ("distribution", "presentation_orders", ["reverse", "canonical"], "presentation-order contract"),
+])
+def test_composite_rejects_inconsistent_component_identity_or_attestation(
+    case, monkeypatch, component, field, replacement, message,
+):
+    """A component's status must not promote a contradictory identity or claim."""
+    module, attribute = (
+        (combined.lineage, "audit_files") if component == "lineage"
+        else (combined.handoff, "verify_counterbalanced_handoff")
+    )
+    actual = getattr(module, attribute)
+
+    def altered(**kwargs):
+        receipt = actual(**kwargs)
+        return {**receipt, field: replacement}
+
+    monkeypatch.setattr(module, attribute, altered)
+    with pytest.raises(ValueError, match=message):
+        combined.verify_automated_handoff(**case)
+
+
+@pytest.mark.parametrize(("order", "field"), [
+    (order, field)
+    for order in ("canonical", "reverse")
+    for field in ("packet_sha256", "ratings_template_sha256", "annotator_guide_sha256")
+])
+def test_composite_rejects_bundle_digest_claim_not_matching_captured_bytes(
+    case, monkeypatch, order, field,
+):
+    """A plausible component PASS cannot certify invented delivery digests."""
+    actual = combined.handoff.verify_counterbalanced_handoff
+
+    def altered(**kwargs):
+        receipt = actual(**kwargs)
+        return {
+            **receipt,
+            "bundles": {
+                **receipt["bundles"],
+                order: {**receipt["bundles"][order], field: "0" * 64},
+            },
+        }
+
+    monkeypatch.setattr(combined.handoff, "verify_counterbalanced_handoff", altered)
+    with pytest.raises(ValueError, match=f"{order} distribution {field}"):
+        combined.verify_automated_handoff(**case)
+
+
+@pytest.mark.parametrize("bad_bundles", [
+    {},
+    {"canonical": None, "reverse": None},
+    {"canonical": {}, "reverse": {}, "extra": {}},
+])
+def test_composite_rejects_malformed_distribution_bundle_receipt(
+    case, monkeypatch, bad_bundles,
+):
+    actual = combined.handoff.verify_counterbalanced_handoff
+
+    def altered(**kwargs):
+        receipt = actual(**kwargs)
+        return {**receipt, "bundles": bad_bundles}
+
+    monkeypatch.setattr(combined.handoff, "verify_counterbalanced_handoff", altered)
+    with pytest.raises(ValueError, match="distribution component bundle"):
         combined.verify_automated_handoff(**case)
