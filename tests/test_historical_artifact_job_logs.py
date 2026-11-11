@@ -179,7 +179,12 @@ def test_workflow_window_allows_last_reported_second_fraction():
     original = original.replace(
         "2026-09-11T17:22:40.6903482Z",
         "2026-09-11T17:22:43.999999999Z",
+    ).replace(
+        "2026-09-11T17:22:40.7100120Z",
+        "2026-09-11T17:22:43.999999999Z",
     )
+    # Both the final URL and its observed closing boundary must fit the
+    # last second; an earlier cleanup would be a reversed event clock.
     receipt = audit.audit_historical_job_logs(original, recovery)
     assert receipt["historical_treatment_evidence_authenticated"] is False
 
