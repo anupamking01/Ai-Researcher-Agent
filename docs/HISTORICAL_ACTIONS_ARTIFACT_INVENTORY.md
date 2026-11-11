@@ -260,10 +260,12 @@ requires the named upload/download action boundaries and unique ordered event
 lines, and compares all artifact IDs, byte sizes, ZIP digests, run-scoped URLs
 and the cross-run original download digest against the recorded metadata.
 An invalid, ambiguous or modified transcript fails closed. The audit also
-parses full-precision UTC event timestamps, rejects impossible calendar dates
-or event-time reversals even when log *line order* is plausible, and requires
-original upload to precede the recovery download and recovery download to
-precede the evaluator-recovery ZIP upload. It permits equal timestamps when
+parses full-precision UTC event timestamps on **every timestamped line inside
+the selected upload/download action steps**, including action-start markers and
+otherwise unrelated progress messages. It rejects impossible calendar dates,
+clock reversals and out-of-workflow-window events even when the digest/ID lines
+alone are ordered and historically plausible. Original upload must precede the
+recovery download, which must precede the evaluator-recovery ZIP upload. It permits equal timestamps when
 the logger cannot distinguish two adjacent events; log line order still must
 be valid. These checks establish **internal recorded chronology only**:
 caller-supplied GitHub logs are not independently authenticated, clock

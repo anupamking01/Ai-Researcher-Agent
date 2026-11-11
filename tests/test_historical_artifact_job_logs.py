@@ -184,6 +184,50 @@ def test_workflow_window_allows_last_reported_second_fraction():
     assert receipt["historical_treatment_evidence_authenticated"] is False
 
 
+@pytest.mark.parametrize(("source", "old_stamp", "new_stamp"), [
+    ("original", "2026-09-11T17:22:39.0297511Z", "2026-09-11T17:22:41.0297511Z"),
+    ("recovery", "2026-09-13T21:21:03.9240000Z", "2026-09-13T21:21:05.9240000Z"),
+])
+def test_action_step_marker_cannot_postdate_its_digest_events(
+    source, old_stamp, new_stamp
+):
+    """Pinned event timestamps alone cannot excuse a later step start."""
+    original, recovery = _logs()
+    if source == "original":
+        original = original.replace(old_stamp, new_stamp)
+    else:
+        recovery = recovery.replace(old_stamp, new_stamp)
+    with pytest.raises(audit.HistoricalLogError, match="timestamps are out of order"):
+        audit.audit_historical_job_logs(original, recovery)
+
+
+def test_unrelated_step_progress_line_cannot_reverse_the_action_clock():
+    original, recovery = _logs()
+    digest = _line(
+        "2026-09-11T17:22:40.4375561Z",
+        f"SHA256 digest of uploaded artifact zip is {audit.ORIGINAL['zip_sha256']}",
+    )
+    assert digest in original
+    original = original.replace(
+        digest,
+        digest + "\\n" + _line("2026-09-11T17:22:40.1000000Z", "Upload progress"),
+    )
+    with pytest.raises(audit.HistoricalLogError, match="timestamps are out of order"):
+        audit.audit_historical_job_logs(original, recovery)
+
+
+def test_unrelated_step_progress_line_must_be_inside_historical_run_window():
+    original, recovery = _logs()
+    cleanup = _line("2026-09-11T17:22:40.7100120Z", "Post job cleanup.")
+    assert cleanup in original
+    original = original.replace(
+        cleanup,
+        _line("2026-09-12T00:00:00.0000000Z", "Upload debug note") + "\\n" + cleanup,
+    )
+    with pytest.raises(audit.HistoricalLogError, match="outside pinned workflow window"):
+        audit.audit_historical_job_logs(original, recovery)
+
+
 def test_impossible_calendar_date_in_expected_event_fails_closed():
     original, recovery = _logs()
     original = original.replace(

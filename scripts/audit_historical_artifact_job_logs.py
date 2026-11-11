@@ -96,6 +96,21 @@ def _require_workflow_window(
         )
 
 
+def _require_action_step_chronology(
+    step: list[tuple[str, str]], *, run_id: int, label: str,
+) -> None:
+    """Check every timestamped line in the action step, not just digest events.
+
+    The GitHub job logger emits other timestamped messages between the pinned
+    events. Their chronology must not contradict the lineage receipt merely
+    because the digest/ID messages remain ordered. These caller-supplied logs
+    are still not independently authenticated.
+    """
+    all_events = [(index, stamp, None) for index, (stamp, _) in enumerate(step)]
+    _require_event_chronology(all_events, label)
+    _require_workflow_window(all_events, run_id=run_id)
+
+
 def _bounded_lines(content: str, label: str) -> list[tuple[str, str]]:
     if type(content) is not str or len(content.encode("utf-8")) > MAX_LOG_BYTES:
         raise HistoricalLogError(f"{label} log is not bounded UTF-8 text")
@@ -137,6 +152,9 @@ def _one(step: list[tuple[str, str]], pattern: str, label: str) -> tuple[int, st
 
 
 def _upload(step: list[tuple[str, str]], expected: dict) -> dict:
+    _require_action_step_chronology(
+        step, run_id=expected["run_id"], label="artifact upload action step"
+    )
     name = re.escape(expected["artifact_name"])
     digest = _one(
         step, rf"SHA256 digest of uploaded artifact zip is (?P<sha>{_HEX})",
@@ -178,6 +196,9 @@ def _upload(step: list[tuple[str, str]], expected: dict) -> dict:
 
 
 def _download(step: list[tuple[str, str]]) -> dict:
+    _require_action_step_chronology(
+        step, run_id=RECOVERED["run_id"], label="recovery download action step"
+    )
     expected = ORIGINAL
     name = re.escape(expected["artifact_name"])
     announced = _one(
