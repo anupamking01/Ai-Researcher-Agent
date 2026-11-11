@@ -18,9 +18,11 @@ on:
         default: "gpt-5.6-luna"
         type: string
 
+# Preserve an already-running authorized diagnostic even if a second dispatch
+# lacks the required acknowledgement. GitHub may still replace pending runs.
 concurrency:
   group: live-app-smoke-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   live-smoke:
@@ -131,7 +133,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: live-app-smoke-${{ github.run_id }}
+          name: noncanonical-diagnostic-live-smoke-${{ github.run_id }}
           path: |
             outputs/smoke/server.log
             outputs/experiment_traces/**

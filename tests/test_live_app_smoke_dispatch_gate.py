@@ -17,6 +17,7 @@ WORKFLOW = (
 ACK = "NONCANONICAL_LIVE_SMOKE"
 GUARD = "Require explicit noncanonical live-smoke acknowledgement"
 SMOKE = "Run live WebSocket research smoke test"
+ARCHIVE = "noncanonical-diagnostic-live-smoke-${{ github.run_id }}"
 
 
 def dispatch_problems(source: str) -> list[str]:
@@ -40,10 +41,25 @@ def dispatch_problems(source: str) -> list[str]:
     ):
         faults.append("mandatory, nondefault live-smoke acknowledgement missing")
 
+    # A second manual dispatch must not terminate a separately authorized
+    # in-flight provider-backed smoke test, even when its own ack is invalid.
+    concurrency = document.get("concurrency")
+    if not isinstance(concurrency, dict) or (
+        concurrency.get("group") != "live-app-smoke-${{ github.ref }}"
+        or concurrency.get("cancel-in-progress") != "false"
+    ):
+        faults.append("live-smoke concurrency must not cancel approved runs")
+
     jobs = document.get("jobs")
     if not isinstance(jobs, dict) or set(jobs) != {"live-smoke"}:
         return faults + ["unexpected live-smoke job layout"]
     job = jobs["live-smoke"]
+    if not isinstance(job, dict):
+        return faults + ["malformed live-smoke job"]
+    if job.get("permissions") != {"contents": "read"} or (
+        document.get("permissions") not in (None, {"contents": "read"})
+    ):
+        faults.append("live-smoke must retain read-only token permissions")
     steps = job.get("steps") if isinstance(job, dict) else None
     if not isinstance(steps, list) or not steps or not isinstance(steps[0], dict):
         return faults + ["first-step execution gate missing"]
@@ -88,6 +104,29 @@ def dispatch_problems(source: str) -> list[str]:
             faults.append(f"{label}: paid step bypasses acknowledgement gate")
     if len(positions) == len(paid_steps) and positions != sorted(positions):
         faults.append("paid execution steps are out of order")
+
+    # Neither an explicit cancellation API call nor Actions-write credentials
+    # should reintroduce the same interruption after manual authorization.
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        script = str(step.get("run", ""))
+        if (
+            "/cancel" in script or "gh run cancel" in script
+            or "GH_TOKEN" in str(step.get("env", {}))
+        ):
+            faults.append("live-smoke must not cancel another authorized run")
+            break
+
+    uploads = [
+        step for step in steps
+        if isinstance(step, dict)
+        and "actions/upload-artifact@" in str(step.get("uses", ""))
+    ]
+    if len(uploads) != 1 or not isinstance(uploads[0].get("with"), dict) or (
+        uploads[0]["with"].get("name") != ARCHIVE
+    ):
+        faults.append("live-smoke artifacts must remain diagnostically labelled")
 
     actual_smoke = [
         step
@@ -184,3 +223,87 @@ def test_paid_steps_must_remain_in_authorized_order():
         "paid execution steps are out of order" in problem
         for problem in dispatch_problems(modified)
     )
+
+
+@pytest.mark.parametrize(
+    ("needle", "replacement"),
+    [
+        ("cancel-in-progress: false", "cancel-in-progress: true"),
+        ("  group: live-app-smoke-${{ github.ref }}", "  group: unrelated-group"),
+    ],
+)
+def test_rejects_inflight_smoke_cancellation_or_unsafe_concurrency(needle, replacement):
+    source = WORKFLOW.read_text(encoding="utf-8")
+    assert source.count(needle) == 1
+    changed = source.replace(needle, replacement, 1)
+    assert any(
+        "must not cancel approved runs" in issue
+        for issue in dispatch_problems(changed)
+    )
+
+
+def test_rejects_concurrency_removal():
+    source = WORKFLOW.read_text(encoding="utf-8")
+    changed = source.replace(
+        "concurrency:\n  group: live-app-smoke-${{ github.ref }}\n"
+        "  cancel-in-progress: false\n",
+        "",
+        1,
+    )
+    assert changed != source
+    assert any("must not cancel approved runs" in issue
+               for issue in dispatch_problems(changed))
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh run cancel 1234",
+        "curl -X POST https://api.github.com/repos/owner/repo/actions/runs/1234/cancel",
+    ],
+)
+def test_rejects_explicit_smoke_run_cancellation(command):
+    source = WORKFLOW.read_text(encoding="utf-8")
+    marker = "      - name: Set up Python\n"
+    assert marker in source
+    changed = source.replace(
+        marker,
+        "      - name: Unapproved cancellation\n"
+        "        run: " + command + "\n" + marker,
+        1,
+    )
+    assert any("must not cancel another authorized run" in issue
+               for issue in dispatch_problems(changed))
+
+
+def test_rejects_actions_permission_escalation():
+    source = WORKFLOW.read_text(encoding="utf-8")
+    changed = source.replace(
+        "      contents: read\n", "      contents: read\n      actions: write\n", 1
+    )
+    assert changed != source
+    assert any("read-only token permissions" in issue
+               for issue in dispatch_problems(changed))
+
+
+def test_rejects_actions_token_reintroduction():
+    source = WORKFLOW.read_text(encoding="utf-8")
+    marker = "      - name: Set up Python\n"
+    assert marker in source
+    changed = source.replace(
+        marker,
+        "      - name: Unauthorized Actions token\n"
+        "        env:\n          GH_TOKEN: synthetic-token\n"
+        "        run: echo unused\n" + marker,
+        1,
+    )
+    assert any("must not cancel another authorized run" in issue
+               for issue in dispatch_problems(changed))
+
+
+def test_rejects_unqualified_smoke_artifact_label():
+    source = WORKFLOW.read_text(encoding="utf-8")
+    assert source.count("name: " + ARCHIVE) == 1
+    changed = source.replace("name: " + ARCHIVE, "name: live-app-smoke-legacy", 1)
+    assert any("diagnostically labelled" in issue
+               for issue in dispatch_problems(changed))
