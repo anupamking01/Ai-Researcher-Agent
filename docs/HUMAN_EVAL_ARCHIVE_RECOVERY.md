@@ -84,6 +84,13 @@ regressions cover future timestamps expressed in different UTC offsets and a
 legitimate past observation. Earlier post-upload and metadata-update chronology
 checks remain in force.
 
+A caller-supplied observation time must also be no more than **60 seconds
+before** the audit's sampled start time. Older backdated times now fail before
+either direct-ID endpoint is queried, including double-404 results. Deterministic
+offline tests use an injected clock for historical boundary simulations; those
+simulations are not retrospective GitHub API observations. Use the default
+real-time timestamp for live historical-artifact availability checks.
+
 This check uses the auditor's local clock, **not** an independent timestamp
 authority. It does not verify backdated caller-supplied timestamps, authenticate
 original ZIP custody, or prove that an unavailable archive was destroyed.
