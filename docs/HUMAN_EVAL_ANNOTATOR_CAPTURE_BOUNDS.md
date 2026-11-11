@@ -33,3 +33,24 @@ Existing coordinator packet and annotator-bundle source-bound verification
 remain mandatory. Captures and hashes do not establish historical authenticity.
 The frozen rubrics, blinded mapping, confirmatory results, exploratory analyses,
 and pending genuine human-validation gate are unchanged.
+
+
+## Bounded distribution-directory inventory (11 November 2026)
+
+The four-file allowlist is also a **resource boundary**. The previous
+`Path.iterdir()` set-comprehension materialized every entry in a candidate
+annotator directory *before* discovering that an extra coordinator file or
+other undeclared content made the bundle unsafe for distribution. Large or
+adversarial directory inventories could consume excessive memory during
+preflight, delaying detection of a blinding-contamination risk.
+
+`_require_annotator_artifact_set` now iterates with `os.scandir()` and
+fails immediately on the **fifth** directory entry, without enumerating
+the rest. Exactly four correctly named entries continue to pass; missing
+or substituted names fail with the original allowlist diagnostics. Offline
+synthetic tests cover clean/missing inventories and an instrumented iterator
+that fails if the verifier requests a sixth entry.
+
+This bounds **entry enumeration**, not overall filesystem lookup latency or
+the later per-file byte captures. It does not authenticate historical source
+archives, an actual delivery, independent raters, or human scores.

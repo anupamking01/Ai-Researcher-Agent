@@ -151,3 +151,56 @@ def test_reader_rejects_parent_replacement(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="replaced during capture"):
         exporter._regular_bytes(path, label="synthetic input")
     assert events == [True]
+
+
+def test_annotator_inventory_accepts_only_the_four_declared_names(tmp_path):
+    """The bounded inventory must still accept the exact distribution schema."""
+    root = tmp_path / "bundle"
+    root.mkdir()
+    for name in exporter.ANNOTATOR_ARTIFACTS:
+        (root / name).write_bytes(b"synthetic fixture")
+    exporter._require_annotator_artifact_set(root)
+
+
+def test_annotator_inventory_rejects_missing_entry(tmp_path):
+    root = tmp_path / "bundle"
+    root.mkdir()
+    for name in exporter.ANNOTATOR_ARTIFACTS[:-1]:
+        (root / name).write_bytes(b"synthetic fixture")
+    with pytest.raises(ValueError, match="annotator bundle artifact set mismatch; missing="):
+        exporter._require_annotator_artifact_set(root)
+
+
+def test_annotator_inventory_stops_before_enumerating_unbounded_extra_files(
+    tmp_path, monkeypatch,
+):
+    """The fifth entry must fail before a sixth or later entry is consumed."""
+    root = tmp_path / "bundle"
+    root.mkdir()
+    seen = []
+
+    class SyntheticDirEntry:
+        def __init__(self, name):
+            self.name = name
+
+    class SyntheticScandir:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def __iter__(self):
+            for name in (*exporter.ANNOTATOR_ARTIFACTS, "blinding_key.csv"):
+                seen.append(name)
+                yield SyntheticDirEntry(name)
+            raise AssertionError("unbounded directory enumeration continued past overflow")
+
+    def synthetic_scandir(path):
+        assert Path(path) == root
+        return SyntheticScandir()
+
+    monkeypatch.setattr(exporter.os, "scandir", synthetic_scandir)
+    with pytest.raises(ValueError, match="artifact set mismatch.*more than 4 entries"):
+        exporter._require_annotator_artifact_set(root)
+    assert seen == [*exporter.ANNOTATOR_ARTIFACTS, "blinding_key.csv"]

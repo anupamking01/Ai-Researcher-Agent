@@ -227,14 +227,31 @@ def _snapshot_coordinator_bundle(packet_root: Path, snapshot_root: Path) -> dict
 
 
 def _require_annotator_artifact_set(output_root: Path) -> None:
-    children = {path.name for path in Path(output_root).iterdir()}
+    """Reject contaminated bundles without materializing an unbounded directory.
+
+    An annotator bundle permits exactly four entries. Path.iterdir() builds a
+    complete directory listing on supported Python runtimes, so a malicious
+    or accidentally huge distribution directory could exhaust memory before
+    the verifier notices the first extra file. os.scandir() lets us stop after
+    one overflow entry while retaining the existing missing/extra diagnostic.
+    """
     expected = set(ANNOTATOR_ARTIFACTS)
+    children: set[str] = set()
+    with os.scandir(output_root) as entries:
+        for entry in entries:
+            children.add(entry.name)
+            if len(children) > len(expected):
+                raise ValueError(
+                    "annotator bundle artifact set mismatch; "
+                    f"missing={sorted(expected - children)}, "
+                    f"extra={sorted(children - expected)}; "
+                    f"more than {len(expected)} entries"
+                )
     if children != expected:
-        extra = sorted(children - expected)
-        missing = sorted(expected - children)
         raise ValueError(
             "annotator bundle artifact set mismatch; "
-            f"missing={missing}, extra={extra}"
+            f"missing={sorted(expected - children)}, "
+            f"extra={sorted(children - expected)}"
         )
 
 
