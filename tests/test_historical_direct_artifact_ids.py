@@ -255,3 +255,43 @@ def test_creation_at_original_workflow_boundary_is_allowed(role, boundary_index)
     originals[target["artifact_id"]]["updated_at"] = stamp
     result = audit.audit_direct_artifact_ids(fetch_artifact=_client(originals), checked_at=NOW)
     assert result["historical_artifacts"][role]["github_upload_log_id_size_concordance"] is True
+
+
+
+@pytest.mark.parametrize("stamp", [
+    "2026-09-11T17:22:43+00:00",
+    "2026-09-13T21:21:40+00:00",
+    "2026-09-13T21:21:40.999999+00:00",
+])
+def test_recovery_observation_time_cannot_predate_completed_uploads(stamp):
+    """A prior-to-completion 404 is not evidence about post-run availability."""
+    requested = []
+
+    def lookup(artifact_id):
+        requested.append(artifact_id)
+        return None
+
+    with pytest.raises(
+        audit.DirectArtifactAuditError, match="predates completion"
+    ):
+        audit.audit_direct_artifact_ids(
+            fetch_artifact=lookup,
+            checked_at=datetime.fromisoformat(stamp),
+        )
+    assert requested == [], "reject incoherent timestamps before API access"
+
+
+def test_first_full_second_after_both_uploads_is_an_observation_not_custody():
+    """Allow the first unambiguous post-run timestamp without promoting 404."""
+    checked_at = datetime.fromisoformat("2026-09-13T21:21:41+00:00")
+    receipt = audit.audit_direct_artifact_ids(
+        fetch_artifact=lambda _artifact_id: None,
+        checked_at=checked_at,
+    )
+    assert receipt["checked_at_utc"] == checked_at.isoformat()
+    assert receipt["historical_evidence_authenticated"] is False
+    assert receipt["human_evaluation_ready"] is False
+    assert all(
+        row["status"] == "http_404_at_both_observations_not_proof_of_destruction"
+        for row in receipt["historical_artifacts"].values()
+    )
