@@ -303,3 +303,56 @@ def test_empty_log_line_separator_remains_accepted():
     )
     receipt = audit.audit_historical_job_logs(original, recovery)
     assert receipt["historical_treatment_evidence_authenticated"] is False
+
+@pytest.mark.parametrize(("source", "missing_boundary"), [
+    ("original", "2026-09-11T17:22:40.7100120Z Post job cleanup."),
+    ("recovery", "2026-09-13T21:21:37.1983251Z Post job cleanup."),
+])
+def test_historical_upload_requires_an_observed_following_step_or_cleanup(
+    source, missing_boundary
+):
+    """A digest/URL-only tail is not a complete observed action window."""
+    original, recovery = _logs()
+    if source == "original":
+        assert missing_boundary in original
+        original = original.replace(missing_boundary, "")
+    else:
+        assert missing_boundary in recovery
+        recovery = recovery.replace(missing_boundary, "")
+    with pytest.raises(audit.HistoricalLogError, match="no following workflow boundary"):
+        audit.audit_historical_job_logs(original, recovery)
+
+
+@pytest.mark.parametrize(("source", "before", "after", "error"), [
+    (
+        "original",
+        "2026-09-11T17:22:40.7100120Z Post job cleanup.",
+        "2026-09-11T17:22:40.0000000Z Post job cleanup.",
+        "timestamps are out of order",
+    ),
+    (
+        "recovery",
+        "2026-09-13T21:21:05.3879883Z ##[group]Run python - <<'PY'",
+        "2026-09-13T21:21:05.0000000Z ##[group]Run python - <<'PY'",
+        "timestamps are out of order",
+    ),
+    (
+        "recovery",
+        "2026-09-13T21:21:37.1983251Z Post job cleanup.",
+        "2026-09-14T00:00:00.0000000Z Post job cleanup.",
+        "outside pinned workflow window",
+    ),
+])
+def test_action_closing_boundary_is_within_the_recorded_chronology(
+    source, before, after, error
+):
+    """Closing boundaries are also evidence-bearing clock observations."""
+    original, recovery = _logs()
+    if source == "original":
+        assert before in original
+        original = original.replace(before, after)
+    else:
+        assert before in recovery
+        recovery = recovery.replace(before, after)
+    with pytest.raises(audit.HistoricalLogError, match=error):
+        audit.audit_historical_job_logs(original, recovery)

@@ -140,13 +140,20 @@ def _action_step(lines: list[tuple[str, str]], action: str) -> list[tuple[str, s
     if len(starts) != 1:
         raise HistoricalLogError(f"expected exactly one {action} v4 action step")
     start = starts[0]
-    end = len(lines)
+    end = None
     for n in range(start + 1, len(lines)):
         message = lines[n][1]
         if message.startswith("##[group]Run ") or message == "Post job cleanup.":
             end = n
             break
-    return lines[start:end]
+    if end is None:
+        raise HistoricalLogError(
+            f"{action} v4 action step has no following workflow boundary"
+        )
+    # A digest-bearing excerpt with no subsequent step/cleanup marker may be
+    # truncated. Include the observed boundary in the chronological and run-
+    # window checks; otherwise a reversed or future boundary escapes review.
+    return lines[start:end + 1]
 
 
 def _one(step: list[tuple[str, str]], pattern: str, label: str) -> tuple[int, str, re.Match]:

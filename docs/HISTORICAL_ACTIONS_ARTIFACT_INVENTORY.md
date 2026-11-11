@@ -1043,3 +1043,22 @@ still cannot prove that the caller supplied a **complete**, unmodified log,
 that GitHub's own records are independent attestations, or that the vanished
 original 40 report/trace files have been recovered. No treatment, evaluator,
 or human-rating results are generated or changed.
+
+## Require an observed action-step closing boundary
+
+The historical upload/download ZIP-lineage verifier now rejects an excerpt
+that contains the expected digest, artifact ID, size, and completion messages
+but **ends without a subsequent GitHub Actions step or post-job cleanup marker**.
+Earlier, the last recognized evidence event could be the last transcript line
+and still produce a passing lineage receipt. Each selected action must have
+an explicit subsequent `##[group]Run ...` or `Post job cleanup.` boundary;
+the boundary timestamp itself is included in the action's nanosecond-precision
+order and pinned workflow-window checks. Synthetic offline tests cover missing
+upload closures, a backward-clock following step, and an out-of-window cleanup.
+
+This checks **observable transcript completeness around the three selected
+action steps only**. A fabricated boundary or omitted earlier/later log lines
+cannot be detected from caller-supplied text alone. GitHub-provider logs remain
+same-provider, unauthenticated provenance evidence; passing does not recover
+or authenticate the original 40 reports/traces, authorize human-evaluation
+distribution, or change frozen treatment/evaluator results.
