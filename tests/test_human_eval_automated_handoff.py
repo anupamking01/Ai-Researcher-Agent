@@ -131,7 +131,9 @@ def case(tmp_path):
 
 def test_composite_gate_proves_both_source_pins_and_report_run_coverage(case):
     receipt = combined.verify_automated_handoff(**case)
-    assert receipt["status"] == "automated_run_and_counterbalanced_handoff_verified"
+    assert receipt["status"] == "noncanonical_handoff_diagnostic_not_historical_release"
+    assert receipt["historical_40_cell_source_checks_completed"] is False
+    assert receipt["human_validation_performed"] is False
     assert receipt["n_reports"] == receipt["run_ids_matched"] == 8
     assert receipt["research_manifest_externally_pinned"] is True
     # This fixture has two synthetic tasks, not the published 40-cell archive.
@@ -377,6 +379,7 @@ def test_canonical_receipt_records_both_independent_source_checks(
     monkeypatch.setattr(
         combined.lineage, "audit_files",
         lambda **_kwargs: {
+            "status": "human_packet_automated_run_lineage_consistent",
             "n_reports": 40, "run_ids_matched": 40,
             "archival_manifest_externally_pinned": True,
         },
@@ -384,6 +387,7 @@ def test_canonical_receipt_records_both_independent_source_checks(
     monkeypatch.setattr(
         combined.handoff, "verify_counterbalanced_handoff",
         lambda **_kwargs: {
+            "status": "human_eval_counterbalanced_handoff_verified",
             "n_reports": 40,
             "bundles": {
                 "canonical": {"packet_sha256": "synthetic-canonical"},
@@ -397,3 +401,56 @@ def test_canonical_receipt_records_both_independent_source_checks(
     assert result["published_frozen_input_anchor_verified"] is True
     assert result["original_treatment_run_task_manifest_verified"] is True
     assert result["n_reports"] == result["run_ids_matched"] == 40
+    assert result["status"] == "automated_run_and_counterbalanced_handoff_verified"
+    assert result["historical_40_cell_source_checks_completed"] is True
+    assert result["human_validation_performed"] is False
+
+
+@pytest.mark.parametrize(("component", "field", "replacement", "message"), [
+    ("lineage", "n_reports", 7, "automated packet reports"),
+    ("lineage", "run_ids_matched", 7, "automated evaluator run IDs"),
+    ("distribution", "n_reports", 7, "counterbalanced distribution reports"),
+    ("lineage", "n_reports", True, "automated packet reports"),
+    ("lineage", "status", "diagnostic_only", "lineage component did not verify"),
+    ("distribution", "status", "diagnostic_only", "distribution component did not verify"),
+])
+def test_joint_handoff_rejects_incomplete_or_nonverifying_component_receipts(
+    case, monkeypatch, component, field, replacement, message,
+):
+    """Even a pinned, intact packet must not inherit an invalid component PASS."""
+    module, attribute = (
+        (combined.lineage, "audit_files") if component == "lineage"
+        else (combined.handoff, "verify_counterbalanced_handoff")
+    )
+    original = getattr(module, attribute)
+
+    def altered(**kwargs):
+        receipt = original(**kwargs)
+        return {**receipt, field: replacement}
+
+    monkeypatch.setattr(module, attribute, altered)
+    with pytest.raises(ValueError, match=message):
+        combined.verify_automated_handoff(**case)
+
+
+def test_joint_handoff_rejects_matching_but_incomplete_component_counts(
+    case, monkeypatch,
+):
+    """Two agreeing short receipts are not a valid eight-cell synthetic matrix."""
+    original_lineage = combined.lineage.audit_files
+    original_distribution = combined.handoff.verify_counterbalanced_handoff
+
+    def short_lineage(**kwargs):
+        receipt = original_lineage(**kwargs)
+        return {**receipt, "n_reports": 7, "run_ids_matched": 7}
+
+    def short_distribution(**kwargs):
+        receipt = original_distribution(**kwargs)
+        return {**receipt, "n_reports": 7}
+
+    monkeypatch.setattr(combined.lineage, "audit_files", short_lineage)
+    monkeypatch.setattr(
+        combined.handoff, "verify_counterbalanced_handoff", short_distribution
+    )
+    with pytest.raises(ValueError, match="expected 8 reports"):
+        combined.verify_automated_handoff(**case)

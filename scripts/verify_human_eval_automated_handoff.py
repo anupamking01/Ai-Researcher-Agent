@@ -135,8 +135,25 @@ def verify_automated_handoff(
         repo_root=repo_root,
         annotator_guide_path=Path(annotator_guide_path),
     )
-    if aligned["n_reports"] != distributed["n_reports"]:
-        raise ValueError("automated evaluator and distributed packet cardinality differ")
+    # Never promote a partial, contradictory, or non-verifying component receipt
+    # to a successful joint handoff. A matching short count from *both*
+    # components was previously enough to pass this composition layer.
+    if aligned.get("status") != "human_packet_automated_run_lineage_consistent":
+        raise ValueError("automated lineage component did not verify run identity")
+    if distributed.get("status") != "human_eval_counterbalanced_handoff_verified":
+        raise ValueError("counterbalanced distribution component did not verify packet")
+    expected_reports = len(expected_tasks) * len(lineage.VARIANTS)
+    if published_anchor_verified and expected_reports != 40:
+        raise ValueError("canonical VERA handoff must cover exactly 40 cells")
+    for label, actual in (
+        ("automated packet reports", aligned.get("n_reports")),
+        ("automated evaluator run IDs", aligned.get("run_ids_matched")),
+        ("counterbalanced distribution reports", distributed.get("n_reports")),
+    ):
+        if type(actual) is not int or actual != expected_reports:
+            raise ValueError(
+                f"{label} does not cover expected {expected_reports} reports"
+            )
     if aligned.get("archival_manifest_externally_pinned") is not True:
         raise ValueError("automated lineage was not independently archive-pinned")
 
@@ -148,7 +165,15 @@ def verify_automated_handoff(
     return {
         "schema_version": 1,
         "study_id": "budget-main-v1",
-        "status": "automated_run_and_counterbalanced_handoff_verified",
+        "status": (
+            "automated_run_and_counterbalanced_handoff_verified"
+            if published_anchor_verified else
+            "noncanonical_handoff_diagnostic_not_historical_release"
+        ),
+        "historical_40_cell_source_checks_completed": (
+            published_anchor_verified and original_task_source_verified
+        ),
+        "human_validation_performed": False,
         "n_reports": aligned["n_reports"],
         "run_ids_matched": aligned["run_ids_matched"],
         "research_manifest_externally_pinned": True,

@@ -131,3 +131,27 @@ confirmatory inference, exploratory analyses, and any future independently
 collected and frozen human ratings remain distinct. Genuine two-rater blinded
 scores on all 40 reports, provenance/attestation freeze, inter-annotator
 agreement, and automated–human reconciliation are still outstanding.
+
+
+## Composite full-matrix and diagnostic-status safeguard (11 November 2026)
+
+The combined coordinator gate now independently checks that the two component
+receipts report the **expected verification statuses**, that the automated
+packet report count, evaluator run-ID count and counterbalanced distribution
+report count are all exact Python integers equal to the full expected matrix,
+and that the historical task matrix has exactly 40 cells. In particular,
+**two matching partial counts no longer produce a successful joint receipt**.
+These checks protect the composition boundary against incomplete, stale, or
+regressed component contracts; they supplement rather than replace each
+source-bound verifier's underlying row and fingerprint checks.
+
+Synthetic/custom-task runs remain supported for offline development, but their
+receipt status is now
+`noncanonical_handoff_diagnostic_not_historical_release` and
+`historical_40_cell_source_checks_completed` is false. Only the default,
+fully source-checked historical matrix can return the existing
+`automated_run_and_counterbalanced_handoff_verified` status. No receipt by
+itself establishes an independently authenticated original report archive,
+genuine annotator identities, human ratings or human-validation outcomes.
+The missing September treatment/recovery source ZIPs remain an external
+blocker; this change neither recreates them nor alters any frozen results.
