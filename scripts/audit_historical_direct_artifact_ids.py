@@ -199,6 +199,24 @@ def _validate_metadata(value: object, pin: dict) -> tuple:
     )
 
 
+
+def _require_observation_chronology(
+    identity: tuple | None, *, checked_at: datetime, role: str
+) -> None:
+    """Reject metadata reporting an update after its asserted observation.
+
+    The audit receipt is an as-of observation, not a historical replay.
+    Same-provider metadata updated in the future relative to its receipt
+    cannot support a temporally coherent claim of current availability.
+    """
+    # _validate_metadata returns (id, name, size, digest, expired, created,
+    # updated, expires, ...). Creation is already bounded to the source run.
+    if identity is not None and identity[6] > checked_at:
+        raise DirectArtifactAuditError(
+            f"{role}: artifact metadata updated_at postdates observation time"
+        )
+
+
 def audit_direct_artifact_ids(
     *, fetch_artifact: Callable[[int], dict | None] = fetch_direct_metadata,
     checked_at: datetime | None = None,
@@ -230,8 +248,14 @@ def audit_direct_artifact_ids(
     for pin in ORIGINAL_PINS:
         first = fetch_artifact(pin["artifact_id"])
         first_identity = None if first is None else _validate_metadata(first, pin)
+        _require_observation_chronology(
+            first_identity, checked_at=checked_at, role=pin["role"]
+        )
         second = fetch_artifact(pin["artifact_id"])
         second_identity = None if second is None else _validate_metadata(second, pin)
+        _require_observation_chronology(
+            second_identity, checked_at=checked_at, role=pin["role"]
+        )
         if first_identity != second_identity:
             raise DirectArtifactAuditError(
                 f"{pin['role']}: direct-ID metadata changed between observations"

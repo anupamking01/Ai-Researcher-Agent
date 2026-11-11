@@ -295,3 +295,45 @@ def test_first_full_second_after_both_uploads_is_an_observation_not_custody():
         row["status"] == "http_404_at_both_observations_not_proof_of_destruction"
         for row in receipt["historical_artifacts"].values()
     )
+
+
+@pytest.mark.parametrize("role", ["original_treatment", "evaluator_recovery"])
+@pytest.mark.parametrize("future_read", [1, 2])
+def test_direct_id_observation_rejects_metadata_updated_in_its_future(
+    role, future_read
+):
+    """An otherwise pinned ZIP must not appear updated after its audit receipt."""
+    originals = {p["artifact_id"]: _candidate(p) for p in audit.ORIGINAL_PINS}
+    target = next(p for p in audit.ORIGINAL_PINS if p["role"] == role)
+    calls = []
+
+    def lookup(artifact_id):
+        calls.append(artifact_id)
+        candidate = copy.deepcopy(originals[artifact_id])
+        target_reads = calls.count(target["artifact_id"])
+        if artifact_id == target["artifact_id"] and target_reads == future_read:
+            # Creation is still inside the original workflow; all pinned
+            # identity, digest and expiry fields remain otherwise consistent.
+            candidate["updated_at"] = "2026-11-05T07:00:01Z"
+        return candidate
+
+    with pytest.raises(
+        audit.DirectArtifactAuditError, match="updated_at postdates observation"
+    ):
+        audit.audit_direct_artifact_ids(fetch_artifact=lookup, checked_at=NOW)
+    # A failed first read must not trigger a redundant second lookup.
+    assert calls.count(target["artifact_id"]) == future_read
+
+
+@pytest.mark.parametrize("role", ["original_treatment", "evaluator_recovery"])
+def test_direct_id_metadata_update_at_observation_boundary_is_allowed(role):
+    """The comparison rejects the future, not a legitimate exact boundary."""
+    originals = {p["artifact_id"]: _candidate(p) for p in audit.ORIGINAL_PINS}
+    target = next(p for p in audit.ORIGINAL_PINS if p["role"] == role)
+    originals[target["artifact_id"]]["updated_at"] = "2026-11-05T07:00:00Z"
+    receipt = audit.audit_direct_artifact_ids(
+        fetch_artifact=_client(originals), checked_at=NOW
+    )
+    assert receipt["historical_artifacts"][role]["github_upload_log_id_size_concordance"]
+    assert receipt["historical_evidence_authenticated"] is False
+    assert receipt["human_evaluation_ready"] is False

@@ -54,6 +54,25 @@ access observation; it does **not** prove destruction or exclude authorized
 offline backups. This diagnostic neither downloads original archives nor
 authenticates original experimental traces, reports, or human ratings.
 
+## Direct-ID metadata update versus observation time
+
+The read-only direct-ID artifact auditor now rejects provider metadata whose
+`updated_at` is later than the recorded UTC observation timestamp, even
+when its original run ID, ZIP SHA-256 digest, name, size, and creation window
+otherwise match. Both reads are checked independently; an impossible first
+read stops before any redundant second request. A timestamp **equal** to
+the observation boundary is accepted. This complements the post-upload
+observation-time floor: an artifact cannot truthfully be described as
+already updated at an earlier observation time. Synthetic offline tests
+exercise both historical artifact roles and either metadata read.
+
+The recorded time is a caller-supplied audit as-of boundary (normally the
+current UTC clock), not an independently trusted timestamp authority.
+The check cannot establish which offline archive is original, authenticate
+reports or traces, recover missing ZIPs, or make human annotation ready.
+An ordinary direct-ID 404 remains an access observation only, not proof
+of destruction or of a missing backup.
+
 ## Blinded packet physical-record integrity across handoffs
 
 The coordinator packet verifier requires the packet builder's exact canonical
