@@ -227,8 +227,11 @@ def test_unrelated_step_progress_line_must_be_inside_historical_run_window():
     assert cleanup in original
     original = original.replace(
         cleanup,
-        _line("2026-09-12T00:00:00.0000000Z", "Upload debug note") + "\n" + cleanup,
+        _line("2026-09-12T00:00:00.0000000Z", "Upload debug note") + "\n"
+        + _line("2026-09-12T00:00:01.0000000Z", "Post job cleanup."),
     )
+    # Keep the closing boundary after the injected progress message so the
+    # out-of-window gate, not the distinct event-reversal gate, is exercised.
     with pytest.raises(audit.HistoricalLogError, match="outside pinned workflow window"):
         audit.audit_historical_job_logs(original, recovery)
 
