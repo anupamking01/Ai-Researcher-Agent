@@ -210,7 +210,7 @@ def test_unrelated_step_progress_line_cannot_reverse_the_action_clock():
     assert digest in original
     original = original.replace(
         digest,
-        digest + "\\n" + _line("2026-09-11T17:22:40.1000000Z", "Upload progress"),
+        digest + "\n" + _line("2026-09-11T17:22:40.1000000Z", "Upload progress"),
     )
     with pytest.raises(audit.HistoricalLogError, match="timestamps are out of order"):
         audit.audit_historical_job_logs(original, recovery)
@@ -222,7 +222,7 @@ def test_unrelated_step_progress_line_must_be_inside_historical_run_window():
     assert cleanup in original
     original = original.replace(
         cleanup,
-        _line("2026-09-12T00:00:00.0000000Z", "Upload debug note") + "\\n" + cleanup,
+        _line("2026-09-12T00:00:00.0000000Z", "Upload debug note") + "\n" + cleanup,
     )
     with pytest.raises(audit.HistoricalLogError, match="outside pinned workflow window"):
         audit.audit_historical_job_logs(original, recovery)
