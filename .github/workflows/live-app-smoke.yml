@@ -3,6 +3,10 @@ name: live-app-smoke
 on:
   workflow_dispatch:
     inputs:
+      smoke_ack:
+        description: "Type NONCANONICAL_LIVE_SMOKE to approve a paid diagnostic, not recovery of original evidence"
+        required: true
+        type: string
       smart_model:
         description: Exact OpenAI model ID for planning and report generation
         required: true
@@ -13,20 +17,6 @@ on:
         required: true
         default: "gpt-5.6-luna"
         type: string
-  push:
-    branches:
-      - main
-      - research-paper-eval-2027
-    paths:
-      - app.py
-      - frontend/**
-      - logic/**
-      - scrape/**
-      - settings/**
-      - text_preprocess/**
-      - scripts/smoke_test_app.py
-      - requirements.txt
-      - requirements-dev.txt
 
 concurrency:
   group: live-app-smoke-${{ github.ref }}
@@ -46,6 +36,20 @@ jobs:
       PYTHONUNBUFFERED: "1"
 
     steps:
+      # Never launch paid API-backed smoke tests implicitly on ordinary pushes.
+      # This diagnostic is not evidence recovery or a canonical treatment run.
+      - name: Require explicit noncanonical live-smoke acknowledgement
+        shell: bash
+        env:
+          VERA_LIVE_SMOKE_ACK: ${{ inputs.smoke_ack }}
+        run: |
+          if [ "$VERA_LIVE_SMOKE_ACK" != "NONCANONICAL_LIVE_SMOKE" ]; then
+            echo "::error::Live smoke can incur provider charges; explicitly acknowledge NONCANONICAL_LIVE_SMOKE."
+            exit 1
+          fi
+          echo "## NONCANONICAL LIVE SMOKE" >> "$GITHUB_STEP_SUMMARY"
+          echo "Diagnostic only; not original treatment evidence, evaluator recovery, or human validation." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
