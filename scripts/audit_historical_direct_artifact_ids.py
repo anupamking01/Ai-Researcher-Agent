@@ -22,6 +22,8 @@ REPOSITORY = inventory.REPOSITORY
 API_BASE = inventory.API_BASE
 MAX_METADATA_BYTES = 64 * 1024
 MAX_METADATA_INTEGER_DIGITS = 20
+# A supplied as-of date must describe this execution, not a historical replay.
+MAX_OBSERVATION_BACKDATE = timedelta(seconds=60)
 # Same-provider upload pins, not independent source/report custody fingerprints.
 ORIGINAL_PINS = (logs.ORIGINAL, logs.RECOVERED)
 RUN_SOURCES = {role: (run_id, sha) for role, run_id, _, sha, _, _ in inventory.HISTORICAL_RUNS}
@@ -217,6 +219,11 @@ def _require_observation_chronology(
         )
 
 
+def _utc_now() -> datetime:
+    """Single clock sampling point, patchable by deterministic offline tests."""
+    return datetime.now(timezone.utc)
+
+
 def audit_direct_artifact_ids(
     *, fetch_artifact: Callable[[int], dict | None] = fetch_direct_metadata,
     checked_at: datetime | None = None,
@@ -225,7 +232,7 @@ def audit_direct_artifact_ids(
     # Capture execution time once so a default receipt uses precisely the
     # same UTC clock sample that bounds caller-supplied as-of timestamps.
     # This is a local-clock consistency check, not a trusted time authority.
-    audit_started_at = datetime.now(timezone.utc)
+    audit_started_at = _utc_now()
     if checked_at is None:
         checked_at = audit_started_at
     if (
@@ -254,6 +261,13 @@ def audit_direct_artifact_ids(
     if checked_at < latest_run_end + timedelta(seconds=1):
         raise DirectArtifactAuditError(
             "observation time predates completion of historical evidence uploads"
+        )
+    # A 404 requested today must not be labelled as a September or other
+    # retrospectively selected observation. Permit only a short clock-skew /
+    # caller-setup interval; all checks precede the first GitHub API call.
+    if checked_at < audit_started_at - MAX_OBSERVATION_BACKDATE:
+        raise DirectArtifactAuditError(
+            "observation time is stale relative to audit execution"
         )
     results = {}
     for pin in ORIGINAL_PINS:
