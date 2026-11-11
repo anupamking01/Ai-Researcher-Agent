@@ -1021,3 +1021,25 @@ making network requests. This strengthens the *run-scoped* recovery diagnostic;
 the separately implemented direct-artifact-ID lookup is not a substitute for
 it. Neither parser can authenticate or recover the historical ZIP contents,
 prove that offline source evidence is absent, or advance human validation.
+
+
+## Reject unframed or malformed GitHub job-log lines
+
+The historical ZIP-lineage verifier now rejects every **nonempty** raw job-log
+line that lacks the canonical GitHub Actions UTC timestamp prefix
+(`YYYY-MM-DDTHH:MM:SS.fractionZ `). Previously, unrecognized lines were
+silently discarded *before* the action-step scan. A caller could therefore
+supply a second digest/completion claim, an offset-qualified clock, or a
+malformed action-progress line without that contradictory line ever reaching
+the uniqueness and chronological checks. Entirely empty separator lines remain
+permitted, and parsed in-step events retain their pinned workflow-time-window
+and sequence validation. Offline tests cover original-upload and
+recovery-download transcript tampering.
+
+This is a conservative input-format check for the **raw** GitHub job-log
+representation, not a general transcript importer. Logs copied without their
+timestamp prefixes must be rejected, not treated as genuine evidence. Passing
+still cannot prove that the caller supplied a **complete**, unmodified log,
+that GitHub's own records are independent attestations, or that the vanished
+original 40 report/trace files have been recovered. No treatment, evaluator,
+or human-rating results are generated or changed.

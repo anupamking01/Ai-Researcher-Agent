@@ -257,3 +257,49 @@ def test_submicrosecond_clock_reversal_is_detected():
     )
     with pytest.raises(audit.HistoricalLogError, match="timestamps are out of order"):
         audit.audit_historical_job_logs(original, recovery)
+
+
+@pytest.mark.parametrize(("source", "unframed"), [
+    (
+        "original",
+        f"SHA256 digest of uploaded artifact zip is {audit.ORIGINAL['zip_sha256']}",
+    ),
+    (
+        "original",
+        "2026-09-11T18:22:40.4375561+01:00 Upload progress",
+    ),
+    (
+        "recovery",
+        "2026-09-13T21:21:05Z Artifact download completed successfully.",
+    ),
+    (
+        "recovery",
+        "2026-09-13T21:21:05.3736925Z\\tTotal of 1 artifact(s) downloaded",
+    ),
+])
+def test_unframed_or_noncanonical_log_lines_fail_instead_of_disappearing(
+    source, unframed
+):
+    """A second, unframed claim or malformed clock cannot be silently omitted."""
+    original, recovery = _logs()
+    if source == "original":
+        anchor = "2026-09-11T17:22:40.4375561Z"
+        assert anchor in original
+        original = original.replace(anchor, unframed + "\n" + anchor, 1)
+    else:
+        anchor = "2026-09-13T21:21:05.3735717Z"
+        assert anchor in recovery
+        recovery = recovery.replace(anchor, unframed + "\n" + anchor, 1)
+    with pytest.raises(audit.HistoricalLogError, match="unframed or malformed"):
+        audit.audit_historical_job_logs(original, recovery)
+
+
+def test_empty_log_line_separator_remains_accepted():
+    """A harmless blank separator is not mistaken for an action event."""
+    original, recovery = _logs()
+    original = original.replace(
+        "2026-09-11T17:22:40.4375561Z",
+        "\n2026-09-11T17:22:40.4375561Z", 1
+    )
+    receipt = audit.audit_historical_job_logs(original, recovery)
+    assert receipt["historical_treatment_evidence_authenticated"] is False

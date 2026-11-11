@@ -118,10 +118,19 @@ def _bounded_lines(content: str, label: str) -> list[tuple[str, str]]:
     if len(lines) > MAX_LOG_LINES:
         raise HistoricalLogError(f"{label} log has too many lines")
     result = []
-    for line in lines:
+    for line_number, line in enumerate(lines, 1):
+        # Raw GitHub Actions job logs frame each nonempty line with a UTC
+        # timestamp. Discarding malformed lines lets a caller hide a duplicate
+        # or contradictory action event while retaining a passing ZIP receipt.
+        if not line:
+            continue
         match = _LOG_LINE.fullmatch(line)
-        if match:
-            result.append((match["stamp"], match["message"]))
+        if match is None:
+            raise HistoricalLogError(
+                f"{label} log contains an unframed or malformed timestamped line "
+                f"at line {line_number}"
+            )
+        result.append((match["stamp"], match["message"]))
     return result
 
 
