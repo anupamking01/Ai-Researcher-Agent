@@ -35,6 +35,18 @@ def test_preexisting_hardlink_alias_rejected_before_readiness_capture(
             pytest.fail("a hardlinked readiness source must not be exposed")
 
 
+def test_source_unlinked_during_readiness_window_is_classified_as_change(tmp_path):
+    path = tmp_path / "human-analysis.json"
+    content = b'{"synthetic":true}'
+    path.write_bytes(content)
+    # The open descriptor can still read the original bytes after unlink.
+    # A readiness receipt must nevertheless reject the vanished generation.
+    with pytest.raises(ValueError, match="human_analysis changed during verification"):
+        with readiness._capture_regular_inputs({"human_analysis": path}) as captured:
+            assert captured["human_analysis"] == content
+            path.unlink()
+
+
 def test_alias_created_during_readiness_window_fails_at_final_recheck(tmp_path):
     path = tmp_path / "human-analysis.json"
     path.write_bytes(b'{"synthetic":true}')

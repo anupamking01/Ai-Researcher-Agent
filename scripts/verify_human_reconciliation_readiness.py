@@ -72,6 +72,11 @@ def _snapshot_regular_descriptor(descriptor: int, *, label: str):
     before = os.fstat(descriptor)
     if not stat.S_ISREG(before.st_mode):
         raise ValueError(f"{label} must be a regular file")
+    # An open descriptor may become unlinked after an atomic same-byte
+    # pathname replacement. Classify its vanished generation as a change
+    # during verification, rather than as an initial hardlink-custody error.
+    if before.st_nlink == 0:
+        raise ValueError(f"{label} changed during verification")
     # A pre-existing hardlink can mutate the source through a different path
     # without changing this receipt path. The gate must reject it at capture.
     if before.st_nlink != 1:

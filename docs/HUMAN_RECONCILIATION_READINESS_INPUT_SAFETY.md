@@ -137,3 +137,23 @@ or create human-validation results. The diagnostic pilot remains diagnostic,
 frozen designated-primary automated findings are post-collection rather than
 established prospective preregistration, exploratory analyses remain
 exploratory, and actual blinded human ratings are still pending.
+
+
+## In-window unlink and same-byte atomic-replacement failure semantics
+
+CI for the initial single-link custody change exposed a diagnostic regression:
+after a pathname was replaced with a byte-identical new inode, the still-open
+old descriptor had link count **zero**, and the recheck reported the
+pre-existing-hardlink error instead of `changed during verification`.
+The gate still rejected the input, but its error classification incorrectly
+described a post-capture generation change.
+
+The descriptor reader now explicitly identifies a zero-link inode as an
+in-window change, while retaining the original single-link rejection for
+positive link counts other than one. This preserves the distinct pre-existing
+hardlink diagnostic, the existing bounded-read failure semantics, and
+fail-closed treatment of unlink or byte-identical atomic replacement. An
+offline unlink regression complements the existing four same-byte replacement
+tests and two hardlink-custody scenarios. This is a readiness-verifier fix,
+not independent authentication of the missing original treatment archives
+and not a human-evaluation result.
