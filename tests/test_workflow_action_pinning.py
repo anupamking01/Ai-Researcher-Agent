@@ -846,12 +846,20 @@ def test_bootstrap_guard_rejects_hidden_setup_python_environment(
     ) == ["hidden.yml:unit-tests: update-environment='false'"]
 
 
-def test_live_smoke_workflow_change_requires_manual_dispatch() -> None:
-    workflow = WORKFLOWS / "live-app-smoke.yml"
-    document = yaml.load(workflow.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
-    automatic_paths = document["on"]["push"]["paths"]
+def test_live_smoke_safety_checks_run_in_ordinary_offline_ci() -> None:
+    """A manual-only live workflow still needs PR/push regression coverage."""
+    ci = yaml.load(
+        (WORKFLOWS / "tests.yml").read_text(encoding="utf-8"),
+        Loader=yaml.BaseLoader,
+    )
+    triggers = ci["on"]
+    assert "pull_request" in triggers
+    assert "research-*" in triggers["push"]["branches"]
 
-    assert ".github/workflows/live-app-smoke.yml" not in automatic_paths
+    steps = ci["jobs"]["unit-tests"]["steps"]
+    commands = [str(step.get("run", "")).strip() for step in steps]
+    assert "bash scripts/run_offline_pytest_firewalled.sh" in commands
+    assert not any("smoke_test_app.py" in command for command in commands)
 
 
 def test_bootstrap_guard_requires_setup_python_in_each_job(tmp_path: Path) -> None:

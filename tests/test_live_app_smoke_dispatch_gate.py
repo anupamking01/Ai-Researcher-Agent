@@ -66,6 +66,29 @@ def dispatch_problems(source: str) -> list[str]:
     ):
         faults.append("guard must fail closed and label diagnostic execution")
 
+    # Default GitHub Actions step conditions stop after a failed guard.
+    # A later `if: always()` on a paid step would override that protection,
+    # while continue-on-error could conceal an authorization failure.
+    if job.get("continue-on-error") is not None:
+        faults.append("live-smoke job must not mask acknowledgement failure")
+    paid_steps = ("Validate live-test secret", "Start FastAPI application", SMOKE)
+    positions = []
+    for label in paid_steps:
+        matches = [
+            index for index, step in enumerate(steps)
+            if isinstance(step, dict) and step.get("name") == label
+        ]
+        if len(matches) != 1:
+            faults.append(f"expected exactly one paid execution step: {label}")
+            continue
+        index = matches[0]
+        positions.append(index)
+        step = steps[index]
+        if step.get("if") is not None or step.get("continue-on-error") is not None:
+            faults.append(f"{label}: paid step bypasses acknowledgement gate")
+    if len(positions) == len(paid_steps) and positions != sorted(positions):
+        faults.append("paid execution steps are out of order")
+
     actual_smoke = [
         step
         for step in steps
@@ -118,3 +141,46 @@ def test_rejects_early_or_non_failing_acknowledgement_step():
         1,
     )
     assert any("failure-enforcing" in e for e in dispatch_problems(bypass))
+
+
+@pytest.mark.parametrize(
+    "step_name",
+    ["Validate live-test secret", "Start FastAPI application", SMOKE],
+)
+@pytest.mark.parametrize("unsafe_option", ["if: always()", "continue-on-error: true"])
+def test_paid_steps_cannot_override_failed_acknowledgement(step_name, unsafe_option):
+    current = WORKFLOW.read_text(encoding="utf-8")
+    marker = "      - name: " + step_name + "\n"
+    assert marker in current
+    modified = current.replace(marker, marker + "        " + unsafe_option + "\n", 1)
+    assert any(
+        "paid step bypasses acknowledgement gate" in problem
+        for problem in dispatch_problems(modified)
+    )
+
+
+def test_job_failure_cannot_be_hidden_after_rejected_acknowledgement():
+    current = WORKFLOW.read_text(encoding="utf-8")
+    marker = "  live-smoke:\n"
+    assert marker in current
+    modified = current.replace(marker, marker + "    continue-on-error: true\n", 1)
+    assert any(
+        "job must not mask acknowledgement failure" in problem
+        for problem in dispatch_problems(modified)
+    )
+
+
+def test_paid_steps_must_remain_in_authorized_order():
+    current = WORKFLOW.read_text(encoding="utf-8")
+    modified = current.replace(
+        "- name: Validate live-test secret", "- name: SWAP_SENTINEL", 1
+    ).replace(
+        "- name: Start FastAPI application", "- name: Validate live-test secret", 1
+    ).replace(
+        "- name: SWAP_SENTINEL", "- name: Start FastAPI application", 1
+    )
+    assert modified != current
+    assert any(
+        "paid execution steps are out of order" in problem
+        for problem in dispatch_problems(modified)
+    )
