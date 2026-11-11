@@ -55,10 +55,27 @@ def _require(ok, message):
         raise ValueError(message)
 
 
+def _readiness_source_identity(metadata):
+    """Bind the complete observed file generation, including link custody."""
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+        metadata.st_mode,
+        metadata.st_nlink,
+    )
+
+
 def _snapshot_regular_descriptor(descriptor: int, *, label: str):
     before = os.fstat(descriptor)
     if not stat.S_ISREG(before.st_mode):
         raise ValueError(f"{label} must be a regular file")
+    # A pre-existing hardlink can mutate the source through a different path
+    # without changing this receipt path. The gate must reject it at capture.
+    if before.st_nlink != 1:
+        raise ValueError(f"{label} must be a single-link regular file")
     if before.st_size > MAX_READINESS_INPUT_BYTES:
         raise ValueError(
             f"{label} exceeds {MAX_READINESS_INPUT_BYTES} byte readiness input limit"
@@ -83,20 +100,8 @@ def _snapshot_regular_descriptor(descriptor: int, *, label: str):
         raise ValueError(
             f"{label} exceeds {MAX_READINESS_INPUT_BYTES} byte readiness input limit"
         )
-    before_identity = (
-        before.st_dev,
-        before.st_ino,
-        before.st_size,
-        before.st_mtime_ns,
-        before.st_ctime_ns,
-    )
-    after_identity = (
-        after.st_dev,
-        after.st_ino,
-        after.st_size,
-        after.st_mtime_ns,
-        after.st_ctime_ns,
-    )
+    before_identity = _readiness_source_identity(before)
+    after_identity = _readiness_source_identity(after)
     if before_identity != after_identity or offset != before.st_size:
         raise ValueError(f"{label} changed while it was being read")
     return b"".join(chunks), after_identity
@@ -155,7 +160,7 @@ def _require_bound_input_stable(snapshot, *, label: str):
         raise ValueError(f"{label} changed during verification") from exc
     if (
         not stat.S_ISREG(current.st_mode)
-        or (current.st_dev, current.st_ino) != identity[:2]
+        or _readiness_source_identity(current) != identity
         or not stat.S_ISDIR(parent_current.st_mode)
         or (parent_current.st_dev, parent_current.st_ino)
         != snapshot["parent_identity"]

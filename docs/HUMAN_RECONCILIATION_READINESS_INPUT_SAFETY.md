@@ -108,3 +108,32 @@ malformed top-level and nested containers, unhashable/unknown task IDs,
 and the unchanged well-formed path. A passed readiness check still requires
 independent source verification; it does not establish original-report
 custody or human validation without genuine retained blinded submissions.
+
+
+## Reconciliation readiness single-link and full-generation custody
+
+The *downstream* readiness preflight now refuses every pre-existing hardlink to
+its captured automated analysis, automated provenance, human analysis,
+human-analysis manifest, or frozen reconciliation contract. It requires one
+filesystem link before reading, then binds device, inode, byte count, mtime,
+ctime, file mode and link count during the descriptor read and at the final
+pathname recheck. Earlier checks held content, size, mtime, ctime and inode,
+but accepted a pre-existing alternate hardlink and compared only device/inode
+at the final pathname check. The final check now also catches a mode or
+metadata change between the final descriptor check and the visible path check.
+
+Synthetic, offline regressions in
+`tests/test_human_reconciliation_readiness_file_identity.py` cover an
+ordinary single-link control, pre-existing aliases for both automated and human
+inputs, an alias created within the verification window, and an instrumented
+late pathname metadata change. They do not modify any genuine rating or
+automated measurement.
+
+This closes an observable local alias and same-inode mutation route before a
+descriptive automated-to-human readiness receipt can be issued. It does not
+authenticate original archived reports and traces, prohibit copies made
+elsewhere, guarantee atomic filesystem snapshots, prove annotator independence,
+or create human-validation results. The diagnostic pilot remains diagnostic,
+frozen designated-primary automated findings are post-collection rather than
+established prospective preregistration, exploratory analyses remain
+exploratory, and actual blinded human ratings are still pending.
