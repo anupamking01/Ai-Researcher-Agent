@@ -14,6 +14,12 @@ from scripts import audit_historical_direct_artifact_ids as audit
 NOW = datetime(2026, 11, 5, 7, 0, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _pin_audit_clock(monkeypatch):
+    """Deterministic synthetic observations, independent of CI wall time."""
+    monkeypatch.setattr(audit, "_utc_now", lambda: NOW)
+
+
 def _candidate(pin):
     run_id, head_sha = audit.RUN_SOURCES[pin["role"]]
     url = f"{audit.API_BASE}/repos/{audit.REPOSITORY}/actions/artifacts/{pin['artifact_id']}"
@@ -281,9 +287,10 @@ def test_recovery_observation_time_cannot_predate_completed_uploads(stamp):
     assert requested == [], "reject incoherent timestamps before API access"
 
 
-def test_first_full_second_after_both_uploads_is_an_observation_not_custody():
+def test_first_full_second_after_both_uploads_is_an_observation_not_custody(monkeypatch):
     """Allow the first unambiguous post-run timestamp without promoting 404."""
     checked_at = datetime.fromisoformat("2026-09-13T21:21:41+00:00")
+    monkeypatch.setattr(audit, "_utc_now", lambda: checked_at)
     receipt = audit.audit_direct_artifact_ids(
         fetch_artifact=lambda _artifact_id: None,
         checked_at=checked_at,
@@ -357,7 +364,7 @@ def test_direct_id_future_observation_rejected_before_any_api_access(offset_hour
 
 def test_valid_recent_past_observation_still_accepts_unavailable_artifacts():
     """The upper time bound preserves legitimate historical as-of diagnostics."""
-    checked_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+    checked_at = NOW - timedelta(seconds=30)
     calls = []
 
     def lookup(ident):
@@ -374,3 +381,35 @@ def test_valid_recent_past_observation_still_accepts_unavailable_artifacts():
     ]
     assert receipt["historical_evidence_authenticated"] is False
     assert receipt["human_evaluation_ready"] is False
+
+
+@pytest.mark.parametrize("offset_hours", [0, 5, -7])
+def test_stale_supplied_asof_rejected_without_network_even_if_404(offset_hours):
+    """A newly fetched 404 cannot be labelled as a months-old observation."""
+    requested = []
+    backdated = (NOW - audit.MAX_OBSERVATION_BACKDATE - timedelta(microseconds=1))
+    supplied = backdated.astimezone(timezone(timedelta(hours=offset_hours)))
+
+    with pytest.raises(audit.DirectArtifactAuditError, match="stale relative"):
+        audit.audit_direct_artifact_ids(
+            fetch_artifact=lambda artifact_id: requested.append(artifact_id),
+            checked_at=supplied,
+        )
+    assert requested == []
+
+
+def test_asof_at_allowed_clock_skew_boundary_does_not_claim_custody():
+    """The short setup allowance is inclusive but still cannot prove absence."""
+    checked_at = NOW - audit.MAX_OBSERVATION_BACKDATE
+    receipt = audit.audit_direct_artifact_ids(
+        fetch_artifact=lambda _artifact_id: None, checked_at=checked_at,
+    )
+    assert receipt["checked_at_utc"] == checked_at.isoformat()
+    assert receipt["historical_evidence_authenticated"] is False
+    assert receipt["human_evaluation_ready"] is False
+
+
+def test_default_observation_time_uses_sampled_execution_clock():
+    receipt = audit.audit_direct_artifact_ids(fetch_artifact=lambda _id: None)
+    assert receipt["checked_at_utc"] == NOW.isoformat()
+    assert receipt["historical_evidence_authenticated"] is False
