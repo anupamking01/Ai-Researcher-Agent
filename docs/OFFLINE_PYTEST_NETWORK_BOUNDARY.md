@@ -114,7 +114,7 @@ GitHub Actions cache/post-processing steps. Synthetic regression tests in
 IPv6-install rollback, and cleanup on passing/failing pytest without invoking
 host firewalls. The live Linux GitHub Actions run is the enforcement check.
 
-This egress protection covers only the ordinary pytest step. It is **not**
+This egress protection applies only while a selected pytest step runs. It is **not**
 a complete OS sandbox or an installation-time network restriction and cannot
 stop malicious processes with root access from deliberately changing firewall
 rules. It does not independently authenticate historical treatment archives,
@@ -140,3 +140,27 @@ rendered with the tooling's explicit default ICMP port-unreachable option
 (IPv4 `icmp-port-unreachable`, IPv6 `icmp6-port-unreachable`). It rejects
 different targets, additional rules, or an OUTPUT bypass. This handles
 iptables serialization without permitting a weaker firewall policy.
+
+
+## Opt-in live diagnostic workflows: firewalled offline phase
+
+The manually dispatched `.github/workflows/live-pilot.yml` and
+`.github/workflows/live-app-smoke.yml` perform offline regression tests
+**before** authorized provider-backed work. These preflight suites now
+use the same fail-closed host-level IPv4/IPv6 firewall wrapper as
+ordinary CI instead of running bare `python -m pytest -q`. Provider
+credentials remain unavailable to those offline steps. This prevents test
+subprocesses and native libraries from accidentally making outbound requests
+during the offline stage, even if they bypass Python's socket guard. The
+existing Linux/privilege requirements are deliberate: inability to establish
+the firewall fails the diagnostic before any paid execution, rather than
+silently downgrading isolation.
+
+`tests/test_offline_ci_network_firewall.py` checks the actual opt-in
+workflows and synthetic regressions for missing or unprotected pytest
+entrypoints, and requires offline validation to precede provider-backed
+execution. Dependency installation and explicitly authorized live stages
+remain online; the wrapper removes its rules after pytest. These are
+execution-safety and reproducibility safeguards, **not** additional pilot
+data, prospective confirmation, exploratory evidence, recovery of the
+original 40 report/trace files, or human-validation results.

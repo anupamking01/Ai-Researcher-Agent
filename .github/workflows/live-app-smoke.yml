@@ -81,7 +81,7 @@ jobs:
       - name: Run offline regression suite
         run: |
           python -m compileall -q agent logic scripts tests settings scrape text_preprocess app.py
-          python -m pytest -q
+          bash scripts/run_offline_pytest_firewalled.sh
 
       - name: Show browser and live model configuration
         run: |

@@ -20,6 +20,70 @@ def test_offline_ci_uses_only_firewalled_pytest_entrypoint():
     assert invocations[0]["run"].strip() == "bash scripts/run_offline_pytest_firewalled.sh"
 
 
+
+# Manually authorized provider-backed workflows also have an offline pytest
+# phase; it must retain the host firewall, without modifying the paid stages.
+LIVE_OFFLINE_GATES = (
+    ("live-pilot.yml", "pilot", "Compile and run offline tests first",
+     "Preflight live search and concurrent browser extraction"),
+    ("live-app-smoke.yml", "live-smoke", "Run offline regression suite",
+     "Start FastAPI application"),
+)
+FIREWALLED_PYTEST = "bash scripts/run_offline_pytest_firewalled.sh"
+
+
+def _live_offline_guard_problems(source, job_name, offline_step, first_live_step):
+    try:
+        workflow = yaml.load(source, Loader=yaml.BaseLoader)
+        steps = workflow["jobs"][job_name]["steps"]
+    except (yaml.YAMLError, KeyError, TypeError):
+        return ["malformed live workflow offline phase"]
+    if not isinstance(steps, list):
+        return ["missing live workflow steps"]
+    invocations = [
+        (index, step) for index, step in enumerate(steps)
+        if isinstance(step, dict) and "pytest" in str(step.get("run", ""))
+    ]
+    if len(invocations) != 1:
+        return ["live diagnostic requires exactly one offline pytest entrypoint"]
+    index, step = invocations[0]
+    script = str(step.get("run", ""))
+    problems = []
+    if (step.get("name") != offline_step
+            or script.strip().splitlines()[-1].strip() != FIREWALLED_PYTEST
+            or script.count(FIREWALLED_PYTEST) != 1
+            or "python -m pytest" in script):
+        problems.append("live diagnostic offline pytest must run under host firewall")
+    live_positions = [
+        i for i, item in enumerate(steps)
+        if isinstance(item, dict) and item.get("name") == first_live_step
+    ]
+    if len(live_positions) != 1 or index >= live_positions[0]:
+        problems.append("offline firewall phase must precede provider-backed execution")
+    return problems
+
+
+@pytest.mark.parametrize(("filename", "job", "offline", "live"), LIVE_OFFLINE_GATES)
+def test_live_diagnostic_offline_pytest_is_firewalled(filename, job, offline, live):
+    source = (WORKFLOW.parent / filename).read_text(encoding="utf-8")
+    assert _live_offline_guard_problems(source, job, offline, live) == []
+
+
+@pytest.mark.parametrize(("filename", "job", "offline", "live"), LIVE_OFFLINE_GATES)
+@pytest.mark.parametrize("replacement", [
+    "python -m pytest -q",
+    "echo skipped-offline-tests",
+    "bash scripts/run_offline_pytest_firewalled.sh && python -m pytest -q",
+])
+def test_live_diagnostic_rejects_unprotected_or_missing_pytest(
+    filename, job, offline, live, replacement
+):
+    source = (WORKFLOW.parent / filename).read_text(encoding="utf-8")
+    altered = source.replace(FIREWALLED_PYTEST, replacement, 1)
+    assert altered != source
+    assert _live_offline_guard_problems(altered, job, offline, live)
+
+
 def _fake_iptables(family: str) -> str:
     return (
         "#!/usr/bin/env bash\n"
