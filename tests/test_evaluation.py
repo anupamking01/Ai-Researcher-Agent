@@ -28,6 +28,51 @@ def test_run_trace_metrics():
     assert trace.citation_precision_proxy == 0.875
 
 
+@pytest.mark.parametrize(
+    ("source_count", "failed_source_count"),
+    [
+        (-1, 0),
+        (0, -1),
+        (1, 2),
+        (True, 0),
+        (1, False),
+        (1.0, 0),
+        (2, 1.0),
+        ("2", 0),
+    ],
+)
+def test_run_trace_fails_closed_on_impossible_source_accounting(
+    source_count, failed_source_count
+):
+    with pytest.raises(ValueError, match="source_count|failed_source_count"):
+        RunTrace(
+            run_id="invalid-diagnostic",
+            completed=False,
+            source_count=source_count,
+            failed_source_count=failed_source_count,
+        )
+
+
+@pytest.mark.parametrize(
+    ("attempted", "failed", "successful", "rate"),
+    [(0, 0, 0, 0.0), (3, 0, 3, 1.0), (3, 3, 0, 0.0), (4, 1, 3, 0.75)],
+)
+def test_run_trace_source_accounting_conserves_attempts(
+    attempted, failed, successful, rate
+):
+    trace = RunTrace(
+        run_id="accounting-fixture",
+        completed=True,
+        source_count=attempted,
+        failed_source_count=failed,
+    )
+    assert trace.successful_source_count == successful
+    assert trace.source_success_rate == rate
+    summary = trace.to_dict()
+    assert summary["successful_source_count"] + trace.failed_source_count == attempted
+    assert summary["source_success_rate"] == rate
+
+
 def test_aggregate_runs():
     runs = [
         RunTrace(run_id="run-1", completed=True, source_count=10, failed_source_count=2, latency_seconds=20.0, prompt_tokens=100, completion_tokens=50, estimated_cost_usd=0.05),

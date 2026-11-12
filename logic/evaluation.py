@@ -49,13 +49,27 @@ class RunTrace:
     usage_accounting_status: str = "unavailable"
     cost_accounting_status: str = "not_computed"
 
+    def __post_init__(self) -> None:
+        """Reject impossible source-count telemetry before computing metrics.
+
+        A negative attempt/failure count or more failed sources than attempted
+        cannot be turned into a valid success rate by silently clamping it.
+        This is an in-memory diagnostic contract, not archival attestation.
+        """
+        for field in ("source_count", "failed_source_count"):
+            value = getattr(self, field)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{field} must be a nonnegative integer")
+        if self.failed_source_count > self.source_count:
+            raise ValueError("failed_source_count cannot exceed source_count")
+
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
 
     @property
     def successful_source_count(self) -> int:
-        return max(self.source_count - self.failed_source_count, 0)
+        return self.source_count - self.failed_source_count
 
     @property
     def source_success_rate(self) -> float:

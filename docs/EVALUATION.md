@@ -200,6 +200,24 @@ Secondary measurements include:
 
 Evaluator usage and evaluator cost are research-measurement overhead. They must not be mixed into the treatment/deployment cost comparison.
 
+### General diagnostic RunTrace source-accounting guard (12 November 2026)
+
+The dependency-free `logic.evaluation.RunTrace` helper now rejects non-integer
+(including Boolean), negative or impossible source-attempt and failed-source
+counts at object construction. A report with more failures than scheduled
+attempts previously returned a silently clamped zero successful sources,
+making invalid diagnostic telemetry appear to be a genuine zero-success
+observation. Valid counts now satisfy `successful + failed = attempted`
+without clamping; empty-attempt runs retain a defined zero success rate.
+Offline synthetic tests cover both valid boundaries and invalid inputs.
+
+This protects **new in-memory diagnostic summaries only**. It neither
+retroactively reinterprets the frozen pilot, alters the independently
+byte-pinned 40-cell automated study or its source-specific CSV audits,
+authenticates missing treatment reports/traces, nor supplies human ratings.
+It does not establish prospectively preregistered confirmation; exploratory
+and human-validation claims retain their separate qualifications.
+
 ## 7. Budget accounting
 
 A central integrity rule is that additional planning or verification computation cannot be described as “free.” Every relevant treatment run should retain enough metadata to reconstruct resource use, including:
