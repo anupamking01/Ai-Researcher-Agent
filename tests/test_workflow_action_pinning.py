@@ -858,7 +858,13 @@ def test_live_smoke_safety_checks_run_in_ordinary_offline_ci() -> None:
 
     steps = ci["jobs"]["unit-tests"]["steps"]
     commands = [str(step.get("run", "")).strip() for step in steps]
-    assert "bash scripts/run_offline_pytest_firewalled.sh" in commands
+    # Retain offline regression coverage when pytest is captured through
+    # a pipefail-protected tee pipeline rather than a single shell command.
+    assert any(
+        "set -euo pipefail" in command
+        and "bash scripts/run_offline_pytest_firewalled.sh" in command
+        for command in commands
+    )
     assert not any("smoke_test_app.py" in command for command in commands)
 
 
