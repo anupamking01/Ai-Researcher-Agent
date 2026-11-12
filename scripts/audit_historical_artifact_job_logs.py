@@ -160,6 +160,13 @@ def _bounded_lines(content: str, label: str) -> list[tuple[str, str]]:
             continue
         if not line:
             continue
+        # The only permitted BOM is removed from byte zero above. A later
+        # BOM inside a timestamped message could disguise a second log header.
+        if "\ufeff" in line:
+            raise HistoricalLogError(
+                f"{label} log contains an unframed or malformed timestamped line "
+                f"at line {line_number}"
+            )
         match = _LOG_LINE.fullmatch(line)
         if match is None:
             raise HistoricalLogError(
