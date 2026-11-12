@@ -109,3 +109,26 @@ evaluation. The diagnostic pilot remains distinct from the qualified
 post-collection designated-primary automated findings and exploratory
 sensitivity analyses; no confirmatory precollection or human-validation
 result is asserted by this change.
+
+
+## Installed CI dependency verification (12 November 2026)
+
+The test workflow now checks **installed** Python distribution metadata against
+every exact version pin in `requirements.txt` and `requirements-ci.lock`
+both after dependency installation and after offline pytest, before publishing
+its source-bound test receipt. This closes a reproducibility gap left by
+hashing requirement *files* alone: an unchanged lock file and successful
+`pip check` do not themselves show that the runner has installed the
+versions the experimenter intended. The gate requires exactly one installed
+distribution per canonical PEP 503-style name and an exact pinned version;
+missing, duplicated, unpinned requirement syntax, or drifted pinned packages
+fail the workflow. Pure synthetic regression cases test each rejection without
+installing anything or making network calls.
+
+These are local installed-distribution **metadata** checks, not an immutable
+environment digest, a complete software-bill-of-materials, source-distribution
+hash validation, attestation of the GitHub runner, or proof that importable
+module bytes match metadata. Packages not listed in the two CI pin files are
+outside this check. The earlier exact Git checkout, firewalled pytest, and
+retained evidence gates remain required and unchanged. No research treatments,
+automated evaluators, or human ratings are run by this check.

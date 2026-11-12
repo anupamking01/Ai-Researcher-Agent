@@ -34,6 +34,9 @@ jobs:
           python -m pip install --no-deps -r requirements-ci.lock
           python -m pip check
 
+      - name: Verify installed CI dependencies before tests
+        run: python -m scripts.verify_ci_installed_dependencies --phase before-tests
+
       - name: Compile research code
         run: python -m compileall -q agent logic scripts tests settings scrape text_preprocess
 
@@ -48,6 +51,9 @@ jobs:
 
       - name: Verify exact source checkout after tests
         run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests
+
+      - name: Verify installed CI dependencies after tests
+        run: python -m scripts.verify_ci_installed_dependencies --phase after-tests
 
       - name: Bind exact-commit offline test evidence
         run: |
