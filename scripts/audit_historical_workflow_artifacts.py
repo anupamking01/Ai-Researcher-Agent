@@ -100,7 +100,8 @@ MAX_RETAINED_CANONICAL_METADATA_BYTES = 16 * 1024
 def _verify_retained_canonical_metadata_file() -> str:
     """Require the retained provider record's exact pinned bytes before API I/O.
 
-    This rejects a missing, linked, oversized, or changed checkout record, even
+    This rejects missing, symlinked, hardlinked, oversized, or replaced checkout
+    records, including byte-identical inode replacement within capture, even
     if GitHub no longer lists the canonical ZIP. It is not an external archive
     attestation and does not verify the original treatment/report provenance.
     """
@@ -117,23 +118,26 @@ def _verify_retained_canonical_metadata_file() -> str:
             before = os.fstat(stream.fileno())
             if (
                 not stat.S_ISREG(before.st_mode)
-                or before.st_size > MAX_RETAINED_CANONICAL_METADATA_BYTES
+                or before.st_nlink != 1
+                or not 0 < before.st_size <= MAX_RETAINED_CANONICAL_METADATA_BYTES
             ):
                 raise ArtifactInventoryError(
                     "retained canonical metadata is not a bounded regular file"
                 )
             captured = stream.read(MAX_RETAINED_CANONICAL_METADATA_BYTES + 1)
             after = os.fstat(stream.fileno())
+            path_after = os.stat(RETAINED_CANONICAL_METADATA_PATH, follow_symlinks=False)
     except OSError as exc:
         raise ArtifactInventoryError(
             "retained canonical metadata could not be read safely"
         ) from exc
     identity = lambda value: (
-        value.st_dev, value.st_ino, value.st_size,
-        value.st_mtime_ns, value.st_ctime_ns,
+        value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+        value.st_size, value.st_mtime_ns, value.st_ctime_ns,
     )
     if (
         identity(before) != identity(after)
+        or identity(after) != identity(path_after)
         or len(captured) != after.st_size
         or len(captured) > MAX_RETAINED_CANONICAL_METADATA_BYTES
     ):

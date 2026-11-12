@@ -5,6 +5,8 @@ fabricate any blinded human-evaluation result.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from scripts import audit_historical_workflow_artifacts as audit
@@ -20,7 +22,7 @@ def test_checked_in_provider_metadata_matches_immutable_byte_anchor():
     "mutation",
     (
         "artifact_id", "zip_digest", "format_only", "truncated",
-        "missing", "symlink", "directory", "oversize",
+        "missing", "symlink", "hardlink", "directory", "oversize",
     ),
 )
 def test_provider_metadata_custody_fails_before_any_github_request(
@@ -44,6 +46,10 @@ def test_provider_metadata_custody_fails_before_any_github_request(
         source = tmp_path / "otherwise-valid-metadata.json"
         source.write_bytes(original)
         target.symlink_to(source)
+    elif mutation == "hardlink":
+        source = tmp_path / "otherwise-valid-hardlinked-metadata.json"
+        source.write_bytes(original)
+        os.link(source, target)
     elif mutation == "directory":
         target.mkdir()
     elif mutation == "oversize":
@@ -62,3 +68,49 @@ def test_provider_metadata_custody_fails_before_any_github_request(
         audit.audit_historical_artifact_inventory(fetch_json=no_live_github_calls)
     assert github_calls == []
 
+
+
+def test_byte_identical_atomic_replacement_is_not_accepted_as_same_source(
+    tmp_path, monkeypatch
+):
+    """Original descriptor and current pathname must denote one file generation."""
+    raw = audit.RETAINED_CANONICAL_METADATA_PATH.read_bytes()
+    target = tmp_path / "retained-provider-metadata.json"
+    target.write_bytes(raw)
+    replacement = tmp_path / "replacement.json"
+    real_fdopen = os.fdopen
+
+    class ReplacingCapture:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            self.stream.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+
+        def fileno(self):
+            return self.stream.fileno()
+
+        def read(self, *args):
+            captured = self.stream.read(*args)
+            replacement.write_bytes(raw)
+            os.replace(replacement, target)
+            return captured
+
+    def fdopen_swapping_after_read(fd, mode):
+        return ReplacingCapture(real_fdopen(fd, mode))
+
+    monkeypatch.setattr(audit, "RETAINED_CANONICAL_METADATA_PATH", target)
+    monkeypatch.setattr(audit.os, "fdopen", fdopen_swapping_after_read)
+    requests = []
+
+    def no_network(path):
+        requests.append(path)
+        raise AssertionError("source was replaced before metadata API request")
+
+    with pytest.raises(audit.ArtifactInventoryError, match="retained canonical metadata"):
+        audit.audit_historical_artifact_inventory(fetch_json=no_network)
+    assert requests == []

@@ -3,6 +3,24 @@
 **Status (2026-11-05): blocked on original report and handoff custody.**
 This is an operational inventory and recovery plan, not an experiment or human-evaluation result.
 
+## Retained canonical provider-metadata file custody (2026-11-12)
+
+Before making any read-only historical Actions metadata request, the inventory
+checks the byte-pinned canonical-analysis provider record in the checkout.
+The preflight now rejects hardlink aliases as well as symlinks, and requires
+the opened descriptor and the pathname after capture to identify the same
+single-link regular file (device, inode, mode, link count, size, and modification
+metadata). This detects a byte-identical atomic replacement or unlink during
+capture; matching SHA-256 bytes alone cannot demonstrate stable source custody.
+Offline synthetic tests cover a hardlinked byte-identical record and a same-byte
+replacement during the read, without requesting GitHub data or running models.
+
+This guards only the *local retained provider metadata input*; its hash is pinned
+inside this repository, not to an independently held external attestation. It
+cannot recover unavailable original report/trace ZIPs, authenticate those
+experiments, or authorize human annotation. Original experimental evidence and
+independent human-validation gates remain outstanding.
+
 ## Run-scoped inventory as-of chronology gate (2026-11-11)
 
 The read-only run-scoped auditor `scripts/audit_historical_workflow_artifacts.py`
