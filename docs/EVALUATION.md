@@ -36,6 +36,27 @@ to new in-memory diagnostic summaries. The original 40 treatment outcomes,
 frozen automated inference, exploratory sensitivity checks, and pending real
 human ratings remain separate and unchanged.
 
+### Diagnostic bootstrap percentile underflow (prospective only)
+
+The reusable offline `bootstrap_confidence_interval` previously interpolated
+percentiles by separately multiplying both endpoint values by their weights.
+For two identical smallest positive subnormal floats (`5e-324`), a half-way
+quantile incorrectly became **zero**: each half underflowed before addition.
+This could produce a zero-valued interval around a nonzero constant statistic
+for supported draw counts (for example, 101 draws with the default 95%
+confidence). Negative subnormal effects were equally vulnerable.
+
+The interpolation now preserves equal endpoints exactly, calculates
+same-sign interpolation from one endpoint and its finite difference, and
+retains the weighted form for opposite-sign extremes where subtracting the
+endpoints could overflow. Synthetic cases pin constant signed subnormal
+intervals, bounded nonconstant subnormal percentiles, and the existing
+opposite-sign extreme behavior. The percentile definition, resampling seed,
+draw count, estimator, and ordinary finite results are unchanged. This
+prospective numerical-integrity safeguard neither revises historical
+automated/pilot/exploratory results nor establishes human validation or
+original-report custody.
+
 ### Direct descriptive metric-input integrity (prospective only)
 
 The shared `logic.evaluation._finite_float` boundary for the reusable

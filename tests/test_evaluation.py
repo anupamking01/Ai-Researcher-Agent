@@ -434,6 +434,34 @@ def test_bootstrap_mean_keeps_finite_extreme_constant_sample():
     assert interval["lower"] == interval["upper"] == 1e308
 
 
+
+@pytest.mark.parametrize("constant", [5e-324, -5e-324, 1e-320, -1e-320])
+def test_bootstrap_percentiles_keep_constant_subnormal_effects(constant):
+    # With 101 draws, the default 95% endpoints land halfway between two
+    # order statistics. Multiplying both smallest-subnormal observations
+    # by their 0.5 weights independently incorrectly produced zero.
+    interval = bootstrap_confidence_interval(
+        [constant], n_resamples=101, seed=17
+    )
+    assert interval["estimate"] == constant
+    assert interval["lower"] == constant
+    assert interval["upper"] == constant
+
+
+def test_bootstrap_percentiles_keep_same_sign_subnormal_bounds():
+    # Exercise interpolation through the public API with known ordered
+    # statistic draws, not a private helper or any experiment outcomes.
+    values = iter((5e-324, 1e-323, 0.0))
+    interval = bootstrap_confidence_interval(
+        [0.0],
+        statistic=lambda sample: next(values),
+        confidence=0.5,
+        n_resamples=2,
+    )
+    assert interval["estimate"] == 0.0
+    assert 5e-324 <= interval["lower"] <= interval["upper"] <= 1e-323
+
+
 def test_paired_metric_comparison_preserves_task_pairing():
     summary = paired_metric_comparison(
         baseline=[2.0, 4.0, 3.0, 5.0],

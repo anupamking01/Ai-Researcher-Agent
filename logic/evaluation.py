@@ -229,10 +229,18 @@ def _linear_quantile(ordered: Sequence[float], probability: float) -> float:
     lower_index = floor(position)
     upper_index = min(lower_index + 1, len(ordered) - 1)
     fraction = position - lower_index
-    return float(
-        (1.0 - fraction) * ordered[lower_index]
-        + fraction * ordered[upper_index]
-    )
+    left, right = ordered[lower_index], ordered[upper_index]
+    # A weighted sum can erase constant subnormal observations: 0.5 times
+    # the smallest float rounds to zero, collapsing a nonzero percentile.
+    if left == right:
+        return float(left)
+    # For same-sign endpoints, the span is finite and interpolation retains
+    # small endpoints without independently rounding both weighted terms.
+    if left >= 0 or right <= 0:
+        return float(left + fraction * (right - left))
+    # Opposite-sign endpoints may have an unrepresentable difference even
+    # though their interpolated percentile is finite.
+    return float((1.0 - fraction) * left + fraction * right)
 
 
 def bootstrap_confidence_interval(
