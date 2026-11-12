@@ -87,3 +87,42 @@ def test_workflow_keeps_piped_wrapper_and_publishes_both_evidence_files():
     assert artifact["with"]["if-no-files-found"] == "error"
     assert "vera-offline-tests.log" in artifact["with"]["path"]
     assert "vera-offline-test-receipt.json" in artifact["with"]["path"]
+
+
+def test_workflow_requires_independent_identity_replay_before_evidence_upload():
+    """Do not publish a producer receipt without exercising its offline consumer."""
+    workflow = yaml.load(
+        (Path(__file__).resolve().parents[1] / ".github/workflows/tests.yml").read_text(),
+        Loader=yaml.BaseLoader,
+    )
+    steps = workflow["jobs"]["unit-tests"]["steps"]
+    producer_index = next(
+        i for i, step in enumerate(steps)
+        if step.get("name") == "Bind exact-commit offline test evidence"
+    )
+    replay_index = next(
+        i for i, step in enumerate(steps)
+        if step.get("name") == "Replay exact-commit offline test evidence before upload"
+    )
+    upload_index = next(
+        i for i, step in enumerate(steps)
+        if step.get("name", "").startswith("Retain source-bound offline test")
+    )
+    assert producer_index < replay_index < upload_index
+    replay_step = steps[replay_index]
+    assert replay_step.get("shell") == "bash"
+    assert "continue-on-error" not in replay_step
+    script = replay_step["run"]
+    assert script.splitlines()[0] == "set -euo pipefail"
+    assert "python -m scripts.verify_retained_ci_test_evidence" in script
+    for flag, value in (
+        ("--log", "$RUNNER_TEMP/vera-offline-tests.log"),
+        ("--receipt", "$RUNNER_TEMP/vera-offline-test-receipt.json"),
+        ("--checkout-sha", "$GITHUB_SHA"),
+        ("--run-id", "$GITHUB_RUN_ID"),
+        ("--run-attempt", "$GITHUB_RUN_ATTEMPT"),
+        ("--event", "$GITHUB_EVENT_NAME"),
+    ):
+        assert f'{flag} "{value}"' in script
+    # The receipt must not supply the independent expected run identity.
+    assert "jq" not in script and "|| true" not in script

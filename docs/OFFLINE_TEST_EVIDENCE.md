@@ -61,3 +61,18 @@ has been authenticated. Inspect the original GitHub workflow/job conclusion
 and the uploaded artifact's source separately. Offline synthetic regressions
 cover clean replay and tampering; they create no experimental results or
 human-evaluation ratings.
+
+## CI-side replay publication gate
+
+The job also runs the **independent-identity replay CLI** against the just
+generated log and receipt *before* `upload-artifact`. Expected checkout SHA,
+run ID, attempt and event are passed directly from the GitHub Actions
+environment, not extracted from the receipt. A failed, missing or inconsistent
+replay exits the job before the source-bound evidence pair is published as
+verified. A workflow regression test pins the producer → replay → upload
+ordering and all independently supplied CLI arguments.
+
+This is an integration/cross-check on **the same CI runner**, not an independent
+second machine, GitHub API attestation or evidence of successful treatment
+execution. Downloaded artifacts should still be replayed later using
+identifiers obtained separately from the GitHub run page/API.

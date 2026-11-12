@@ -49,6 +49,18 @@ jobs:
             --log "$RUNNER_TEMP/vera-offline-tests.log" \
             --out "$RUNNER_TEMP/vera-offline-test-receipt.json"
 
+      - name: Replay exact-commit offline test evidence before upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.verify_retained_ci_test_evidence \
+            --log "$RUNNER_TEMP/vera-offline-tests.log" \
+            --receipt "$RUNNER_TEMP/vera-offline-test-receipt.json" \
+            --checkout-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --event "$GITHUB_EVENT_NAME"
+
       - name: Retain source-bound offline test evidence (90 days)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
