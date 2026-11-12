@@ -101,8 +101,108 @@ def test_oversize_log_rejected_before_parsing():
         audit.audit_historical_job_logs("x" * (audit.MAX_LOG_BYTES + 1), b)
 
 
+
+def _with_job_envelope(log: str, *, original: bool) -> str:
+    if original:
+        start, cleanup, terminal = (
+            "2026-09-11T16:15:19.0726994Z",
+            "2026-09-11T17:22:40.8790940Z",
+            "2026-09-11T17:22:40.8981857Z",
+        )
+        actions = "actions/checkout@v4, actions/setup-python@v5, actions/upload-artifact@v4"
+    else:
+        start, cleanup, terminal = (
+            "2026-09-13T21:20:36.3138953Z",
+            "2026-09-13T21:21:37.5684206Z",
+            "2026-09-13T21:21:37.5998672Z",
+        )
+        actions = (
+            "actions/checkout@v4, actions/download-artifact@v4, "
+            "actions/setup-python@v5, actions/upload-artifact@v4"
+        )
+    return "\n".join((
+        _line(start, "Current runner version: '2.337.0'"),
+        log,
+        _line(cleanup, "Cleaning up orphan processes"),
+        _line(
+            terminal,
+            "##[warning]Node.js 20 is deprecated. The following actions target "
+            "Node.js 20 but are being forced to run on Node.js 24: "
+            + actions
+            + ". For more information see: "
+            "https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/",
+        ),
+    ))
+
+
+@pytest.mark.parametrize("original", [True, False])
+def test_pinned_job_log_envelope_accepts_historical_opening_and_terminal_markers(original):
+    a, b = _logs()
+    log = _with_job_envelope(a if original else b, original=original)
+    audit._require_historical_job_envelope(
+        log,
+        run_id=audit.ORIGINAL["run_id"] if original else audit.RECOVERED["run_id"],
+        label="synthetic",
+    )
+
+
+@pytest.mark.parametrize("original", [True, False])
+def test_digest_bearing_excerpt_without_job_envelope_is_not_accepted_by_cli_guard(original):
+    a, b = _logs()
+    log = a if original else b
+    # Action-level matching still succeeds on these synthetic excerpts.
+    audit.audit_historical_job_logs(a, b)
+    with pytest.raises(audit.HistoricalLogError, match="opening marker"):
+        audit._require_historical_job_envelope(
+            log,
+            run_id=audit.ORIGINAL["run_id"] if original else audit.RECOVERED["run_id"],
+            label="synthetic",
+        )
+
+
+@pytest.mark.parametrize("original", [True, False])
+def test_pinned_job_envelope_rejects_truncated_tail_and_missing_cleanup(original):
+    a, b = _logs()
+    log = _with_job_envelope(a if original else b, original=original)
+    run_id = audit.ORIGINAL["run_id"] if original else audit.RECOVERED["run_id"]
+    with pytest.raises(audit.HistoricalLogError, match="terminal job-log warning"):
+        audit._require_historical_job_envelope(
+            "\n".join(log.splitlines()[:-1]), run_id=run_id, label="synthetic",
+        )
+    without_cleanup = "\n".join(
+        line for line in log.splitlines() if not line.endswith("Cleaning up orphan processes")
+    )
+    with pytest.raises(audit.HistoricalLogError, match="terminal cleanup"):
+        audit._require_historical_job_envelope(
+            without_cleanup, run_id=run_id, label="synthetic",
+        )
+
+
+def test_pinned_job_envelope_rejects_concatenated_job_and_early_cleanup():
+    a, _ = _logs()
+    log = _with_job_envelope(a, original=True)
+    with pytest.raises(audit.HistoricalLogError, match="duplicate or relocated"):
+        audit._require_historical_job_envelope(
+            log + "\n" + log, run_id=audit.ORIGINAL["run_id"], label="synthetic",
+        )
+    moved = log.replace(
+        _line("2026-09-11T17:22:40.8790940Z", "Cleaning up orphan processes"),
+        "",
+    ).replace(
+        _line("2026-09-11T16:15:19.0726994Z", "Current runner version: '2.337.0'"),
+        _line("2026-09-11T16:15:19.0726994Z", "Current runner version: '2.337.0'") +
+        "\n" + _line("2026-09-11T16:15:19.0726995Z", "Cleaning up orphan processes"),
+    )
+    with pytest.raises(audit.HistoricalLogError, match="terminal cleanup"):
+        audit._require_historical_job_envelope(
+            moved, run_id=audit.ORIGINAL["run_id"], label="synthetic",
+        )
+
+
 def test_cli_accepts_bounded_synthetic_job_logs(tmp_path, capsys, monkeypatch):
     a, b = _logs()
+    a = _with_job_envelope(a, original=True)
+    b = _with_job_envelope(b, original=False)
     original = tmp_path / "original.log"
     recovery = tmp_path / "recovery.log"
     original.write_text(a, encoding="utf-8")

@@ -193,6 +193,58 @@ def _bounded_lines(content: str, label: str) -> list[tuple[str, str]]:
     return result
 
 
+
+def _require_historical_job_envelope(
+    content: str, *, run_id: int, label: str,
+) -> None:
+    """Check the observed opening/terminal markers of each pinned Actions job.
+
+    A digest-bearing excerpt can pass action-step checks despite omitting the
+    rest of the GitHub job. These markers identify a *plausibly bounded* job
+    transcript, not completeness of its middle or independent authentication.
+    Synthetic in-memory step fixtures use audit_historical_job_logs directly;
+    the CLI additionally enforces these full-job envelope markers.
+    """
+    if run_id not in HISTORICAL_WORKFLOW_WINDOWS:
+        raise HistoricalLogError("unknown historical job-log envelope")
+    lines = _bounded_lines(content, label)
+    if not lines or lines[0][1] != "Current runner version: '2.337.0'":
+        raise HistoricalLogError(f"{label}: missing pinned GitHub runner opening marker")
+    openings = [
+        index for index, (_, message) in enumerate(lines)
+        if message.startswith("Current runner version:")
+    ]
+    if openings != [0]:
+        raise HistoricalLogError(f"{label}: duplicate or relocated runner opening marker")
+    cleanups = [
+        index for index, (_, message) in enumerate(lines)
+        if message == "Cleaning up orphan processes"
+    ]
+    uploads = [
+        index for index, (_, message) in enumerate(lines)
+        if message.startswith(
+            f"Artifact download URL: https://github.com/{REPOSITORY}"
+            f"/actions/runs/{run_id}/artifacts/"
+        )
+    ]
+    if len(cleanups) != 1 or len(uploads) != 1 or cleanups[0] <= uploads[0]:
+        raise HistoricalLogError(
+            f"{label}: missing or misplaced terminal cleanup after artifact upload"
+        )
+    warning_prefix = (
+        "##[warning]Node.js 20 is deprecated. The following actions target "
+        "Node.js 20 but are being forced to run on Node.js 24:"
+    )
+    warnings = [
+        index for index, (_, message) in enumerate(lines)
+        if message.startswith(warning_prefix)
+    ]
+    if warnings != [len(lines) - 1] or warnings[0] <= cleanups[0]:
+        raise HistoricalLogError(
+            f"{label}: missing or misplaced pinned terminal job-log warning"
+        )
+
+
 def _action_step(lines: list[tuple[str, str]], action: str) -> list[tuple[str, str]]:
     marker = f"##[group]Run actions/{action}@v4"
     starts = [n for n, (_, message) in enumerate(lines) if message == marker]
@@ -417,10 +469,16 @@ def main() -> int:
     parser.add_argument("--recovery-job-log", type=Path, required=True)
     args = parser.parse_args()
     try:
-        receipt = audit_historical_job_logs(
-            _read_log(args.original_job_log),
-            _read_log(args.recovery_job_log),
+        original_log = _read_log(args.original_job_log)
+        recovery_log = _read_log(args.recovery_job_log)
+        _require_historical_job_envelope(
+            original_log, run_id=ORIGINAL["run_id"], label="original treatment",
         )
+        _require_historical_job_envelope(
+            recovery_log, run_id=RECOVERED["run_id"], label="evaluator recovery",
+        )
+        receipt = audit_historical_job_logs(original_log, recovery_log)
+        receipt["pinned_job_opening_and_terminal_markers_matched"] = True
     except (OSError, HistoricalLogError) as exc:
         parser.exit(1, f"VERA HISTORICAL JOB-LOG LINEAGE: FAIL: {exc}\n")
     print(json.dumps(receipt, sort_keys=True, indent=2))

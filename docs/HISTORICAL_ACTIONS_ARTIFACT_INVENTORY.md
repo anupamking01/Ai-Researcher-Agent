@@ -1114,3 +1114,33 @@ prospective precollection statistical preregistration, or authorize blinded
 human evaluation. Pilot findings remain diagnostic; frozen automated primary
 analyses have their documented post-collection-plan qualification; sensitivity
 analyses remain exploratory; genuine human ratings are still absent.
+
+
+## Historical job-log opening/terminal envelope guard (12 November 2026)
+
+The original and recovery GitHub job-log endpoint returns a transcript with a
+runner-version opening line, the selected artifact upload/download events,
+post-job cleanup, and a final Node.js runtime-warning line. Previously a
+caller-supplied excerpt ending after the artifact action's next step marker
+could pass the offline CLI audit even if the rest of the job transcript had
+been omitted. Correct digest/ID chronology does not imply a complete job log.
+
+The **CLI** now checks the historical runner opening marker occurs once at
+the start, the final artifact upload URL precedes exactly one
+`Cleaning up orphan processes` message, and the observed terminal Node.js
+warning occurs once as the last timestamped message. The existing parser
+continues to check all supplied line timestamps within each workflow window
+and requires correct artifact ZIP digests, IDs, sizes, and ordered steps.
+These markers were checked against the actual read-only GitHub job-log
+responses for runs `34620917346` and `34783525480`; synthetic offline
+tests cover both roles, missing openings, truncated tails, missing or early
+cleanup, and concatenated transcripts. The in-memory step-analysis function
+remains usable on deliberately abbreviated synthetic fixtures; **the CLI
+applies the extra complete-job envelope gate before invoking it**.
+
+This is an internal same-provider transcript-boundary consistency check,
+**not** a cryptographic proof that every middle log line is present, proof
+of original ZIP availability or independent preservation, or authentication
+of the underlying forty reports/traces. It does not change the pilot,
+post-collection qualified automated primary analysis, exploratory analyses,
+or pending human-validation status; no treatments or ratings were run.
