@@ -695,10 +695,6 @@ def test_task_aggregate_accepts_one_pass_generators_and_zero_source_failures():
             [{"estimated_cost_usd": 1e308}, {"estimated_cost_usd": 1e308}],
             "avg_estimated_cost_usd must be finite",
         ),
-        (
-            [{"latency_seconds": 0.0}, {"latency_seconds": 1e200}],
-            "latency_stddev_seconds must be finite",
-        ),
         ([{"source_count": 10**400}], "aggregate run statistics must be finite"),
         ([{"prompt_tokens": 10**400}], "aggregate run statistics must be finite"),
     ],
@@ -727,19 +723,48 @@ def test_task_keyed_aggregate_inherits_nonfinite_summary_rejection():
         )
 
 
-def test_aggregate_runs_keeps_large_but_representable_statistics():
+@pytest.mark.parametrize("large", [1e100, 1e200])
+def test_aggregate_runs_keeps_large_but_representable_statistics(large):
     traces = [
         RunTrace(run_id="a", completed=False, source_count=0,
                  latency_seconds=0.0, estimated_cost_usd=0.0),
         RunTrace(run_id="b", completed=True, source_count=1,
-                 latency_seconds=1e100, estimated_cost_usd=1e100),
+                 latency_seconds=large, estimated_cost_usd=large),
     ]
     result = aggregate_runs(traces)
     assert result["n_runs"] == 2
     assert result["completion_rate"] == 0.5
-    assert result["avg_latency_seconds"] == pytest.approx(5e99)
-    assert result["latency_stddev_seconds"] == pytest.approx(5e99)
-    assert result["avg_estimated_cost_usd"] == pytest.approx(5e99)
+    assert result["avg_latency_seconds"] == pytest.approx(large / 2)
+    assert result["latency_stddev_seconds"] == pytest.approx(large / 2)
+    assert result["avg_estimated_cost_usd"] == pytest.approx(large / 2)
+
+
+@pytest.mark.parametrize(
+    ("observations", "expected"),
+    [
+        ([0.0, 1e200], 5e199),
+        ([0.0, 1e308], 5e307),
+        ([-1e308, 1e308], 1e308),
+        ([1e308, 1e308], 0.0),
+        ([0.0, 1e-200], 5e-201),
+    ],
+)
+def test_population_stddev_avoids_spurious_intermediate_overflow(
+    observations, expected
+):
+    assert population_stddev(observations) == pytest.approx(expected)
+
+
+def test_task_keyed_aggregate_preserves_finite_extreme_latency_dispersion():
+    traces = [
+        _task_aggregate_trace("a", latency_seconds=0.0),
+        _task_aggregate_trace("b", latency_seconds=1e200),
+    ]
+    summary = aggregate_runs_by_task(
+        traces, variant_id="D3", task_set_id="frozen-diagnostic",
+        expected_task_ids=["a", "b"],
+    )
+    assert summary["latency_stddev_seconds"] == pytest.approx(5e199)
 
 
 def test_deduplicate_sources_preserves_order():

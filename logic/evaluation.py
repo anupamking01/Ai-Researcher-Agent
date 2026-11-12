@@ -164,12 +164,23 @@ def safe_median(values: Iterable[float]) -> float:
 
 
 def population_stddev(values: Iterable[float]) -> float:
-    """Return population standard deviation, defined as 0.0 when empty."""
+    """Return population stddev without overflowing squared finite deviations.
+
+    Center and square dimensionless observations, then restore their scale.
+    For instance, [0, 1e200] has representable stddev 5e199 even though
+    squaring an unscaled 5e199 deviation would overflow binary64.
+    """
     values = list(values)
     if not values:
         return 0.0
-    mean = safe_mean(values)
-    return sqrt(safe_mean((value - mean) ** 2 for value in values))
+    scale = max(abs(value) for value in values)
+    if scale == 0:
+        return 0.0
+    normalized = [value / scale for value in values]
+    mean = safe_mean(normalized)
+    return scale * sqrt(
+        safe_mean((value - mean) ** 2 for value in normalized)
+    )
 
 
 def _finite_float(value: float, *, label: str) -> float:

@@ -11,14 +11,19 @@ Human quality ratings are **not yet results**. They remain pending and must be c
 ### Diagnostic derived-summary finiteness (prospective only)
 
 The general `logic.evaluation.aggregate_runs` summary and its complete-task
-wrapper `aggregate_runs_by_task` now reject derived non-finite output values
-rather than publishing `Infinity` or `NaN` as descriptive means, medians or
-dispersion. Valid nonnegative raw `RunTrace` counts and finite latencies/costs
-can still overflow a floating-point intermediate (for example, summing two
-very large finite costs, squaring a large deviation, or converting an enormous
-integer token count). Such aggregates raise `ValueError` instead of becoming
-a plausible-looking research result. Regression tests cover overflow and
-large-but-representable inputs.
+wrapper `aggregate_runs_by_task` reject derived non-finite output values
+rather than publishing `Infinity` or `NaN` as descriptive statistics.
+Valid nonnegative raw `RunTrace` counts and finite latencies/costs can still
+overflow a floating-point mean or integer-to-float conversion; such aggregates
+raise `ValueError` rather than producing plausible-looking invalid results.
+
+Population standard deviation now centers and squares scale-normalized values
+before restoring the original units. For example, latencies 0 and `1e200`
+have a valid population standard deviation of `5e199`; the earlier direct
+squaring of the deviation overflowed and incorrectly rejected the entire
+summary. Regression tests cover representable extreme dispersion, including
+the task-keyed wrapper, and retain rejection of genuinely non-finite derived
+means. Other aggregate estimators retain their existing semantics.
 
 This is **fail-closed detection**, not a new numerical estimator, a correction
 of historical telemetry, or an attestation of source custody. It applies only
