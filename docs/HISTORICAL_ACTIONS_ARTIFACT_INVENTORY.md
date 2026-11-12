@@ -1094,3 +1094,23 @@ were independently retained. Original pilot outcomes remain diagnostic; frozen
 automated analysis remains post-collection, pre-publication with the qualified
 chronology; later sensitivity work remains exploratory; human evaluation remains
 blocked pending independently authenticated original source materials.
+
+## Local historical job-log source capture (12 November 2026)
+
+The offline historical ZIP-lineage CLI now requires each supplied log file to be
+a nonempty, bounded **single-link regular file**. Its read must consume exactly
+the stat-declared byte count, and the opened descriptor and visible pathname
+must agree on device, inode, mode, hardlink count, size, mtime and ctime before
+and after capture. Earlier matching-size-only checks could accept a short read
+or a new hardlink alias without reporting that the caller-supplied transcript
+was no longer stably captured. Four offline synthetic regression tests cover
+normal UTF-8/BOM reading, a pre-existing hardlink, a hardlink added during
+capture, and a short read with unchanged file metadata.
+
+These are local capture-integrity conditions, **not** independent GitHub-log
+authentication or original report/trace custody. They do not prove a supplied
+transcript includes every historical event, recover expired ZIPs, establish
+prospective precollection statistical preregistration, or authorize blinded
+human evaluation. Pilot findings remain diagnostic; frozen automated primary
+analyses have their documented post-collection-plan qualification; sensitivity
+analyses remain exploratory; genuine human ratings are still absent.

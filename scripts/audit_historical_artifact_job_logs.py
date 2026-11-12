@@ -381,14 +381,30 @@ def _read_log(path: Path) -> str:
     fd = os.open(path, flags)
     with os.fdopen(fd, "rb") as handle:
         before = os.fstat(handle.fileno())
-        if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_LOG_BYTES:
-            raise HistoricalLogError("job log must be a bounded regular file")
+        # Caller-supplied historical logs are not independently authenticated.
+        # Still reject mutable aliases and any partial descriptor read: a
+        # truncated transcript could omit contradictory event timestamps.
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or not 0 < before.st_size <= MAX_LOG_BYTES
+        ):
+            raise HistoricalLogError(
+                "job log must be a bounded single-link regular file"
+            )
         raw = handle.read(MAX_LOG_BYTES + 1)
         after = os.fstat(handle.fileno())
         path_stat = os.stat(path, follow_symlinks=False)
-        identity = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
-        if len(raw) > MAX_LOG_BYTES or identity(before) != identity(after) or identity(after) != identity(path_stat):
-            raise HistoricalLogError("job log changed or exceeded limit during read")
+        identity = lambda s: (
+            s.st_dev, s.st_ino, s.st_mode, s.st_nlink, s.st_size,
+            s.st_mtime_ns, s.st_ctime_ns,
+        )
+        if (
+            len(raw) != before.st_size
+            or identity(before) != identity(after)
+            or identity(after) != identity(path_stat)
+        ):
+            raise HistoricalLogError("job log changed or was truncated during read")
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
