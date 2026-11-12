@@ -21,6 +21,25 @@ MAX_LOG_BYTES = 2 * 1024 * 1024
 MAX_LOG_LINES = 15000
 REPOSITORY = "anupamking01/Ai-Researcher-Agent"
 
+# The original GitHub job-log endpoint returns a UTF-8 BOM at the beginning
+# and renders upload-artifact's multi-line "path:" input with one timestamp
+# followed by ten UNSTAMPED continuation lines. These precise historical
+# input lines are allowed only immediately after the stamped first path line,
+# inside an upload-artifact v4 step. Other unframed lines remain errors.
+_UPLOAD_PATH_CONTINUATION = (
+    "outputs/main_study_progress.json",
+    "outputs/main_study_summary.json",
+    "outputs/main_study_runs.csv",
+    "outputs/posthoc_support_summary.json",
+    "outputs/posthoc_support_runs.csv",
+    "outputs/posthoc_evaluations/**",
+    "outputs/experiment_traces/**",
+    "outputs/*/research_report.md",
+    "outputs/*/research-query-*.txt",
+    "outputs/*/verification.json",
+)
+_UPLOAD_PATH_HEAD = "  path: outputs/main_study_manifest.json"
+
 # Recorded from the upload-artifact v4 and download-artifact v4 job steps on
 # 2026-09-11 and 2026-09-13. These are contemporaneous, GitHub-service-reported
 # ZIP metadata, *not* independently archived report/trace fingerprints.
@@ -118,10 +137,27 @@ def _bounded_lines(content: str, label: str) -> list[tuple[str, str]]:
     if len(lines) > MAX_LOG_LINES:
         raise HistoricalLogError(f"{label} log has too many lines")
     result = []
+    in_upload_step = False
+    path_block_seen = False
+    pending_path_index = None
     for line_number, line in enumerate(lines, 1):
-        # Raw GitHub Actions job logs frame each nonempty line with a UTC
-        # timestamp. Discarding malformed lines lets a caller hide a duplicate
-        # or contradictory action event while retaining a passing ZIP receipt.
+        # GitHub's raw job-log download has a single UTF-8 BOM at byte zero.
+        # A BOM anywhere else is not a permitted second log framing prefix.
+        if line_number == 1 and line.startswith("\ufeff"):
+            line = line[1:]
+        if pending_path_index is not None:
+            # These are the only unframed lines accepted: the literal, ordered
+            # upload-artifact@v4 path input from the two pinned original runs.
+            # Never interpret an arbitrary continuation as an action event.
+            if line != _UPLOAD_PATH_CONTINUATION[pending_path_index]:
+                raise HistoricalLogError(
+                    f"{label} log has unexpected upload-artifact path continuation "
+                    f"at line {line_number}"
+                )
+            pending_path_index += 1
+            if pending_path_index == len(_UPLOAD_PATH_CONTINUATION):
+                pending_path_index = None
+            continue
         if not line:
             continue
         match = _LOG_LINE.fullmatch(line)
@@ -130,7 +166,23 @@ def _bounded_lines(content: str, label: str) -> list[tuple[str, str]]:
                 f"{label} log contains an unframed or malformed timestamped line "
                 f"at line {line_number}"
             )
-        result.append((match["stamp"], match["message"]))
+        message = match["message"]
+        if message == "##[group]Run actions/upload-artifact@v4":
+            in_upload_step = True
+        elif message.startswith("##[group]Run ") or message == "Post job cleanup.":
+            in_upload_step = False
+        if message == _UPLOAD_PATH_HEAD:
+            if not in_upload_step or path_block_seen:
+                raise HistoricalLogError(
+                    f"{label} log has an unexpected upload-artifact path input"
+                )
+            path_block_seen = True
+            pending_path_index = 0
+        result.append((match["stamp"], message))
+    if pending_path_index is not None:
+        raise HistoricalLogError(
+            f"{label} log has a truncated upload-artifact path continuation"
+        )
     return result
 
 
@@ -264,6 +316,17 @@ def audit_historical_job_logs(original_log: str, recovery_log: str) -> dict:
     """Validate two historical log transcripts without inferring archive survival."""
     original_lines = _bounded_lines(original_log, "original treatment")
     recovery_lines = _bounded_lines(recovery_log, "evaluator recovery")
+    # Validate the complete timestamped job transcript, not only the selected
+    # ZIP-bearing action steps. Raw uploads include other stamped steps before
+    # and after the archive events; contradictory clock events there also
+    # weaken the claimed GitHub-service lineage.
+    for lines, run_id, label in (
+        (original_lines, ORIGINAL["run_id"], "original treatment job log"),
+        (recovery_lines, RECOVERED["run_id"], "evaluator recovery job log"),
+    ):
+        events = [(index, stamp, None) for index, (stamp, _) in enumerate(lines)]
+        _require_event_chronology(events, label)
+        _require_workflow_window(events, run_id=run_id)
     treatment = _upload(_action_step(original_lines, "upload-artifact"), ORIGINAL)
     download = _download(_action_step(recovery_lines, "download-artifact"))
     recovered = _upload(_action_step(recovery_lines, "upload-artifact"), RECOVERED)

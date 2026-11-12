@@ -1062,3 +1062,35 @@ cannot be detected from caller-supplied text alone. GitHub-provider logs remain
 same-provider, unauthenticated provenance evidence; passing does not recover
 or authenticate the original 40 reports/traces, authorize human-evaluation
 distribution, or change frozen treatment/evaluator results.
+
+
+## Full original GitHub job-log ingestion and chronology (12 November 2026)
+
+The historical artifact-lineage auditor accepts **actual full decoded GitHub
+Actions job logs**, not only hand-extracted timestamped excerpts. Direct
+read-only inspection of the original treatment job \`103334373932\` and
+evaluator-recovery job \`103794737655\` identified two GitHub-log formatting
+details: a leading UTF-8 BOM on the very first line and the upload-artifact@v4
+multi-line \`path:\` input whose ten continuation lines do not repeat the UTC
+timestamp. The parser now accepts **only** that exact known ordered file-pattern
+continuation inside a stamped upload-artifact v4 step, plus a BOM at the start.
+All other nonempty unframed lines, changed/missing/extra patterns, and misplaced
+BOMs fail closed rather than being silently discarded. This permits reviewing
+the original complete log without cutting away relevant lines.
+
+The auditor also validates **every timestamped message in each supplied full
+job transcript** against chronological order and that workflow's originally
+recorded UTC execution window, including non-artifact steps before and after the
+ZIP operations. Unstamped known upload-path continuation lines are not counted
+as independent timestamp observations. Synthetic regression tests cover the
+raw format, malformed continuations, and clock contradictions outside artifact
+steps. The complete original transcripts examined read-only in GitHub showed
+no reversed timestamped events; this is not independent archival custody.
+
+This improvement establishes *format support and internal GitHub-service log
+consistency*, **not** that the log was independently authenticated, that either
+original ZIP is still downloadable, or that any original trace/report bytes
+were independently retained. Original pilot outcomes remain diagnostic; frozen
+automated analysis remains post-collection, pre-publication with the qualified
+chronology; later sensitivity work remains exploratory; human evaluation remains
+blocked pending independently authenticated original source materials.

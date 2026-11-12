@@ -364,3 +364,88 @@ def test_action_closing_boundary_is_within_the_recorded_chronology(
         recovery = recovery.replace(before, after)
     with pytest.raises(audit.HistoricalLogError, match=error):
         audit.audit_historical_job_logs(original, recovery)
+
+
+def _with_historical_upload_path_block(log: str) -> str:
+    """Model the literal multiline upload path returned by GitHub job-log GET."""
+    marker = next(
+        line for line in log.splitlines()
+        if line.endswith(" ##[group]Run actions/upload-artifact@v4")
+    )
+    stamp = marker.split(" ", 1)[0]
+    block = "\n".join((
+        _line(stamp, audit._UPLOAD_PATH_HEAD),
+        *audit._UPLOAD_PATH_CONTINUATION,
+    ))
+    return log.replace(marker, marker + "\n" + block, 1)
+
+
+def test_raw_github_log_bom_and_exact_multiline_upload_path_are_accepted():
+    """Historical GET format must work, not just hand-curated log excerpts."""
+    original, recovery = _logs()
+    original = "\ufeff" + _with_historical_upload_path_block(original)
+    recovery = "\ufeff" + _with_historical_upload_path_block(recovery)
+    receipt = audit.audit_historical_job_logs(original, recovery)
+    assert receipt["two_workflow_github_log_digest_concordance"] is True
+    assert receipt["historical_treatment_evidence_authenticated"] is False
+    assert receipt["human_evaluation_ready"] is False
+
+
+@pytest.mark.parametrize("source", ["original", "recovery"])
+def test_modified_or_reordered_unframed_upload_input_fails_closed(source):
+    original, recovery = _logs()
+    selected = _with_historical_upload_path_block(
+        original if source == "original" else recovery
+    )
+    selected = selected.replace(
+        "\noutputs/posthoc_support_runs.csv",
+        "\noutputs/changed_support_runs.csv", 1
+    )
+    if source == "original":
+        original = selected
+    else:
+        recovery = selected
+    with pytest.raises(audit.HistoricalLogError, match="unexpected upload-artifact path continuation"):
+        audit.audit_historical_job_logs(original, recovery)
+
+
+def test_unframed_path_continuation_cannot_be_truncated_or_extended():
+    original, recovery = _logs()
+    selected = _with_historical_upload_path_block(original)
+    missing = selected.replace("\noutputs/*/verification.json", "", 1)
+    with pytest.raises(audit.HistoricalLogError, match="unexpected upload-artifact path continuation"):
+        audit.audit_historical_job_logs(missing, recovery)
+    surplus = selected.replace(
+        "\noutputs/*/verification.json",
+        "\noutputs/*/verification.json\noutputs/extra-secret.txt", 1
+    )
+    with pytest.raises(audit.HistoricalLogError, match="unframed or malformed"):
+        audit.audit_historical_job_logs(surplus, recovery)
+
+
+def test_unframed_path_outside_upload_step_and_second_bom_are_rejected():
+    original, recovery = _logs()
+    with pytest.raises(audit.HistoricalLogError, match="unframed or malformed"):
+        audit.audit_historical_job_logs(
+            original + "\n" + audit._UPLOAD_PATH_CONTINUATION[0], recovery
+        )
+    with pytest.raises(audit.HistoricalLogError, match="unframed or malformed"):
+        audit.audit_historical_job_logs(
+            original.replace("Post job cleanup.", "\ufeffPost job cleanup."),
+            recovery
+        )
+
+
+def test_raw_job_log_clock_cannot_reverse_outside_selected_artifact_actions():
+    original, recovery = _logs()
+    # The artifact action itself remains unchanged and internally ordered.
+    forged_prefix = _line("2026-09-11T17:22:41.0000000Z", "Earlier checkout step")
+    with pytest.raises(audit.HistoricalLogError, match="timestamps are out of order"):
+        audit.audit_historical_job_logs(forged_prefix + "\n" + original, recovery)
+
+
+def test_raw_job_log_clock_cannot_escape_run_window_outside_selected_actions():
+    original, recovery = _logs()
+    forged_prefix = _line("2026-09-13T00:00:00.0000000Z", "Earlier checkout step")
+    with pytest.raises(audit.HistoricalLogError, match="outside pinned workflow window"):
+        audit.audit_historical_job_logs(forged_prefix + "\n" + original, recovery)
