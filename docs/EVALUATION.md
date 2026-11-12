@@ -8,6 +8,24 @@ The project has progressed beyond the original proposed-study document. Pilot in
 
 Human quality ratings are **not yet results**. They remain pending and must be collected under `paper/HUMAN_EVAL_PROTOCOL.md` before any human-quality claim is made.
 
+### Diagnostic derived-summary finiteness (prospective only)
+
+The general `logic.evaluation.aggregate_runs` summary and its complete-task
+wrapper `aggregate_runs_by_task` now reject derived non-finite output values
+rather than publishing `Infinity` or `NaN` as descriptive means, medians or
+dispersion. Valid nonnegative raw `RunTrace` counts and finite latencies/costs
+can still overflow a floating-point intermediate (for example, summing two
+very large finite costs, squaring a large deviation, or converting an enormous
+integer token count). Such aggregates raise `ValueError` instead of becoming
+a plausible-looking research result. Regression tests cover overflow and
+large-but-representable inputs.
+
+This is **fail-closed detection**, not a new numerical estimator, a correction
+of historical telemetry, or an attestation of source custody. It applies only
+to new in-memory diagnostic summaries. The original 40 treatment outcomes,
+frozen automated inference, exploratory sensitivity checks, and pending real
+human ratings remain separate and unchanged.
+
 ### Diagnostic completion-status integrity (prospective only)
 
 `RunTrace` requires `completed` to be an **exact Boolean** at construction.

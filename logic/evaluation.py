@@ -385,33 +385,40 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
             "median_estimated_cost_usd": 0.0,
         }
 
-    latencies = [run.latency_seconds for run in runs]
-    total_tokens = [float(run.total_tokens) for run in runs]
-    costs = [run.estimated_cost_usd for run in runs]
+    try:
+        latencies = [run.latency_seconds for run in runs]
+        total_tokens = [float(run.total_tokens) for run in runs]
+        costs = [run.estimated_cost_usd for run in runs]
 
-    return {
-        "n_runs": len(runs),
-        "completion_rate": safe_mean(1.0 if run.completed else 0.0 for run in runs),
-        "avg_sources": safe_mean(float(run.source_count) for run in runs),
-        "avg_successful_sources": safe_mean(
-            float(run.successful_source_count) for run in runs
-        ),
-        "avg_source_success_rate": safe_mean(run.source_success_rate for run in runs),
-        "avg_claim_support_rate": safe_mean(run.claim_support_rate for run in runs),
-        "avg_citation_precision_proxy": safe_mean(
-            run.citation_precision_proxy for run in runs
-        ),
-        "avg_latency_seconds": safe_mean(latencies),
-        "median_latency_seconds": safe_median(latencies),
-        "latency_stddev_seconds": population_stddev(latencies),
-        "avg_total_tokens": safe_mean(total_tokens),
-        "total_tokens_stddev": population_stddev(total_tokens),
-        "avg_model_calls": safe_mean(float(run.model_call_count) for run in runs),
-        "avg_search_calls": safe_mean(float(run.search_call_count) for run in runs),
-        "avg_estimated_cost_usd": safe_mean(costs),
-        "median_estimated_cost_usd": safe_median(costs),
-    }
+        summary = {
+            "n_runs": len(runs),
+            "completion_rate": safe_mean(1.0 if run.completed else 0.0 for run in runs),
+            "avg_sources": safe_mean(float(run.source_count) for run in runs),
+            "avg_successful_sources": safe_mean(
+                float(run.successful_source_count) for run in runs
+            ),
+            "avg_source_success_rate": safe_mean(run.source_success_rate for run in runs),
+            "avg_claim_support_rate": safe_mean(run.claim_support_rate for run in runs),
+            "avg_citation_precision_proxy": safe_mean(
+                run.citation_precision_proxy for run in runs
+            ),
+            "avg_latency_seconds": safe_mean(latencies),
+            "median_latency_seconds": safe_median(latencies),
+            "latency_stddev_seconds": population_stddev(latencies),
+            "avg_total_tokens": safe_mean(total_tokens),
+            "total_tokens_stddev": population_stddev(total_tokens),
+            "avg_model_calls": safe_mean(float(run.model_call_count) for run in runs),
+            "avg_search_calls": safe_mean(float(run.search_call_count) for run in runs),
+            "avg_estimated_cost_usd": safe_mean(costs),
+            "median_estimated_cost_usd": safe_median(costs),
+        }
 
+    except OverflowError as exc:
+        raise ValueError("aggregate run statistics must be finite") from exc
+    for metric, value in summary.items():
+        if metric != "n_runs" and not isfinite(value):
+            raise ValueError(f"{metric} must be finite")
+    return summary
 
 
 def aggregate_runs_by_task(

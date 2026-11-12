@@ -688,6 +688,60 @@ def test_task_aggregate_accepts_one_pass_generators_and_zero_source_failures():
     assert result["avg_source_success_rate"] == 0.0
 
 
+@pytest.mark.parametrize(
+    ("record_overrides", "error"),
+    [
+        (
+            [{"estimated_cost_usd": 1e308}, {"estimated_cost_usd": 1e308}],
+            "avg_estimated_cost_usd must be finite",
+        ),
+        (
+            [{"latency_seconds": 0.0}, {"latency_seconds": 1e200}],
+            "latency_stddev_seconds must be finite",
+        ),
+        ([{"source_count": 10**400}], "aggregate run statistics must be finite"),
+        ([{"prompt_tokens": 10**400}], "aggregate run statistics must be finite"),
+    ],
+)
+def test_aggregate_runs_rejects_derived_overflow(record_overrides, error):
+    """Finite/valid raw counters need not yield representable statistics."""
+    traces = [
+        RunTrace(run_id=f"overflow-{i}", completed=True, source_count=1, **row)
+        if "source_count" not in row
+        else RunTrace(run_id=f"overflow-{i}", completed=True, **row)
+        for i, row in enumerate(record_overrides)
+    ]
+    with pytest.raises(ValueError, match=error):
+        aggregate_runs(traces)
+
+
+def test_task_keyed_aggregate_inherits_nonfinite_summary_rejection():
+    traces = [
+        _task_aggregate_trace("a", estimated_cost_usd=1e308),
+        _task_aggregate_trace("b", estimated_cost_usd=1e308),
+    ]
+    with pytest.raises(ValueError, match="avg_estimated_cost_usd must be finite"):
+        aggregate_runs_by_task(
+            traces, variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=["a", "b"],
+        )
+
+
+def test_aggregate_runs_keeps_large_but_representable_statistics():
+    traces = [
+        RunTrace(run_id="a", completed=False, source_count=0,
+                 latency_seconds=0.0, estimated_cost_usd=0.0),
+        RunTrace(run_id="b", completed=True, source_count=1,
+                 latency_seconds=1e100, estimated_cost_usd=1e100),
+    ]
+    result = aggregate_runs(traces)
+    assert result["n_runs"] == 2
+    assert result["completion_rate"] == 0.5
+    assert result["avg_latency_seconds"] == pytest.approx(5e99)
+    assert result["latency_stddev_seconds"] == pytest.approx(5e99)
+    assert result["avg_estimated_cost_usd"] == pytest.approx(5e99)
+
+
 def test_deduplicate_sources_preserves_order():
     urls = [" https://example.com/a ", "https://example.com/b", "https://example.com/a", "", "https://example.com/c"]
     assert deduplicate_sources(urls) == ["https://example.com/a", "https://example.com/b", "https://example.com/c"]
