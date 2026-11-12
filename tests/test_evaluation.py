@@ -431,15 +431,22 @@ def test_paired_metric_comparison_rejects_overflowed_delta():
         paired_metric_comparison([-1e308], [1e308])
 
 
-@pytest.mark.parametrize(
-    ("baseline", "candidate"),
-    [([-1e308, -1e308], [0.0, 0.0]), ([0.0, 0.0], [1e308, -1e308])],
-)
-def test_paired_metric_comparison_rejects_non_finite_summary(
-    baseline, candidate
-):
+def test_paired_metric_comparison_rejects_non_finite_mean():
+    # Two large positive deltas overflow the legacy mean even though
+    # each individual paired delta is finite.
     with pytest.raises(ValueError, match="paired summary must be finite"):
-        paired_metric_comparison(baseline, candidate)
+        paired_metric_comparison([-1e308, -1e308], [0.0, 0.0])
+
+
+def test_paired_metric_comparison_retains_finite_extreme_dispersion():
+    # Opposing finite deltas have representable mean and population stddev.
+    # Squaring them directly used to overflow and falsely reject this pair.
+    result = paired_metric_comparison([0.0, 0.0], [1e308, -1e308])
+    assert result["n_pairs"] == 2
+    assert result["mean_delta"] == 0.0
+    assert result["median_delta"] == 0.0
+    assert result["delta_stddev"] == pytest.approx(1e308)
+    assert (result["wins"], result["ties"], result["losses"]) == (1, 0, 1)
 
 
 def test_task_keyed_pairing_joins_by_id_not_row_order():
