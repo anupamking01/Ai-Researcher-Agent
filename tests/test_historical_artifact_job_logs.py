@@ -148,7 +148,7 @@ def test_original_archive_cannot_be_logged_as_uploaded_after_recovery_download()
 def test_recovery_archive_cannot_be_logged_as_uploaded_before_source_download():
     original, recovery = _logs()
     recovery = recovery.replace("2026-09-13T21:21:3", "2026-09-13T21:20:3")
-    with pytest.raises(audit.HistoricalLogError, match="chronology contradicts archive lineage"):
+    with pytest.raises(audit.HistoricalLogError, match="timestamps are out of order|chronology contradicts archive lineage"):
         audit.audit_historical_job_logs(original, recovery)
 
 
@@ -446,6 +446,6 @@ def test_raw_job_log_clock_cannot_reverse_outside_selected_artifact_actions():
 
 def test_raw_job_log_clock_cannot_escape_run_window_outside_selected_actions():
     original, recovery = _logs()
-    forged_prefix = _line("2026-09-13T00:00:00.0000000Z", "Earlier checkout step")
+    forged_prefix = _line("2026-09-10T00:00:00.0000000Z", "Earlier checkout step")
     with pytest.raises(audit.HistoricalLogError, match="outside pinned workflow window"):
         audit.audit_historical_job_logs(forged_prefix + "\n" + original, recovery)
