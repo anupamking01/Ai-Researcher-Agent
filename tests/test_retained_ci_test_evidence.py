@@ -25,6 +25,8 @@ def _receipt(log=LOG, *, context=CONTEXT, deps=DEPS):
         log, context=context, checkout_sha=context["GITHUB_SHA"],
         dependency_bytes=deps,
     )
+    # Synthetic receipt represents the pinned CI interpreter, not this test host.
+    value["python_version"] = replay.runtime.PINNED_VERSION_TEXT
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
 
 
@@ -67,6 +69,8 @@ def test_rejects_changed_log_deps_or_independent_identity(override):
     ("firewall_activation_marker_observed", 1),
     ("original_treatment_authenticated", True),
     ("python_version", "../../other"),
+    ("python_version", "3.11.16"),
+    ("python_version", "3.12.0"),
     ("workflow_event", "pull_request"),
 ])
 def test_rejects_modified_receipt_fields_even_if_canonically_serialized(key, value):

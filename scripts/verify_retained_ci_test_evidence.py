@@ -13,6 +13,7 @@ import re
 import subprocess
 
 from scripts import verify_ci_test_evidence as producer
+from scripts import verify_ci_python_runtime as runtime
 
 MAX_RECEIPT_BYTES = 16 * 1024
 PYTHON_VERSION_PATTERN = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
@@ -85,6 +86,8 @@ def verify_retained_evidence(
     version = receipt.get("python_version")
     if type(version) is not str or not PYTHON_VERSION_PATTERN.fullmatch(version):
         raise ValueError("invalid producer Python version")
+    if version != runtime.PINNED_VERSION_TEXT:
+        raise ValueError("retained CI receipt Python version differs from the pinned test runtime")
 
     expected = producer.build_receipt(
         log,

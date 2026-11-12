@@ -153,3 +153,28 @@ firewall was independently attested, or that omitted output before the final
 summary was not suppressed. The GitHub workflow/job conclusion, independent
 run identity, and original research-artifact custody remain separate checks.
 It does not rerun experimental treatments, evaluators, or human annotation.
+
+
+## Exact CI Python runtime verification (12 November 2026)
+
+The workflow's `setup-python` configuration selects CPython 3.11.17, but a
+workflow declaration alone does not prove that subsequent `python` commands
+execute that interpreter. New fail-closed gates, **before dependency installation
+and after pytest**, independently inspect the running executable's exact final
+Python release, CPython implementation, Linux/x86_64 host, and 64-bit pointer
+ABI. The gates are enforced before a successful source-bound test receipt can
+be published. Offline synthetic tests reject older patch releases, prereleases,
+other Python implementations, host-architecture changes, and 32-bit runtimes.
+
+The retained receipt's independently replayable `python_version` must now
+match **3.11.17**; previously any syntactically valid version was accepted.
+This makes revision-specific CI receipts reject mismatched reported runtimes,
+while leaving the local replay host free to run a different Python version.
+The receipt format and all historical published receipts remain unchanged:
+replaying older receipts with another runtime version will now fail this
+stricter check instead of silently treating them as pinned 3.11.17 tests.
+
+These checks do **not** authenticate the interpreter's executable bytes,
+OS image, system libraries, GitHub runner, firewall, or original research
+artifacts. They are CI environment reproducibility checks, not experimental
+replication, outcome verification, or human validation.
