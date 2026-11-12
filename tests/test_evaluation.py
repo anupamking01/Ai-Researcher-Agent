@@ -6,6 +6,7 @@ from logic.evaluation import (
     bootstrap_confidence_interval,
     deduplicate_sources,
     paired_metric_comparison,
+    paired_metric_comparison_by_task,
     population_stddev,
     safe_median,
 )
@@ -413,6 +414,112 @@ def test_paired_metric_comparison_rejects_non_finite_summary(
 ):
     with pytest.raises(ValueError, match="paired summary must be finite"):
         paired_metric_comparison(baseline, candidate)
+
+
+def test_task_keyed_pairing_joins_by_id_not_row_order():
+    expected = ["task-c", "task-a", "task-b"]
+    baseline = [("task-b", 2), ("task-c", 3), ("task-a", 1)]
+    candidate = [("task-a", 2), ("task-b", 2), ("task-c", 1)]
+    result = paired_metric_comparison_by_task(
+        baseline, candidate, expected_task_ids=expected
+    )
+    assert result["task_ids"] == ["task-a", "task-b", "task-c"]
+    assert result["n_pairs"] == 3
+    assert result["mean_delta"] == pytest.approx(-1 / 3)
+    assert (result["wins"], result["ties"], result["losses"]) == (1, 1, 1)
+    assert result == paired_metric_comparison_by_task(
+        reversed(baseline),
+        reversed(candidate),
+        expected_task_ids=reversed(expected),
+    )
+
+
+@pytest.mark.parametrize(
+    ("baseline", "candidate", "message"),
+    [
+        ([("a", 1)], [("a", 2)], "baseline task coverage mismatch"),
+        ([("a", 1), ("b", 1)], [("a", 2)], "candidate task coverage mismatch"),
+        ([("a", 1), ("b", 1)], [("a", 2), ("x", 2)], "candidate task coverage mismatch"),
+        ([("a", 1), ("a", 2), ("b", 3)], [("a", 1), ("b", 2)], "duplicate baseline"),
+        ([("a", 1), ("b", 2)], [("a", 1), ("b", 2), ("b", 3)], "duplicate candidate"),
+    ],
+)
+def test_task_keyed_pairing_rejects_missing_substituted_or_replicated_cells(
+    baseline, candidate, message
+):
+    with pytest.raises(ValueError, match=message):
+        paired_metric_comparison_by_task(
+            baseline, candidate, expected_task_ids=["a", "b"]
+        )
+
+
+@pytest.mark.parametrize(
+    ("expected", "message"),
+    [
+        ([], "must not be empty"),
+        (["a", "a"], "duplicate expected"),
+        (["a", ""], "expected task_id"),
+        (["a", " b"], "expected task_id"),
+    ],
+)
+def test_task_keyed_pairing_rejects_invalid_reference_task_set(expected, message):
+    with pytest.raises(ValueError, match=message):
+        paired_metric_comparison_by_task([], [], expected_task_ids=expected)
+
+
+@pytest.mark.parametrize("bad_id", ["", " a", "a ", False, 1, None])
+@pytest.mark.parametrize("arm", ["baseline", "candidate"])
+def test_task_keyed_pairing_rejects_invalid_observed_task_ids(bad_id, arm):
+    baseline, candidate = [("a", 1)], [("a", 2)]
+    if arm == "baseline":
+        baseline = [(bad_id, 1)]
+    else:
+        candidate = [(bad_id, 2)]
+    with pytest.raises(ValueError, match=f"{arm} task_id"):
+        paired_metric_comparison_by_task(
+            baseline, candidate, expected_task_ids=["a"]
+        )
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [False, "1", None, float("nan"), float("inf"), float("-inf"), 10**400],
+)
+@pytest.mark.parametrize("arm", ["baseline", "candidate"])
+def test_task_keyed_pairing_rejects_non_numeric_or_nonfinite_metrics(
+    bad_value, arm
+):
+    baseline, candidate = [("a", 1)], [("a", 2)]
+    if arm == "baseline":
+        baseline = [("a", bad_value)]
+    else:
+        candidate = [("a", bad_value)]
+    with pytest.raises(ValueError, match=f"{arm} metric"):
+        paired_metric_comparison_by_task(
+            baseline, candidate, expected_task_ids=["a"]
+        )
+
+
+@pytest.mark.parametrize(
+    "bad_record", [("a",), ("a", 1, 2), "a", {"task_id": "a"}]
+)
+def test_task_keyed_pairing_rejects_malformed_rows(bad_record):
+    with pytest.raises(ValueError, match="records must be"):
+        paired_metric_comparison_by_task(
+            [bad_record], [("a", 1)], expected_task_ids=["a"]
+        )
+
+
+def test_task_keyed_pairing_accepts_finite_zero_and_generator_inputs():
+    result = paired_metric_comparison_by_task(
+        (item for item in [("b", 0.0), ("a", -1.0)]),
+        (item for item in [("a", -1.0), ("b", 0.0)]),
+        expected_task_ids=(task for task in ["a", "b"]),
+    )
+    assert result["task_ids"] == ["a", "b"]
+    assert result["n_pairs"] == 2
+    assert result["wins"] == result["losses"] == 0
+    assert result["ties"] == 2
 
 
 def test_deduplicate_sources_preserves_order():

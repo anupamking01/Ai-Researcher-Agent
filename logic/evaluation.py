@@ -288,6 +288,74 @@ def paired_metric_comparison(
     }
 
 
+def paired_metric_comparison_by_task(
+    baseline: Iterable[tuple[str, float]],
+    candidate: Iterable[tuple[str, float]],
+    *,
+    expected_task_ids: Iterable[str],
+) -> dict:
+    """Descriptively compare complete, explicitly task-keyed metric records.
+
+    Unlike positional pairing, this refuses duplicate IDs, cross-arm task
+    substitution, and jointly omitted tasks relative to the caller's
+    independently defined expected set. Sorting the validated keys makes
+    floating-point accumulation reproducible under record reordering.
+
+    This is a diagnostic helper, not the frozen main-study inference path.
+    Its coverage check is only as trustworthy as the provided task manifest.
+    """
+    def valid_id(value: str, label: str) -> str:
+        if type(value) is not str or not value or value.strip() != value:
+            raise ValueError(f"{label} task_id must be a nonempty, unpadded string")
+        return value
+
+    expected: set[str] = set()
+    for task_id in expected_task_ids:
+        task_id = valid_id(task_id, "expected")
+        if task_id in expected:
+            raise ValueError(f"duplicate expected task_id: {task_id!r}")
+        expected.add(task_id)
+    if not expected:
+        raise ValueError("expected_task_ids must not be empty")
+
+    def index_records(
+        records: Iterable[tuple[str, float]], label: str
+    ) -> dict[str, float]:
+        indexed: dict[str, float] = {}
+        for record in records:
+            if not isinstance(record, (tuple, list)) or len(record) != 2:
+                raise ValueError(f"{label} records must be (task_id, metric) pairs")
+            task_id, value = record
+            task_id = valid_id(task_id, label)
+            if task_id in indexed:
+                raise ValueError(f"duplicate {label} task_id: {task_id!r}")
+            if type(value) not in (int, float):
+                raise ValueError(f"{label} metric must be a finite number")
+            try:
+                indexed[task_id] = _finite_float(
+                    value, label=f"{label} metric"
+                )
+            except OverflowError as exc:
+                raise ValueError(f"{label} metric must be a finite number") from exc
+        missing = sorted(expected - indexed.keys())
+        unexpected = sorted(indexed.keys() - expected)
+        if missing or unexpected:
+            raise ValueError(
+                f"{label} task coverage mismatch: "
+                f"missing={missing!r}, unexpected={unexpected!r}"
+            )
+        return indexed
+
+    baseline_by_task = index_records(baseline, "baseline")
+    candidate_by_task = index_records(candidate, "candidate")
+    task_ids = sorted(expected)
+    result = paired_metric_comparison(
+        [baseline_by_task[task_id] for task_id in task_ids],
+        [candidate_by_task[task_id] for task_id in task_ids],
+    )
+    return {"task_ids": task_ids, **result}
+
+
 def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
     """Aggregate run-level traces into experiment-level summary metrics.
 

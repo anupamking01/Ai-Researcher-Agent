@@ -26,6 +26,26 @@ authenticate historical provider usage, change historical cost estimates, or
 establish a human-evaluation result. The separate published-input and
 original-report custody requirements still apply.
 
+### Task-keyed completeness gate for new descriptive paired comparisons
+
+For **new diagnostic** comparisons, `logic.evaluation.paired_metric_comparison_by_task`
+accepts baseline and candidate `(task_id, metric)` records and an **explicit,
+independently specified** `expected_task_ids` collection. It fails closed
+on duplicate, empty, padded, substituted, or missing task identifiers,
+including when **both** arms silently omit the same difficult task.
+It validates finite numeric observations, rejects malformed records, and
+sorts validated IDs before computing the same descriptive deltas and
+win/tie/loss summary as `paired_metric_comparison`. The return includes
+the exact sorted task identifiers for a checkable pairing receipt.
+
+Positional `paired_metric_comparison` remains for backward compatibility;
+its inputs must already be aligned by the caller. This stricter, opt-in
+helper does **not** authenticate the expected task manifest, establish that
+an evaluator measured the right report, or repair past experiments. The
+frozen main-study inference and its separately pinned input-integrity
+audits remain unchanged. Neither descriptive summary establishes a
+prospectively preregistered confirmatory effect or human-validation result.
+
 ## 1. Research questions
 
 The main study is organized around three primary stage-wise questions plus a broader systems question:
