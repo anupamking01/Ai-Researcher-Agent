@@ -398,6 +398,21 @@ def test_bootstrap_confidence_interval_rejects_non_finite_statistic():
         )
 
 
+@pytest.mark.parametrize("invalid", [True, False, "1.0", None, 10**400])
+def test_bootstrap_rejects_coerced_or_unrepresentable_sample_metric(invalid):
+    # A coercible status/string is not an observed research measurement.
+    with pytest.raises(ValueError, match="bootstrap sample must be finite"):
+        bootstrap_confidence_interval([1.0, invalid], n_resamples=10)
+
+
+@pytest.mark.parametrize("invalid", [True, "3.0", None, 10**400])
+def test_bootstrap_rejects_coerced_or_unrepresentable_statistic(invalid):
+    with pytest.raises(ValueError, match="bootstrap statistic must be finite"):
+        bootstrap_confidence_interval(
+            [1.0, 2.0], statistic=lambda values: invalid, n_resamples=10
+        )
+
+
 def test_bootstrap_confidence_interval_interpolates_extreme_finite_estimates():
     statistic_values = iter((-1e308, 1e308, 0.0))
 
@@ -457,6 +472,23 @@ def test_paired_metric_comparison_rejects_non_finite_samples(side, invalid):
     else:
         candidate[0] = invalid
 
+    with pytest.raises(ValueError, match=f"{side} values must be finite"):
+        paired_metric_comparison(baseline, candidate)
+
+
+@pytest.mark.parametrize("side", ["baseline", "candidate"])
+@pytest.mark.parametrize("invalid", [True, False, "1.0", None, 10**400])
+def test_positional_pairing_rejects_coerced_or_unrepresentable_metrics(
+    side, invalid
+):
+    # The task-keyed API already rejected these, but the positional API
+    # previously converted them to plausible floating-point observations.
+    baseline = [1.0]
+    candidate = [2.0]
+    if side == "baseline":
+        baseline[0] = invalid
+    else:
+        candidate[0] = invalid
     with pytest.raises(ValueError, match=f"{side} values must be finite"):
         paired_metric_comparison(baseline, candidate)
 

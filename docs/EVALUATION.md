@@ -36,6 +36,26 @@ to new in-memory diagnostic summaries. The original 40 treatment outcomes,
 frozen automated inference, exploratory sensitivity checks, and pending real
 human ratings remain separate and unchanged.
 
+### Direct descriptive metric-input integrity (prospective only)
+
+The shared `logic.evaluation._finite_float` boundary for the reusable
+positional paired comparison and descriptive bootstrap now requires exact
+built-in integer or floating-point *observations*. Previously, strings such
+as `"1.0"` and Boolean statuses such as `True` were silently converted into
+numeric measurements; a sufficiently large integer could instead escape as
+an unhandled Python overflow. The same fail-closed contract now covers raw
+baseline/candidate samples, bootstrap samples, and custom bootstrap
+statistic returns. Negative and zero numeric observations remain valid for
+these generic difference/statistic APIs; non-finite values still fail.
+This aligns the positional boundary with the existing task-keyed metric
+validation without changing the descriptive estimator, resampling method,
+legacy empty-input convention, or any preserved experiment outcomes.
+
+The fix concerns **prospective in-memory diagnostics** only. It does not
+authenticate the original reports/traces, alter frozen designated-primary
+automated inference, promote pilot or exploratory observations into
+confirmatory evidence, or manufacture pending human validation.
+
 ### Diagnostic completion-status integrity (prospective only)
 
 `RunTrace` requires `completed` to be an **exact Boolean** at construction.

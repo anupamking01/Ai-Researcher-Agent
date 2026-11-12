@@ -202,10 +202,17 @@ def population_stddev(values: Iterable[float]) -> float:
 
 
 def _finite_float(value: float, *, label: str) -> float:
-    """Normalize one numeric value and reject invalid statistical inputs."""
+    """Require finite numeric observations, never coerced text or Booleans.
+
+    This shared boundary protects raw positional pairing, bootstrap samples,
+    and user-supplied bootstrap statistics. It matches the stricter task-keyed
+    metric contract without changing numerical estimators.
+    """
+    if type(value) not in (int, float):
+        raise ValueError(f"{label} must be finite")
     try:
         normalized = float(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"{label} must be finite") from exc
     if not isfinite(normalized):
         raise ValueError(f"{label} must be finite")
