@@ -133,7 +133,18 @@ def _require_action_step_chronology(
 def _bounded_lines(content: str, label: str) -> list[tuple[str, str]]:
     if type(content) is not str or len(content.encode("utf-8")) > MAX_LOG_BYTES:
         raise HistoricalLogError(f"{label} log is not bounded UTF-8 text")
-    lines = content.splitlines()
+    # Raw GitHub job logs contain LF-delimited physical records. CRLF copies
+    # may be normalized, but splitlines() would also turn a bare CR or Unicode
+    # separator embedded inside a physical record into an apparent new event.
+    # Such a synthetic timestamp must never pass as another GitHub log line.
+    if re.search(r"\r(?!\n)|[\v\f\x1c-\x1e\x85\u2028\u2029]", content):
+        raise HistoricalLogError(
+            f"{label} log contains unsupported physical line separator"
+        )
+    lines = content.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    lines = [line.removesuffix("\r") for line in lines]
     if len(lines) > MAX_LOG_LINES:
         raise HistoricalLogError(f"{label} log has too many lines")
     result = []

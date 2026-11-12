@@ -1,5 +1,25 @@
 # Historical GitHub Actions artifact availability inventory
 
+## Physical GitHub job-log record boundaries (2026-11-12)
+
+The offline historical upload/download transcript auditor
+`scripts/audit_historical_artifact_job_logs.py` now parses
+**physical LF-delimited records**, not Python's broader Unicode
+`str.splitlines()` interpretation. A bare carriage return,
+vertical-tab/form-feed, control-record separator or Unicode line/paragraph
+separator inside a line cannot manufacture an additional apparently
+timestamped GitHub event. The auditor rejects those inputs before any
+artifact-lineage claim. It accepts a consistent LF log (the observed raw
+treatment and recovery GitHub job-log format) and benign CRLF text copies.
+Offline regressions cover nine otherwise silently split delimiters, both
+permitted newline styles, and the GitHub BOM/path-continuation shape.
+
+This limits a *parser framing ambiguity* in caller-supplied text. It is not
+a cryptographic log signature, a proof that intermediate records were not
+removed, a substitute for independently retained ZIP/report/trace bytes, or
+authorization to perform blinded human evaluation. It changes no automated
+treatment outputs, exploratory analysis, or human ratings.
+
 **Purpose:** Identify which original VERA run artifacts are still *listed* by GitHub Actions without downloading data, replacing missing reports, or rerunning any treatment/evaluator. This is a recovery-triage diagnostic, **not** an authenticity check or a human-evaluation result.
 
 Run:
