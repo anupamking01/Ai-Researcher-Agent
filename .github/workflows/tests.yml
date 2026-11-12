@@ -38,4 +38,23 @@ jobs:
         run: python -m compileall -q agent logic scripts tests settings scrape text_preprocess
 
       - name: Run offline unit tests
-        run: bash scripts/run_offline_pytest_firewalled.sh
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/run_offline_pytest_firewalled.sh 2>&1 | tee "$RUNNER_TEMP/vera-offline-tests.log"
+
+      - name: Bind exact-commit offline test evidence
+        run: |
+          python -m scripts.verify_ci_test_evidence \
+            --log "$RUNNER_TEMP/vera-offline-tests.log" \
+            --out "$RUNNER_TEMP/vera-offline-test-receipt.json"
+
+      - name: Retain source-bound offline test evidence (90 days)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-offline-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/vera-offline-tests.log
+            ${{ runner.temp }}/vera-offline-test-receipt.json
+          if-no-files-found: error
+          retention-days: 90

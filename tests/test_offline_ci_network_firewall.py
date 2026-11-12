@@ -17,7 +17,13 @@ def test_offline_ci_uses_only_firewalled_pytest_entrypoint():
     steps = workflow["jobs"]["unit-tests"]["steps"]
     invocations = [step for step in steps if "pytest" in str(step.get("run", ""))]
     assert len(invocations) == 1
-    assert invocations[0]["run"].strip() == "bash scripts/run_offline_pytest_firewalled.sh"
+    # Pipefail preserves the firewalled wrapper's exit status under tee.
+    # No second unprotected pytest invocation is permitted in this job.
+    run = invocations[0]["run"].strip().splitlines()
+    assert run == [
+        "set -euo pipefail",
+        'bash scripts/run_offline_pytest_firewalled.sh 2>&1 | tee "$RUNNER_TEMP/vera-offline-tests.log"',
+    ]
 
 
 
