@@ -1,8 +1,11 @@
+from dataclasses import replace
+
 import pytest
 
 from logic.evaluation import (
     RunTrace,
     aggregate_runs,
+    aggregate_runs_by_task,
     bootstrap_confidence_interval,
     deduplicate_sources,
     paired_metric_comparison,
@@ -520,6 +523,146 @@ def test_task_keyed_pairing_accepts_finite_zero_and_generator_inputs():
     assert result["n_pairs"] == 2
     assert result["wins"] == result["losses"] == 0
     assert result["ties"] == 2
+
+
+
+def _task_aggregate_trace(task_id, *, completed=True, **overrides):
+    fields = {
+        "run_id": f"run-{task_id}",
+        "completed": completed,
+        "source_count": 2,
+        "variant_id": "D3",
+        "task_set_id": "frozen-diagnostic",
+        "task_id": task_id,
+    }
+    fields.update(overrides)
+    return RunTrace(**fields)
+
+
+def test_task_aggregate_checks_all_tasks_and_retains_failed_cells():
+    rows = [
+        _task_aggregate_trace("task-b", completed=False, source_count=0),
+        _task_aggregate_trace("task-a", completed=True),
+    ]
+    result = aggregate_runs_by_task(
+        rows,
+        variant_id="D3",
+        task_set_id="frozen-diagnostic",
+        expected_task_ids=["task-b", "task-a"],
+    )
+    assert result["task_ids"] == ["task-a", "task-b"]
+    assert result["n_runs"] == 2
+    assert result["completion_rate"] == 0.5
+    assert result["avg_sources"] == 1.0
+    assert result == aggregate_runs_by_task(
+        reversed(rows),
+        variant_id="D3",
+        task_set_id="frozen-diagnostic",
+        expected_task_ids=reversed(["task-a", "task-b"]),
+    )
+
+
+@pytest.mark.parametrize(
+    ("expected", "message"),
+    [
+        ([], "expected_task_ids must not be empty"),
+        (["a", "a"], "duplicate expected task_id"),
+        (["a", ""], "expected task_id"),
+        (["a", " b"], "expected task_id"),
+        (["a", " "], "expected task_id"),
+        (["a", None], "expected task_id"),
+        (["a", True], "expected task_id"),
+    ],
+)
+def test_task_aggregate_rejects_invalid_reference_manifest(expected, message):
+    with pytest.raises(ValueError, match=message):
+        aggregate_runs_by_task(
+            [], variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=expected,
+        )
+
+
+@pytest.mark.parametrize("field", ["variant_id", "task_set_id"])
+@pytest.mark.parametrize("invalid", ["", " ", " D3", None, False, 123])
+def test_task_aggregate_rejects_invalid_required_identity(field, invalid):
+    arguments = {
+        "variant_id": "D3",
+        "task_set_id": "frozen-diagnostic",
+    }
+    arguments[field] = invalid
+    with pytest.raises(ValueError, match=field):
+        aggregate_runs_by_task(
+            [_task_aggregate_trace("a")], expected_task_ids=["a"], **arguments
+        )
+
+
+@pytest.mark.parametrize(
+    ("observed", "message"),
+    [
+        ([], "task coverage mismatch"),
+        ([_task_aggregate_trace("a")], "task coverage mismatch"),
+        ([_task_aggregate_trace("a"), _task_aggregate_trace("x")], "task coverage mismatch"),
+        ([_task_aggregate_trace("a"), _task_aggregate_trace("a")], "duplicate observed task_id"),
+        (
+            [_task_aggregate_trace("a"), _task_aggregate_trace("b", run_id="run-a")],
+            "duplicate run_id",
+        ),
+    ],
+)
+def test_task_aggregate_rejects_incomplete_substituted_or_duplicate_runs(
+    observed, message
+):
+    with pytest.raises(ValueError, match=message):
+        aggregate_runs_by_task(
+            observed, variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=["a", "b"],
+        )
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"variant_id": "D6"}, "variant_id mismatch"),
+        ({"task_set_id": "other"}, "task_set_id mismatch"),
+        ({"completed": "false"}, "completed must be a Boolean"),
+        ({"completed": 1}, "completed must be a Boolean"),
+        ({"task_id": ""}, "observed task_id"),
+        ({"task_id": " "}, "observed task_id"),
+        ({"task_id": " a"}, "observed task_id"),
+        ({"run_id": " "}, "run_id"),
+        ({"run_id": None}, "run_id"),
+    ],
+)
+def test_task_aggregate_rejects_corrupt_identity_or_completion(override, message):
+    with pytest.raises(ValueError, match=message):
+        aggregate_runs_by_task(
+            [replace(_task_aggregate_trace("a"), **override)],
+            variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=["a"],
+        )
+
+
+def test_task_aggregate_rejects_non_trace_records():
+    with pytest.raises(ValueError, match="RunTrace"):
+        aggregate_runs_by_task(
+            [("a", 2)], variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=["a"],
+        )
+
+
+def test_task_aggregate_accepts_one_pass_generators_and_zero_source_failures():
+    result = aggregate_runs_by_task(
+        (row for row in [
+            _task_aggregate_trace("b", completed=False, source_count=0),
+            _task_aggregate_trace("a", completed=False, source_count=0),
+        ]),
+        variant_id="D3", task_set_id="frozen-diagnostic",
+        expected_task_ids=(task_id for task_id in ["b", "a"]),
+    )
+    assert result["task_ids"] == ["a", "b"]
+    assert result["n_runs"] == 2
+    assert result["completion_rate"] == 0.0
+    assert result["avg_source_success_rate"] == 0.0
 
 
 def test_deduplicate_sources_preserves_order():

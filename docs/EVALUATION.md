@@ -46,6 +46,29 @@ frozen main-study inference and its separately pinned input-integrity
 audits remain unchanged. Neither descriptive summary establishes a
 prospectively preregistered confirmatory effect or human-validation result.
 
+### Complete-arm task-keyed diagnostic aggregation (prospective only)
+
+For **new descriptive analyses**, `logic.evaluation.aggregate_runs_by_task`
+accepts one `RunTrace` per expected task, together with explicit
+`variant_id`, `task_set_id`, and independently provided
+`expected_task_ids`. It rejects omitted or substituted tasks, duplicate
+task/run IDs, cross-variant or cross-task-set records, malformed identity
+fields, and non-Boolean completion status. The function retains failed and
+zero-source runs in the denominator rather than selecting only completed
+cases; it sorts by task identifier before reusing the existing
+`aggregate_runs` descriptive statistics, so row order cannot change the
+accumulation order. The returned summary includes the exact task IDs and
+treatment/task-set identity to support a checkable descriptive coverage claim.
+
+This is an **opt-in fail-closed wrapper**: the generic `aggregate_runs`
+remains unchanged for legacy callers. The expected task list must come from
+an independent frozen manifest; the helper does not authenticate that
+manifest or the input traces, verify evaluator provenance, or permit
+multiple attempts per task. It does not rerun, reinterpret, or alter the
+frozen 40-cell automated analysis; pilot evidence stays diagnostic, later
+retrospective checks stay exploratory, and blinded human validation remains
+pending.
+
 ## 1. Research questions
 
 The main study is organized around three primary stage-wise questions plus a broader systems question:

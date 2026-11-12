@@ -411,6 +411,84 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
     }
 
 
+
+def aggregate_runs_by_task(
+    runs: Iterable[RunTrace],
+    *,
+    variant_id: str,
+    task_set_id: str,
+    expected_task_ids: Iterable[str],
+) -> dict:
+    """Aggregate one complete diagnostic treatment arm against a task manifest.
+
+    Caller-supplied task/variant identity is an independent coverage contract,
+    not a claim that the historical source files or manifest are authenticated.
+    Unlike generic aggregate_runs, this opt-in helper rejects dropped tasks,
+    duplicate attempts, run-ID reuse, and accidental cross-arm pooling. Failed
+    runs remain in the denominator. Sorting by task ID makes sums reproducible
+    if input records arrive in different orders.
+
+    This does not change the separately frozen main-study analysis.
+    """
+    def valid_identifier(value: str, label: str) -> str:
+        if (
+            type(value) is not str
+            or not value
+            or not value.strip()
+            or value.strip() != value
+        ):
+            raise ValueError(f"{label} must be a nonempty, unpadded string")
+        return value
+
+    variant_id = valid_identifier(variant_id, "variant_id")
+    task_set_id = valid_identifier(task_set_id, "task_set_id")
+
+    expected: set[str] = set()
+    for task_id in expected_task_ids:
+        task_id = valid_identifier(task_id, "expected task_id")
+        if task_id in expected:
+            raise ValueError(f"duplicate expected task_id: {task_id!r}")
+        expected.add(task_id)
+    if not expected:
+        raise ValueError("expected_task_ids must not be empty")
+
+    by_task: dict[str, RunTrace] = {}
+    seen_run_ids: set[str] = set()
+    for trace in runs:
+        if not isinstance(trace, RunTrace):
+            raise ValueError("runs must contain RunTrace records")
+        task_id = valid_identifier(trace.task_id, "observed task_id")
+        run_id = valid_identifier(trace.run_id, "run_id")
+        if type(trace.completed) is not bool:
+            raise ValueError("completed must be a Boolean")
+        if trace.variant_id != variant_id:
+            raise ValueError(f"variant_id mismatch for task {task_id!r}")
+        if trace.task_set_id != task_set_id:
+            raise ValueError(f"task_set_id mismatch for task {task_id!r}")
+        if task_id in by_task:
+            raise ValueError(f"duplicate observed task_id: {task_id!r}")
+        if run_id in seen_run_ids:
+            raise ValueError(f"duplicate run_id: {run_id!r}")
+        by_task[task_id] = trace
+        seen_run_ids.add(run_id)
+
+    missing = sorted(expected - by_task.keys())
+    unexpected = sorted(by_task.keys() - expected)
+    if missing or unexpected:
+        raise ValueError(
+            f"task coverage mismatch: missing={missing!r}, unexpected={unexpected!r}"
+        )
+
+    task_ids = sorted(expected)
+    summary = aggregate_runs([by_task[task_id] for task_id in task_ids])
+    return {
+        "variant_id": variant_id,
+        "task_set_id": task_set_id,
+        "task_ids": task_ids,
+        **summary,
+    }
+
+
 def deduplicate_sources(urls: Iterable[str]) -> list[str]:
     """Return normalized, order-preserving unique source URLs."""
     seen: set[str] = set()
