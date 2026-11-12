@@ -56,6 +56,8 @@ class RunTrace:
         diagnostic rates and descriptive budget-efficiency aggregates.
         This is an in-memory diagnostic contract, not archival attestation.
         """
+        if type(self.completed) is not bool:
+            raise ValueError("completed must be a Boolean")
         count_fields = (
             "source_count",
             "failed_source_count",

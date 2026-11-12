@@ -8,6 +8,19 @@ The project has progressed beyond the original proposed-study document. Pilot in
 
 Human quality ratings are **not yet results**. They remain pending and must be collected under `paper/HUMAN_EVAL_PROTOCOL.md` before any human-quality claim is made.
 
+### Diagnostic completion-status integrity (prospective only)
+
+`RunTrace` requires `completed` to be an **exact Boolean** at construction.
+Python treats nonempty strings such as `"False"` and nonzero integers as truthy;
+previously, generic `aggregate_runs` could count such malformed statuses as
+successful runs, distorting the descriptive completion rate. Strings, numbers,
+`None`, and container placeholders now fail closed before either generic or
+task-keyed aggregation. Valid failed and completed observations remain in
+their original denominator. This is prospective in-memory diagnostic
+validation, not retrospective authentication or revision of the frozen
+40-cell treatment data, the post-collection designated-primary automated
+analysis, exploratory sensitivity checks, or pending human ratings.
+
 ### Diagnostic resource-telemetry validation (prospective, not archival)
 
 The generic, dependency-free `logic.evaluation.RunTrace` constructor rejects malformed

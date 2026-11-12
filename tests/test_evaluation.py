@@ -33,6 +33,29 @@ def test_run_trace_metrics():
 
 
 @pytest.mark.parametrize(
+    "invalid",
+    [None, "False", "True", "", 0, 1, -1, 0.0, 1.0, [], {}, ()],
+)
+def test_run_trace_rejects_non_boolean_completion_before_aggregation(invalid):
+    # Python truthiness would otherwise turn "False" and -1 into success.
+    with pytest.raises(ValueError, match="completed must be a Boolean"):
+        RunTrace(
+            run_id="invalid-completion",
+            completed=invalid,
+            source_count=0,
+        )
+
+
+def test_run_trace_boolean_completion_retains_failed_runs_in_generic_summary():
+    complete = RunTrace(run_id="success", completed=True, source_count=1)
+    failed = RunTrace(run_id="failed", completed=False, source_count=0)
+    assert complete.to_dict()["completed"] is True
+    assert failed.to_dict()["completed"] is False
+    assert aggregate_runs([complete, failed])["completion_rate"] == 0.5
+    assert aggregate_runs([failed, failed])["completion_rate"] == 0.0
+
+
+@pytest.mark.parametrize(
     ("source_count", "failed_source_count"),
     [
         (-1, 0),
