@@ -13,19 +13,24 @@ Human quality ratings are **not yet results**. They remain pending and must be c
 The general `logic.evaluation.aggregate_runs` summary and its complete-task
 wrapper `aggregate_runs_by_task` reject derived non-finite output values
 rather than publishing `Infinity` or `NaN` as descriptive statistics.
-Valid nonnegative raw `RunTrace` counts and finite latencies/costs can still
-overflow a floating-point mean or integer-to-float conversion; such aggregates
-raise `ValueError` rather than producing plausible-looking invalid results.
+Valid nonnegative raw `RunTrace` counts may still exceed floating-point
+representation during integer-to-float conversion; these invalid summaries
+raise `ValueError` rather than silently publishing `Infinity` or `NaN`.
 
-Population standard deviation now centers and squares scale-normalized values
-before restoring the original units. For example, latencies 0 and `1e200`
-have a valid population standard deviation of `5e199`; the earlier direct
-squaring of the deviation overflowed and incorrectly rejected the entire
-summary. Regression tests cover representable extreme dispersion, including
-the task-keyed wrapper, and retain rejection of genuinely non-finite derived
-means. Other aggregate estimators retain their existing semantics.
+Population standard deviation centers and squares scale-normalized values
+before restoring the original units. Means now use precision-preserving
+summation and, only if the intermediate sum overflows, accumulate observations
+divided by their count. Even-sized medians similarly halve the operands only
+when their finite midpoint sum would overflow. Thus `[1e308, 1e308]`
+has a representable mean **and** median of `1e308`, not an invalid
+summary. Subnormal precision is retained in the ordinary path. Regression
+tests cover aggregates, task-keyed summaries, paired diagnostic differences,
+and the reusable descriptive bootstrap. Unrepresentable paired differences
+and oversized integer counters still fail closed; estimator definitions and
+uncertainty interpretation are unchanged.
 
-This is **fail-closed detection**, not a new numerical estimator, a correction
+This is **numerical integrity for prospective diagnostics**, not a new
+statistical estimator, a correction
 of historical telemetry, or an attestation of source custody. It applies only
 to new in-memory diagnostic summaries. The original 40 treatment outcomes,
 frozen automated inference, exploratory sensitivity checks, and pending real

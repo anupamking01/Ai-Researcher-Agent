@@ -11,6 +11,7 @@ from logic.evaluation import (
     paired_metric_comparison,
     paired_metric_comparison_by_task,
     population_stddev,
+    safe_mean,
     safe_median,
 )
 
@@ -317,6 +318,34 @@ def test_robust_statistics_handle_odd_even_and_empty_inputs():
     assert population_stddev([10.0, 20.0]) == 5.0
 
 
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ([1e308, 1e308], 1e308),
+        ([-1e308, -1e308], -1e308),
+        ([-1e308, 1e308], 0.0),
+        ([1e308, 1e308, -1e308], 1e308 / 3),
+        ([5e-324, 5e-324], 5e-324),
+    ],
+)
+def test_safe_mean_retains_representable_large_and_subnormal_centers(values, expected):
+    observed = safe_mean(values)
+    assert observed == expected if expected == 5e-324 else observed == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ([1e308, 1e308], 1e308),
+        ([-1e308, -1e308], -1e308),
+        ([-1e308, 1e308], 0.0),
+        ([5e-324, 5e-324], 5e-324),
+    ],
+)
+def test_safe_median_retains_representable_large_and_subnormal_centers(values, expected):
+    assert safe_median(values) == expected
+
+
 def test_bootstrap_confidence_interval_is_reproducible_and_bounded():
     first = bootstrap_confidence_interval([1, 2, 3, 4, 5], n_resamples=500, seed=42)
     second = bootstrap_confidence_interval([1, 2, 3, 4, 5], n_resamples=500, seed=42)
@@ -384,6 +413,12 @@ def test_bootstrap_confidence_interval_interpolates_extreme_finite_estimates():
     assert interval["upper"] == pytest.approx(5e307)
 
 
+def test_bootstrap_mean_keeps_finite_extreme_constant_sample():
+    interval = bootstrap_confidence_interval([1e308, 1e308], n_resamples=20, seed=7)
+    assert interval["estimate"] == 1e308
+    assert interval["lower"] == interval["upper"] == 1e308
+
+
 def test_paired_metric_comparison_preserves_task_pairing():
     summary = paired_metric_comparison(
         baseline=[2.0, 4.0, 3.0, 5.0],
@@ -431,11 +466,14 @@ def test_paired_metric_comparison_rejects_overflowed_delta():
         paired_metric_comparison([-1e308], [1e308])
 
 
-def test_paired_metric_comparison_rejects_non_finite_mean():
-    # Two large positive deltas overflow the legacy mean even though
-    # each individual paired delta is finite.
-    with pytest.raises(ValueError, match="paired summary must be finite"):
-        paired_metric_comparison([-1e308, -1e308], [0.0, 0.0])
+def test_paired_metric_comparison_keeps_finite_extreme_mean():
+    # The two deltas and their true mean are finite; only the old sum overflowed.
+    result = paired_metric_comparison([-1e308, -1e308], [0.0, 0.0])
+    assert result["n_pairs"] == 2
+    assert result["mean_delta"] == pytest.approx(1e308)
+    assert result["median_delta"] == pytest.approx(1e308)
+    assert result["delta_stddev"] == 0.0
+    assert (result["wins"], result["ties"], result["losses"]) == (2, 0, 0)
 
 
 def test_paired_metric_comparison_retains_finite_extreme_dispersion():
@@ -698,10 +736,6 @@ def test_task_aggregate_accepts_one_pass_generators_and_zero_source_failures():
 @pytest.mark.parametrize(
     ("record_overrides", "error"),
     [
-        (
-            [{"estimated_cost_usd": 1e308}, {"estimated_cost_usd": 1e308}],
-            "avg_estimated_cost_usd must be finite",
-        ),
         ([{"source_count": 10**400}], "aggregate run statistics must be finite"),
         ([{"prompt_tokens": 10**400}], "aggregate run statistics must be finite"),
     ],
@@ -718,16 +752,42 @@ def test_aggregate_runs_rejects_derived_overflow(record_overrides, error):
         aggregate_runs(traces)
 
 
-def test_task_keyed_aggregate_inherits_nonfinite_summary_rejection():
+def test_task_keyed_aggregate_preserves_finite_extreme_cost_centers():
     traces = [
         _task_aggregate_trace("a", estimated_cost_usd=1e308),
         _task_aggregate_trace("b", estimated_cost_usd=1e308),
     ]
-    with pytest.raises(ValueError, match="avg_estimated_cost_usd must be finite"):
+    result = aggregate_runs_by_task(
+        traces, variant_id="D3", task_set_id="frozen-diagnostic",
+        expected_task_ids=["a", "b"],
+    )
+    assert result["avg_estimated_cost_usd"] == pytest.approx(1e308)
+    assert result["median_estimated_cost_usd"] == pytest.approx(1e308)
+
+
+def test_task_keyed_aggregate_still_rejects_oversized_integer_counter():
+    with pytest.raises(ValueError, match="aggregate run statistics must be finite"):
         aggregate_runs_by_task(
-            traces, variant_id="D3", task_set_id="frozen-diagnostic",
-            expected_task_ids=["a", "b"],
+            [_task_aggregate_trace("a", prompt_tokens=10**400)],
+            variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=["a"],
         )
+
+
+def test_aggregate_runs_preserves_finite_extreme_timing_and_cost_centers():
+    traces = [
+        RunTrace(
+            run_id=f"finite-large-{index}", completed=True, source_count=1,
+            latency_seconds=1e308, estimated_cost_usd=1e308,
+        )
+        for index in range(2)
+    ]
+    result = aggregate_runs(traces)
+    assert result["avg_latency_seconds"] == pytest.approx(1e308)
+    assert result["median_latency_seconds"] == pytest.approx(1e308)
+    assert result["latency_stddev_seconds"] == 0.0
+    assert result["avg_estimated_cost_usd"] == pytest.approx(1e308)
+    assert result["median_estimated_cost_usd"] == pytest.approx(1e308)
 
 
 @pytest.mark.parametrize("large", [1e100, 1e200])

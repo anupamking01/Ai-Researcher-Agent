@@ -8,7 +8,7 @@ benchmark results; it only defines metrics and aggregation utilities.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from math import floor, isfinite, sqrt
+from math import floor, fsum, isfinite, sqrt
 from random import Random
 from typing import Callable, Iterable, Sequence
 
@@ -147,8 +147,20 @@ class RunTrace:
 
 
 def safe_mean(values: Iterable[float]) -> float:
+    """Return a mean without overflowing an otherwise representable center.
+
+    Prefer accurate full-scale summation (including tiny subnormal values).
+    If that sum overflows, divide each term by the sample count before
+    accumulating: a finite sample of finite floats has a finite mean.
+    """
     values = list(values)
-    return sum(values) / len(values) if values else 0.0
+    if not values:
+        return 0.0
+    count = len(values)
+    try:
+        return fsum(values) / count
+    except OverflowError:
+        return fsum(value / count for value in values)
 
 
 def safe_median(values: Iterable[float]) -> float:
@@ -160,7 +172,13 @@ def safe_median(values: Iterable[float]) -> float:
     midpoint = size // 2
     if size % 2:
         return float(ordered[midpoint])
-    return (ordered[midpoint - 1] + ordered[midpoint]) / 2
+    left, right = ordered[midpoint - 1], ordered[midpoint]
+    midpoint_sum = left + right
+    if isfinite(midpoint_sum):
+        return midpoint_sum / 2
+    # The same-sign intermediate sum overflowed, not the finite midpoint.
+    # Use halves only in that case to preserve subnormal input precision.
+    return left / 2 + right / 2
 
 
 def population_stddev(values: Iterable[float]) -> float:
