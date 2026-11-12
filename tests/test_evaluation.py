@@ -151,6 +151,106 @@ def test_run_trace_keeps_citations_distinct_from_claim_labels():
     assert trace.citation_precision_proxy == 0.0
 
 
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [
+        (field, invalid)
+        for field in (
+            "prompt_tokens",
+            "completion_tokens",
+            "source_budget",
+            "query_count",
+            "search_call_count",
+            "model_call_count",
+            "unavailable_usage_call_count",
+        )
+        for invalid in (-1, False, 1.5, "2")
+    ],
+)
+def test_run_trace_rejects_invalid_resource_counts(field, invalid):
+    counts = {
+        "prompt_tokens": 12,
+        "completion_tokens": 8,
+        "source_budget": 4,
+        "query_count": 2,
+        "search_call_count": 1,
+        "model_call_count": 2,
+        "unavailable_usage_call_count": 1,
+    }
+    counts[field] = invalid
+    with pytest.raises(ValueError, match=field):
+        RunTrace(
+            run_id="invalid-budget-telemetry",
+            completed=True,
+            source_count=1,
+            **counts,
+        )
+
+
+@pytest.mark.parametrize("field", ["latency_seconds", "estimated_cost_usd"])
+@pytest.mark.parametrize(
+    "invalid",
+    [-1, -0.01, True, "1", None, float("nan"), float("inf"), float("-inf"), 10**400],
+)
+def test_run_trace_rejects_invalid_timing_and_cost(field, invalid):
+    with pytest.raises(ValueError, match=field):
+        RunTrace(
+            run_id="invalid-finite-telemetry",
+            completed=False,
+            source_count=0,
+            **{field: invalid},
+        )
+
+
+@pytest.mark.parametrize(
+    ("model_calls", "unavailable_calls"),
+    [(0, 1), (2, 3)],
+)
+def test_run_trace_rejects_impossible_missing_usage_call_ledger(
+    model_calls, unavailable_calls
+):
+    with pytest.raises(ValueError, match="unavailable_usage_call_count"):
+        RunTrace(
+            run_id="bad-call-accounting",
+            completed=False,
+            source_count=0,
+            model_call_count=model_calls,
+            unavailable_usage_call_count=unavailable_calls,
+        )
+
+
+def test_run_trace_accepts_valid_resource_boundaries_and_aggregates():
+    runs = [
+        RunTrace(
+            run_id="complete-usage",
+            completed=True,
+            source_count=2,
+            source_budget=2,
+            prompt_tokens=100,
+            completion_tokens=50,
+            query_count=2,
+            search_call_count=2,
+            model_call_count=3,
+            unavailable_usage_call_count=1,
+            latency_seconds=2,
+            estimated_cost_usd=0.25,
+        ),
+        RunTrace(
+            run_id="zero-usage",
+            completed=False,
+            source_count=0,
+            model_call_count=0,
+            unavailable_usage_call_count=0,
+            latency_seconds=0.0,
+            estimated_cost_usd=0.0,
+        ),
+    ]
+    assert runs[0].to_dict()["total_tokens"] == 150
+    assert aggregate_runs(runs)["avg_total_tokens"] == 75.0
+    assert aggregate_runs(runs)["avg_estimated_cost_usd"] == 0.125
+    assert aggregate_runs(runs)["avg_latency_seconds"] == 1.0
+
+
 def test_aggregate_runs():
     runs = [
         RunTrace(run_id="run-1", completed=True, source_count=10, failed_source_count=2, latency_seconds=20.0, prompt_tokens=100, completion_tokens=50, estimated_cost_usd=0.05),

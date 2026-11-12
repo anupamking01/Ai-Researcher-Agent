@@ -50,10 +50,10 @@ class RunTrace:
     cost_accounting_status: str = "not_computed"
 
     def __post_init__(self) -> None:
-        """Reject impossible source and claim-count telemetry before scoring.
+        """Reject impossible source, claim, and resource telemetry before scoring.
 
-        Negative, fractional, Boolean, or text counts can create misleading
-        rates (including a strict claim-support rate outside [0, 1]).
+        Malformed counts or non-finite timing/cost values can poison bounded
+        diagnostic rates and descriptive budget-efficiency aggregates.
         This is an in-memory diagnostic contract, not archival attestation.
         """
         count_fields = (
@@ -64,6 +64,13 @@ class RunTrace:
             "partially_supported_claim_count",
             "unsupported_claim_count",
             "contradicted_claim_count",
+            "prompt_tokens",
+            "completion_tokens",
+            "source_budget",
+            "query_count",
+            "search_call_count",
+            "model_call_count",
+            "unavailable_usage_call_count",
         )
         for field in count_fields:
             value = getattr(self, field)
@@ -71,6 +78,20 @@ class RunTrace:
                 raise ValueError(f"{field} must be a nonnegative integer")
         if self.failed_source_count > self.source_count:
             raise ValueError("failed_source_count cannot exceed source_count")
+        if self.unavailable_usage_call_count > self.model_call_count:
+            raise ValueError(
+                "unavailable_usage_call_count cannot exceed model_call_count"
+            )
+        for field in ("latency_seconds", "estimated_cost_usd"):
+            value = getattr(self, field)
+            if type(value) not in (int, float):
+                raise ValueError(f"{field} must be a finite nonnegative number")
+            try:
+                finite = isfinite(value)
+            except OverflowError:
+                finite = False
+            if not finite or value < 0:
+                raise ValueError(f"{field} must be a finite nonnegative number")
 
     @property
     def total_tokens(self) -> int:

@@ -8,6 +8,24 @@ The project has progressed beyond the original proposed-study document. Pilot in
 
 Human quality ratings are **not yet results**. They remain pending and must be collected under `paper/HUMAN_EVAL_PROTOCOL.md` before any human-quality claim is made.
 
+### Diagnostic resource-telemetry validation (prospective, not archival)
+
+The generic, dependency-free `logic.evaluation.RunTrace` constructor rejects malformed
+resource counters (`prompt_tokens`, `completion_tokens`, `source_budget`,
+`query_count`, `search_call_count`, `model_call_count`, and
+`unavailable_usage_call_count`). Each must be an exact nonnegative integer,
+not a Boolean, fractional number, or coerced string. Unavailable-usage calls
+cannot exceed total model calls. Diagnostic `latency_seconds` and
+`estimated_cost_usd` must be finite nonnegative built-in numeric values;
+NaN, infinity, negative values, Booleans, text, and nonnumeric placeholders
+are rejected before averages, medians, token totals, and dispersion metrics
+are computed. Synthetic tests cover these invalid inputs and legitimate zero
+usage/cost. This strengthens **new in-memory diagnostic telemetry**; it does
+not revalidate or rewrite frozen September treatment files, independently
+authenticate historical provider usage, change historical cost estimates, or
+establish a human-evaluation result. The separate published-input and
+original-report custody requirements still apply.
+
 ## 1. Research questions
 
 The main study is organized around three primary stage-wise questions plus a broader systems question:
