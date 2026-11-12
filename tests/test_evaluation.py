@@ -73,6 +73,84 @@ def test_run_trace_source_accounting_conserves_attempts(
     assert summary["source_success_rate"] == rate
 
 
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [
+        (field, invalid)
+        for field in (
+            "citation_count",
+            "supported_claim_count",
+            "partially_supported_claim_count",
+            "unsupported_claim_count",
+            "contradicted_claim_count",
+        )
+        for invalid in (-1, True, 1.0, "1")
+    ],
+)
+def test_run_trace_rejects_invalid_claim_accounting(field, invalid):
+    counts = {
+        "citation_count": 4,
+        "supported_claim_count": 1,
+        "partially_supported_claim_count": 1,
+        "unsupported_claim_count": 1,
+        "contradicted_claim_count": 1,
+    }
+    counts[field] = invalid
+    with pytest.raises(ValueError, match=field):
+        RunTrace(
+            run_id="invalid-claim-telemetry",
+            completed=True,
+            source_count=1,
+            **counts,
+        )
+
+
+@pytest.mark.parametrize(
+    ("labels", "expected_rate"),
+    [
+        ((0, 0, 0, 0), 0.0),
+        ((3, 0, 1, 0), 0.75),
+        ((0, 1, 2, 1), 0.0),
+        ((2, 1, 1, 0), 0.5),
+    ],
+)
+def test_run_trace_claim_accounting_is_bounded_and_conserved(
+    labels, expected_rate
+):
+    supported, partial, unsupported, contradicted = labels
+    claims_checked = sum(labels)
+    trace = RunTrace(
+        run_id="valid-claim-telemetry",
+        completed=True,
+        source_count=1,
+        citation_count=claims_checked,
+        supported_claim_count=supported,
+        partially_supported_claim_count=partial,
+        unsupported_claim_count=unsupported,
+        contradicted_claim_count=contradicted,
+    )
+    assert trace.verified_claim_count == claims_checked
+    assert trace.claim_support_rate == expected_rate
+    assert 0.0 <= trace.claim_support_rate <= 1.0
+    assert trace.to_dict()["claim_support_rate"] == expected_rate
+
+
+def test_run_trace_keeps_citations_distinct_from_claim_labels():
+    # A citation count need not equal a claim-label partition; do not add
+    # an unjustified cross-unit constraint to the generic diagnostic helper.
+    trace = RunTrace(
+        run_id="different-units",
+        completed=True,
+        source_count=1,
+        citation_count=1,
+        unsupported_claim_count=2,
+    )
+    assert trace.verified_claim_count == 2
+    assert trace.claim_support_rate == 0.0
+    assert trace.citation_precision_proxy == 0.0
+
+
 def test_aggregate_runs():
     runs = [
         RunTrace(run_id="run-1", completed=True, source_count=10, failed_source_count=2, latency_seconds=20.0, prompt_tokens=100, completion_tokens=50, estimated_cost_usd=0.05),

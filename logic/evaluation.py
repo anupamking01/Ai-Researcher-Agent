@@ -50,13 +50,22 @@ class RunTrace:
     cost_accounting_status: str = "not_computed"
 
     def __post_init__(self) -> None:
-        """Reject impossible source-count telemetry before computing metrics.
+        """Reject impossible source and claim-count telemetry before scoring.
 
-        A negative attempt/failure count or more failed sources than attempted
-        cannot be turned into a valid success rate by silently clamping it.
+        Negative, fractional, Boolean, or text counts can create misleading
+        rates (including a strict claim-support rate outside [0, 1]).
         This is an in-memory diagnostic contract, not archival attestation.
         """
-        for field in ("source_count", "failed_source_count"):
+        count_fields = (
+            "source_count",
+            "failed_source_count",
+            "citation_count",
+            "supported_claim_count",
+            "partially_supported_claim_count",
+            "unsupported_claim_count",
+            "contradicted_claim_count",
+        )
+        for field in count_fields:
             value = getattr(self, field)
             if type(value) is not int or value < 0:
                 raise ValueError(f"{field} must be a nonnegative integer")

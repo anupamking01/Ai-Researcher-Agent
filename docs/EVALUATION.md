@@ -296,6 +296,23 @@ reason to rerun or replace those outcomes. The canonical run retains its
 original GitHub Actions workflow, Git commit, dependency files, and logs; their
 environment-recording limits remain a threat to exact replication.
 
+### In-memory diagnostic claim-count validation
+
+`logic.evaluation.RunTrace` now rejects negative, fractional, Boolean, and
+text-valued source **and claim-classification counts** before calculating
+diagnostic rates or exporting a run summary. The five classification fields
+(`supported_claim_count`, `partially_supported_claim_count`,
+`unsupported_claim_count`, `contradicted_claim_count`, and the legacy
+`citation_count`) must be exact nonnegative integers; zero counts remain
+valid. This prevents impossible count telemetry from producing a negative
+citation proxy or an out-of-range strict claim-support rate. Citation
+occurrences and verified claim labels are not generally the same unit, so
+the generic helper does **not** require `citation_count` to equal the sum
+of claim labels. This checks future in-memory diagnostic inputs only; it
+does not authenticate or revise the frozen treatment traces, evaluator
+recovery, primary automated estimates, exploratory analyses, or pending
+human ratings.
+
 ## 8. Failure handling and provenance
 
 A failed source fetch is not equivalent to a missing experiment. Likewise, zero successful evidence can be a valid treatment outcome rather than a reason to discard the run.
