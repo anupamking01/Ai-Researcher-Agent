@@ -76,3 +76,28 @@ This is an integration/cross-check on **the same CI runner**, not an independent
 second machine, GitHub API attestation or evidence of successful treatment
 execution. Downloaded artifacts should still be replayed later using
 identifiers obtained separately from the GitHub run page/API.
+
+## Exact source-byte checkout gates around pytest (12 November 2026)
+
+Two fail-closed steps in 'tests.yml' verify the **actual tracked working-tree
+bytes** against the exact 'GITHUB_SHA' immediately before and after offline
+pytest. The source-checkout verifier compares every tracked blob to its Git HEAD
+content hash, checks regular-file/symlink type and executable mode, rejects
+unexpected nonignored untracked files and staged changes, and requires the
+repository root to be the expected checkout. Unlike a HEAD-only check or a
+Git-index-only diff, it also detects changes concealed by Git's
+'assume-unchanged' flag. The logged pytest/receipt/replay/upload sequence is
+unchanged; a failed source gate prevents publishing a successful CI evidence
+artifact. Offline synthetic Git fixtures test clean revisions, staged/unstaged
+and hidden edits, untracked files, mode changes and symlink substitution.
+Ordinary '.pytest_cache/' test output is ignored explicitly.
+
+This is a **bounded local-runner consistency check** rather than independent
+attestation: ignored cache/build outputs are outside the Git-blob comparison;
+a transient change restored before the post-test check may escape detection,
+and GitHub/runner integrity must still be independently established. It does
+not authenticate historical model reports/traces or establish real human
+evaluation. The diagnostic pilot remains distinct from the qualified
+post-collection designated-primary automated findings and exploratory
+sensitivity analyses; no confirmatory precollection or human-validation
+result is asserted by this change.

@@ -37,11 +37,17 @@ jobs:
       - name: Compile research code
         run: python -m compileall -q agent logic scripts tests settings scrape text_preprocess
 
+      - name: Verify exact source checkout before tests
+        run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
+
       - name: Run offline unit tests
         shell: bash
         run: |
           set -euo pipefail
           bash scripts/run_offline_pytest_firewalled.sh 2>&1 | tee "$RUNNER_TEMP/vera-offline-tests.log"
+
+      - name: Verify exact source checkout after tests
+        run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests
 
       - name: Bind exact-commit offline test evidence
         run: |
