@@ -126,3 +126,29 @@ def test_workflow_requires_independent_identity_replay_before_evidence_upload():
         assert f'{flag} "{value}"' in script
     # The receipt must not supply the independent expected run identity.
     assert "jq" not in script and "|| true" not in script
+
+
+def test_physical_crlf_log_with_terminal_summary_is_valid():
+    log = _log().replace(b"\n", b"\r\n")
+    assert evidence.build_receipt(
+        log, context=CONTEXT, checkout_sha=SHA, dependency_bytes=DEPS
+    )["test_counts"]["passed"] == 6
+
+
+@pytest.mark.parametrize("bad_log", [
+    _log() + b"unexpected output after summary\n",
+    _log().rstrip(b"\n"),
+    _log().replace(b"\n", b"\r", 1),
+    _log().replace(b"\n", b"\xe2\x80\xa8", 1),
+    _log().replace(b"\n", b"\xc2\x85", 1),
+    _log().replace(
+        evidence.FIREWALL_MARKER.encode(),
+        b"reported: " + evidence.FIREWALL_MARKER.encode(),
+    ),
+    _log().splitlines()[1] + b"\n" + evidence.FIREWALL_MARKER.encode() + b"\n",
+])
+def test_rejects_out_of_order_nonterminal_or_forged_physical_ci_records(bad_log):
+    with pytest.raises(ValueError):
+        evidence.build_receipt(
+            bad_log, context=CONTEXT, checkout_sha=SHA, dependency_bytes=DEPS
+        )

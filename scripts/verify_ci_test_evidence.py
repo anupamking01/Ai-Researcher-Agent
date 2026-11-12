@@ -39,15 +39,30 @@ def build_receipt(log: bytes, *, context: dict[str, str],
     if type(log) is not bytes or not 0 < len(log) <= MAX_LOG_BYTES:
         raise ValueError("offline test log is missing or exceeds size limit")
     try:
-        lines = log.decode("utf-8").splitlines()
+        decoded = log.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("offline test log is not UTF-8") from exc
-    if sum(FIREWALL_MARKER in line for line in lines) != 1:
-        raise ValueError("missing or repeated offline firewall activation marker")
-    matches = [match for line in lines if (match := SUMMARY.fullmatch(line.strip()))]
+    # Preserve *physical* LF/CRLF records. str.splitlines() would also accept
+    # Unicode separators and bare CR as forged pytest/runner log boundaries.
+    if not decoded.endswith("\n") or "\x00" in decoded:
+        raise ValueError("offline test log has no complete terminal record")
+    if any(sep in decoded for sep in ("\x85", "\u2028", "\u2029", "\x0b", "\x0c")):
+        raise ValueError("offline test log has unsupported record separators")
+    if "\r" in decoded.replace("\r\n", ""):
+        raise ValueError("offline test log has bare carriage returns")
+    lines = [line.removesuffix("\r") for line in decoded.split("\n")]
+    markers = [i for i, line in enumerate(lines) if line == FIREWALL_MARKER]
+    if len(markers) != 1:
+        raise ValueError("missing or repeated physical offline firewall marker")
+    matches = [(i, match) for i, line in enumerate(lines)
+               if (match := SUMMARY.fullmatch(line))]
     if len(matches) != 1:
         raise ValueError("offline pytest success summary missing or ambiguous")
-    match = matches[0]
+    summary_index, match = matches[0]
+    if summary_index <= markers[0]:
+        raise ValueError("offline pytest success precedes firewall activation")
+    if summary_index != max(i for i, line in enumerate(lines) if line):
+        raise ValueError("offline pytest success is not the final nonempty log record")
     parsed = {}
     for token in match["counts"].split(", "):
         count, label = token.split(" ", 1)

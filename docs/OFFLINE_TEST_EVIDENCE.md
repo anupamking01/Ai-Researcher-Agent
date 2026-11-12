@@ -132,3 +132,24 @@ module bytes match metadata. Packages not listed in the two CI pin files are
 outside this check. The earlier exact Git checkout, firewalled pytest, and
 retained evidence gates remain required and unchanged. No research treatments,
 automated evaluators, or human ratings are run by this check.
+
+
+## Physical and terminal pytest-log framing gate (12 November 2026)
+
+The receipt producer and its independent offline replay consumer require one
+**whole physical** firewall-activation record followed by exactly one pytest
+success summary, with the summary as the **last nonempty physical record**.
+Only LF and CRLF records are accepted; bare CR, NUL, Unicode line/paragraph
+separators, and unterminated final records fail closed. This prevents an
+embedded marker, a success line printed before firewall activation, or output
+appended after an otherwise valid-looking success line from being treated as
+a complete successful test transcript. Synthetic regressions cover normal
+LF/CRLF logs and the rejected framing/order cases. The actual CI wrapper and
+piped pytest invocation remain unchanged.
+
+This tightens the *internal consistency* of a retained text transcript only:
+it cannot prove that the GitHub runner genuinely executed pytest, that the
+firewall was independently attested, or that omitted output before the final
+summary was not suppressed. The GitHub workflow/job conclusion, independent
+run identity, and original research-artifact custody remain separate checks.
+It does not rerun experimental treatments, evaluators, or human annotation.
