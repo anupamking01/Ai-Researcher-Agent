@@ -22,3 +22,42 @@ provider call, human rating, or confirmatory analysis is invoked by this
 addition. The five-task pilot stays diagnostic; original designated-primary
 automated analysis retains the post-collection plan qualification; exploratory
 bounds and future human validation remain separate.
+
+
+## Replaying retained CI evidence after download
+
+The companion **offline consumer** `scripts/verify_retained_ci_test_evidence.py`
+lets a second checkout audit the log/receipt pair retained by GitHub Actions.
+It recomputes the producer's success counts, log SHA-256, dependency-file
+fingerprints, identity and fixed status fields. It rejects modified logs,
+altered dependencies, missing or extra receipt fields, wrong GitHub run or
+attempt, duplicate JSON keys, noncanonical JSON and Python bool/integer
+substitution. Only the producer's informational Python patch version may differ
+from the replay host; it is constrained to a numeric version string.
+
+**Obtain the tested commit SHA, run ID, attempt and event independently from
+the GitHub Actions run page/API, not from the downloaded receipt.** Download and
+extract that run's `vera-offline-tests-<run-id>-<attempt>` artifact, then check
+out the **exact tested SHA** (for PR runs this may be GitHub's synthetic merge
+commit, not the pull-request branch HEAD). On that checkout, use:
+
+```bash
+python -m scripts.verify_retained_ci_test_evidence \
+  --log /trusted-download/vera-offline-tests.log \
+  --receipt /trusted-download/vera-offline-test-receipt.json \
+  --checkout-sha <independently-verified-40-character-commit-SHA> \
+  --run-id <independently-verified-GitHub-run-ID> \
+  --run-attempt <independently-verified-attempt> \
+  --event push
+```
+
+Replace `push` with `pull_request` or `workflow_dispatch` for that run.
+This helper must exist in the checked-out revision and the two dependency files
+must match those used by that revision. A local PASS means that the downloaded
+files are **self-consistent under those independently supplied identifiers**,
+not that GitHub ran the tests, that the runner's network was isolated, that the
+upload was independently attested or that any scientific treatment artifact
+has been authenticated. Inspect the original GitHub workflow/job conclusion
+and the uploaded artifact's source separately. Offline synthetic regressions
+cover clean replay and tampering; they create no experimental results or
+human-evaluation ratings.
