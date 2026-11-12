@@ -86,6 +86,43 @@ def test_symlink_substitution_is_rejected(checkout):
         verify_source_checkout(root, expected_sha=sha)
 
 
+def test_out_of_checkout_hardlink_to_identical_source_is_rejected(checkout):
+    root, sha = checkout
+    # No edit to source.py or untracked in-repository path exists: a hash-only
+    # gate and git status both accept it, but an external writer has an alias.
+    alias = root.parent / f"{root.name}-external-source-alias"
+    try:
+        alias.hardlink_to(root / "source.py")
+        assert _git(root, "status", "--porcelain") == ""
+        with pytest.raises(ValueError, match="single-link"):
+            verify_source_checkout(root, expected_sha=sha)
+    finally:
+        alias.unlink(missing_ok=True)
+
+
+def test_out_of_checkout_hardlink_to_tracked_symlink_is_rejected(checkout):
+    root, _ = checkout
+    (root / "pointer.py").symlink_to("source.py")
+    _git(root, "add", "pointer.py")
+    _git(root, "commit", "-qm", "add tracked symlink")
+    sha = _git(root, "rev-parse", "HEAD")
+    alias = root.parent / f"{root.name}-external-link-alias"
+    try:
+        # POSIX hardlinks to symlink inodes are possible without changing
+        # the symlink target stored in Git or the checkout status.
+        import os
+        try:
+            os.link(root / "pointer.py", alias, follow_symlinks=False)
+        except (OSError, NotImplementedError):
+            pytest.skip("platform does not support hardlinks to symlink inodes")
+        assert alias.is_symlink()
+        assert _git(root, "status", "--porcelain") == ""
+        with pytest.raises(ValueError, match="single-link"):
+            verify_source_checkout(root, expected_sha=sha)
+    finally:
+        alias.unlink(missing_ok=True)
+
+
 def test_workflow_gates_both_sides_of_tests_before_evidence_publication():
     workflow = yaml.load(
         (Path(__file__).resolve().parents[1] / ".github/workflows/tests.yml").read_text(),

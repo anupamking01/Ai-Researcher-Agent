@@ -36,6 +36,10 @@ def _source_blob_digest(path: Path, mode: bytes) -> str:
     """Hash the actual checkout bytes with Git blob framing, not index data."""
     try:
         before = path.lstat()
+        # A second name for the same inode can alter CI source bytes from
+        # outside the checkout without creating an untracked repository file.
+        if before.st_nlink != 1:
+            raise ValueError("tracked source must be single-link (no hardlink aliases)")
         if mode == b"120000":
             if not stat.S_ISLNK(before.st_mode):
                 raise ValueError("tracked symlink was replaced")
@@ -53,6 +57,8 @@ def _source_blob_digest(path: Path, mode: bytes) -> str:
                 opened = os.fstat(fd)
                 if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
                     raise ValueError("tracked file was replaced during open")
+                if opened.st_nlink != 1:
+                    raise ValueError("tracked source must be single-link (no hardlink aliases)")
                 digest_state = hashlib.sha1()
                 digest_state.update(b"blob %d\0" % opened.st_size)
                 observed = 0

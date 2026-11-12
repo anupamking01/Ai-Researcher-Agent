@@ -90,7 +90,15 @@ Git-index-only diff, it also detects changes concealed by Git's
 unchanged; a failed source gate prevents publishing a successful CI evidence
 artifact. Offline synthetic Git fixtures test clean revisions, staged/unstaged
 and hidden edits, untracked files, mode changes and symlink substitution.
-Ordinary '.pytest_cache/' test output is ignored explicitly.
+The verifier also rejects tracked regular files and tracked symlinks with
+multiple hardlinks: otherwise a path **outside the checkout** could modify
+the tested inode while every in-repository pathname, original Git blob hash,
+and Git status remain unchanged at the preflight gate. It checks link count
+both at initial pathname inspection and on the opened file descriptor,
+then includes it in the before/after generation comparisons. Two synthetic
+out-of-checkout alias regressions cover byte-identical files and symlink
+inodes; no model or experimental data is read. Ordinary '.pytest_cache/'
+test output is ignored explicitly.
 
 This is a **bounded local-runner consistency check** rather than independent
 attestation: ignored cache/build outputs are outside the Git-blob comparison;
