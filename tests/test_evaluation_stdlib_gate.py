@@ -10,6 +10,7 @@ import unittest
 
 from logic.evaluation import (
     RunTrace,
+    MAX_DIAGNOSTIC_REFERENCE_TASKS,
     aggregate_runs_by_task,
     paired_bootstrap_confidence_interval_by_task,
     paired_run_trace_bootstrap_by_task,
@@ -98,6 +99,31 @@ class DependencyFreeEvaluationGate(unittest.TestCase):
         )
         self.assertEqual(first, second)
         self.assertEqual(first["mean_delta"], 0.5)
+
+    def test_infinite_independent_manifest_fails_before_observation_reads(self):
+        reads = {"reference": 0, "baseline": 0, "candidate": 0}
+
+        def reference():
+            index = 0
+            while True:
+                reads["reference"] += 1
+                yield f"task-{index}"
+                index += 1
+
+        def arm(name):
+            reads[name] += 1
+            raise AssertionError("invalid reference read an observation")
+            yield (TASKS[0], 0.0)
+
+        with self.assertRaisesRegex(ValueError, "diagnostic reference limit"):
+            paired_bootstrap_confidence_interval_by_task(
+                arm("baseline"), arm("candidate"),
+                expected_task_ids=reference(), n_resamples=4,
+            )
+        self.assertEqual(reads, {
+            "reference": MAX_DIAGNOSTIC_REFERENCE_TASKS + 1,
+            "baseline": 0, "candidate": 0,
+        })
 
     def test_invalid_sampling_temperature_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "temperature"):

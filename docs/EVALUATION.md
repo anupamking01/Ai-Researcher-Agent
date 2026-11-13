@@ -1190,3 +1190,30 @@ human-validation evidence. The five-task pilot remains diagnostic; designated
 primary automated analysis retains post-collection statistical-plan, fixed-order,
 and evaluator-comparability qualifications; retrospective sensitivities remain
 exploratory; genuine blinded human ratings are still pending.
+
+
+## Bounded independent task references for prospective diagnostics
+
+The shared task-keyed diagnostic preflight now caps **independently supplied**
+reference task IDs at **10,000 unique IDs** and rejects the 10,001st before
+reading either observed treatment arm. This closes the remaining indefinite
+read/memory exposure from a never-ending one-pass *reference* iterator; earlier
+changes already bounded observed records after a finite reference. Independently
+supplied task/question mappings also reject duplicate entries from nonstandard
+mapping iterators and any entries beyond the declared task cardinality, so an
+unending mapping cannot hang preflight. A valid reference of 10,000 tasks is
+still accepted, as are one-shot manifests and order-independent comparisons.
+Tests use synthetic infinite producers and verify no observations are consumed
+on invalid references. A genuinely larger prospective diagnostic study requires
+an explicit reviewed change to this resource contract; do not silently drop
+excess tasks or reinterpret missing pairs as exclusions.
+
+This is an **in-memory diagnostic resource and provenance boundary**, not
+external authentication of caller-supplied reference bytes. It does not change
+frozen treatment/evaluator inputs, primary paired inference, cost accounting,
+or automated results. The five-task pilot remains diagnostic; the historical
+main-study designated-primary automated inference retains its post-collection
+plan, fixed-order and evaluator-policy comparability qualifications;
+retrospective sensitivities remain exploratory. Original report/trace custody,
+independent blinded human evaluation and human–automated reconciliation are
+still pending.

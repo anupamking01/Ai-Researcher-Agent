@@ -5,6 +5,8 @@ import pytest
 
 from logic.evaluation import (
     RunTrace,
+    MAX_DIAGNOSTIC_REFERENCE_TASKS,
+    _validated_reference_task_manifest,
     aggregate_runs,
     aggregate_runs_by_task,
     bootstrap_confidence_interval,
@@ -1712,3 +1714,84 @@ def test_task_keyed_bootstrap_one_pass_compatibility_remains_seeded():
     assert first == second
     assert first["mean_delta"] == 0.25
     assert first["bootstrap_confidence_interval"]["estimate"] == 0.25
+
+
+# Prospective diagnostic reference preflight only. Synthetic, no provider calls.
+def test_reference_manifest_at_explicit_limit_preserves_valid_one_pass_order():
+    task_ids, questions = _validated_reference_task_manifest(
+        (f"task-{index:05d}" for index in range(MAX_DIAGNOSTIC_REFERENCE_TASKS))
+    )
+    assert len(task_ids) == MAX_DIAGNOSTIC_REFERENCE_TASKS
+    assert task_ids[0] == "task-00000"
+    assert task_ids[-1] == f"task-{MAX_DIAGNOSTIC_REFERENCE_TASKS - 1:05d}"
+    assert questions is None
+
+
+@pytest.mark.parametrize(
+    "comparator",
+    [paired_metric_comparison_by_task, paired_bootstrap_confidence_interval_by_task],
+)
+def test_unbounded_independent_task_reference_fails_before_reading_arms(comparator):
+    reference_reads = 0
+    arm_reads = 0
+
+    def infinite_unique_reference():
+        nonlocal reference_reads
+        index = 0
+        while True:
+            reference_reads += 1
+            yield f"task-{index}"
+            index += 1
+
+    def forbidden_arm():
+        nonlocal arm_reads
+        arm_reads += 1
+        raise AssertionError("invalid reference must not consume observations")
+        yield ("task-0", 1.0)
+
+    with pytest.raises(ValueError, match="diagnostic reference limit"):
+        comparator(
+            forbidden_arm(), forbidden_arm(),
+            expected_task_ids=infinite_unique_reference(),
+        )
+    assert reference_reads == MAX_DIAGNOSTIC_REFERENCE_TASKS + 1
+    assert arm_reads == 0
+
+
+def test_unbounded_independent_question_mapping_fails_before_trace_reads():
+    class UnboundedQuestions(dict):
+        def __init__(self):
+            self.reads = 0
+
+        def items(self):
+            index = 0
+            while True:
+                self.reads += 1
+                yield f"unknown-{index}", "Synthetic question?"
+                index += 1
+
+    questions = UnboundedQuestions()
+    observations = 0
+
+    def forbidden_runs():
+        nonlocal observations
+        observations += 1
+        raise AssertionError("invalid reference must not consume a trace")
+        yield _task_aggregate_trace("task-a")
+
+    with pytest.raises(ValueError, match="question coverage mismatch"):
+        aggregate_runs_by_task(
+            forbidden_runs(), variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=["task-a"], expected_questions_by_task=questions,
+        )
+    assert questions.reads == 2
+    assert observations == 0
+
+
+def test_independent_question_mapping_still_accepts_complete_one_pass_reference():
+    task_ids, questions = _validated_reference_task_manifest(
+        (x for x in ["task-b", "task-a"]),
+        {"task-b": "Question B?", "task-a": "Question A?"},
+    )
+    assert task_ids == ["task-a", "task-b"]
+    assert questions == {"task-b": "Question B?", "task-a": "Question A?"}

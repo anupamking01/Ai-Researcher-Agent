@@ -14,6 +14,11 @@ from random import Random
 from typing import Callable, Iterable, Sequence
 
 
+# Resource boundary for untrusted/one-pass independent diagnostic task manifests.
+# This does not apply to frozen automated results or source research archives.
+MAX_DIAGNOSTIC_REFERENCE_TASKS = 10_000
+
+
 @dataclass(frozen=True)
 class RunTrace:
     """A normalized record for one research-agent run."""
@@ -357,8 +362,11 @@ def _validated_reference_task_manifest(
 
     A scalar string is *not* a task collection: silently iterating its
     characters could make a malformed one-task manifest appear complete.
-    Validate the full ID/question contract first, including on one-pass
-    reference iterators, so neither treatment arm is read on invalid input.
+    Bound the independently provided task list to 10,000 unique IDs, and
+    question mapping reads to the known task cardinality; otherwise infinite
+    reference producers could hang before treatment observations are checked.
+    Validate first, including on one-pass references, so invalid input never
+    consumes either treatment arm.
     """
     if isinstance(expected_task_ids, (str, bytes)):
         raise ValueError("expected_task_ids must be a collection, not scalar text")
@@ -371,6 +379,11 @@ def _validated_reference_task_manifest(
             raise ValueError("expected task_id must be a nonempty, unpadded string")
         if task_id in expected:
             raise ValueError(f"duplicate expected task_id: {task_id!r}")
+        if len(expected) >= MAX_DIAGNOSTIC_REFERENCE_TASKS:
+            raise ValueError(
+                "expected_task_ids exceeds the "
+                f"{MAX_DIAGNOSTIC_REFERENCE_TASKS}-task diagnostic reference limit"
+            )
         expected.add(task_id)
     if not expected:
         raise ValueError("expected_task_ids must not be empty")
@@ -390,6 +403,13 @@ def _validated_reference_task_manifest(
                 )
             if type(question) is not str or not question.strip():
                 raise ValueError("expected task question must be nonempty text")
+            if task_id in questions_by_task:
+                raise ValueError(f"duplicate expected question task_id: {task_id!r}")
+            if len(questions_by_task) >= len(expected):
+                raise ValueError(
+                    "expected task question coverage mismatch: more entries "
+                    "than the independent task-ID reference"
+                )
             questions_by_task[task_id] = question
         missing_questions = sorted(expected - questions_by_task.keys())
         unexpected_questions = sorted(questions_by_task.keys() - expected)
