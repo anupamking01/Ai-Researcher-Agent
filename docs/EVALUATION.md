@@ -8,6 +8,31 @@ The project has progressed beyond the original proposed-study document. Pilot in
 
 Human quality ratings are **not yet results**. They remain pending and must be collected under `paper/HUMAN_EVAL_PROTOCOL.md` before any human-quality claim is made.
 
+
+### Complete-task paired bootstrap for prospective diagnostics
+
+`logic.evaluation.paired_bootstrap_confidence_interval_by_task` is an opt-in
+offline descriptive helper for *new* task-level measurements. It requires an
+independently specified nonempty expected task-ID set, exactly one numeric
+observation per task in each arm, and explicit finite confidence, integer
+resample count (at least two) and integer seed. It rejects duplicate, omitted,
+substituted, malformed or nonfinite task measurements **before drawing samples**.
+It sorts the checked task IDs, computes candidate-minus-baseline differences,
+then resamples those **paired differences**, rather than independently
+resampling the two treatment arms. Consequently one-pass input generators and
+different input row orders yield the same seeded result. The return includes
+the paired descriptive summary, ordered task IDs, a method label and a
+deterministic percentile interval for the *mean paired difference*.
+
+A confidence interval produced by this helper is not an independently
+preregistered confirmatory test, and the caller's task manifest still requires
+separate provenance authentication. The helper is not used to recompute or
+replace the historically frozen designated-primary automated contrasts; the
+five-task pilot remains diagnostic, later retrospective sensitivities remain
+exploratory, and real blinded human ratings are not yet collected. Synthetic
+regression tests protect paired (not arm-independent) resampling, complete
+task coverage, deterministic ordering, and fail-closed configuration.
+
 ### Diagnostic derived-summary finiteness (prospective only)
 
 The general `logic.evaluation.aggregate_runs` summary and its complete-task

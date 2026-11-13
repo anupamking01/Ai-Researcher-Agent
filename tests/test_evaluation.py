@@ -10,6 +10,7 @@ from logic.evaluation import (
     deduplicate_sources,
     paired_metric_comparison,
     paired_metric_comparison_by_task,
+    paired_bootstrap_confidence_interval_by_task,
     population_stddev,
     safe_mean,
     safe_median,
@@ -897,3 +898,106 @@ def test_task_keyed_aggregate_preserves_finite_extreme_latency_dispersion():
 def test_deduplicate_sources_preserves_order():
     urls = [" https://example.com/a ", "https://example.com/b", "https://example.com/a", "", "https://example.com/c"]
     assert deduplicate_sources(urls) == ["https://example.com/a", "https://example.com/b", "https://example.com/c"]
+
+def test_task_keyed_bootstrap_resamples_complete_paired_differences():
+    # Exact dyadic deltas make the paired effect and its constant interval
+    # unambiguous without relying on live or historical outcome data.
+    result = paired_bootstrap_confidence_interval_by_task(
+        [("task-b", 0.5), ("task-a", 0.25)],
+        [("task-a", 0.5), ("task-b", 0.75)],
+        expected_task_ids=["task-b", "task-a"],
+        n_resamples=101,
+        seed=31,
+    )
+    assert result["task_ids"] == ["task-a", "task-b"]
+    assert result["n_pairs"] == 2
+    assert result["mean_delta"] == 0.25
+    assert result["wins"] == 2
+    assert result["bootstrap_method"] == "paired_percentile_mean_delta"
+    assert result["bootstrap_confidence_interval"] == {
+        "estimate": 0.25,
+        "lower": 0.25,
+        "upper": 0.25,
+        "confidence": 0.95,
+        "n_resamples": 101,
+    }
+
+
+def test_task_keyed_bootstrap_is_reproducible_across_generator_record_order():
+    baseline = [("c", 0.0), ("a", 0.0), ("b", 0.0)]
+    candidate = [("b", 0.5), ("c", -0.5), ("a", 1.0)]
+    first = paired_bootstrap_confidence_interval_by_task(
+        iter(baseline),
+        iter(candidate),
+        expected_task_ids=(task for task in ["c", "b", "a"]),
+        n_resamples=211,
+        confidence=0.9,
+        seed=29,
+    )
+    second = paired_bootstrap_confidence_interval_by_task(
+        iter(reversed(baseline)),
+        iter(reversed(candidate)),
+        expected_task_ids=(task for task in ["a", "c", "b"]),
+        n_resamples=211,
+        confidence=0.9,
+        seed=29,
+    )
+    assert first == second
+    assert first["task_ids"] == ["a", "b", "c"]
+    assert first["bootstrap_confidence_interval"]["estimate"] == first["mean_delta"]
+    assert -0.5 <= first["bootstrap_confidence_interval"]["lower"]
+    assert first["bootstrap_confidence_interval"]["upper"] <= 1.0
+
+
+@pytest.mark.parametrize(
+    ("baseline", "candidate", "expected", "message"),
+    [
+        ([("a", 0.0)], [("a", 0.5)], ["a", "b"], "coverage mismatch"),
+        ([("a", 0.0), ("b", 0.0)],
+         [("a", 0.5), ("x", 0.5)], ["a", "b"], "coverage mismatch"),
+        ([("a", 0.0), ("a", 0.0)],
+         [("a", 0.5)], ["a"], "duplicate baseline task_id"),
+        ([("a", 0.0)], [("a", 0.5)], ["a", "a"], "duplicate expected task_id"),
+        ([("a", True)], [("a", 0.5)], ["a"], "baseline metric"),
+        ([("a", 0.0)], [("a", "0.5")], ["a"], "candidate metric"),
+        ([("a", -1e308)], [("a", 1e308)], ["a"], "paired deltas"),
+    ],
+)
+def test_task_keyed_bootstrap_fails_closed_on_invalid_pairing(
+    baseline, candidate, expected, message
+):
+    with pytest.raises(ValueError, match=message):
+        paired_bootstrap_confidence_interval_by_task(
+            iter(baseline), iter(candidate),
+            expected_task_ids=expected, n_resamples=7, seed=0,
+        )
+
+
+@pytest.mark.parametrize("invalid", [0, 1, -1, True, 2.0, "50", None])
+def test_task_keyed_bootstrap_rejects_invalid_resample_count(invalid):
+    with pytest.raises(ValueError, match="n_resamples"):
+        paired_bootstrap_confidence_interval_by_task(
+            [("a", 0.0)], [("a", 1.0)],
+            expected_task_ids=["a"], n_resamples=invalid,
+        )
+
+
+@pytest.mark.parametrize("invalid", [True, None, 0.5, "1", [], {}])
+def test_task_keyed_bootstrap_requires_explicit_integer_seed(invalid):
+    with pytest.raises(ValueError, match="seed"):
+        paired_bootstrap_confidence_interval_by_task(
+            [("a", 0.0)], [("a", 1.0)],
+            expected_task_ids=["a"], seed=invalid,
+        )
+
+
+@pytest.mark.parametrize(
+    "invalid", [True, False, "0.95", None, float("nan"), float("inf"), 0, 1]
+)
+def test_task_keyed_bootstrap_rejects_invalid_confidence(invalid):
+    with pytest.raises(ValueError, match="confidence"):
+        paired_bootstrap_confidence_interval_by_task(
+            [("a", 0.0)], [("a", 1.0)],
+            expected_task_ids=["a"], confidence=invalid,
+        )
+

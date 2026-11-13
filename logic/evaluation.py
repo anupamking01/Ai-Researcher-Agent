@@ -402,6 +402,67 @@ def paired_metric_comparison_by_task(
     return {"task_ids": task_ids, **result}
 
 
+
+def paired_bootstrap_confidence_interval_by_task(
+    baseline: Iterable[tuple[str, float]],
+    candidate: Iterable[tuple[str, float]],
+    *,
+    expected_task_ids: Iterable[str],
+    confidence: float = 0.95,
+    n_resamples: int = 2000,
+    seed: int = 0,
+) -> dict:
+    """Bootstrap complete, task-matched candidate-minus-baseline differences.
+
+    Validate both arms against an independent expected task set *before*
+    drawing any samples. Re-sample the paired differences, never the arms
+    independently, and sort task IDs so input ordering cannot change seeded
+    resampling. This prospective diagnostic interval is descriptive only;
+    it does not replace the separately frozen main-study inference.
+    """
+    if type(n_resamples) is not int or n_resamples < 2:
+        raise ValueError("n_resamples must be an integer >= 2")
+    if type(seed) is not int:
+        raise ValueError("seed must be an integer")
+    if (
+        type(confidence) not in (int, float)
+        or not isfinite(confidence)
+        or not 0.0 < confidence < 1.0
+    ):
+        raise ValueError("confidence must be a finite number between 0 and 1")
+
+    # Retain one-pass inputs so both completeness validation and the
+    # subsequent resampling use exactly the same observations.
+    baseline_rows = list(baseline)
+    candidate_rows = list(candidate)
+    comparison = paired_metric_comparison_by_task(
+        baseline_rows,
+        candidate_rows,
+        expected_task_ids=expected_task_ids,
+    )
+    baseline_by_task = dict(baseline_rows)
+    candidate_by_task = dict(candidate_rows)
+    differences = [
+        _finite_float(
+            float(candidate_by_task[task_id]) - float(baseline_by_task[task_id]),
+            label="paired deltas",
+        )
+        for task_id in comparison["task_ids"]
+    ]
+    interval = bootstrap_confidence_interval(
+        differences,
+        statistic=safe_mean,
+        confidence=confidence,
+        n_resamples=n_resamples,
+        seed=seed,
+    )
+    return {
+        **comparison,
+        "bootstrap_method": "paired_percentile_mean_delta",
+        "bootstrap_confidence_interval": interval,
+    }
+
+
 def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
     """Aggregate run-level traces into experiment-level summary metrics.
 
