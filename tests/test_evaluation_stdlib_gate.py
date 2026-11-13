@@ -13,6 +13,7 @@ from logic.evaluation import (
     MAX_DIAGNOSTIC_REFERENCE_TASKS,
     aggregate_runs_by_task,
     paired_bootstrap_confidence_interval_by_task,
+    paired_metric_comparison_by_task,
     paired_run_trace_bootstrap_by_task,
 )
 
@@ -75,6 +76,25 @@ class DependencyFreeEvaluationGate(unittest.TestCase):
     def test_unending_trace_stream_is_bounded_by_task_manifest(self):
         with self.assertRaisesRegex(ValueError, "more records"):
             compare(repeat(make_trace("D3", "task-a")), iter(()))
+
+    def test_numeric_pairing_rejects_first_unplanned_task_before_other_arm(self):
+        reads = {"baseline": 0, "candidate": 0}
+
+        def baseline():
+            reads["baseline"] += 1
+            yield ("unplanned-task", float("nan"))
+            raise AssertionError("off-manifest observation must not be read ahead")
+
+        def candidate():
+            reads["candidate"] += 1
+            raise AssertionError("bad baseline must not read candidate")
+            yield (TASKS[0], 1.0)
+
+        with self.assertRaisesRegex(ValueError, "baseline task coverage mismatch"):
+            paired_metric_comparison_by_task(
+                baseline(), candidate(), expected_task_ids=TASKS,
+            )
+        self.assertEqual(reads, {"baseline": 1, "candidate": 0})
 
     def test_failed_zero_source_task_remains_in_denominator(self):
         records = [make_trace("D3", "task-a", completed=False),

@@ -430,9 +430,10 @@ def _index_complete_task_metrics(
 ) -> dict[str, float]:
     """Validate one one-pass task arm with bounded memory and early failure.
 
-    No stream can contribute more unique records than the independent frozen
-    reference. A duplicate fails immediately; an extra distinct record fails
-    on the first excess observation instead of exhausting an unbounded source.
+    Reject any off-manifest task immediately, before evaluating its metric or
+    reading another record. A duplicate also fails on its first occurrence.
+    This bounds even an unending producer by the independent task reference
+    and prevents an unrelated later metric error from hiding task substitution.
     """
     indexed: dict[str, float] = {}
     for record in records:
@@ -443,16 +444,13 @@ def _index_complete_task_metrics(
             raise ValueError(f"{label} task_id must be a nonempty, unpadded string")
         if task_id in indexed:
             raise ValueError(f"duplicate {label} task_id: {task_id!r}")
+        if task_id not in expected_task_ids:
+            raise ValueError(
+                f"{label} task coverage mismatch: unexpected={task_id!r}"
+            )
         if type(value) not in (int, float):
             raise ValueError(f"{label} metric must be a finite number")
         indexed[task_id] = _finite_float(value, label=f"{label} metric")
-        if len(indexed) > len(expected_task_ids):
-            missing = sorted(expected_task_ids - indexed.keys())
-            unexpected = sorted(indexed.keys() - expected_task_ids)
-            raise ValueError(
-                f"{label} task coverage mismatch: "
-                f"missing={missing!r}, unexpected={unexpected!r}"
-            )
     missing = sorted(expected_task_ids - indexed.keys())
     unexpected = sorted(indexed.keys() - expected_task_ids)
     if missing or unexpected:

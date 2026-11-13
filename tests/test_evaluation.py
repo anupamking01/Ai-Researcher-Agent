@@ -1654,7 +1654,7 @@ def test_task_keyed_comparators_bound_unending_baseline_before_candidate(compara
 
     with pytest.raises(ValueError, match="baseline task coverage mismatch"):
         comparator(baseline(), candidate(), expected_task_ids=["a", "b"])
-    assert reads == {"baseline": 3, "candidate": 0}
+    assert reads == {"baseline": 1, "candidate": 0}
 
 
 @pytest.mark.parametrize(
@@ -1680,7 +1680,38 @@ def test_task_keyed_comparators_bound_unending_candidate_after_valid_baseline(
             candidate(),
             expected_task_ids=["a", "b"],
         )
-    assert reads == 3
+    assert reads == 1
+
+
+@pytest.mark.parametrize(
+    "comparator",
+    [paired_metric_comparison_by_task, paired_bootstrap_confidence_interval_by_task],
+)
+@pytest.mark.parametrize("bad_arm", ["baseline", "candidate"])
+def test_task_keyed_comparators_reject_first_unplanned_id_before_invalid_metric(
+    comparator, bad_arm,
+):
+    """A substituted ID, not a later corrupt metric, is the first error."""
+    reads = {"unexpected": 0, "opposite": 0}
+
+    def substituted():
+        reads["unexpected"] += 1
+        yield ("unplanned-task", float("nan"))
+        raise AssertionError("off-manifest stream must not advance past first record")
+
+    def valid():
+        reads["opposite"] += 1
+        yield ("a", 0.0)
+        yield ("b", 0.0)
+
+    baseline, candidate = (
+        (substituted(), valid()) if bad_arm == "baseline"
+        else (valid(), substituted())
+    )
+    with pytest.raises(ValueError, match=f"{bad_arm} task coverage mismatch: unexpected"):
+        comparator(baseline, candidate, expected_task_ids=["a", "b"])
+    assert reads["unexpected"] == 1
+    assert reads["opposite"] == (0 if bad_arm == "baseline" else 1)
 
 
 def test_task_keyed_bootstrap_invalid_baseline_does_not_touch_candidate():

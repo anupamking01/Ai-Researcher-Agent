@@ -13,11 +13,12 @@ Human quality ratings are **not yet results**. They remain pending and must be c
 
 Both `paired_metric_comparison_by_task` and
 `paired_bootstrap_confidence_interval_by_task` now validate one arm at a time
-against the independently supplied complete task-ID manifest. A repeated task
-fails immediately; a stream yielding more distinct task records than declared
-fails on its first excess observation (**at most N+1 records examined per
-arm**). An invalid baseline is rejected before consuming the candidate
-iterator. Previously, the paired-bootstrap wrapper eagerly materialized both
+against the independently supplied complete task-ID manifest. A duplicate
+or off-manifest task fails on its **first offending record** (including an
+unknown ID with an invalid numeric metric), before later observations can mask
+task substitution. Finite task references also bound each arm to at most
+N+1 reads even for a never-ending source. An invalid baseline is rejected
+before consuming the candidate iterator. Previously, the paired-bootstrap wrapper eagerly materialized both
 arms using unbounded `list(...)` calls, so a nonterminating stream could exhaust
 memory or mask a baseline error behind unrelated candidate behavior.
 
@@ -25,7 +26,9 @@ The two helpers retain one-pass input support, original task-order-invariant
 pairing, seeded interval calculations, finite-metric requirements, complete
 failed-task inclusion where represented in the caller's measurements, and the
 same output schemas for valid inputs. Synthetic regressions cover infinite
-streams, baseline-first failure, and deterministic compatible results.
+streams, immediate unknown-task rejection and baseline-first failure,
+and deterministic compatible results. The dependency-free CI gate also checks
+this failure boundary before installing test dependencies.
 The independently supplied reference itself must still be finite and trustworthy;
 this is bounded in-memory **prospective diagnostic** analysis, not
 authentication of historical source custody, a revised frozen automated
