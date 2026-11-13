@@ -24,6 +24,24 @@ automated analysis retains the post-collection plan qualification; exploratory
 bounds and future human validation remain separate.
 
 
+## Fail closed on pruned or unexpectedly passing test suites (13 November 2026)
+
+A zero-exit pytest summary can still include **deselected** tests (for example,
+from an accidental `-k`/marker filter) or **xpassed** tests (a regression
+marked as expected to fail unexpectedly passed). The full and targeted
+source-bound CI receipt producer now refuses to issue a green receipt when
+either count is positive; independent receipt replay enforces the same
+policy, even for a coherently rehashed old-style receipt. Synthetic tests
+cover both green-looking cases. Legitimate `skipped` and `xfailed` cases
+remain explicitly recorded in `test_counts` for review; they are not passed
+cases. The GitHub workflow's actual conclusion remains a separate requirement.
+
+This blocks **observably pruned/unexpected** pytest runs, not a suite whose
+tests were silently omitted before collection, forged logs, or hidden skips.
+It does not prove total source-test completeness or attest the runner,
+historical treatment custody, automated results, or blinded human ratings.
+No treatment, evaluator, experimental outcome, or human rating was changed.
+
 ## Replaying retained CI evidence after download
 
 The companion **offline consumer** `scripts/verify_retained_ci_test_evidence.py`

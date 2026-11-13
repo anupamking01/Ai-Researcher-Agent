@@ -72,6 +72,13 @@ def build_receipt(log: bytes, *, context: dict[str, str],
     if any(label not in {"passed", "skipped", "xfailed", "xpassed",
                          "warnings", "deselected"} for label in parsed):
         raise ValueError("unsupported offline test result category")
+    # A zero-exit pytest run can still hide narrowed test collection or an
+    # unexpectedly passing known-failure case. Neither is complete validation
+    # of the source-bound CI test scope, even with a green pytest summary.
+    if parsed.get("deselected", 0):
+        raise ValueError("deselected tests cannot produce a complete CI test receipt")
+    if parsed.get("xpassed", 0):
+        raise ValueError("unexpectedly passing tests cannot produce a CI test receipt")
     if not re.fullmatch(r"[0-9a-f]{40}", checkout_sha):
         raise ValueError("invalid checked-out commit identity")
     if any(not context.get(key) for key in REQUIRED_ENV):

@@ -62,6 +62,28 @@ def test_wrong_run_identity_cannot_issue_receipt(change):
         )
 
 
+@pytest.mark.parametrize("summary,reason", [
+    ("1 passed, 9 deselected in 0.02s", "deselected"),
+    ("1 passed, 1 xpassed in 0.02s", "unexpectedly passing"),
+])
+def test_green_pytest_with_pruned_collection_or_xpass_is_not_certified(summary, reason):
+    with pytest.raises(ValueError, match=reason):
+        evidence.build_receipt(
+            _log(summary), context=CONTEXT, checkout_sha=SHA,
+            dependency_bytes=DEPS,
+        )
+
+
+def test_explicit_expected_skips_and_xfails_remain_visible_not_hidden():
+    receipt = evidence.build_receipt(
+        _log("5 passed, 2 skipped, 1 xfailed in 0.02s"),
+        context=CONTEXT, checkout_sha=SHA, dependency_bytes=DEPS,
+    )
+    assert receipt["test_counts"] == {
+        "passed": 5, "skipped": 2, "xfailed": 1,
+    }
+
+
 def test_missing_dependency_pin_fails_closed():
     with pytest.raises(ValueError):
         evidence.build_receipt(

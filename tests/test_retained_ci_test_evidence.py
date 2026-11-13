@@ -1,4 +1,5 @@
 """Synthetic-only tamper tests for downloaded offline test-evidence pairs."""
+import hashlib
 import json
 
 import pytest
@@ -37,6 +38,21 @@ def _verify(log=LOG, receipt=None, *, deps=DEPS, sha=SHA, run_id=RUN_ID,
         checkout_sha=sha, run_id=run_id, run_attempt=attempt, event=event,
         dependency_bytes=deps,
     )
+
+
+@pytest.mark.parametrize("summary,label", [
+    ("7 passed, 2 deselected in 0.23s", "deselected"),
+    ("7 passed, 1 xpassed in 0.23s", "xpassed"),
+])
+def test_replay_rejects_coherently_rehashed_pruned_or_xpassed_receipts(summary, label):
+    changed_log = (producer.FIREWALL_MARKER + "\n" + summary + "\n").encode()
+    forged = json.loads(_receipt())
+    forged["test_counts"] = {"passed": 7, label: 2 if label == "deselected" else 1}
+    forged["log_bytes"] = len(changed_log)
+    forged["log_sha256"] = hashlib.sha256(changed_log).hexdigest()
+    forged_bytes = (json.dumps(forged, sort_keys=True, indent=2) + "\n").encode()
+    with pytest.raises(ValueError, match="deselected|unexpectedly passing"):
+        _verify(log=changed_log, receipt=forged_bytes)
 
 
 def test_unchanged_source_bound_receipt_replays():
