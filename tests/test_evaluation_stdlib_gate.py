@@ -212,5 +212,41 @@ class DependencyFreeEvaluationGate(unittest.TestCase):
             with self.assertRaises(ValueError):
                 build_receipt(log, **kwargs)
 
+    def test_unbounded_planned_settings_fail_before_observation_reads(self):
+        class InfiniteFields(dict):
+            def __init__(self):
+                self.reads = 0
+
+            def items(self):
+                fields = {
+                    "planning_mode": "direct", "verification_mode": "off",
+                    "source_budget": 3, "smart_model": "smart",
+                    "fast_model": "fast", "temperature": 0.0,
+                }
+                for key, value in fields.items():
+                    self.reads += 1
+                    yield key, value
+                while True:
+                    self.reads += 1
+                    yield "unexpected-field", 0
+
+        plan = InfiniteFields()
+        observed = 0
+
+        def forbidden_runs():
+            nonlocal observed
+            observed += 1
+            raise AssertionError("malformed plan cannot read runs")
+            yield make_trace("D3", TASKS[0])
+
+        with self.assertRaisesRegex(ValueError, "exactly six"):
+            aggregate_runs_by_task(
+                forbidden_runs(), variant_id="D3", task_set_id=TASK_SET,
+                expected_task_ids=TASKS, expected_treatment_settings=plan,
+            )
+        self.assertEqual(plan.reads, 7)
+        self.assertEqual(observed, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

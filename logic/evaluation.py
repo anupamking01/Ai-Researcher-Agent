@@ -615,13 +615,42 @@ _TREATMENT_FIELDS = (
 )
 
 
+def _snapshot_exact_planned_mapping(
+    supplied: Mapping[str, object],
+    *,
+    expected_keys: set[str],
+    label: str,
+    requirement: str,
+) -> dict[str, object]:
+    """Bound independent plan input even for custom one-pass Mapping.items().
+
+    An unexpected or repeated key fails immediately; at most N+1 entries
+    can be inspected for N expected keys, before any observed treatment run.
+    This is a prospective diagnostic guard, not archival authentication.
+    """
+    if not isinstance(supplied, Mapping):
+        raise ValueError(f"{label} must be a mapping")
+    snapshot: dict[str, object] = {}
+    for key, value in supplied.items():
+        if type(key) is not str or key not in expected_keys or key in snapshot:
+            raise ValueError(
+                f"{label} must declare {requirement}; "
+                "duplicate or unexpected configuration key"
+            )
+        snapshot[key] = value
+    if set(snapshot) != expected_keys:
+        raise ValueError(f"{label} must declare {requirement}")
+    return snapshot
+
+
 def _validated_treatment_settings(settings: Mapping[str, object]) -> dict[str, object]:
     """Capture the independently planned treatment settings before trace reads."""
-    if not isinstance(settings, Mapping):
-        raise ValueError("expected_treatment_settings must be a mapping")
-    planned = dict(settings.items())
-    if set(planned) != set(_TREATMENT_FIELDS):
-        raise ValueError("expected_treatment_settings must declare exactly six fields")
+    planned = _snapshot_exact_planned_mapping(
+        settings,
+        expected_keys=set(_TREATMENT_FIELDS),
+        label="expected_treatment_settings",
+        requirement="exactly six fields",
+    )
     for field in ("planning_mode", "verification_mode", "smart_model", "fast_model"):
         value = planned[field]
         if (
@@ -793,15 +822,14 @@ def paired_run_trace_bootstrap_by_task(
     if expected_treatment_settings_by_variant is not None:
         if not isinstance(expected_treatment_settings_by_variant, Mapping):
             raise ValueError("expected_treatment_settings_by_variant must be a mapping")
-        raw_configs = dict(expected_treatment_settings_by_variant.items())
-        if (
-            type(baseline_variant_id) is not str
-            or type(candidate_variant_id) is not str
-            or set(raw_configs) != {baseline_variant_id, candidate_variant_id}
-        ):
-            raise ValueError(
-                "expected_treatment_settings_by_variant must cover exactly both variants"
-            )
+        if type(baseline_variant_id) is not str or type(candidate_variant_id) is not str:
+            raise ValueError("expected_treatment_settings_by_variant requires string variant IDs")
+        raw_configs = _snapshot_exact_planned_mapping(
+            expected_treatment_settings_by_variant,
+            expected_keys={baseline_variant_id, candidate_variant_id},
+            label="expected_treatment_settings_by_variant",
+            requirement="exactly both variants",
+        )
         # Validate both independent plans before consuming any observed trace.
         configs = {
             variant: _validated_treatment_settings(raw_configs[variant])

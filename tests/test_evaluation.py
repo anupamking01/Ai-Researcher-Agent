@@ -1795,3 +1795,96 @@ def test_independent_question_mapping_still_accepts_complete_one_pass_reference(
     )
     assert task_ids == ["task-a", "task-b"]
     assert questions == {"task-b": "Question B?", "task-a": "Question A?"}
+
+
+# Independent planned settings are prospective diagnostic inputs, not observed data.
+def test_unbounded_planned_fields_fail_at_seventh_entry_without_trace_reads():
+    class InfiniteFields(dict):
+        def __init__(self):
+            self.reads = 0
+
+        def items(self):
+            for field, value in _PLANNED["D3"].items():
+                self.reads += 1
+                yield field, value
+            index = 0
+            while True:
+                self.reads += 1
+                yield f"extra-field-{index}", index
+                index += 1
+
+    plan = InfiniteFields()
+    observed = 0
+
+    def forbidden_runs():
+        nonlocal observed
+        observed += 1
+        raise AssertionError("invalid plan cannot consume treatment records")
+        yield _planned_trace("a", "D3")
+
+    with pytest.raises(ValueError, match="expected_treatment_settings.*exactly six"):
+        aggregate_runs_by_task(
+            forbidden_runs(), variant_id="D3", task_set_id="prospective-paired",
+            expected_task_ids=["a"], expected_treatment_settings=plan,
+        )
+    assert plan.reads == 7
+    assert observed == 0
+
+
+def test_unbounded_planned_variants_fail_at_third_entry_without_arm_reads():
+    class InfiniteVariants(dict):
+        def __init__(self):
+            self.reads = 0
+
+        def items(self):
+            for variant, fields in _PLANNED.items():
+                self.reads += 1
+                yield variant, fields
+            index = 0
+            while True:
+                self.reads += 1
+                yield f"extra-variant-{index}", _PLANNED["D3"]
+                index += 1
+
+    plans = InfiniteVariants()
+    observed = 0
+
+    def forbidden_runs():
+        nonlocal observed
+        observed += 1
+        raise AssertionError("invalid plan cannot consume either treatment arm")
+        yield _planned_trace("a", "D3")
+
+    with pytest.raises(ValueError, match="expected_treatment_settings_by_variant.*exactly both"):
+        _compare_paired_traces(
+            forbidden_runs(), forbidden_runs(),
+            expected_treatment_settings_by_variant=plans,
+        )
+    assert plans.reads == 3
+    assert observed == 0
+
+
+def test_valid_one_pass_planned_mappings_preserve_seeded_paired_result():
+    class OnePassMapping(dict):
+        def __init__(self, source):
+            super().__init__()
+            self.source = source
+            self.used = False
+
+        def items(self):
+            if self.used:
+                raise AssertionError("planned source read more than once")
+            self.used = True
+            yield from self.source.items()
+
+    baseline = [_planned_trace("a", "D3"), _planned_trace("b", "D3")]
+    candidate = [_planned_trace("a", "D6"), _planned_trace("b", "D6")]
+    control = _compare_paired_traces(
+        baseline, candidate, expected_treatment_settings_by_variant=_PLANNED
+    )
+    nested = {variant: OnePassMapping(fields) for variant, fields in _PLANNED.items()}
+    actual = _compare_paired_traces(
+        iter(baseline), iter(candidate),
+        expected_treatment_settings_by_variant=OnePassMapping(nested),
+    )
+    assert actual == control

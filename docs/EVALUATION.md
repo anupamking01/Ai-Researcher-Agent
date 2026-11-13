@@ -1256,3 +1256,29 @@ preregistration, automated-evaluator comparability or human evaluation.
 The five-task pilot remains diagnostic, designated-primary automated analysis
 retains its post-collection-plan and fixed-order qualifications, historical
 measurement sensitivity is exploratory, and blinded human ratings are pending.
+
+
+## Bounded independent treatment-plan references (13 November 2026)
+
+Prospective task-keyed diagnostics optionally validate independent six-field
+treatment settings and an exact two-variant configuration map. Previously these
+preflight paths used unbounded `dict(mapping.items())`: a custom
+`Mapping.items()` producer that never terminates could hang before reading
+any treatment observations, even though task/question references and observed
+streams were already guarded.
+
+Both planned-setting sources now validate every yielded key before storage,
+reject duplicate or unexpected keys immediately, and refuse incomplete
+coverage. A six-field mapping consumes at most seven entries; a two-variant
+mapping at most three. Valid one-pass sources retain the same configuration
+checks, seeded comparisons and output schema. Synthetic full-suite and
+dependency-free early CI regressions check finite reads and no treatment-arm
+consumption with malformed plans.
+
+This is a local resource/provenance safeguard, not independent evidence of
+historical experiment custody or prospective preregistration. It does not
+change frozen automated results, the original treatments or the evaluator.
+The pilot remains diagnostic; designated-primary automated comparisons retain
+post-collection analysis-plan, fixed-order and evaluator-comparability
+limitations; retrospective sensitivity remains exploratory and genuine
+blinded human validation remains pending.
