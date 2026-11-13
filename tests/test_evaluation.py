@@ -858,6 +858,58 @@ def test_task_aggregate_accepts_one_pass_generators_and_zero_source_failures():
 
 
 
+
+def test_task_aggregate_rejects_unbounded_distinct_stream_on_first_unknown_task():
+    reads = []
+
+    def stream():
+        index = 0
+        while True:
+            reads.append(index)
+            yield _task_aggregate_trace(f"unexpected-{index}")
+            index += 1
+
+    with pytest.raises(ValueError, match="task coverage mismatch"):
+        aggregate_runs_by_task(
+            stream(), variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=(task for task in ("a", "b")),
+        )
+    assert reads == [0]
+
+
+def test_task_aggregate_rejects_unbounded_duplicate_stream_without_read_ahead():
+    reads = []
+
+    def stream():
+        while True:
+            reads.append(len(reads))
+            yield _task_aggregate_trace("a")
+
+    with pytest.raises(ValueError, match="duplicate observed task_id"):
+        aggregate_runs_by_task(
+            stream(), variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=["a", "b"],
+        )
+    assert reads == [0, 1]
+
+
+def test_task_aggregate_rejects_extra_after_complete_arm_without_read_ahead():
+    reads = []
+
+    def stream():
+        for task_id in ("b", "a", "extra"):
+            reads.append(task_id)
+            yield _task_aggregate_trace(task_id)
+        raise AssertionError("unexpected extra source read")
+
+    with pytest.raises(ValueError, match="task coverage mismatch"):
+        aggregate_runs_by_task(
+            stream(), variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=["a", "b"],
+        )
+    assert reads == ["b", "a", "extra"]
+
+
 def test_task_aggregate_question_manifest_rejects_swapped_questions():
     """Task IDs alone cannot detect the correct prompt attached to wrong runs."""
     questions = {"a": "What is evidence A?", "b": "Why is B different?"}

@@ -683,6 +683,13 @@ def aggregate_runs_by_task(
             raise ValueError(f"variant_id mismatch for task {task_id!r}")
         if trace.task_set_id != task_set_id:
             raise ValueError(f"task_set_id mismatch for task {task_id!r}")
+        # The independent manifest bounds observed task identities. Reject a
+        # substituted/extra task immediately, before an unbounded source can
+        # keep producing distinct unexpected traces.
+        if task_id not in expected:
+            raise ValueError(
+                f"task coverage mismatch: unexpected observed task_id {task_id!r}"
+            )
         if expected_config is not None:
             for field, planned_value in expected_config.items():
                 if getattr(trace, field) != planned_value:

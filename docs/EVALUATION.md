@@ -243,6 +243,17 @@ cases; it sorts by task identifier before reusing the existing
 accumulation order. The returned summary includes the exact task IDs and
 treatment/task-set identity to support a checkable descriptive coverage claim.
 
+The direct aggregation helper now also rejects an unexpected observed task ID
+**on its first occurrence**, rather than retaining arbitrary new task IDs until
+an unbounded iterator finishes. Duplicate task IDs already fail immediately.
+With a finite independent reference of N tasks, at most N+1 observation records
+can be read even from a never-ending generator. Synthetic tests exercise
+unbounded distinct and duplicate producers, as well as an excess record after
+a complete task arm. Valid one-pass traces, failed/zero-source tasks, and
+descriptive outputs are unchanged. The caller must still supply a finite,
+independently authenticated reference; this is a prospective diagnostic
+memory/coverage safeguard, not archival proof or revised frozen inference.
+
 For an additional prospective **task-text identity** check, callers can
 supply `expected_questions_by_task` as an independent mapping from the frozen
 task manifest (in addition to `expected_task_ids`). The optional gate requires
