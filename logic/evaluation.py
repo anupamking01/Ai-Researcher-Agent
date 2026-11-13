@@ -402,66 +402,72 @@ def _validated_reference_task_manifest(
     return sorted(expected), questions_by_task
 
 
+def _index_complete_task_metrics(
+    records: Iterable[tuple[str, float]],
+    *,
+    label: str,
+    expected_task_ids: set[str],
+) -> dict[str, float]:
+    """Validate one one-pass task arm with bounded memory and early failure.
+
+    No stream can contribute more unique records than the independent frozen
+    reference. A duplicate fails immediately; an extra distinct record fails
+    on the first excess observation instead of exhausting an unbounded source.
+    """
+    indexed: dict[str, float] = {}
+    for record in records:
+        if not isinstance(record, (tuple, list)) or len(record) != 2:
+            raise ValueError(f"{label} records must be (task_id, metric) pairs")
+        task_id, value = record
+        if type(task_id) is not str or not task_id or task_id.strip() != task_id:
+            raise ValueError(f"{label} task_id must be a nonempty, unpadded string")
+        if task_id in indexed:
+            raise ValueError(f"duplicate {label} task_id: {task_id!r}")
+        if type(value) not in (int, float):
+            raise ValueError(f"{label} metric must be a finite number")
+        indexed[task_id] = _finite_float(value, label=f"{label} metric")
+        if len(indexed) > len(expected_task_ids):
+            missing = sorted(expected_task_ids - indexed.keys())
+            unexpected = sorted(indexed.keys() - expected_task_ids)
+            raise ValueError(
+                f"{label} task coverage mismatch: "
+                f"missing={missing!r}, unexpected={unexpected!r}"
+            )
+    missing = sorted(expected_task_ids - indexed.keys())
+    unexpected = sorted(indexed.keys() - expected_task_ids)
+    if missing or unexpected:
+        raise ValueError(
+            f"{label} task coverage mismatch: "
+            f"missing={missing!r}, unexpected={unexpected!r}"
+        )
+    return indexed
+
+
 def paired_metric_comparison_by_task(
     baseline: Iterable[tuple[str, float]],
     candidate: Iterable[tuple[str, float]],
     *,
     expected_task_ids: Iterable[str],
 ) -> dict:
-    """Descriptively compare complete, explicitly task-keyed metric records.
+    """Descriptively compare task-keyed numeric metrics with complete coverage.
 
-    Unlike positional pairing, this refuses duplicate IDs, cross-arm task
-    substitution, and jointly omitted tasks relative to the caller's
-    independently defined expected set. Sorting the validated keys makes
-    floating-point accumulation reproducible under record reordering.
-
-    This is a diagnostic helper, not the frozen main-study inference path.
-    Its coverage check is only as trustworthy as the provided task manifest.
+    Validate each arm against an independent reference before reading the next
+    arm, including on one-pass or unbounded sources. Sorting task IDs preserves
+    deterministic accumulation. This remains prospective diagnostic analysis.
     """
-    def valid_id(value: str, label: str) -> str:
-        if type(value) is not str or not value or value.strip() != value:
-            raise ValueError(f"{label} task_id must be a nonempty, unpadded string")
-        return value
-
     task_ids, _ = _validated_reference_task_manifest(expected_task_ids)
     expected = set(task_ids)
-
-    def index_records(
-        records: Iterable[tuple[str, float]], label: str
-    ) -> dict[str, float]:
-        indexed: dict[str, float] = {}
-        for record in records:
-            if not isinstance(record, (tuple, list)) or len(record) != 2:
-                raise ValueError(f"{label} records must be (task_id, metric) pairs")
-            task_id, value = record
-            task_id = valid_id(task_id, label)
-            if task_id in indexed:
-                raise ValueError(f"duplicate {label} task_id: {task_id!r}")
-            if type(value) not in (int, float):
-                raise ValueError(f"{label} metric must be a finite number")
-            try:
-                indexed[task_id] = _finite_float(
-                    value, label=f"{label} metric"
-                )
-            except OverflowError as exc:
-                raise ValueError(f"{label} metric must be a finite number") from exc
-        missing = sorted(expected - indexed.keys())
-        unexpected = sorted(indexed.keys() - expected)
-        if missing or unexpected:
-            raise ValueError(
-                f"{label} task coverage mismatch: "
-                f"missing={missing!r}, unexpected={unexpected!r}"
-            )
-        return indexed
-
-    baseline_by_task = index_records(baseline, "baseline")
-    candidate_by_task = index_records(candidate, "candidate")
+    baseline_by_task = _index_complete_task_metrics(
+        baseline, label="baseline", expected_task_ids=expected
+    )
+    candidate_by_task = _index_complete_task_metrics(
+        candidate, label="candidate", expected_task_ids=expected
+    )
     result = paired_metric_comparison(
         [baseline_by_task[task_id] for task_id in task_ids],
         [candidate_by_task[task_id] for task_id in task_ids],
     )
     return {"task_ids": task_ids, **result}
-
 
 
 def paired_bootstrap_confidence_interval_by_task(
@@ -484,23 +490,26 @@ def paired_bootstrap_confidence_interval_by_task(
     _validate_bootstrap_settings(confidence, n_resamples, seed)
     task_ids, _ = _validated_reference_task_manifest(expected_task_ids)
 
-    # Retain one-pass inputs so both completeness validation and the
-    # subsequent resampling use exactly the same observations.
-    baseline_rows = list(baseline)
-    candidate_rows = list(candidate)
-    comparison = paired_metric_comparison_by_task(
-        baseline_rows,
-        candidate_rows,
-        expected_task_ids=task_ids,
+    # Index one arm at a time against the independent reference. This
+    # prevents unbounded list(...) reads and rejects a malformed baseline
+    # before consuming any candidate records. One-pass iterators stay valid.
+    expected = set(task_ids)
+    baseline_by_task = _index_complete_task_metrics(
+        baseline, label="baseline", expected_task_ids=expected
     )
-    baseline_by_task = dict(baseline_rows)
-    candidate_by_task = dict(candidate_rows)
+    candidate_by_task = _index_complete_task_metrics(
+        candidate, label="candidate", expected_task_ids=expected
+    )
+    comparison = paired_metric_comparison(
+        [baseline_by_task[task_id] for task_id in task_ids],
+        [candidate_by_task[task_id] for task_id in task_ids],
+    )
     differences = [
         _finite_float(
-            float(candidate_by_task[task_id]) - float(baseline_by_task[task_id]),
+            candidate_by_task[task_id] - baseline_by_task[task_id],
             label="paired deltas",
         )
-        for task_id in comparison["task_ids"]
+        for task_id in task_ids
     ]
     interval = bootstrap_confidence_interval(
         differences,
@@ -510,6 +519,7 @@ def paired_bootstrap_confidence_interval_by_task(
         seed=seed,
     )
     return {
+        "task_ids": task_ids,
         **comparison,
         "bootstrap_method": "paired_percentile_mean_delta",
         "bootstrap_confidence_interval": interval,

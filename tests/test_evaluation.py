@@ -1575,3 +1575,88 @@ def test_run_trace_pairing_rejects_bad_baseline_before_candidate_read():
     ]
     with pytest.raises(ValueError, match="variant_id mismatch"):
         _compare_paired_traces(iter(baseline), unread_candidate())
+
+
+
+# Prospective-only: bounded one-pass task-keyed numeric comparators. All data
+# below are synthetic; none represent historical or human-evaluation scores.
+@pytest.mark.parametrize(
+    "comparator",
+    [paired_metric_comparison_by_task, paired_bootstrap_confidence_interval_by_task],
+)
+def test_task_keyed_comparators_bound_unending_baseline_before_candidate(comparator):
+    reads = {"baseline": 0, "candidate": 0}
+
+    def baseline():
+        index = 0
+        while True:
+            reads["baseline"] += 1
+            yield (f"extra-{index}", 0.0)
+            index += 1
+
+    def candidate():
+        reads["candidate"] += 1
+        yield ("a", 1.0)
+
+    with pytest.raises(ValueError, match="baseline task coverage mismatch"):
+        comparator(baseline(), candidate(), expected_task_ids=["a", "b"])
+    assert reads == {"baseline": 3, "candidate": 0}
+
+
+@pytest.mark.parametrize(
+    "comparator",
+    [paired_metric_comparison_by_task, paired_bootstrap_confidence_interval_by_task],
+)
+def test_task_keyed_comparators_bound_unending_candidate_after_valid_baseline(
+    comparator,
+):
+    reads = 0
+
+    def candidate():
+        nonlocal reads
+        index = 0
+        while True:
+            reads += 1
+            yield (f"extra-{index}", 1.0)
+            index += 1
+
+    with pytest.raises(ValueError, match="candidate task coverage mismatch"):
+        comparator(
+            [("a", 0.0), ("b", 0.0)],
+            candidate(),
+            expected_task_ids=["a", "b"],
+        )
+    assert reads == 3
+
+
+def test_task_keyed_bootstrap_invalid_baseline_does_not_touch_candidate():
+    def candidate():
+        raise AssertionError("candidate must not be read on bad baseline")
+        yield ("a", 1.0)
+
+    with pytest.raises(ValueError, match="baseline task coverage mismatch"):
+        paired_bootstrap_confidence_interval_by_task(
+            [("a", 0.0)],
+            candidate(),
+            expected_task_ids=["a", "b"],
+        )
+
+
+def test_task_keyed_bootstrap_one_pass_compatibility_remains_seeded():
+    def arm(rows):
+        yield from rows
+
+    params = dict(expected_task_ids=["a", "b"], seed=17, n_resamples=19)
+    first = paired_bootstrap_confidence_interval_by_task(
+        arm([("b", 0.5), ("a", 0.25)]),
+        arm([("a", 0.5), ("b", 0.75)]),
+        **params,
+    )
+    second = paired_bootstrap_confidence_interval_by_task(
+        arm([("a", 0.25), ("b", 0.5)]),
+        arm([("b", 0.75), ("a", 0.5)]),
+        **params,
+    )
+    assert first == second
+    assert first["mean_delta"] == 0.25
+    assert first["bootstrap_confidence_interval"]["estimate"] == 0.25
