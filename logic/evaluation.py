@@ -7,6 +7,7 @@ benchmark results; it only defines metrics and aggregation utilities.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from math import floor, fsum, isfinite, sqrt
 from random import Random
@@ -537,6 +538,7 @@ def aggregate_runs_by_task(
     variant_id: str,
     task_set_id: str,
     expected_task_ids: Iterable[str],
+    expected_questions_by_task: Mapping[str, str] | None = None,
 ) -> dict:
     """Aggregate one complete diagnostic treatment arm against a task manifest.
 
@@ -545,9 +547,13 @@ def aggregate_runs_by_task(
     Unlike generic aggregate_runs, this opt-in helper rejects dropped tasks,
     duplicate attempts, run-ID reuse, and accidental cross-arm pooling. Failed
     runs remain in the denominator. Sorting by task ID makes sums reproducible
-    if input records arrive in different orders.
+    if input records arrive in different orders. An optional independently
+    sourced task-ID-to-question mapping rejects traces mislabeled with the
+    correct task ID but the wrong research question, including cross-task
+    question swaps that task-ID coverage alone cannot detect.
 
-    This does not change the separately frozen main-study analysis.
+    This does not authenticate the provided manifest or the trace's original
+    source bytes, or change the separately frozen main-study analysis.
     """
     def valid_identifier(value: str, label: str) -> str:
         if (
@@ -570,6 +576,27 @@ def aggregate_runs_by_task(
         expected.add(task_id)
     if not expected:
         raise ValueError("expected_task_ids must not be empty")
+
+    # Take one stable local snapshot of the caller's independent question
+    # manifest. Do not guess questions from the traces under examination.
+    questions_by_task: dict[str, str] | None = None
+    if expected_questions_by_task is not None:
+        if not isinstance(expected_questions_by_task, Mapping):
+            raise ValueError("expected_questions_by_task must be a mapping")
+        questions_by_task = {}
+        for task_id, question in expected_questions_by_task.items():
+            task_id = valid_identifier(task_id, "expected question task_id")
+            if type(question) is not str or not question.strip():
+                raise ValueError("expected task question must be nonempty text")
+            questions_by_task[task_id] = question
+        missing_questions = sorted(expected - questions_by_task.keys())
+        unexpected_questions = sorted(questions_by_task.keys() - expected)
+        if missing_questions or unexpected_questions:
+            raise ValueError(
+                "expected task question coverage mismatch: "
+                f"missing={missing_questions!r}, "
+                f"unexpected={unexpected_questions!r}"
+            )
 
     by_task: dict[str, RunTrace] = {}
     seen_run_ids: set[str] = set()
@@ -599,6 +626,16 @@ def aggregate_runs_by_task(
         )
 
     task_ids = sorted(expected)
+    if questions_by_task is not None:
+        for task_id in task_ids:
+            observed_question = by_task[task_id].question
+            if (
+                type(observed_question) is not str
+                or observed_question != questions_by_task[task_id]
+            ):
+                raise ValueError(
+                    f"task question mismatch for task {task_id!r}"
+                )
     summary = aggregate_runs([by_task[task_id] for task_id in task_ids])
     return {
         "variant_id": variant_id,

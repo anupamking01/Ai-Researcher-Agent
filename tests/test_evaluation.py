@@ -844,6 +844,92 @@ def test_task_aggregate_accepts_one_pass_generators_and_zero_source_failures():
     assert result["avg_source_success_rate"] == 0.0
 
 
+
+def test_task_aggregate_question_manifest_rejects_swapped_questions():
+    """Task IDs alone cannot detect the correct prompt attached to wrong runs."""
+    questions = {"a": "What is evidence A?", "b": "Why is B different?"}
+    rows = [
+        _task_aggregate_trace("a", question=questions["b"]),
+        _task_aggregate_trace("b", question=questions["a"]),
+    ]
+    with pytest.raises(ValueError, match="task question mismatch"):
+        aggregate_runs_by_task(
+            rows, variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=["a", "b"], expected_questions_by_task=questions,
+        )
+
+
+def test_task_aggregate_question_manifest_accepts_exact_text_and_failed_runs():
+    questions = {"a": "What is evidence A?", "b": "Why is B different?"}
+    rows = [
+        _task_aggregate_trace("b", completed=False, source_count=0, question=questions["b"]),
+        _task_aggregate_trace("a", question=questions["a"]),
+    ]
+    result = aggregate_runs_by_task(
+        (row for row in rows),
+        variant_id="D3", task_set_id="frozen-diagnostic",
+        expected_task_ids=(task_id for task_id in ["b", "a"]),
+        expected_questions_by_task=questions,
+    )
+    assert result["task_ids"] == ["a", "b"]
+    assert result["completion_rate"] == 0.5
+    assert result == aggregate_runs_by_task(
+        reversed(rows), variant_id="D3", task_set_id="frozen-diagnostic",
+        expected_task_ids=reversed(["a", "b"]),
+        expected_questions_by_task=dict(reversed(list(questions.items()))),
+    )
+    # Legacy callers can omit the new independent text contract.
+    assert aggregate_runs_by_task(
+        [_task_aggregate_trace("a")], variant_id="D3",
+        task_set_id="frozen-diagnostic", expected_task_ids=["a"],
+    )["n_runs"] == 1
+
+
+@pytest.mark.parametrize(
+    ("manifest", "message"),
+    [
+        ([], "expected_questions_by_task must be a mapping"),
+        ({}, "expected task question coverage mismatch"),
+        ({"a": "Question?"}, "expected task question coverage mismatch"),
+        ({"a": "Question?", "b": "Other?", "c": "Extra?"}, "expected task question coverage mismatch"),
+        ({"a": "Question?", " b": "Other?"}, "expected question task_id"),
+        ({1: "Question?", "b": "Other?"}, "expected question task_id"),
+        ({"a": "", "b": "Other?"}, "expected task question"),
+        ({"a": "  ", "b": "Other?"}, "expected task question"),
+        ({"a": None, "b": "Other?"}, "expected task question"),
+        ({"a": 123, "b": "Other?"}, "expected task question"),
+        ({"a": True, "b": "Other?"}, "expected task question"),
+    ],
+)
+def test_task_aggregate_rejects_corrupt_question_manifest_before_trace_reads(
+    manifest, message
+):
+    def must_not_read():
+        raise AssertionError("invalid independent manifest consumed trace records")
+        yield None
+
+    with pytest.raises(ValueError, match=message):
+        aggregate_runs_by_task(
+            must_not_read(), variant_id="D3",
+            task_set_id="frozen-diagnostic", expected_task_ids=["a", "b"],
+            expected_questions_by_task=manifest,
+        )
+
+
+@pytest.mark.parametrize(
+    "observed",
+    ["Different case?", "Question? ", " Question?", "", None, True, 42],
+)
+def test_task_aggregate_rejects_mismatched_or_nontext_trace_question(observed):
+    with pytest.raises(ValueError, match="task question mismatch"):
+        aggregate_runs_by_task(
+            [_task_aggregate_trace("a", question=observed)],
+            variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=["a"],
+            expected_questions_by_task={"a": "Question?"},
+        )
+
+
 @pytest.mark.parametrize(
     ("record_overrides", "error"),
     [

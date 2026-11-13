@@ -190,6 +190,42 @@ cases; it sorts by task identifier before reusing the existing
 accumulation order. The returned summary includes the exact task IDs and
 treatment/task-set identity to support a checkable descriptive coverage claim.
 
+For an additional prospective **task-text identity** check, callers can
+supply `expected_questions_by_task` as an independent mapping from the frozen
+task manifest (in addition to `expected_task_ids`). The optional gate requires
+exactly the expected IDs, nonempty string question texts, and an **exact match**
+between each observed `RunTrace.question` and the frozen text for that task.
+It catches mislabeled or cross-task-swapped questions even when all task IDs,
+variant IDs, and run counts remain valid. This check occurs before any
+descriptive summary and includes failed and zero-source tasks; input ordering
+cannot change its result. It does not normalize whitespace or silently
+substitute the observed question for the reference. Omitting the new argument
+preserves the previous API behavior for legacy traces that lack question text.
+
+Example (the caller must source this mapping independently of the runs):
+
+```python
+summary = aggregate_runs_by_task(
+    traces,
+    variant_id="D3",
+    task_set_id="prospective-v1",
+    expected_task_ids=["task-a", "task-b"],
+    expected_questions_by_task={
+        "task-a": "First frozen research question?",
+        "task-b": "Second frozen research question?",
+    },
+)
+```
+
+This opt-in binding is **not** a cryptographic source custody check: a
+mislabeled trace can also carry an altered question, and an in-memory mapping
+is only as trustworthy as the independently obtained manifest. It neither
+authenticates original historical reports/traces nor changes any frozen
+treatment, evaluator, or automated analysis result. The pilot remains
+diagnostic, historical designated-primary automated inference remains
+qualified by post-collection planning and fixed order, retrospective
+sensitivities remain exploratory, and blinded human validation is pending.
+
 This is an **opt-in fail-closed wrapper**: the generic `aggregate_runs`
 remains unchanged for legacy callers. The expected task list must come from
 an independent frozen manifest; the helper does not authenticate that
