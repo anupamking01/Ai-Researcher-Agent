@@ -1217,3 +1217,24 @@ plan, fixed-order and evaluator-policy comparability qualifications;
 retrospective sensitivities remain exploratory. Original report/trace custody,
 independent blinded human evaluation and human–automated reconciliation are
 still pending.
+
+
+## Replayable dependency-free CI evidence for cancellation-prone test lanes
+
+The early Python-standard-library evaluation gate now produces and *replays*
+a local-consistency receipt before either workflow installs dependencies.
+The receipt binds the completed physical unittest transcript to the GitHub
+checkout SHA, workflow run/attempt/event, the exact source bytes of the
+implementation, early tests and verifier, and the passed case names/count.
+The paired log and receipt are uploaded together for 90 days. The verifier
+rejects partial, failed, duplicate, ambiguous, or retitled transcripts and
+rechecks source and run identities on replay; synthetic dependency-free
+regressions cover success, truncation, count alteration and SHA mismatch.
+A later cancelled pip or compile step does **not** erase the earlier narrow
+record, but a log/receipt pair is only *locally consistent*, not independently
+signed or attested proof that GitHub ran the tests. This does **not** establish
+full pytest success, original report/trace custody, prospective precollection
+preregistration, automated-evaluator comparability or human evaluation.
+The five-task pilot remains diagnostic, designated-primary automated analysis
+retains its post-collection-plan and fixed-order qualifications, historical
+measurement sensitivity is exploratory, and blinded human ratings are pending.

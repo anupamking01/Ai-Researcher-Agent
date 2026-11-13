@@ -47,11 +47,37 @@ jobs:
       - name: Verify exact checkout after dependency-free diagnostic gate
         run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests
 
+      - name: Bind dependency-free test transcript to commit and run
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.verify_ci_early_gate_evidence \
+            --mode create \
+            --log "$RUNNER_TEMP/vera-stdlib-evaluation.log" \
+            --receipt "$RUNNER_TEMP/vera-stdlib-evaluation-receipt.json" \
+            --checkout-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" --event "$GITHUB_EVENT_NAME" \
+            --repository "$GITHUB_REPOSITORY"
+
+      - name: Independently replay dependency-free evidence before retention
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.verify_ci_early_gate_evidence \
+            --mode verify \
+            --log "$RUNNER_TEMP/vera-stdlib-evaluation.log" \
+            --receipt "$RUNNER_TEMP/vera-stdlib-evaluation-receipt.json" \
+            --checkout-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" --event "$GITHUB_EVENT_NAME" \
+            --repository "$GITHUB_REPOSITORY"
+
       - name: Retain pre-install diagnostic evidence (90 days)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: vera-stdlib-evaluation-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/vera-stdlib-evaluation.log
+          path: |
+            ${{ runner.temp }}/vera-stdlib-evaluation.log
+            ${{ runner.temp }}/vera-stdlib-evaluation-receipt.json
           if-no-files-found: error
           retention-days: 90
       - name: Install application and test dependencies

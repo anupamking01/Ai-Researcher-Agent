@@ -131,5 +131,39 @@ class DependencyFreeEvaluationGate(unittest.TestCase):
                      temperature=float("nan"))
 
 
+    def test_early_receipt_replays_exact_success_and_rejects_identity_tamper(self):
+        from scripts.verify_ci_early_gate_evidence import build_receipt, SOURCES
+        cases = [
+            f"test_{n} (test_evaluation_stdlib_gate.DependencyFreeEvaluationGate.test_{n}) ... ok"
+            for n in ("a", "b", "c", "d", "e", "f", "g")
+        ]
+        log = ("VERA EARLY DIAGNOSTIC: sha=" + "a" * 40
+               + " run=42 attempt=1 event=push\n"
+               + "\n".join(cases) + "\n"
+               + "-" * 70 + "\nRan 7 tests in 0.001s\n\nOK\n").encode()
+        kwargs = dict(sha="a" * 40, run_id="42", attempt="1",
+                      event="push", repository="anupamking01/Ai-Researcher-Agent",
+                      sources={name: name.encode() for name in SOURCES})
+        receipt = build_receipt(log, **kwargs)
+        self.assertEqual(receipt["passed_tests"], 7)
+        self.assertFalse(receipt["full_pytest_success_established"])
+        with self.assertRaisesRegex(ValueError, "identity header"):
+            build_receipt(log, **{**kwargs, "sha": "b" * 40})
+        with self.assertRaisesRegex(ValueError, "completion count"):
+            build_receipt(log.replace(b"Ran 7 tests", b"Ran 8 tests"), **kwargs)
+        with self.assertRaisesRegex(ValueError, "final successful unittest result"):
+            build_receipt(log.replace(b"\nOK\n", b"\nOK\nPASS\n"), **kwargs)
+
+    def test_early_receipt_rejects_missing_tests_and_failed_output(self):
+        from scripts.verify_ci_early_gate_evidence import build_receipt, SOURCES
+        kwargs = dict(sha="a" * 40, run_id="42", attempt="1",
+                      event="push", repository="anupamking01/Ai-Researcher-Agent",
+                      sources={name: b"pinned" for name in SOURCES})
+        for log in (b"", b"Ran 7 tests in 0.001s\nOK\n",
+                    b"VERA EARLY DIAGNOSTIC: sha=" + b"a" * 40 +
+                    b" run=42 attempt=1 event=push\nRan 7 tests in 0.001s\nFAILED\n"):
+            with self.assertRaises(ValueError):
+                build_receipt(log, **kwargs)
+
 if __name__ == "__main__":
     unittest.main()
