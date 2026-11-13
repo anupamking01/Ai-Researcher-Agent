@@ -1056,3 +1056,26 @@ remains diagnostic; the historical designated-primary automated analysis is
 post-collection-plan and subject to fixed-order and evaluator comparability
 limits; retrospective sensitivity results remain exploratory; and blinded
 human evaluation remains pending.
+
+
+## Fast exact-commit offline diagnostic evaluation CI
+
+The independent `.github/workflows/diagnostic-evaluation-fast-ci.yml` lane
+runs the `logic/evaluation.py` regression tests and its workflow-contract
+tests for each relevant research-branch change. It pins CPython 3.11.17,
+installs just the pinned offline-test packages, checks the exact Git checkout
+before and after the suite, and uses the same inspected IPv4/IPv6 firewalled
+pytest wrapper as the full offline test workflow. A separate receipt producer
+and verifier bind the completed test log to the workflow's commit, dependencies,
+run identity and Python version before retaining both log and receipt for 90
+days. A failed or cancelled run must not be counted as passed.
+
+This **targeted** check can finish independently when the considerably larger
+`tests.yml` suite remains pending, cancelled, or times out. It does not replace
+or attest the full offline suite or all installed application dependencies,
+prove external network isolation independently of the runner, authenticate
+original treatment reports/traces, or establish historical preregistration,
+causality, exploratory robustness, or human validation. Full-suite completion
+and scientific evidence-custody gates remain separate requirements. This
+workflow runs no treatments, evaluators, web/LLM provider calls, or human
+annotations; it does not recompute the frozen designated-primary results.

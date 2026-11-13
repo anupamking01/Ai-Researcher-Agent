@@ -1,0 +1,113 @@
+name: diagnostic-evaluation-fast-ci
+
+# Dedicated, exact-commit offline diagnostic evaluation test lane. This is
+# narrower than the full suite and is NOT evidence of experimental replication.
+on:
+  push:
+    branches:
+      - "research-*"
+    paths:
+      - .github/workflows/diagnostic-evaluation-fast-ci.yml
+      - logic/evaluation.py
+      - tests/test_evaluation.py
+      - tests/test_evaluation_fast_ci_workflow.py
+      - scripts/run_offline_pytest_firewalled.sh
+      - scripts/verify_ci_python_runtime.py
+      - scripts/verify_ci_source_checkout.py
+      - scripts/verify_ci_test_evidence.py
+      - scripts/verify_retained_ci_test_evidence.py
+      - requirements.txt
+      - requirements-ci.lock
+  pull_request:
+    paths:
+      - .github/workflows/diagnostic-evaluation-fast-ci.yml
+      - logic/evaluation.py
+      - tests/test_evaluation.py
+      - tests/test_evaluation_fast_ci_workflow.py
+      - scripts/run_offline_pytest_firewalled.sh
+      - scripts/verify_ci_python_runtime.py
+      - scripts/verify_ci_source_checkout.py
+      - scripts/verify_ci_test_evidence.py
+      - scripts/verify_retained_ci_test_evidence.py
+      - requirements.txt
+      - requirements-ci.lock
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic-evaluation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout source without stored credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Pin Python interpreter
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+          pip-version: "26.2.1"
+          cache: pip
+
+      - name: Install only pinned offline diagnostic-test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --no-deps -r requirements-ci.lock
+          python -m pip install --no-deps "packaging==24.0" "PyYAML==6.0.1"
+          python -m pip check
+
+      - name: Verify pinned interpreter before targeted tests
+        run: python -m scripts.verify_ci_python_runtime --phase before-tests
+
+      - name: Compile only the diagnostic implementation and its tests
+        run: python -m py_compile logic/evaluation.py tests/test_evaluation.py tests/test_evaluation_fast_ci_workflow.py
+
+      - name: Verify source checkout before targeted tests
+        run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
+
+      - name: Run firewalled diagnostic evaluation regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/run_offline_pytest_firewalled.sh tests/test_evaluation.py tests/test_evaluation_fast_ci_workflow.py 2>&1 | tee "$RUNNER_TEMP/vera-diagnostic-evaluation-tests.log"
+
+      - name: Verify source checkout after targeted tests
+        run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests
+
+      - name: Verify pinned interpreter after targeted tests
+        run: python -m scripts.verify_ci_python_runtime --phase after-tests
+
+      - name: Bind exact-commit diagnostic test receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.verify_ci_test_evidence \
+            --log "$RUNNER_TEMP/vera-diagnostic-evaluation-tests.log" \
+            --out "$RUNNER_TEMP/vera-diagnostic-evaluation-test-receipt.json"
+
+      - name: Independently replay diagnostic receipt before retention
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.verify_retained_ci_test_evidence \
+            --log "$RUNNER_TEMP/vera-diagnostic-evaluation-tests.log" \
+            --receipt "$RUNNER_TEMP/vera-diagnostic-evaluation-test-receipt.json" \
+            --checkout-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --event "$GITHUB_EVENT_NAME"
+
+      - name: Retain source-bound targeted diagnostic test evidence (90 days)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-diagnostic-evaluation-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/vera-diagnostic-evaluation-tests.log
+            ${{ runner.temp }}/vera-diagnostic-evaluation-test-receipt.json
+          if-no-files-found: error
+          retention-days: 90
