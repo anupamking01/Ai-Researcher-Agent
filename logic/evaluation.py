@@ -85,7 +85,7 @@ class RunTrace:
             raise ValueError(
                 "unavailable_usage_call_count cannot exceed model_call_count"
             )
-        for field in ("latency_seconds", "estimated_cost_usd"):
+        for field in ("latency_seconds", "estimated_cost_usd", "temperature"):
             value = getattr(self, field)
             if type(value) not in (int, float):
                 raise ValueError(f"{field} must be a finite nonnegative number")

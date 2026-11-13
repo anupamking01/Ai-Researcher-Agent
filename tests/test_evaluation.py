@@ -1,4 +1,5 @@
 from dataclasses import replace
+import json
 
 import pytest
 
@@ -217,12 +218,12 @@ def test_run_trace_rejects_invalid_resource_counts(field, invalid):
         )
 
 
-@pytest.mark.parametrize("field", ["latency_seconds", "estimated_cost_usd"])
+@pytest.mark.parametrize("field", ["latency_seconds", "estimated_cost_usd", "temperature"])
 @pytest.mark.parametrize(
     "invalid",
     [-1, -0.01, True, "1", None, float("nan"), float("inf"), float("-inf"), 10**400],
 )
-def test_run_trace_rejects_invalid_timing_and_cost(field, invalid):
+def test_run_trace_rejects_invalid_numeric_telemetry_and_temperature(field, invalid):
     with pytest.raises(ValueError, match=field):
         RunTrace(
             run_id="invalid-finite-telemetry",
@@ -230,6 +231,17 @@ def test_run_trace_rejects_invalid_timing_and_cost(field, invalid):
             source_count=0,
             **{field: invalid},
         )
+
+
+@pytest.mark.parametrize("temperature", [0, 0.0, 0.7, 1.0, 2, 1e-320])
+def test_run_trace_preserves_finite_sampling_temperature_as_serializable_provenance(temperature):
+    trace = RunTrace(
+        run_id="finite-temperature", completed=True, source_count=1,
+        temperature=temperature,
+    )
+    assert trace.temperature == temperature
+    assert trace.to_dict()["temperature"] == temperature
+    assert json.loads(json.dumps(trace.to_dict(), allow_nan=False))["temperature"] == temperature
 
 
 @pytest.mark.parametrize(

@@ -145,12 +145,16 @@ resource counters (`prompt_tokens`, `completion_tokens`, `source_budget`,
 `query_count`, `search_call_count`, `model_call_count`, and
 `unavailable_usage_call_count`). Each must be an exact nonnegative integer,
 not a Boolean, fractional number, or coerced string. Unavailable-usage calls
-cannot exceed total model calls. Diagnostic `latency_seconds` and
-`estimated_cost_usd` must be finite nonnegative built-in numeric values;
-NaN, infinity, negative values, Booleans, text, and nonnumeric placeholders
-are rejected before averages, medians, token totals, and dispersion metrics
-are computed. Synthetic tests cover these invalid inputs and legitimate zero
-usage/cost. This strengthens **new in-memory diagnostic telemetry**; it does
+cannot exceed total model calls. Diagnostic `latency_seconds`,
+`estimated_cost_usd`, and the recorded sampling `temperature` must be finite
+nonnegative built-in numeric values; NaN, infinity, negative values, Booleans,
+text, and nonnumeric placeholders are rejected at trace construction. This
+also prevents malformed sampling configuration from entering the trace JSON
+and masquerading as reproducible provenance. No arbitrary upper temperature
+bound is imposed because allowable values depend on the model/API; this is
+numeric integrity, not verification that a provider actually used the setting.
+Synthetic tests cover invalid values, legitimate zero and finite positive
+configuration, and strict JSON serialization. This strengthens **new in-memory diagnostic telemetry**; it does
 not revalidate or rewrite frozen September treatment files, independently
 authenticate historical provider usage, change historical cost estimates, or
 establish a human-evaluation result. The separate published-input and
