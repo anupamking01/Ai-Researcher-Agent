@@ -8,6 +8,7 @@ not attest the runner, GitHub identity, firewall, or experiment provenance.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 from pathlib import Path
@@ -28,6 +29,35 @@ CASE = re.compile(
 )
 SUMMARY = re.compile(r"^Ran ([1-9][0-9]*) tests? in [0-9]+(?:\.[0-9]+)?s$")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
+
+
+def _declared_early_test_names(source: bytes) -> list[str]:
+    """Bind a green receipt to every unittest method declared in tracked source.
+
+    A subset of successful cases must not look like a complete early gate.
+    This checks source/transcript consistency, not runner authenticity.
+    """
+    try:
+        module = ast.parse(source.decode("utf-8"),
+                           filename="tests/test_evaluation_stdlib_gate.py")
+    except (UnicodeError, SyntaxError) as exc:
+        raise ValueError("invalid early diagnostic test source") from exc
+    suites = [node for node in module.body
+              if isinstance(node, ast.ClassDef)
+              and node.name == "DependencyFreeEvaluationGate"]
+    if len(suites) != 1 or not any(
+        isinstance(base, ast.Attribute)
+        and isinstance(base.value, ast.Name)
+        and base.value.id == "unittest" and base.attr == "TestCase"
+        for base in suites[0].bases
+    ):
+        raise ValueError("missing unique early diagnostic unittest suite")
+    names = [node.name for node in suites[0].body
+             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+             and node.name.startswith("test_")]
+    if len(names) < 7 or len(names) != len(set(names)):
+        raise ValueError("incomplete or duplicated declared early test methods")
+    return sorted(names)
 
 
 def _unique_pairs(pairs):
@@ -69,6 +99,9 @@ def build_receipt(log: bytes, *, sha: str, run_id: str, attempt: str,
         raise ValueError("invalid workflow event")
     if set(sources) != set(SOURCES) or any(type(v) is not bytes for v in sources.values()):
         raise ValueError("incomplete early test source fingerprints")
+    declared_names = _declared_early_test_names(
+        sources["tests/test_evaluation_stdlib_gate.py"]
+    )
     try:
         transcript = log.decode("utf-8")
     except UnicodeError as exc:
@@ -84,6 +117,8 @@ def build_receipt(log: bytes, *, sha: str, run_id: str, attempt: str,
     names = [m.group(1) for line in lines if (m := CASE.fullmatch(line))]
     if len(names) < 7 or len(names) != len(set(names)):
         raise ValueError("incomplete or repeated early diagnostic test cases")
+    if sorted(names) != declared_names:
+        raise ValueError("early diagnostic test suite does not match declared source cases")
     matches = [(i, m) for i, line in enumerate(lines)
                if (m := SUMMARY.fullmatch(line))]
     if len(matches) != 1 or int(matches[0][1].group(1)) != len(names):

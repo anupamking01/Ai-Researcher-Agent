@@ -299,6 +299,24 @@ frozen 40-cell automated analysis; pilot evidence stays diagnostic, later
 retrospective checks stay exploratory, and blinded human validation remains
 pending.
 
+### Complete declared-test coverage in early CI receipts
+
+The dependency-free early diagnostic CI gate now binds its retained green
+`unittest` transcript to **every** `test_*` method statically declared in the
+tracked `DependencyFreeEvaluationGate` class, rather than accepting any seven
+passing names. The standard-library-only receipt verifier parses the exact
+test source already included in its source fingerprints and rejects omitted,
+substituted, or duplicate case names even when a partial test invocation
+prints a successful `OK` summary. A synthetic regression proves both a
+complete receipt and rejection of a green-looking partial/substituted suite.
+
+The check improves **CI coverage evidence**, not the runtime authenticity of
+the hosted runner or the scientific provenance of historical reports/traces.
+It neither establishes complete pytest validation when those jobs are
+cancelled nor changes the diagnostic pilot, the post-collection qualified
+designated-primary automated findings, exploratory sensitivity analyses,
+or pending independent blinded human validation.
+
 ## 1. Research questions
 
 The main study is organized around three primary stage-wise questions plus a broader systems question:

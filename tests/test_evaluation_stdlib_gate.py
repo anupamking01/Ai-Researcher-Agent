@@ -132,27 +132,74 @@ class DependencyFreeEvaluationGate(unittest.TestCase):
 
 
     def test_early_receipt_replays_exact_success_and_rejects_identity_tamper(self):
-        from scripts.verify_ci_early_gate_evidence import build_receipt, SOURCES
+        from scripts.verify_ci_early_gate_evidence import (
+            build_receipt, SOURCES, ROOT, _declared_early_test_names,
+        )
+        sources = {name: (ROOT / name).read_bytes() for name in SOURCES}
+        names = _declared_early_test_names(
+            sources["tests/test_evaluation_stdlib_gate.py"]
+        )
         cases = [
-            f"test_{n} (test_evaluation_stdlib_gate.DependencyFreeEvaluationGate.test_{n}) ... ok"
-            for n in ("a", "b", "c", "d", "e", "f", "g")
+            f"{n} (test_evaluation_stdlib_gate.DependencyFreeEvaluationGate.{n}) ... ok"
+            for n in names
         ]
         log = ("VERA EARLY DIAGNOSTIC: sha=" + "a" * 40
                + " run=42 attempt=1 event=push\n"
                + "\n".join(cases) + "\n"
-               + "-" * 70 + "\nRan 7 tests in 0.001s\n\nOK\n").encode()
+               + "-" * 70 + f"\nRan {len(names)} tests in 0.001s\n\nOK\n").encode()
         kwargs = dict(sha="a" * 40, run_id="42", attempt="1",
                       event="push", repository="anupamking01/Ai-Researcher-Agent",
-                      sources={name: name.encode() for name in SOURCES})
+                      sources=sources)
         receipt = build_receipt(log, **kwargs)
-        self.assertEqual(receipt["passed_tests"], 7)
+        self.assertEqual(receipt["passed_tests"], len(names))
+        self.assertEqual(receipt["test_names"], names)
         self.assertFalse(receipt["full_pytest_success_established"])
         with self.assertRaisesRegex(ValueError, "identity header"):
             build_receipt(log, **{**kwargs, "sha": "b" * 40})
+        bad_count = log.replace(
+            f"Ran {len(names)} tests".encode(),
+            f"Ran {len(names) + 1} tests".encode(),
+        )
         with self.assertRaisesRegex(ValueError, "completion count"):
-            build_receipt(log.replace(b"Ran 7 tests", b"Ran 8 tests"), **kwargs)
+            build_receipt(bad_count, **kwargs)
         with self.assertRaisesRegex(ValueError, "final successful unittest result"):
             build_receipt(log.replace(b"\nOK\n", b"\nOK\nPASS\n"), **kwargs)
+
+    def test_early_receipt_rejects_partial_green_or_substituted_suite(self):
+        from scripts.verify_ci_early_gate_evidence import (
+            build_receipt, SOURCES, ROOT, _declared_early_test_names,
+        )
+        sources = {name: (ROOT / name).read_bytes() for name in SOURCES}
+        names = _declared_early_test_names(
+            sources["tests/test_evaluation_stdlib_gate.py"]
+        )
+
+        def green_log(selected):
+            lines = [
+                f"{n} (test_evaluation_stdlib_gate.DependencyFreeEvaluationGate.{n}) ... ok"
+                for n in selected
+            ]
+            return (
+                "VERA EARLY DIAGNOSTIC: sha=" + "a" * 40
+                + " run=42 attempt=1 event=push\n"
+                + "\n".join(lines) + "\n"
+                + "-" * 70
+                + f"\nRan {len(selected)} tests in 0.001s\n\nOK\n"
+            ).encode()
+
+        kwargs = dict(sha="a" * 40, run_id="42", attempt="1",
+                      event="push", repository="anupamking01/Ai-Researcher-Agent",
+                      sources=sources)
+        self.assertEqual(
+            build_receipt(green_log(names), **kwargs)["test_names"], names
+        )
+        # The old >=7 rule accepted both valid-looking incomplete transcripts.
+        with self.assertRaisesRegex(ValueError, "does not match declared source"):
+            build_receipt(green_log(names[:-1]), **kwargs)
+        with self.assertRaisesRegex(ValueError, "does not match declared source"):
+            build_receipt(
+                green_log(names[:-1] + ["test_unrelated_green_placeholder"]), **kwargs
+            )
 
     def test_early_receipt_rejects_missing_tests_and_failed_output(self):
         from scripts.verify_ci_early_gate_evidence import build_receipt, SOURCES
