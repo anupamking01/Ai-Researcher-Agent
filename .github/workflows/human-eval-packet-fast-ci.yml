@@ -9,7 +9,16 @@ on:
     paths:
       - .github/workflows/human-eval-packet-fast-ci.yml
       - scripts/build_human_eval_packet.py
+      - scripts/verify_human_eval_packet.py
+      - scripts/export_human_eval_annotator_bundle.py
+      - scripts/freeze_human_eval_ratings.py
+      - scripts/verify_frozen_main_study_tasks.py
       - tests/test_human_eval.py
+      - tests/test_human_eval_packet_capture_bounds.py
+      - tests/test_human_eval_packet_record_boundaries.py
+      - tests/test_human_eval_packet_source_numeric_integrity.py
+      - tests/test_human_eval_packet_verification.py
+      - tests/test_human_eval_packet_window_custody.py
       - tests/test_human_eval_packet_fast_ci_workflow.py
       - scripts/run_offline_pytest_firewalled.sh
       - scripts/verify_ci_python_runtime.py
@@ -22,7 +31,16 @@ on:
     paths:
       - .github/workflows/human-eval-packet-fast-ci.yml
       - scripts/build_human_eval_packet.py
+      - scripts/verify_human_eval_packet.py
+      - scripts/export_human_eval_annotator_bundle.py
+      - scripts/freeze_human_eval_ratings.py
+      - scripts/verify_frozen_main_study_tasks.py
       - tests/test_human_eval.py
+      - tests/test_human_eval_packet_capture_bounds.py
+      - tests/test_human_eval_packet_record_boundaries.py
+      - tests/test_human_eval_packet_source_numeric_integrity.py
+      - tests/test_human_eval_packet_verification.py
+      - tests/test_human_eval_packet_window_custody.py
       - tests/test_human_eval_packet_fast_ci_workflow.py
       - scripts/run_offline_pytest_firewalled.sh
       - scripts/verify_ci_python_runtime.py
@@ -72,7 +90,10 @@ jobs:
           python -m pip check
 
       - name: Compile packet implementation and regressions
-        run: python -m py_compile scripts/build_human_eval_packet.py tests/test_human_eval.py tests/test_human_eval_packet_fast_ci_workflow.py
+        run: |
+          python -m py_compile \
+            scripts/build_human_eval_packet.py scripts/verify_human_eval_packet.py scripts/export_human_eval_annotator_bundle.py scripts/freeze_human_eval_ratings.py scripts/verify_frozen_main_study_tasks.py \
+            tests/test_human_eval.py tests/test_human_eval_packet_capture_bounds.py tests/test_human_eval_packet_record_boundaries.py tests/test_human_eval_packet_source_numeric_integrity.py tests/test_human_eval_packet_verification.py tests/test_human_eval_packet_window_custody.py tests/test_human_eval_packet_fast_ci_workflow.py
 
       - name: Verify source immediately before packet tests
         run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
@@ -83,7 +104,7 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |
           set -euo pipefail
-          bash scripts/run_offline_pytest_firewalled.sh tests/test_human_eval.py tests/test_human_eval_packet_fast_ci_workflow.py 2>&1 | tee "$RUNNER_TEMP/vera-human-packet-tests.log"
+          bash scripts/run_offline_pytest_firewalled.sh tests/test_human_eval.py tests/test_human_eval_packet_capture_bounds.py tests/test_human_eval_packet_record_boundaries.py tests/test_human_eval_packet_source_numeric_integrity.py tests/test_human_eval_packet_verification.py tests/test_human_eval_packet_window_custody.py tests/test_human_eval_packet_fast_ci_workflow.py 2>&1 | tee "$RUNNER_TEMP/vera-human-packet-tests.log"
 
       - name: Verify runtime and source after packet tests
         run: |

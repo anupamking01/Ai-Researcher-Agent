@@ -10,10 +10,26 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/human-eval-packet-fast-ci.yml"
+PACKET_SCRIPTS = (
+    "scripts/build_human_eval_packet.py",
+    "scripts/verify_human_eval_packet.py",
+    "scripts/export_human_eval_annotator_bundle.py",
+    "scripts/freeze_human_eval_ratings.py",
+    "scripts/verify_frozen_main_study_tasks.py",
+)
+PACKET_MODULES = (
+    "tests/test_human_eval.py",
+    "tests/test_human_eval_packet_capture_bounds.py",
+    "tests/test_human_eval_packet_record_boundaries.py",
+    "tests/test_human_eval_packet_source_numeric_integrity.py",
+    "tests/test_human_eval_packet_verification.py",
+    "tests/test_human_eval_packet_window_custody.py",
+    "tests/test_human_eval_packet_fast_ci_workflow.py",
+)
 SCOPE = (
     "bash scripts/run_offline_pytest_firewalled.sh "
-    "tests/test_human_eval.py tests/test_human_eval_packet_fast_ci_workflow.py "
-    '2>&1 | tee "$RUNNER_TEMP/vera-human-packet-tests.log"'
+    + " ".join(PACKET_MODULES)
+    + ' 2>&1 | tee "$RUNNER_TEMP/vera-human-packet-tests.log"'
 )
 
 
@@ -45,15 +61,17 @@ def test_packet_lane_is_narrow_pinned_and_offline():
     ):
         assert value in command
     assert "-r requirements.txt" not in command
+    compile_step = next(s for s in steps if s["name"] == "Compile packet implementation and regressions")
+    for path in (*PACKET_SCRIPTS, *PACKET_MODULES):
+        assert path in compile_step["run"]
     test = next(s for s in steps if s["name"] == "Run firewalled blinded-packet regressions")
     assert test["env"]["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
     assert test["run"].strip().splitlines() == ["set -euo pipefail", SCOPE]
     for event in ("push", "pull_request"):
         paths = workflow["on"][event]["paths"]
         for required in (
-            "scripts/build_human_eval_packet.py",
-            "tests/test_human_eval.py",
-            "tests/test_human_eval_packet_fast_ci_workflow.py",
+            *PACKET_SCRIPTS,
+            *PACKET_MODULES,
             ".github/workflows/human-eval-packet-fast-ci.yml",
             "scripts/run_offline_pytest_firewalled.sh",
             "requirements.txt",

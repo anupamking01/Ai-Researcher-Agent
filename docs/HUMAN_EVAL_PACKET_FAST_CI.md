@@ -1,12 +1,21 @@
 # Offline blinded-packet regression CI
 
 The `.github/workflows/human-eval-packet-fast-ci.yml` workflow independently
-exercises `tests/test_human_eval.py` and its own workflow contract tests
-after changes to the packet builder, test suite, source-evidence verifier or
-pinned dependencies. Unlike the large full-suite workflow, this narrow
+exercises `tests/test_human_eval.py`, the full synthetic packet-verification
+regressions, bounded source-capture checks, physical-record and JSON-numeric
+integrity cases, whole-verification-window custody checks, and its workflow
+contract tests
+after changes to the packet builder, packet verifier, cross-stage packet
+readers, selected regression modules, source-evidence verifier or pinned
+dependencies. The workflow contract test asserts all selected modules are both
+compiled and exercised, and that their implementation paths trigger CI on
+pushes and pull requests. Unlike the large full-suite workflow, this narrow
 **blinded-packet source-custody** lane can produce a specific pass/fail result
-for symlink-ancestor, hardlink-alias, source-window, task-matrix and blinding
-regressions without waiting for unrelated offline tests.
+for symlink-ancestor, hardlink-alias, verification-window, duplicate/invalid
+physical records, malformed JSON numbers, task-matrix and blinding regressions
+without waiting for unrelated offline tests. This closes the gap where the
+previous fast lane checked packet construction but did not execute the
+independent packet-verifier regression module.
 
 The job uses a pinned Python version and the repository's two dependency locks
 as constraints, installs only the minimal pinned test/Markdown packages, checks
@@ -18,7 +27,7 @@ research artifact provenance, or any human validation. A cancelled or failed
 job is **not a pass**, even if some selected tests previously passed.
 
 This improvement responds to repeated full-suite cancellation and the
-unverified status of newly introduced human-packet regressions. It neither
+lack of fast-lane execution for the independent packet verifier. It neither
 recovers nor independently authenticates original treatment reports/traces
 from Actions runs `34620917346` and `34783525480`. Distribution of a
 source-verified blinded packet is still blocked until unchanged original
