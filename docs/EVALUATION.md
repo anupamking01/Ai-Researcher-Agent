@@ -1032,3 +1032,27 @@ original trace/report custody, eliminate fixed-order confounding, or correct
 historical evaluator-policy differences. No pilot, frozen designated-primary
 automated, exploratory, or human-validation result is changed or promoted
 by this prospective diagnostic guard. Blinded human validation remains pending.
+
+
+## Prospective reference-manifest preflight before diagnostic observations
+
+All three task-keyed diagnostic entry points (descriptive pairing, paired
+bootstrap, and complete-arm aggregation), plus the treatment-aware paired
+`RunTrace` adapter, now validate and snapshot independent expected task IDs
+**before consuming any observed rows**. The treatment-aware adapter also checks
+the complete independently supplied task-ID-to-exact-question mapping before
+reading either arm. In particular, a scalar `"task-a"` is rejected rather than
+being interpreted as the character task IDs `"t"`, `"a"`, and so on. This
+matters when a one-task or single-character-ID experiment could otherwise pass
+an accidentally malformed manifest. Duplicated, absent, ill-typed, padded,
+and question-incomplete references fail closed. Valid one-pass reference
+iterators, deterministic task sorting, failed/zero-source records and existing
+metric estimators retain their behavior.
+
+These checks validate **in-memory caller-supplied references**, not the
+authenticity of their origin, source report/trace custody or actual execution
+conditions. They introduce no new research measurements. The five-task pilot
+remains diagnostic; the historical designated-primary automated analysis is
+post-collection-plan and subject to fixed-order and evaluator comparability
+limits; retrospective sensitivity results remain exploratory; and blinded
+human evaluation remains pending.

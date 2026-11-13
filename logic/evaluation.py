@@ -349,6 +349,59 @@ def paired_metric_comparison(
     }
 
 
+def _validated_reference_task_manifest(
+    expected_task_ids: Iterable[str],
+    expected_questions_by_task: Mapping[str, str] | None = None,
+) -> tuple[list[str], dict[str, str] | None]:
+    """Snapshot an independent reference before consuming observed results.
+
+    A scalar string is *not* a task collection: silently iterating its
+    characters could make a malformed one-task manifest appear complete.
+    Validate the full ID/question contract first, including on one-pass
+    reference iterators, so neither treatment arm is read on invalid input.
+    """
+    if isinstance(expected_task_ids, (str, bytes)):
+        raise ValueError("expected_task_ids must be a collection, not scalar text")
+    expected: set[str] = set()
+    for task_id in expected_task_ids:
+        if (
+            type(task_id) is not str or not task_id
+            or task_id.strip() != task_id or not task_id.strip()
+        ):
+            raise ValueError("expected task_id must be a nonempty, unpadded string")
+        if task_id in expected:
+            raise ValueError(f"duplicate expected task_id: {task_id!r}")
+        expected.add(task_id)
+    if not expected:
+        raise ValueError("expected_task_ids must not be empty")
+
+    questions_by_task: dict[str, str] | None = None
+    if expected_questions_by_task is not None:
+        if not isinstance(expected_questions_by_task, Mapping):
+            raise ValueError("expected_questions_by_task must be a mapping")
+        questions_by_task = {}
+        for task_id, question in expected_questions_by_task.items():
+            if (
+                type(task_id) is not str or not task_id
+                or task_id.strip() != task_id or not task_id.strip()
+            ):
+                raise ValueError(
+                    "expected question task_id must be a nonempty, unpadded string"
+                )
+            if type(question) is not str or not question.strip():
+                raise ValueError("expected task question must be nonempty text")
+            questions_by_task[task_id] = question
+        missing_questions = sorted(expected - questions_by_task.keys())
+        unexpected_questions = sorted(questions_by_task.keys() - expected)
+        if missing_questions or unexpected_questions:
+            raise ValueError(
+                "expected task question coverage mismatch: "
+                f"missing={missing_questions!r}, "
+                f"unexpected={unexpected_questions!r}"
+            )
+    return sorted(expected), questions_by_task
+
+
 def paired_metric_comparison_by_task(
     baseline: Iterable[tuple[str, float]],
     candidate: Iterable[tuple[str, float]],
@@ -370,14 +423,8 @@ def paired_metric_comparison_by_task(
             raise ValueError(f"{label} task_id must be a nonempty, unpadded string")
         return value
 
-    expected: set[str] = set()
-    for task_id in expected_task_ids:
-        task_id = valid_id(task_id, "expected")
-        if task_id in expected:
-            raise ValueError(f"duplicate expected task_id: {task_id!r}")
-        expected.add(task_id)
-    if not expected:
-        raise ValueError("expected_task_ids must not be empty")
+    task_ids, _ = _validated_reference_task_manifest(expected_task_ids)
+    expected = set(task_ids)
 
     def index_records(
         records: Iterable[tuple[str, float]], label: str
@@ -409,7 +456,6 @@ def paired_metric_comparison_by_task(
 
     baseline_by_task = index_records(baseline, "baseline")
     candidate_by_task = index_records(candidate, "candidate")
-    task_ids = sorted(expected)
     result = paired_metric_comparison(
         [baseline_by_task[task_id] for task_id in task_ids],
         [candidate_by_task[task_id] for task_id in task_ids],
@@ -436,6 +482,7 @@ def paired_bootstrap_confidence_interval_by_task(
     it does not replace the separately frozen main-study inference.
     """
     _validate_bootstrap_settings(confidence, n_resamples, seed)
+    task_ids, _ = _validated_reference_task_manifest(expected_task_ids)
 
     # Retain one-pass inputs so both completeness validation and the
     # subsequent resampling use exactly the same observations.
@@ -444,7 +491,7 @@ def paired_bootstrap_confidence_interval_by_task(
     comparison = paired_metric_comparison_by_task(
         baseline_rows,
         candidate_rows,
-        expected_task_ids=expected_task_ids,
+        expected_task_ids=task_ids,
     )
     baseline_by_task = dict(baseline_rows)
     candidate_by_task = dict(candidate_rows)
@@ -604,35 +651,10 @@ def aggregate_runs_by_task(
     variant_id = valid_identifier(variant_id, "variant_id")
     task_set_id = valid_identifier(task_set_id, "task_set_id")
 
-    expected: set[str] = set()
-    for task_id in expected_task_ids:
-        task_id = valid_identifier(task_id, "expected task_id")
-        if task_id in expected:
-            raise ValueError(f"duplicate expected task_id: {task_id!r}")
-        expected.add(task_id)
-    if not expected:
-        raise ValueError("expected_task_ids must not be empty")
-
-    # Take one stable local snapshot of the caller's independent question
-    # manifest. Do not guess questions from the traces under examination.
-    questions_by_task: dict[str, str] | None = None
-    if expected_questions_by_task is not None:
-        if not isinstance(expected_questions_by_task, Mapping):
-            raise ValueError("expected_questions_by_task must be a mapping")
-        questions_by_task = {}
-        for task_id, question in expected_questions_by_task.items():
-            task_id = valid_identifier(task_id, "expected question task_id")
-            if type(question) is not str or not question.strip():
-                raise ValueError("expected task question must be nonempty text")
-            questions_by_task[task_id] = question
-        missing_questions = sorted(expected - questions_by_task.keys())
-        unexpected_questions = sorted(questions_by_task.keys() - expected)
-        if missing_questions or unexpected_questions:
-            raise ValueError(
-                "expected task question coverage mismatch: "
-                f"missing={missing_questions!r}, "
-                f"unexpected={unexpected_questions!r}"
-            )
+    task_ids, questions_by_task = _validated_reference_task_manifest(
+        expected_task_ids, expected_questions_by_task
+    )
+    expected = set(task_ids)
 
     expected_config = (
         _validated_treatment_settings(expected_treatment_settings)
@@ -671,7 +693,6 @@ def aggregate_runs_by_task(
             f"task coverage mismatch: missing={missing!r}, unexpected={unexpected!r}"
         )
 
-    task_ids = sorted(expected)
     if questions_by_task is not None:
         for task_id in task_ids:
             observed_question = by_task[task_id].question
@@ -752,8 +773,9 @@ def paired_run_trace_bootstrap_by_task(
 
     # Snapshot the independent reference once, including one-pass task IDs;
     # do not infer either expected set or questions from the observed arms.
-    task_ids = list(expected_task_ids)
-    questions = dict(expected_questions_by_task.items())
+    task_ids, questions = _validated_reference_task_manifest(
+        expected_task_ids, expected_questions_by_task
+    )
     baseline = list(baseline_runs)
     candidate = list(candidate_runs)
     aggregate_runs_by_task(

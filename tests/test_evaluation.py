@@ -1441,3 +1441,91 @@ def test_treatment_fidelity_paired_manifest_fails_before_arm_reads(configs):
             no_read(), no_read(),
             expected_treatment_settings_by_variant=configs,
         )
+
+
+# Independent reference inputs must be checked before reading observations.
+@pytest.mark.parametrize("bad_ids", ["a", b"a", "", b""])
+def test_task_reference_rejects_scalar_text_without_reading_observations(bad_ids):
+    def no_read():
+        raise AssertionError("malformed reference must not consume observations")
+        yield None
+
+    with pytest.raises(ValueError, match="expected_task_ids"):
+        paired_metric_comparison_by_task(
+            no_read(), no_read(), expected_task_ids=bad_ids
+        )
+    with pytest.raises(ValueError, match="expected_task_ids"):
+        paired_bootstrap_confidence_interval_by_task(
+            no_read(), no_read(), expected_task_ids=bad_ids,
+            n_resamples=3,
+        )
+    with pytest.raises(ValueError, match="expected_task_ids"):
+        aggregate_runs_by_task(
+            no_read(), variant_id="D3", task_set_id="prospective-paired",
+            expected_task_ids=bad_ids,
+        )
+    with pytest.raises(ValueError, match="expected_task_ids"):
+        paired_run_trace_bootstrap_by_task(
+            no_read(), no_read(),
+            baseline_variant_id="D3", candidate_variant_id="D6",
+            task_set_id="prospective-paired",
+            expected_task_ids=bad_ids,
+            expected_questions_by_task={"a": "First research question?"},
+            n_resamples=3,
+        )
+
+
+@pytest.mark.parametrize(
+    ("bad_ids", "error"),
+    [
+        ([], "must not be empty"),
+        (["a", "a"], "duplicate expected task_id"),
+        (["a", " b"], "expected task_id"),
+        (["a", None], "expected task_id"),
+    ],
+)
+def test_paired_trace_rejects_invalid_reference_ids_before_reading_arms(
+    bad_ids, error
+):
+    def no_read():
+        raise AssertionError("invalid independent task reference read an arm")
+        yield None
+
+    with pytest.raises(ValueError, match=error):
+        paired_run_trace_bootstrap_by_task(
+            no_read(), no_read(),
+            baseline_variant_id="D3", candidate_variant_id="D6",
+            task_set_id="prospective-paired", expected_task_ids=bad_ids,
+            expected_questions_by_task={"a": _PAIR_QUESTIONS["a"]},
+            n_resamples=3,
+        )
+
+
+@pytest.mark.parametrize(
+    ("bad_questions", "error"),
+    [
+        ([], "expected_questions_by_task"),
+        ({}, "coverage mismatch"),
+        ({"a": _PAIR_QUESTIONS["a"]}, "coverage mismatch"),
+        ({"a": "", "b": _PAIR_QUESTIONS["b"]}, "expected task question"),
+        ({" a": "wrong", "b": _PAIR_QUESTIONS["b"]}, "expected question task_id"),
+        ({"a": _PAIR_QUESTIONS["a"], "b": _PAIR_QUESTIONS["b"],
+          "extra": "unexpected"}, "coverage mismatch"),
+    ],
+)
+def test_paired_trace_preflights_reference_questions_before_reading_arms(
+    bad_questions, error
+):
+    def no_read():
+        raise AssertionError("invalid independent question reference read an arm")
+        yield None
+
+    with pytest.raises(ValueError, match=error):
+        paired_run_trace_bootstrap_by_task(
+            no_read(), no_read(),
+            baseline_variant_id="D3", candidate_variant_id="D6",
+            task_set_id="prospective-paired",
+            expected_task_ids=(task for task in ["b", "a"]),
+            expected_questions_by_task=bad_questions,
+            n_resamples=3,
+        )
