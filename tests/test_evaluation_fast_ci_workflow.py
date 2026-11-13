@@ -82,3 +82,46 @@ def test_fast_diagnostic_ci_fails_closed_and_replays_exact_commit_receipt():
     assert upload["with"]["retention-days"] == "90"
     assert "vera-diagnostic-evaluation-tests.log" in upload["with"]["path"]
     assert "vera-diagnostic-evaluation-test-receipt.json" in upload["with"]["path"]
+
+
+def test_fast_diagnostic_ci_bootstraps_only_pinned_minimal_dependencies():
+    """Do not let unrelated transport packages or slow source builds block CI.
+
+    This test protects the source-bound input specification and validates that
+    the selected test dependencies are exact pins in the existing two locks.
+    """
+    root = WORKFLOW.parents[2]
+    workflow = _load_workflow()
+    steps = workflow["jobs"]["diagnostic-evaluation"]["steps"]
+    setup = next(s for s in steps if s.get("name") == "Pin Python interpreter")
+    assert setup["with"]["cache-dependency-path"].split() == [
+        "requirements.txt", "requirements-ci.lock"
+    ]
+
+    install = next(
+        s for s in steps
+        if s.get("name") == "Install only pinned offline diagnostic-test dependencies"
+    )
+    script = install["run"]
+    command = " ".join(script.splitlines())
+    assert "set -euo pipefail" in script
+    assert "--no-deps" in command
+    assert "--only-binary=:all:" in command
+    assert "--retries 1 --timeout 15" in command
+    assert "--constraint requirements-ci.lock --constraint requirements.txt" in command
+    assert "pytest pluggy iniconfig packaging PyYAML" in command
+    assert "python -m pip check" in command
+    assert "-r requirements-ci.lock" not in command
+
+    ci_lock = (root / "requirements-ci.lock").read_text(encoding="utf-8")
+    app_lock = (root / "requirements.txt").read_text(encoding="utf-8")
+    for entry in ("pytest==8.3.2", "pluggy==1.7.0", "iniconfig==2.3.1"):
+        assert entry in ci_lock.splitlines()
+    for entry in ("packaging==24.0", "PyYAML==6.0.1"):
+        assert entry in app_lock.splitlines()
+
+    run = next(
+        s for s in steps
+        if s.get("name") == "Run firewalled diagnostic evaluation regressions"
+    )
+    assert run["env"]["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"

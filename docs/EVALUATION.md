@@ -1079,3 +1079,30 @@ causality, exploratory robustness, or human validation. Full-suite completion
 and scientific evidence-custody gates remain separate requirements. This
 workflow runs no treatments, evaluators, web/LLM provider calls, or human
 annotations; it does not recompute the frozen designated-primary results.
+
+
+### Bounded minimal dependency installation for diagnostic CI
+
+The first targeted diagnostic-evaluation CI runs at commit
+`8017b62170bd5ae3f87a8a94fabd49bb6c0ad4a9` ended **cancelled during
+dependency installation**, without executing the diagnostic regressions.
+This is missing test evidence, not a pass or a demonstrated test failure.
+The targeted lane now installs only `pytest`, `pluggy`, `iniconfig`,
+`packaging`, and `PyYAML`, from **exact-version constraints in the already
+fingerprinted** `requirements-ci.lock` and `requirements.txt`. It skips
+unrelated native transport dependencies, disables third-party pytest plugin
+autoloading, disallows source builds, and bounds pip network retries and
+timeouts so an unavailable wheel or index fails visibly instead of hanging.
+The pip cache key covers both locks; `pip check` still verifies installed
+dependency consistency. Synthetic workflow-contract tests pin these gates.
+
+This is a **prospective diagnostic CI reliability and reproducibility
+improvement**, not evidence that the new runs have passed, a substitute for
+the complete offline test suite, or verification of the original experimental
+sources. Retained log/receipt identity checks and IPv4/IPv6 test isolation
+remain required. Historical pilot findings remain diagnostic, frozen
+automated designated-primary results retain post-collection-plan and
+fixed-order limitations, retrospective sensitivities remain exploratory,
+and genuinely independent human ratings remain pending. Nothing here reruns
+treatments or evaluators, authenticates unavailable original reports/traces,
+or changes frozen outcomes.
