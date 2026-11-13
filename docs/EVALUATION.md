@@ -927,3 +927,58 @@ Research-facing documentation should follow these rules:
 ## 15. Current status
 
 The repository now has a reproducible evaluation architecture and a frozen human-evaluation protocol. The remaining research step is not to invent another metric: it is to collect real blinded annotations, validate the canonical main-study artifact set, run the predeclared analysis against that set, and write conclusions that stay within the measured evidence.
+
+
+## Source-identified task-paired diagnostic bootstrap (prospective only)
+
+The lower-level \`paired_bootstrap_confidence_interval_by_task\` receives
+\`(task_id, metric)\` observations and cannot detect an accidentally mixed
+treatment variant, altered research question, or reused run ID across arms.
+\`paired_run_trace_bootstrap_by_task\` closes that metadata gap for future
+\`RunTrace\` comparisons. It requires two **distinct** declared variants, one
+task set, a complete independent task-ID set, and an independently obtained
+**exact** task-ID-to-question mapping. Both treatment arms are validated
+against the same reference before deriving any metric or drawing samples.
+It also refuses any run ID appearing in both arms, preventing one run from
+being accidentally treated as two independent treatment outputs.
+
+For example, with the manifest sourced separately from the observed traces:
+
+\`\`\`python
+from logic.evaluation import paired_run_trace_bootstrap_by_task
+
+comparison = paired_run_trace_bootstrap_by_task(
+    baseline_traces, candidate_traces,
+    baseline_variant_id="D3",
+    candidate_variant_id="D6",
+    task_set_id="prospective-v1",
+    expected_task_ids=["task-a", "task-b"],
+    expected_questions_by_task={
+        "task-a": "First frozen research question?",
+        "task-b": "Second frozen research question?",
+    },
+    metric="claim_support_rate",
+    seed=23,
+)
+\`\`\`
+
+The supported higher-is-better rates are \`claim_support_rate\`,
+\`source_success_rate\`, and the **legacy**
+\`citation_precision_proxy\` (not an independently verified citation-accuracy
+measure). Failed and zero-source tasks remain present, including their zero
+rates; no favorable-only filtering occurs. After identity validation, the
+existing seeded, sorted-task **within-pair** percentile bootstrap estimates
+candidate minus baseline; no new hypothesis test or significance claim is
+introduced. One-pass trace/task iterables work, and input order does not alter
+the seeded output.
+
+This adapter checks **in-memory identity consistency only**. The independent
+task/question reference must itself be authenticated elsewhere; matching
+\`RunTrace\` metadata is not proof of report/trace source custody, treatment
+independence, human scoring, or causal inference. Do not apply it as a
+replacement for the frozen ten-task designated-primary automated procedure:
+that plan was committed after the original collection, fixed treatment order
+remains confounded, and source/evaluator comparability limits still apply.
+The five-task pilot is diagnostic, retrospective measurement checks are
+exploratory, and genuine blinded human evaluation remains pending. No
+historical result is re-estimated or changed by this optional helper.

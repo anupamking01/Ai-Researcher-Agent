@@ -645,6 +645,88 @@ def aggregate_runs_by_task(
     }
 
 
+
+def paired_run_trace_bootstrap_by_task(
+    baseline_runs: Iterable[RunTrace],
+    candidate_runs: Iterable[RunTrace],
+    *,
+    baseline_variant_id: str,
+    candidate_variant_id: str,
+    task_set_id: str,
+    expected_task_ids: Iterable[str],
+    expected_questions_by_task: Mapping[str, str],
+    metric: str = "claim_support_rate",
+    confidence: float = 0.95,
+    n_resamples: int = 2000,
+    seed: int = 0,
+) -> dict:
+    """Compare complete, independently identified diagnostic treatment arms.
+
+    The lower-level task-keyed bootstrap accepts numeric observations without
+    their treatment metadata. This adapter validates each RunTrace arm against
+    an independent task/question manifest, rejects shared run IDs across arms,
+    and only then extracts a preselected higher-is-better diagnostic rate.
+    It neither authenticates historical source files nor replaces frozen
+    main-study inference, whose inputs and procedure are separate.
+    """
+    _validate_bootstrap_settings(confidence, n_resamples, seed)
+    if type(metric) is not str or metric not in (
+        "claim_support_rate",
+        "source_success_rate",
+        "citation_precision_proxy",
+    ):
+        raise ValueError("metric must be a supported higher-is-better diagnostic rate")
+    if baseline_variant_id == candidate_variant_id:
+        raise ValueError("baseline and candidate variant IDs must differ")
+    if not isinstance(expected_questions_by_task, Mapping):
+        raise ValueError("expected_questions_by_task must be a mapping")
+
+    # Snapshot the independent reference once, including one-pass task IDs;
+    # do not infer either expected set or questions from the observed arms.
+    task_ids = list(expected_task_ids)
+    questions = dict(expected_questions_by_task.items())
+    baseline = list(baseline_runs)
+    candidate = list(candidate_runs)
+    aggregate_runs_by_task(
+        baseline,
+        variant_id=baseline_variant_id,
+        task_set_id=task_set_id,
+        expected_task_ids=task_ids,
+        expected_questions_by_task=questions,
+    )
+    aggregate_runs_by_task(
+        candidate,
+        variant_id=candidate_variant_id,
+        task_set_id=task_set_id,
+        expected_task_ids=task_ids,
+        expected_questions_by_task=questions,
+    )
+    reused_run_ids = sorted(
+        {trace.run_id for trace in baseline}
+        & {trace.run_id for trace in candidate}
+    )
+    if reused_run_ids:
+        raise ValueError(
+            f"run_id reused across baseline and candidate arms: {reused_run_ids!r}"
+        )
+
+    paired = paired_bootstrap_confidence_interval_by_task(
+        ((trace.task_id, getattr(trace, metric)) for trace in baseline),
+        ((trace.task_id, getattr(trace, metric)) for trace in candidate),
+        expected_task_ids=task_ids,
+        confidence=confidence,
+        n_resamples=n_resamples,
+        seed=seed,
+    )
+    return {
+        "baseline_variant_id": baseline_variant_id,
+        "candidate_variant_id": candidate_variant_id,
+        "task_set_id": task_set_id,
+        "metric": metric,
+        **paired,
+    }
+
+
 def deduplicate_sources(urls: Iterable[str]) -> list[str]:
     """Return normalized, order-preserving unique source URLs."""
     seen: set[str] = set()

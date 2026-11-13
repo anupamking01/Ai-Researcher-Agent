@@ -11,6 +11,7 @@ from logic.evaluation import (
     paired_metric_comparison,
     paired_metric_comparison_by_task,
     paired_bootstrap_confidence_interval_by_task,
+    paired_run_trace_bootstrap_by_task,
     population_stddev,
     safe_mean,
     safe_median,
@@ -1137,3 +1138,170 @@ def test_task_keyed_bootstrap_rejects_invalid_confidence(invalid):
             expected_task_ids=["a"], confidence=invalid,
         )
 
+
+# Prospective-only RunTrace adapter: validate treatment identity and frozen
+# question assignment before turning records into numeric paired observations.
+_PAIR_QUESTIONS = {"a": "First research question?", "b": "Second research question?"}
+
+
+def _paired_run_trace(task_id, variant, *, completed=True, **changes):
+    values = {
+        "run_id": f"{variant}-{task_id}",
+        "completed": completed,
+        "source_count": 2 if completed else 0,
+        "supported_claim_count": 1 if completed else 0,
+        "unsupported_claim_count": 1 if completed else 0,
+        "variant_id": variant,
+        "task_set_id": "prospective-paired",
+        "task_id": task_id,
+        "question": _PAIR_QUESTIONS[task_id],
+    }
+    values.update(changes)
+    return RunTrace(**values)
+
+
+def _compare_paired_traces(baseline, candidate, **settings):
+    return paired_run_trace_bootstrap_by_task(
+        baseline,
+        candidate,
+        baseline_variant_id="D3",
+        candidate_variant_id="D6",
+        task_set_id="prospective-paired",
+        expected_task_ids=(task for task in ("b", "a")),
+        expected_questions_by_task=_PAIR_QUESTIONS,
+        confidence=0.9,
+        n_resamples=101,
+        seed=23,
+        **settings,
+    )
+
+
+def test_run_trace_bootstrap_retains_failed_zero_source_task_and_is_order_invariant():
+    baseline = [
+        _paired_run_trace("b", "D3", completed=False),
+        _paired_run_trace("a", "D3"),
+    ]
+    candidate = [
+        _paired_run_trace("a", "D6", supported_claim_count=2,
+                          unsupported_claim_count=0),
+        _paired_run_trace("b", "D6", completed=False),
+    ]
+    first = _compare_paired_traces(iter(baseline), iter(candidate))
+    second = _compare_paired_traces(reversed(baseline), reversed(candidate))
+    assert first == second
+    assert first["task_ids"] == ["a", "b"]
+    assert first["n_pairs"] == 2
+    assert first["wins"] == 1
+    assert first["ties"] == 1
+    assert first["losses"] == 0
+    assert first["mean_delta"] == 0.25
+    assert first["bootstrap_confidence_interval"]["estimate"] == 0.25
+    assert first["baseline_variant_id"] == "D3"
+    assert first["candidate_variant_id"] == "D6"
+
+
+@pytest.mark.parametrize(
+    ("metric", "estimate"),
+    [
+        ("claim_support_rate", 0.25),
+        ("source_success_rate", 0.0),
+        ("citation_precision_proxy", 0.0),
+    ],
+)
+def test_run_trace_bootstrap_supports_only_preselected_rate_metrics(metric, estimate):
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3", completed=False)]
+    candidate = [
+        _paired_run_trace("a", "D6", supported_claim_count=2,
+                          unsupported_claim_count=0),
+        _paired_run_trace("b", "D6", completed=False),
+    ]
+    assert paired_run_trace_bootstrap_by_task(
+        baseline, candidate,
+        baseline_variant_id="D3", candidate_variant_id="D6",
+        task_set_id="prospective-paired", expected_task_ids=["a", "b"],
+        expected_questions_by_task=_PAIR_QUESTIONS,
+        metric=metric, n_resamples=101,
+    )["mean_delta"] == estimate
+
+
+@pytest.mark.parametrize("bad_metric", ["estimated_cost_usd", "question", "", None, True])
+def test_run_trace_bootstrap_rejects_unapproved_or_non_numeric_metric(bad_metric):
+    with pytest.raises(ValueError, match="supported higher-is-better"):
+        _compare_paired_traces([], [], metric=bad_metric)
+
+
+@pytest.mark.parametrize(
+    ("arm", "change", "message"),
+    [
+        ("baseline", {"variant_id": "D6"}, "variant_id mismatch"),
+        ("candidate", {"variant_id": "D3"}, "variant_id mismatch"),
+        ("baseline", {"task_set_id": "other"}, "task_set_id mismatch"),
+        ("candidate", {"task_set_id": "other"}, "task_set_id mismatch"),
+        ("baseline", {"question": "Second research question?"}, "task question mismatch"),
+        ("candidate", {"question": "Other question?"}, "task question mismatch"),
+        ("baseline", {"task_id": "other"}, "task coverage mismatch"),
+        ("candidate", {"task_id": "other"}, "task coverage mismatch"),
+    ],
+)
+def test_run_trace_bootstrap_fails_before_sampling_on_mislabeled_cells(
+    arm, change, message
+):
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")]
+    rows = baseline if arm == "baseline" else candidate
+    rows[0] = replace(rows[0], **change)
+    with pytest.raises(ValueError, match=message):
+        _compare_paired_traces(baseline, candidate)
+
+
+def test_run_trace_bootstrap_rejects_cross_arm_run_id_reuse():
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [
+        replace(_paired_run_trace("a", "D6"), run_id=baseline[0].run_id),
+        _paired_run_trace("b", "D6"),
+    ]
+    with pytest.raises(ValueError, match="run_id reused across"):
+        _compare_paired_traces(baseline, candidate)
+
+
+@pytest.mark.parametrize(
+    ("baseline", "candidate", "message"),
+    [
+        ([_paired_run_trace("a", "D3")], [_paired_run_trace("a", "D6"),
+                                         _paired_run_trace("b", "D6")],
+         "task coverage mismatch"),
+        ([_paired_run_trace("a", "D3"), _paired_run_trace("a", "D3")],
+         [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")],
+         "duplicate observed task_id"),
+    ],
+)
+def test_run_trace_bootstrap_rejects_missing_and_duplicate_cells(
+    baseline, candidate, message
+):
+    with pytest.raises(ValueError, match=message):
+        _compare_paired_traces(baseline, candidate)
+
+
+def test_run_trace_bootstrap_rejects_same_variant_and_invalid_resamples():
+    with pytest.raises(ValueError, match="must differ"):
+        paired_run_trace_bootstrap_by_task(
+            [], [], baseline_variant_id="D3", candidate_variant_id="D3",
+            task_set_id="prospective-paired", expected_task_ids=["a"],
+            expected_questions_by_task={"a": "First research question?"},
+        )
+    with pytest.raises(ValueError, match="n_resamples"):
+        _compare_paired_traces([], [], n_resamples=1)
+
+
+def test_run_trace_bootstrap_rejects_nonindependent_reference_question_mapping():
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")]
+    with pytest.raises(ValueError, match="task question mismatch"):
+        paired_run_trace_bootstrap_by_task(
+            baseline, candidate,
+            baseline_variant_id="D3", candidate_variant_id="D6",
+            task_set_id="prospective-paired", expected_task_ids=["a", "b"],
+            expected_questions_by_task={"a": _PAIR_QUESTIONS["b"],
+                                        "b": _PAIR_QUESTIONS["a"]},
+            n_resamples=10,
+        )
