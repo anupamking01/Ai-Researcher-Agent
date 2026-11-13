@@ -1452,7 +1452,13 @@ def test_build_packet_rejects_symlinked_intermediate_source_directory(
     # Neither selected leaf nor its immediate parent is a symlink. The old
     # parent-only O_NOFOLLOW read accepted this alternate source path.
     if source_kind == "task_manifest":
-        task_manifest = alias / "main_budget_tasks.json"
+        # Put the manifest below another *real* directory: alias itself
+        # must not be the leaf parent or the previous O_NOFOLLOW already
+        # rejects it. This makes the regression specifically indirect.
+        manifest_parent = source_root / "frozen"
+        manifest_parent.mkdir()
+        task_manifest.rename(manifest_parent / task_manifest.name)
+        task_manifest = alias / "frozen" / "main_budget_tasks.json"
     else:
         trace_root = alias / "outputs" / "experiment_traces"
 
