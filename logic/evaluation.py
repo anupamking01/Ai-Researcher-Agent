@@ -243,6 +243,23 @@ def _linear_quantile(ordered: Sequence[float], probability: float) -> float:
     return float((1.0 - fraction) * left + fraction * right)
 
 
+def _validate_bootstrap_settings(
+    confidence: float, n_resamples: int, seed: int
+) -> None:
+    """Reject ambiguous bootstrap parameters before consuming any observations.
+
+    In particular, a single draw cannot define percentile uncertainty, and
+    Boolean or coerced text parameters are not explicit experiment settings.
+    This is a diagnostic input contract, not a change to the estimator.
+    """
+    if type(confidence) not in (int, float) or not 0.0 < confidence < 1.0:
+        raise ValueError("confidence must be a finite number between 0 and 1")
+    if type(n_resamples) is not int or n_resamples < 2:
+        raise ValueError("n_resamples must be an integer >= 2")
+    if type(seed) is not int:
+        raise ValueError("seed must be an integer")
+
+
 def bootstrap_confidence_interval(
     values: Sequence[float],
     statistic: Callable[[Iterable[float]], float] = safe_mean,
@@ -256,10 +273,7 @@ def bootstrap_confidence_interval(
     state. The returned interval is descriptive uncertainty and does not imply
     statistical significance.
     """
-    if not 0.0 < confidence < 1.0:
-        raise ValueError("confidence must be between 0 and 1")
-    if n_resamples <= 0:
-        raise ValueError("n_resamples must be positive")
+    _validate_bootstrap_settings(confidence, n_resamples, seed)
 
     sample = _finite_values(values, label="bootstrap sample")
     if not sample:
@@ -420,15 +434,7 @@ def paired_bootstrap_confidence_interval_by_task(
     resampling. This prospective diagnostic interval is descriptive only;
     it does not replace the separately frozen main-study inference.
     """
-    if type(n_resamples) is not int or n_resamples < 2:
-        raise ValueError("n_resamples must be an integer >= 2")
-    if type(seed) is not int:
-        raise ValueError("seed must be an integer")
-    if (
-        type(confidence) not in (int, float)
-        or not 0.0 < confidence < 1.0
-    ):
-        raise ValueError("confidence must be a finite number between 0 and 1")
+    _validate_bootstrap_settings(confidence, n_resamples, seed)
 
     # Retain one-pass inputs so both completeness validation and the
     # subsequent resampling use exactly the same observations.

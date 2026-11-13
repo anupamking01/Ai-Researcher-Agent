@@ -9,6 +9,29 @@ The project has progressed beyond the original proposed-study document. Pilot in
 Human quality ratings are **not yet results**. They remain pending and must be collected under `paper/HUMAN_EVAL_PROTOCOL.md` before any human-quality claim is made.
 
 
+### Shared diagnostic bootstrap-configuration contract (prospective only)
+
+Both the reusable `bootstrap_confidence_interval` and the complete-task
+`paired_bootstrap_confidence_interval_by_task` now call one shared parameter
+validator **before reading samples or resampling**. A confidence level must be
+an explicit built-in finite numeric value strictly between zero and one;
+`n_resamples` must be an exact integer of at least two, and `seed` must be
+an exact integer (including valid negative integer seeds). Strings, Booleans,
+non-finite values, single-draw pseudo-intervals, and otherwise invalid
+configurations raise `ValueError` rather than being coerced, reaching an
+unhandled RNG error, or emitting a misleading degenerate percentile interval.
+The existing empty-sample convention and all valid seeded percentile
+estimates remain unchanged. Synthetic regression tests cover malformed
+parameters, the before-consumption boundary, seeded reproduction, and
+valid empty-input behavior.
+
+This is a **prospective diagnostic input-integrity improvement**, not a
+recalculation of frozen automated results or a new inferential claim. The
+five-task pilot remains diagnostic, retrospective analyses remain exploratory,
+the designated-primary automated study retains its post-collection-plan and
+fixed-order qualifications, and original-report custody plus genuinely
+independent blinded human validation remain outstanding.
+
 ### Complete-task paired bootstrap for prospective diagnostics
 
 `logic.evaluation.paired_bootstrap_confidence_interval_by_task` is an opt-in

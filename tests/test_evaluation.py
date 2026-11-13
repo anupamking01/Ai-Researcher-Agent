@@ -364,6 +364,56 @@ def test_bootstrap_confidence_interval_handles_empty_and_invalid_settings():
         bootstrap_confidence_interval([1.0], n_resamples=0)
 
 
+@pytest.mark.parametrize(
+    "invalid", [0, 1, -1, True, False, 2.0, "50", None, [], {}, 10**400]
+)
+def test_generic_bootstrap_requires_explicit_multiple_integer_draws(invalid):
+    with pytest.raises(ValueError, match="n_resamples"):
+        bootstrap_confidence_interval([0.25, 0.75], n_resamples=invalid)
+
+
+@pytest.mark.parametrize(
+    "invalid", [True, False, None, 0.5, "1", [], {}]
+)
+def test_generic_bootstrap_requires_explicit_integer_seed(invalid):
+    with pytest.raises(ValueError, match="seed"):
+        bootstrap_confidence_interval([0.25, 0.75], seed=invalid)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [True, False, "0.95", None, float("nan"), float("inf"),
+     float("-inf"), 0, 1, -1, 10**400],
+)
+def test_generic_bootstrap_requires_finite_numeric_confidence(invalid):
+    with pytest.raises(ValueError, match="confidence"):
+        bootstrap_confidence_interval([0.25, 0.75], confidence=invalid)
+
+
+def test_generic_bootstrap_rejects_bad_settings_before_consuming_observations():
+    class ForbidIteration:
+        def __iter__(self):
+            raise AssertionError("invalid settings consumed diagnostic inputs")
+
+    with pytest.raises(ValueError, match="seed"):
+        bootstrap_confidence_interval(ForbidIteration(), seed="3")
+
+
+def test_generic_bootstrap_preserves_valid_seeded_intervals_and_empty_input():
+    first = bootstrap_confidence_interval(
+        [0.0, 0.25, 0.75], confidence=0.9, n_resamples=25, seed=-7
+    )
+    second = bootstrap_confidence_interval(
+        [0.0, 0.25, 0.75], confidence=0.9, n_resamples=25, seed=-7
+    )
+    assert first == second
+    assert first["confidence"] == 0.9
+    assert first["n_resamples"] == 25
+    assert bootstrap_confidence_interval(
+        [], confidence=0.9, n_resamples=2, seed=-7
+    )["estimate"] == 0.0
+
+
 def test_bootstrap_confidence_interval_uses_linear_percentiles(monkeypatch):
     samples = iter(([0.0], [10.0], [20.0], [30.0]))
 
