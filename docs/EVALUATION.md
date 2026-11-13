@@ -9,6 +9,30 @@ The project has progressed beyond the original proposed-study document. Pilot in
 Human quality ratings are **not yet results**. They remain pending and must be collected under `paper/HUMAN_EVAL_PROTOCOL.md` before any human-quality claim is made.
 
 
+### Bounded, ordered treatment-arm validation for prospective comparisons
+
+The optional task/question-bound `paired_run_trace_bootstrap_by_task` adapter
+now caps each one-pass treatment-arm snapshot at the independently declared
+number of tasks. Previously, it eagerly materialized **both** arm iterators
+before validating the baseline: an unending, unexpectedly large, or malformed
+producer could consume unbounded memory, or an unrelated candidate producer
+could mask the baseline's provenance error. The adapter now fails closed on
+the first excess record, and checks the complete baseline (including run IDs,
+task/question identity, failed-task coverage, and optional independently planned
+treatment settings) **before reading a candidate record**. The candidate is
+then bounded and independently checked as before. Synthetic regressions assert
+that infinite streams are read only through the first excess record and that
+an invalid baseline leaves a candidate iterator untouched.
+
+Valid complete task matrices, seeded paired resampling, descriptive estimates,
+and the frozen main-study analysis are unchanged. This is prospective
+in-memory robustness, not authentication of original source files or new
+experimental/human evidence. The pilot remains diagnostic, retrospective
+sensitivity analyses remain exploratory, and historical designated-primary
+automated claims retain their post-collection plan, fixed-order, and
+evaluator-comparability limitations. Independent report custody and genuine
+blinded human validation remain blocked.
+
 ### Shared diagnostic bootstrap-configuration contract (prospective only)
 
 Both the reusable `bootstrap_confidence_interval` and the complete-task

@@ -1529,3 +1529,49 @@ def test_paired_trace_preflights_reference_questions_before_reading_arms(
             expected_questions_by_task=bad_questions,
             n_resamples=3,
         )
+
+
+# Fail closed on unbounded one-pass producers: the independent task matrix
+# bounds reads, and a malformed baseline must not touch the candidate arm.
+def test_run_trace_pairing_bounds_unending_baseline_without_consuming_candidate():
+    reads = []
+
+    def endless_baseline():
+        while True:
+            reads.append(1)
+            yield _paired_run_trace("a", "D3")
+
+    def unread_candidate():
+        raise AssertionError("candidate arm read before baseline cardinality validation")
+        yield None
+
+    with pytest.raises(ValueError, match="baseline has more records"):
+        _compare_paired_traces(endless_baseline(), unread_candidate())
+    assert len(reads) == len(_PAIR_QUESTIONS) + 1
+
+
+def test_run_trace_pairing_bounds_unending_candidate_after_valid_baseline():
+    reads = []
+
+    def endless_candidate():
+        while True:
+            reads.append(1)
+            yield _paired_run_trace("a", "D6")
+
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    with pytest.raises(ValueError, match="candidate has more records"):
+        _compare_paired_traces(iter(baseline), endless_candidate())
+    assert len(reads) == len(_PAIR_QUESTIONS) + 1
+
+
+def test_run_trace_pairing_rejects_bad_baseline_before_candidate_read():
+    def unread_candidate():
+        raise AssertionError("candidate arm read before baseline identity validation")
+        yield None
+
+    baseline = [
+        replace(_paired_run_trace("a", "D3"), variant_id="D6"),
+        _paired_run_trace("b", "D3"),
+    ]
+    with pytest.raises(ValueError, match="variant_id mismatch"):
+        _compare_paired_traces(iter(baseline), unread_candidate())

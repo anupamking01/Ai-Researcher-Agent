@@ -776,8 +776,23 @@ def paired_run_trace_bootstrap_by_task(
     task_ids, questions = _validated_reference_task_manifest(
         expected_task_ids, expected_questions_by_task
     )
-    baseline = list(baseline_runs)
-    candidate = list(candidate_runs)
+    # The independent reference bounds cardinality *before* we materialize
+    # either one-pass arm. A never-ending or excessively repeated producer must
+    # not exhaust memory while we are still checking the treatment matrix.
+    def snapshot_arm(records: Iterable[RunTrace], label: str) -> list[RunTrace]:
+        observed: list[RunTrace] = []
+        for trace in records:
+            if len(observed) >= len(task_ids):
+                raise ValueError(
+                    f"{label} has more records than the independent task manifest"
+                )
+            observed.append(trace)
+        return observed
+
+    baseline = snapshot_arm(baseline_runs, "baseline")
+    # Check the first arm before touching the second arm. This prevents an
+    # invalid baseline from exhausting a candidate generator or obscuring its
+    # own provenance failure with a later unrelated producer error.
     aggregate_runs_by_task(
         baseline,
         variant_id=baseline_variant_id,
@@ -788,6 +803,7 @@ def paired_run_trace_bootstrap_by_task(
             configs[baseline_variant_id] if configs is not None else None
         ),
     )
+    candidate = snapshot_arm(candidate_runs, "candidate")
     aggregate_runs_by_task(
         candidate,
         variant_id=candidate_variant_id,
