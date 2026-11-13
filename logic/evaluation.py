@@ -426,7 +426,6 @@ def paired_bootstrap_confidence_interval_by_task(
         raise ValueError("seed must be an integer")
     if (
         type(confidence) not in (int, float)
-        or not isfinite(confidence)
         or not 0.0 < confidence < 1.0
     ):
         raise ValueError("confidence must be a finite number between 0 and 1")

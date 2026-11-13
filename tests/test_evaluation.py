@@ -992,7 +992,7 @@ def test_task_keyed_bootstrap_requires_explicit_integer_seed(invalid):
 
 
 @pytest.mark.parametrize(
-    "invalid", [True, False, "0.95", None, float("nan"), float("inf"), 0, 1]
+    "invalid", [True, False, "0.95", None, float("nan"), float("inf"), 0, 1, 10**400]
 )
 def test_task_keyed_bootstrap_rejects_invalid_confidence(invalid):
     with pytest.raises(ValueError, match="confidence"):
