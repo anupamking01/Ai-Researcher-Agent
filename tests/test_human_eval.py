@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from scripts import build_human_eval_packet as packet_builder
+from scripts import freeze_human_eval_ratings as ratings_freeze
+from scripts import verify_human_eval_freeze as freeze_verifier
 from scripts.build_human_eval_packet import build_packet
 
 
@@ -1483,3 +1485,89 @@ def test_packet_source_capture_preserves_real_nested_directory_reads(tmp_path):
     assert packet_builder._read_regular_file_captured(
         source, label="synthetic nested source"
     ) == expected
+
+
+
+def test_human_freeze_source_rejects_indirect_directory_symlink(tmp_path):
+    """The leaf and immediate parent alone cannot reveal a higher redirect."""
+    real = tmp_path / "real" / "nested" / "submissions"
+    real.mkdir(parents=True)
+    (real / "rating.csv").write_bytes(b"synthetic rating")
+    alias = tmp_path / "alias"
+    try:
+        alias.symlink_to(tmp_path / "real", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("directory symlinks unavailable")
+    redirected = alias / "nested" / "submissions" / "rating.csv"
+    for capture in (
+        lambda p: ratings_freeze._capture_regular_input(p, label="synthetic rating"),
+        lambda p: freeze_verifier._require_regular_file(p, label="synthetic rating"),
+    ):
+        with pytest.raises(ValueError, match="ancestor directory"):
+            capture(redirected)
+    assert ratings_freeze._capture_regular_input(
+        real / "rating.csv", label="synthetic rating",
+    ) == b"synthetic rating"
+
+
+def test_human_freeze_source_detects_ancestor_swap_during_read(tmp_path, monkeypatch):
+    real = tmp_path / "current" / "nested" / "submissions"
+    real.mkdir(parents=True)
+    source = real / "rating.csv"
+    source.write_bytes(b"synthetic rating")
+    original_pread = os.pread
+    swapped = False
+
+    def redirect_after_first_read(descriptor, size, offset):
+        nonlocal swapped
+        payload = original_pread(descriptor, size, offset)
+        if offset == 0 and payload and not swapped:
+            (tmp_path / "current").rename(tmp_path / "moved")
+            (tmp_path / "current").symlink_to(
+                tmp_path / "moved", target_is_directory=True,
+            )
+            swapped = True
+        return payload
+
+    monkeypatch.setattr(ratings_freeze.os, "pread", redirect_after_first_read)
+    with pytest.raises(ValueError, match="ancestor directory changed during capture"):
+        ratings_freeze._capture_regular_input(source, label="synthetic rating")
+    assert swapped
+
+
+def test_independent_human_freeze_inventory_rejects_indirect_root_alias(tmp_path):
+    root = tmp_path / "genuine" / "nested" / "frozen"
+    root.mkdir(parents=True)
+    (root / "freeze_manifest.json").write_bytes(b"synthetic manifest")
+    alias = tmp_path / "alias"
+    try:
+        alias.symlink_to(tmp_path / "genuine", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("directory symlinks unavailable")
+    with pytest.raises(ValueError, match="ancestor directory"):
+        freeze_verifier._capture_freeze_inventory(alias / "nested" / "frozen")
+    assert freeze_verifier._capture_freeze_inventory(root)[1][0][0] == "freeze_manifest.json"
+
+
+def test_independent_human_freeze_inventory_detects_ancestor_swap(tmp_path, monkeypatch):
+    root = tmp_path / "current" / "nested" / "frozen"
+    root.mkdir(parents=True)
+    (root / "freeze_manifest.json").write_bytes(b"synthetic manifest")
+    original = freeze_verifier._capture_directory_inventory
+    swapped = False
+
+    def redirect_after_scan(*args, **kwargs):
+        nonlocal swapped
+        inventory = original(*args, **kwargs)
+        if not swapped:
+            (tmp_path / "current").rename(tmp_path / "moved")
+            (tmp_path / "current").symlink_to(
+                tmp_path / "moved", target_is_directory=True,
+            )
+            swapped = True
+        return inventory
+
+    monkeypatch.setattr(freeze_verifier, "_capture_directory_inventory", redirect_after_scan)
+    with pytest.raises(ValueError, match="ancestor directory changed during capture"):
+        freeze_verifier._capture_freeze_inventory(root)
+    assert swapped

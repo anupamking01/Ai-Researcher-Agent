@@ -7,8 +7,7 @@ rubric, assignment plan, or automated analysis plan.
 ## What the manifest binds
 
 Every file that determines the blinded freeze is read once into an in-memory
-byte snapshot through a non-symlink regular-file descriptor under a bound
-regular parent directory. This includes each ratings CSV, the blinded packet,
+byte snapshot through a non-symlink regular-file descriptor under a pinned, no-follow chain of regular directory ancestors. This includes each ratings CSV, the blinded packet,
 the three frozen governing documents, the coordinator attestation CSV, and the
 archived freezer and annotator-content-validator implementations. Capture
 fails closed if the file, its immediate parent, or the visible pathname is
@@ -354,3 +353,20 @@ The check is a local snapshot consistency safeguard, not a filesystem lock,
 independent origin attestation, or proof that historical treatment data have
 been recovered. Captured bytes remain the analysis input, frozen rubric and
 confirmatory inference are unchanged, and human validation remains pending.
+
+## Full ancestor-directory custody (prospective)
+
+The producer and independent pre-unblinding verifier now pin every absolute
+ancestor directory using no-follow descriptors, and recheck their device,
+inode and mode after reading a blinded rating, governing input or retained
+freeze file. The independent verifier likewise binds its recursive freeze
+inventory to the full freeze-root directory ancestry. Previously an indirect
+symlink, above the immediate parent, could redirect a byte-valid source or
+archive while escaping leaf-only and immediate-parent checks. Synthetic tests
+cover normal nested inputs, preexisting indirect aliases and deterministic
+ancestor substitutions during capture and inventory scanning; the selected
+offline human-packet CI lane executes these cross-stage regression tests.
+
+This is an observed local-filesystem safeguard, not independent historical
+source authentication or proof of annotator identity or uninterrupted custody.
+It does not generate, change, adjudicate or infer any human ratings.

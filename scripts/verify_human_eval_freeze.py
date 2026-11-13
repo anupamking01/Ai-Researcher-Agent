@@ -169,17 +169,11 @@ def _capture_directory_inventory(
 
 
 def _capture_freeze_inventory(freeze_root: Path):
-    """Bind a stable recursive inventory to the visible freeze-root path."""
-    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    directory_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(
-        os, "O_NOFOLLOW", 0
+    """Bind the recursive freeze inventory and all of its visible ancestors."""
+    directory_chain = freeze._open_nofollow_directory_chain(
+        freeze_root, label="freeze root",
     )
-    try:
-        descriptor = os.open(freeze_root, directory_flags)
-    except OSError as exc:
-        raise ValueError(
-            f"freeze root must be a regular directory: {freeze_root}"
-        ) from exc
+    descriptor = directory_chain[-1]
     try:
         inventory = _capture_directory_inventory(descriptor, label="freeze root")
         try:
@@ -190,9 +184,13 @@ def _capture_freeze_inventory(freeze_root: Path):
             ) from exc
         if _entry_identity(visible) != inventory[0]:
             raise ValueError("freeze root changed while it was being verified")
+        freeze._recheck_nofollow_directory_chain(
+            freeze_root, directory_chain, label="freeze root",
+        )
         return inventory
     finally:
-        os.close(descriptor)
+        for directory_fd in reversed(directory_chain):
+            os.close(directory_fd)
 
 
 # Freeze manifests and agreement records have shallow, fixed JSON schemas.

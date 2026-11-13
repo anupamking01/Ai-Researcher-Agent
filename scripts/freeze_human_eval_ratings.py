@@ -460,6 +460,56 @@ def _validate_annotator_attestation_coverage(
         )
 
 
+def _open_nofollow_directory_chain(directory: Path, *, label: str) -> list[int]:
+    """Open the full visible directory ancestry via pinned no-follow descriptors."""
+    directory = Path(directory)
+    if ".." in directory.parts:
+        raise ValueError(f"{label} ancestor traversal is not permitted")
+    absolute = Path(os.path.abspath(directory))
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptors: list[int] = []
+    try:
+        descriptors.append(os.open(absolute.anchor, flags))
+        for component in absolute.parts[1:]:
+            descriptors.append(os.open(component, flags, dir_fd=descriptors[-1]))
+        return descriptors
+    except OSError as exc:
+        for fd in reversed(descriptors):
+            os.close(fd)
+        raise ValueError(
+            f"{label} ancestor directory must be a stable non-symlink directory"
+        ) from exc
+
+
+def _recheck_nofollow_directory_chain(
+    directory: Path, descriptors: list[int], *, label: str
+) -> None:
+    """Reject any observed redirection of an already opened ancestor."""
+    absolute = Path(os.path.abspath(directory))
+    if len(descriptors) != len(absolute.parts):
+        raise ValueError(f"{label} ancestor directory chain is incomplete")
+    for index, component in enumerate(absolute.parts[1:], start=1):
+        try:
+            opened = os.fstat(descriptors[index])
+            current = os.stat(
+                component, dir_fd=descriptors[index - 1],
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise ValueError(
+                f"{label} ancestor directory changed during capture"
+            ) from exc
+        if (
+            not stat.S_ISDIR(current.st_mode)
+            or (opened.st_dev, opened.st_ino, opened.st_mode)
+            != (current.st_dev, current.st_ino, current.st_mode)
+        ):
+            raise ValueError(
+                f"{label} ancestor directory changed during capture"
+            )
+
+
 def _capture_regular_input(
     path: Path, *, label: str,
     max_bytes: int | None = None,
@@ -474,17 +524,9 @@ def _capture_regular_input(
         or not 0 < max_bytes <= MAX_HUMAN_FREEZE_INPUT_BYTES
     ):
         raise ValueError("human-evaluation capture limit must be a positive bounded integer")
-    path = Path(path)
-    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    directory_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(
-        os, "O_NOFOLLOW", 0
-    )
-    try:
-        parent_fd = os.open(path.parent, directory_flags)
-    except OSError as exc:
-        raise ValueError(
-            f"{label} parent must be a regular directory: {path.parent}"
-        ) from exc
+    path = Path(os.path.abspath(path))
+    directory_chain = _open_nofollow_directory_chain(path.parent, label=label)
+    parent_fd = directory_chain[-1]
     try:
         parent = os.fstat(parent_fd)
         if not stat.S_ISDIR(parent.st_mode):
@@ -589,11 +631,15 @@ def _capture_regular_input(
                 or visible_parent_identity != parent_identity
             ):
                 raise ValueError(f"{label} changed while it was being read")
+            _recheck_nofollow_directory_chain(
+                path.parent, directory_chain, label=label,
+            )
             return b"".join(chunks)
         finally:
             os.close(file_fd)
     finally:
-        os.close(parent_fd)
+        for directory_fd in reversed(directory_chain):
+            os.close(directory_fd)
 
 
 def _load_ratings(
