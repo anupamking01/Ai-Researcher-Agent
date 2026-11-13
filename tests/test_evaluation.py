@@ -1161,6 +1161,8 @@ def _paired_run_trace(task_id, variant, *, completed=True, **changes):
 
 
 def _compare_paired_traces(baseline, candidate, **settings):
+    options = {"confidence": 0.9, "n_resamples": 101, "seed": 23}
+    options.update(settings)
     return paired_run_trace_bootstrap_by_task(
         baseline,
         candidate,
@@ -1169,10 +1171,7 @@ def _compare_paired_traces(baseline, candidate, **settings):
         task_set_id="prospective-paired",
         expected_task_ids=(task for task in ("b", "a")),
         expected_questions_by_task=_PAIR_QUESTIONS,
-        confidence=0.9,
-        n_resamples=101,
-        seed=23,
-        **settings,
+        **options,
     )
 
 

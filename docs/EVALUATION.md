@@ -931,11 +931,11 @@ The repository now has a reproducible evaluation architecture and a frozen human
 
 ## Source-identified task-paired diagnostic bootstrap (prospective only)
 
-The lower-level \`paired_bootstrap_confidence_interval_by_task\` receives
-\`(task_id, metric)\` observations and cannot detect an accidentally mixed
+The lower-level `paired_bootstrap_confidence_interval_by_task` receives
+`(task_id, metric)` observations and cannot detect an accidentally mixed
 treatment variant, altered research question, or reused run ID across arms.
-\`paired_run_trace_bootstrap_by_task\` closes that metadata gap for future
-\`RunTrace\` comparisons. It requires two **distinct** declared variants, one
+`paired_run_trace_bootstrap_by_task` closes that metadata gap for future
+`RunTrace` comparisons. It requires two **distinct** declared variants, one
 task set, a complete independent task-ID set, and an independently obtained
 **exact** task-ID-to-question mapping. Both treatment arms are validated
 against the same reference before deriving any metric or drawing samples.
@@ -944,7 +944,7 @@ being accidentally treated as two independent treatment outputs.
 
 For example, with the manifest sourced separately from the observed traces:
 
-\`\`\`python
+```python
 from logic.evaluation import paired_run_trace_bootstrap_by_task
 
 comparison = paired_run_trace_bootstrap_by_task(
@@ -960,11 +960,11 @@ comparison = paired_run_trace_bootstrap_by_task(
     metric="claim_support_rate",
     seed=23,
 )
-\`\`\`
+```
 
-The supported higher-is-better rates are \`claim_support_rate\`,
-\`source_success_rate\`, and the **legacy**
-\`citation_precision_proxy\` (not an independently verified citation-accuracy
+The supported higher-is-better rates are `claim_support_rate`,
+`source_success_rate`, and the **legacy**
+`citation_precision_proxy` (not an independently verified citation-accuracy
 measure). Failed and zero-source tasks remain present, including their zero
 rates; no favorable-only filtering occurs. After identity validation, the
 existing seeded, sorted-task **within-pair** percentile bootstrap estimates
@@ -974,7 +974,7 @@ the seeded output.
 
 This adapter checks **in-memory identity consistency only**. The independent
 task/question reference must itself be authenticated elsewhere; matching
-\`RunTrace\` metadata is not proof of report/trace source custody, treatment
+`RunTrace` metadata is not proof of report/trace source custody, treatment
 independence, human scoring, or causal inference. Do not apply it as a
 replacement for the frozen ten-task designated-primary automated procedure:
 that plan was committed after the original collection, fixed treatment order
