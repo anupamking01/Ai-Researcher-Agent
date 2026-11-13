@@ -532,6 +532,39 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
     return summary
 
 
+_TREATMENT_FIELDS = (
+    "planning_mode", "verification_mode", "source_budget",
+    "smart_model", "fast_model", "temperature",
+)
+
+
+def _validated_treatment_settings(settings: Mapping[str, object]) -> dict[str, object]:
+    """Capture the independently planned treatment settings before trace reads."""
+    if not isinstance(settings, Mapping):
+        raise ValueError("expected_treatment_settings must be a mapping")
+    planned = dict(settings.items())
+    if set(planned) != set(_TREATMENT_FIELDS):
+        raise ValueError("expected_treatment_settings must declare exactly six fields")
+    for field in ("planning_mode", "verification_mode", "smart_model", "fast_model"):
+        value = planned[field]
+        if (
+            type(value) is not str
+            or value != value.strip()
+            or (field in ("planning_mode", "verification_mode") and not value)
+        ):
+            raise ValueError(f"expected_treatment_settings {field} must be valid text")
+    budget = planned["source_budget"]
+    if type(budget) is not int or budget < 0:
+        raise ValueError("expected_treatment_settings source_budget must be nonnegative int")
+    temperature = _finite_float(
+        planned["temperature"], label="expected_treatment_settings temperature"
+    )
+    if temperature < 0:
+        raise ValueError("expected_treatment_settings temperature must be nonnegative")
+    planned["temperature"] = temperature
+    return planned
+
+
 def aggregate_runs_by_task(
     runs: Iterable[RunTrace],
     *,
@@ -539,6 +572,7 @@ def aggregate_runs_by_task(
     task_set_id: str,
     expected_task_ids: Iterable[str],
     expected_questions_by_task: Mapping[str, str] | None = None,
+    expected_treatment_settings: Mapping[str, object] | None = None,
 ) -> dict:
     """Aggregate one complete diagnostic treatment arm against a task manifest.
 
@@ -550,7 +584,9 @@ def aggregate_runs_by_task(
     if input records arrive in different orders. An optional independently
     sourced task-ID-to-question mapping rejects traces mislabeled with the
     correct task ID but the wrong research question, including cross-task
-    question swaps that task-ID coverage alone cannot detect.
+    question swaps that task-ID coverage alone cannot detect. An optional
+    independently planned six-field configuration also detects mislabeled
+    treatment settings despite otherwise valid task and variant IDs.
 
     This does not authenticate the provided manifest or the trace's original
     source bytes, or change the separately frozen main-study analysis.
@@ -598,6 +634,10 @@ def aggregate_runs_by_task(
                 f"unexpected={unexpected_questions!r}"
             )
 
+    expected_config = (
+        _validated_treatment_settings(expected_treatment_settings)
+        if expected_treatment_settings is not None else None
+    )
     by_task: dict[str, RunTrace] = {}
     seen_run_ids: set[str] = set()
     for trace in runs:
@@ -611,6 +651,12 @@ def aggregate_runs_by_task(
             raise ValueError(f"variant_id mismatch for task {task_id!r}")
         if trace.task_set_id != task_set_id:
             raise ValueError(f"task_set_id mismatch for task {task_id!r}")
+        if expected_config is not None:
+            for field, planned_value in expected_config.items():
+                if getattr(trace, field) != planned_value:
+                    raise ValueError(
+                        f"treatment setting mismatch for {field} at task {task_id!r}"
+                    )
         if task_id in by_task:
             raise ValueError(f"duplicate observed task_id: {task_id!r}")
         if run_id in seen_run_ids:
@@ -655,6 +701,9 @@ def paired_run_trace_bootstrap_by_task(
     task_set_id: str,
     expected_task_ids: Iterable[str],
     expected_questions_by_task: Mapping[str, str],
+    expected_treatment_settings_by_variant: (
+        Mapping[str, Mapping[str, object]] | None
+    ) = None,
     metric: str = "claim_support_rate",
     confidence: float = 0.95,
     n_resamples: int = 2000,
@@ -664,7 +713,8 @@ def paired_run_trace_bootstrap_by_task(
 
     The lower-level task-keyed bootstrap accepts numeric observations without
     their treatment metadata. This adapter validates each RunTrace arm against
-    an independent task/question manifest, rejects shared run IDs across arms,
+    independent task/question and optional planned treatment-setting manifests,
+    rejects shared run IDs across arms,
     and only then extracts a preselected higher-is-better diagnostic rate.
     It neither authenticates historical source files nor replaces frozen
     main-study inference, whose inputs and procedure are separate.
@@ -681,6 +731,25 @@ def paired_run_trace_bootstrap_by_task(
     if not isinstance(expected_questions_by_task, Mapping):
         raise ValueError("expected_questions_by_task must be a mapping")
 
+    configs = None
+    if expected_treatment_settings_by_variant is not None:
+        if not isinstance(expected_treatment_settings_by_variant, Mapping):
+            raise ValueError("expected_treatment_settings_by_variant must be a mapping")
+        raw_configs = dict(expected_treatment_settings_by_variant.items())
+        if (
+            type(baseline_variant_id) is not str
+            or type(candidate_variant_id) is not str
+            or set(raw_configs) != {baseline_variant_id, candidate_variant_id}
+        ):
+            raise ValueError(
+                "expected_treatment_settings_by_variant must cover exactly both variants"
+            )
+        # Validate both independent plans before consuming any observed trace.
+        configs = {
+            variant: _validated_treatment_settings(raw_configs[variant])
+            for variant in (baseline_variant_id, candidate_variant_id)
+        }
+
     # Snapshot the independent reference once, including one-pass task IDs;
     # do not infer either expected set or questions from the observed arms.
     task_ids = list(expected_task_ids)
@@ -693,6 +762,9 @@ def paired_run_trace_bootstrap_by_task(
         task_set_id=task_set_id,
         expected_task_ids=task_ids,
         expected_questions_by_task=questions,
+        expected_treatment_settings=(
+            configs[baseline_variant_id] if configs is not None else None
+        ),
     )
     aggregate_runs_by_task(
         candidate,
@@ -700,6 +772,9 @@ def paired_run_trace_bootstrap_by_task(
         task_set_id=task_set_id,
         expected_task_ids=task_ids,
         expected_questions_by_task=questions,
+        expected_treatment_settings=(
+            configs[candidate_variant_id] if configs is not None else None
+        ),
     )
     reused_run_ids = sorted(
         {trace.run_id for trace in baseline}

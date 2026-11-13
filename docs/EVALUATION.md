@@ -986,3 +986,49 @@ remains confounded, and source/evaluator comparability limits still apply.
 The five-task pilot is diagnostic, retrospective measurement checks are
 exploratory, and genuine blinded human evaluation remains pending. No
 historical result is re-estimated or changed by this optional helper.
+
+
+## Prospective treatment-setting fidelity check (optional)
+
+A correct variant ID, task ID, and frozen research-question match can still
+mask an observation recorded under the wrong treatment settings. Future
+diagnostic callers can supply an independently pinned six-field configuration
+to `aggregate_runs_by_task(expected_treatment_settings=...)`, or a
+variant-keyed pair of configurations to
+`paired_run_trace_bootstrap_by_task(expected_treatment_settings_by_variant=...)`.
+
+Each configuration must declare exactly `planning_mode`,
+`verification_mode`, `source_budget`, `smart_model`, `fast_model`, and
+`temperature`. The input contract validates text, nonnegative integer
+budget, and finite nonnegative numeric temperature. Every field is compared
+exactly to every observed run (including failed and zero-source tasks).
+Both plans are validated **before** reading either paired treatment-arm
+iterator. A missing, additional, malformed, or drifted setting fails closed.
+Omitting this opt-in contract keeps existing callers and estimates unchanged.
+
+A synthetic illustration (these are not assertions about historical settings):
+
+```python
+planned = {
+    "D3": {"planning_mode": "direct", "verification_mode": "off",
+           "source_budget": 3, "smart_model": "smart-v1",
+           "fast_model": "fast-v1", "temperature": 0.0},
+    "D6": {"planning_mode": "direct", "verification_mode": "off",
+           "source_budget": 6, "smart_model": "smart-v1",
+           "fast_model": "fast-v1", "temperature": 0.0},
+}
+paired_run_trace_bootstrap_by_task(
+    baseline_traces, candidate_traces,
+    baseline_variant_id="D3", candidate_variant_id="D6",
+    task_set_id="prospective-v1", expected_task_ids=["task-a", "task-b"],
+    expected_questions_by_task=independently_pinned_questions,
+    expected_treatment_settings_by_variant=planned, seed=23,
+)
+```
+
+Source the plan **independently of the observed traces**. Matching recorded
+configuration does not prove the provider actually honored it, authenticate
+original trace/report custody, eliminate fixed-order confounding, or correct
+historical evaluator-policy differences. No pilot, frozen designated-primary
+automated, exploratory, or human-validation result is changed or promoted
+by this prospective diagnostic guard. Blinded human validation remains pending.

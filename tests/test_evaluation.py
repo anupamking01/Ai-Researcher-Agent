@@ -1316,3 +1316,128 @@ def test_run_trace_bootstrap_rejects_nonindependent_reference_question_mapping()
                                         "b": _PAIR_QUESTIONS["a"]},
             n_resamples=10,
         )
+
+
+# Synthetic independent configuration references, not historic treatment data.
+_PLANNED = {
+    "D3": {
+        "planning_mode": "direct", "verification_mode": "off", "source_budget": 3,
+        "smart_model": "smart-v1", "fast_model": "fast-v1", "temperature": 0.0,
+    },
+    "D6": {
+        "planning_mode": "direct", "verification_mode": "off", "source_budget": 6,
+        "smart_model": "smart-v1", "fast_model": "fast-v1", "temperature": 0.0,
+    },
+}
+
+
+def _planned_trace(task, variant, **changes):
+    completed = changes.pop("completed", True)
+    return replace(
+        _paired_run_trace(task, variant, completed=completed),
+        **{**_PLANNED[variant], **changes},
+    )
+
+
+def test_treatment_fidelity_optional_contract_detects_budget_drift():
+    rows = [_planned_trace("a", "D3", source_budget=6)]
+    opts = {
+        "variant_id": "D3", "task_set_id": "prospective-paired",
+        "expected_task_ids": ["a"],
+        "expected_questions_by_task": {"a": _PAIR_QUESTIONS["a"]},
+    }
+    assert aggregate_runs_by_task(rows, **opts)["n_runs"] == 1
+    with pytest.raises(ValueError, match="treatment setting mismatch for source_budget"):
+        aggregate_runs_by_task(
+            rows, expected_treatment_settings=_PLANNED["D3"], **opts
+        )
+
+
+def test_treatment_fidelity_preserves_failed_cells_and_seeded_pairing():
+    baseline = [_planned_trace("b", "D3", completed=False, source_count=0),
+                _planned_trace("a", "D3")]
+    candidate = [_planned_trace("a", "D6", supported_claim_count=2,
+                                unsupported_claim_count=0),
+                 _planned_trace("b", "D6", completed=False, source_count=0)]
+    old = _compare_paired_traces(baseline, candidate)
+    bound = _compare_paired_traces(
+        iter(baseline), iter(candidate),
+        expected_treatment_settings_by_variant=_PLANNED,
+    )
+    reverse = _compare_paired_traces(
+        reversed(baseline), reversed(candidate),
+        expected_treatment_settings_by_variant=_PLANNED,
+    )
+    assert old == bound == reverse
+    assert bound["task_ids"] == ["a", "b"]
+    assert bound["n_pairs"] == 2
+
+
+@pytest.mark.parametrize("variant", ["D3", "D6"])
+@pytest.mark.parametrize(
+    ("field", "changed"),
+    [
+        ("planning_mode", "planner"), ("verification_mode", "on"),
+        ("source_budget", 9), ("smart_model", "other"),
+        ("fast_model", "other"), ("temperature", 0.3),
+    ],
+)
+def test_treatment_fidelity_detects_wrong_planned_setting_in_both_arms(
+    variant, field, changed
+):
+    baseline = [_planned_trace("a", "D3"), _planned_trace("b", "D3")]
+    candidate = [_planned_trace("a", "D6"), _planned_trace("b", "D6")]
+    arm = baseline if variant == "D3" else candidate
+    arm[0] = replace(arm[0], **{field: changed})
+    with pytest.raises(ValueError, match=f"treatment setting mismatch for {field}"):
+        _compare_paired_traces(
+            baseline, candidate, expected_treatment_settings_by_variant=_PLANNED,
+        )
+
+
+@pytest.mark.parametrize(
+    ("bad", "message"),
+    [
+        ({}, "exactly six"), ({"source_budget": 3}, "exactly six"),
+        ({**_PLANNED["D3"], "extra": 1}, "exactly six"),
+        ({**_PLANNED["D3"], "source_budget": True}, "source_budget"),
+        ({**_PLANNED["D3"], "source_budget": -1}, "source_budget"),
+        ({**_PLANNED["D3"], "planning_mode": ""}, "planning_mode"),
+        ({**_PLANNED["D3"], "verification_mode": " off"}, "verification_mode"),
+        ({**_PLANNED["D3"], "smart_model": None}, "smart_model"),
+        ({**_PLANNED["D3"], "temperature": True}, "temperature"),
+        ({**_PLANNED["D3"], "temperature": "0"}, "temperature"),
+        ({**_PLANNED["D3"], "temperature": float("nan")}, "temperature"),
+        ({**_PLANNED["D3"], "temperature": -1.0}, "temperature"),
+        ({**_PLANNED["D3"], "temperature": 10**400}, "temperature"),
+    ],
+)
+def test_treatment_fidelity_invalid_plan_fails_before_consuming_runs(bad, message):
+    def no_read():
+        raise AssertionError("must not inspect observations with an invalid plan")
+        yield None
+
+    with pytest.raises(ValueError, match=message):
+        aggregate_runs_by_task(
+            no_read(), variant_id="D3", task_set_id="prospective-paired",
+            expected_task_ids=["a"], expected_treatment_settings=bad,
+        )
+
+
+@pytest.mark.parametrize(
+    "configs", [
+        [], {}, {"D3": _PLANNED["D3"]},
+        {**_PLANNED, "P6": _PLANNED["D3"]},
+        {"D3": [], "D6": _PLANNED["D6"]},
+    ],
+)
+def test_treatment_fidelity_paired_manifest_fails_before_arm_reads(configs):
+    def no_read():
+        raise AssertionError("must not inspect observed treatment arms")
+        yield None
+
+    with pytest.raises(ValueError, match="expected_treatment_settings"):
+        _compare_paired_traces(
+            no_read(), no_read(),
+            expected_treatment_settings_by_variant=configs,
+        )
