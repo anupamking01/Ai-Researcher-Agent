@@ -1437,3 +1437,43 @@ def test_production_packet_rechecks_pinned_evaluator_before_publication(
             require_original_task_manifest=True,
         )
     assert not output_root.exists()
+
+@pytest.mark.parametrize("source_kind", ["task_manifest", "trace_tree"])
+def test_build_packet_rejects_symlinked_intermediate_source_directory(
+    tmp_path, source_kind
+):
+    """An indirect alias must not become original human-evaluation evidence."""
+    source_root = tmp_path / "original-evidence"
+    trace_root = _write_complete_matrix(source_root)
+    task_manifest = _write_task_manifest(source_root)
+    alias = tmp_path / "external-alias"
+    alias.symlink_to(source_root, target_is_directory=True)
+
+    # Neither selected leaf nor its immediate parent is a symlink. The old
+    # parent-only O_NOFOLLOW read accepted this alternate source path.
+    if source_kind == "task_manifest":
+        task_manifest = alias / "main_budget_tasks.json"
+    else:
+        trace_root = alias / "outputs" / "experiment_traces"
+
+    output_root = tmp_path / f"packet-indirect-{source_kind}"
+    with pytest.raises(ValueError, match="ancestor directory"):
+        build_packet(
+            trace_root,
+            output_root,
+            seed=20260915,
+            task_manifest_path=task_manifest,
+        )
+    assert not output_root.exists()
+
+
+def test_packet_source_capture_preserves_real_nested_directory_reads(tmp_path):
+    """The ancestor guard must not reject a valid one-link regular input."""
+    source = tmp_path / "original" / "nested" / "source.json"
+    source.parent.mkdir(parents=True)
+    expected = b'{"frozen_before_execution": true}\n'
+    source.write_bytes(expected)
+
+    assert packet_builder._read_regular_file_captured(
+        source, label="synthetic nested source"
+    ) == expected

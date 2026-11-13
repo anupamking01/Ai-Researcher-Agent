@@ -493,10 +493,29 @@ def _read_regular_file_captured(
     path = Path(os.path.abspath(Path(path)))
     directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
-    parent_fd = None
+    # A no-follow open of only the immediate parent does not protect an
+    # earlier ancestor: /archive/alias/variant can silently traverse an
+    # out-of-tree symlink even if /variant and the leaf are regular.
+    # Pin the entire absolute directory chain, component by component.
+    directory_fds: list[int] = []
     file_fd = None
     try:
-        parent_fd = os.open(path.parent, directory_flags | nofollow)
+        directory_fds.append(os.open(path.anchor, directory_flags | nofollow))
+        for component in path.parent.parts[1:]:
+            try:
+                directory_fds.append(
+                    os.open(
+                        component,
+                        directory_flags | nofollow,
+                        dir_fd=directory_fds[-1],
+                    )
+                )
+            except OSError as exc:
+                raise ValueError(
+                    f"{label} ancestor directory is not a stable, "
+                    f"non-symlink directory: {path}"
+                ) from exc
+        parent_fd = directory_fds[-1]
         parent_before = os.fstat(parent_fd)
         # Avoid blocking on a substituted FIFO before rejecting its inode type.
         file_fd = os.open(
@@ -538,6 +557,23 @@ def _read_regular_file_captured(
             != (parent_after.st_dev, parent_after.st_ino)
         ):
             raise ValueError(f"{label} was replaced during capture: {path}")
+        # Recheck the same directory chain after reading. Leaf-parent
+        # identity alone cannot detect an indirect redirect of its ancestors.
+        for index, component in enumerate(path.parent.parts[1:], start=1):
+            opened = os.fstat(directory_fds[index])
+            current = os.stat(
+                component,
+                dir_fd=directory_fds[index - 1],
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISDIR(current.st_mode)
+                or (opened.st_dev, opened.st_ino, opened.st_mode)
+                != (current.st_dev, current.st_ino, current.st_mode)
+            ):
+                raise ValueError(
+                    f"{label} ancestor directory changed during capture: {path}"
+                )
         # Record the identity of the exact descriptor whose bytes were captured.
         # An independent pathname stat after close would reopen a race window.
         if identity_out is not None:
@@ -550,8 +586,8 @@ def _read_regular_file_captured(
     finally:
         if file_fd is not None:
             os.close(file_fd)
-        if parent_fd is not None:
-            os.close(parent_fd)
+        for directory_fd in reversed(directory_fds):
+            os.close(directory_fd)
 
 
 def _resolve_report_markdown(trace_root: Path, report_path: str, *, run_id: str) -> Path:

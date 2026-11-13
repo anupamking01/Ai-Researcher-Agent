@@ -1,5 +1,27 @@
 # Recover the original automated-to-human VERA evidence (no outcome reruns)
 
+## Indirect source-directory alias custody (14 November 2026)
+
+Original-source capture now opens **each absolute directory component** from
+the filesystem root with a no-follow directory descriptor, not just the
+immediate leaf parent. It rechecks directory identity from those pinned
+descriptors after the captured file read and before accepting source bytes.
+This rejects an indirect symlink such as `backup-alias/outputs/experiment_traces`
+where the trace file, variant directory, and leaf parent themselves are
+regular paths, as well as observed ancestor replacements during capture.
+The guard applies to the frozen task manifest, treatment traces, reports
+and pinned evaluator inputs, including prepublication rereads.
+
+Synthetic negative tests cover alias-based task-manifest and trace-tree
+substitutions; a positive nested-path fixture preserves ordinary reads. This
+is a prospective local path-custody check on platforms supporting
+`O_NOFOLLOW`/descriptor-relative opens, **not** an external archive
+attestation, a guarantee against every concurrent filesystem adversary, or
+proof that the historical reports actually exist. Original treatment and
+evaluator-recovery archives remain independently unauthenticated; blinded
+human packet distribution remains blocked. No frozen automated scores,
+pilot findings, exploratory sensitivities, or human ratings were changed.
+
 ## Single-link original-source preflight (14 November 2026)
 
 The offline human-evaluation packet builder now fails closed if a captured
