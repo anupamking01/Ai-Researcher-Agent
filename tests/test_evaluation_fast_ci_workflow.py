@@ -125,3 +125,43 @@ def test_fast_diagnostic_ci_bootstraps_only_pinned_minimal_dependencies():
         if s.get("name") == "Run firewalled diagnostic evaluation regressions"
     )
     assert run["env"]["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+
+
+def test_dependency_free_gate_runs_before_pip_and_retains_partial_test_evidence():
+    """An early test result must survive later cancellation or slow pip."""
+    full = WORKFLOW.parents[2] / ".github/workflows/tests.yml"
+    workflows = [
+        _load_workflow(),
+        yaml.load(full.read_text(encoding="utf-8"), Loader=yaml.BaseLoader),
+    ]
+    for workflow in workflows:
+        steps = next(iter(workflow["jobs"].values()))["steps"]
+        names = [step["name"] for step in steps]
+        order = (
+            "Verify pinned Python before dependency-free diagnostic gate",
+            "Verify exact checkout before dependency-free diagnostic gate",
+            "Run dependency-free diagnostic invariants before pip installation",
+            "Verify exact checkout after dependency-free diagnostic gate",
+            "Retain pre-install diagnostic evidence (90 days)",
+        )
+        positions = [names.index(name) for name in order]
+        assert positions == sorted(positions)
+        install = next(
+            i for i, name in enumerate(names)
+            if name.startswith("Install ") and "dependencies" in name
+        )
+        assert positions[-1] < install
+        run = steps[positions[2]]["run"]
+        assert "set -euo pipefail" in run
+        assert "python -m unittest discover -s tests -p 'test_evaluation_stdlib_gate.py' -v" in run
+        assert "vera-stdlib-evaluation.log" in run
+        assert "$GITHUB_SHA" in run
+        for position in (positions[1], positions[3]):
+            assert '--checkout-sha "$GITHUB_SHA"' in steps[position]["run"]
+        evidence = steps[positions[-1]]
+        assert evidence["with"]["if-no-files-found"] == "error"
+        assert evidence["with"]["retention-days"] == "90"
+        assert "vera-stdlib-evaluation.log" in evidence["with"]["path"]
+    filters = workflows[0]["on"]
+    for trigger in ("push", "pull_request"):
+        assert "tests/test_evaluation_stdlib_gate.py" in filters[trigger]["paths"]

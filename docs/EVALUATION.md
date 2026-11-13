@@ -1166,3 +1166,27 @@ fixed-order limitations, retrospective sensitivities remain exploratory,
 and genuinely independent human ratings remain pending. Nothing here reruns
 treatments or evaluators, authenticates unavailable original reports/traces,
 or changes frozen outcomes.
+
+
+## Early dependency-free diagnostic CI evidence
+
+Both the full tests.yml workflow and targeted diagnostic-evaluation-fast-ci.yml
+workflow now execute six synthetic, Python-standard-library-only evaluation
+regressions **before** pip dependency installation. This is motivated by
+repeated CI cancellations before pytest. Each early gate checks the pinned
+interpreter and exact Git checkout, runs the dependency-free suite, rechecks
+tracked source bytes, and immediately uploads a GitHub-run-scoped log.
+If a later step is cancelled, the narrow result can remain visible **only
+when the early steps actually completed**. The pre-existing, independently
+pinned firewalled pytest, full-suite and receipt-verification gates remain.
+
+The six cases cover exact task/question pairing, seeded order invariance,
+failed/zero-source denominator inclusion, a question-swap rejection before
+candidate consumption, bounded consumption of an unending trace producer,
+and invalid sampling-temperature rejection. They run no providers and generate
+no experimental outcomes. An early-gate success is **not** full pytest success,
+independent original-source authentication, treatment replication, or
+human-validation evidence. The five-task pilot remains diagnostic; designated
+primary automated analysis retains post-collection statistical-plan, fixed-order,
+and evaluator-comparability qualifications; retrospective sensitivities remain
+exploratory; genuine blinded human ratings are still pending.

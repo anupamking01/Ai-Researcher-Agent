@@ -11,6 +11,7 @@ on:
       - logic/evaluation.py
       - tests/test_evaluation.py
       - tests/test_evaluation_fast_ci_workflow.py
+      - tests/test_evaluation_stdlib_gate.py
       - scripts/run_offline_pytest_firewalled.sh
       - scripts/verify_ci_python_runtime.py
       - scripts/verify_ci_source_checkout.py
@@ -24,6 +25,7 @@ on:
       - logic/evaluation.py
       - tests/test_evaluation.py
       - tests/test_evaluation_fast_ci_workflow.py
+      - tests/test_evaluation_stdlib_gate.py
       - scripts/run_offline_pytest_firewalled.sh
       - scripts/verify_ci_python_runtime.py
       - scripts/verify_ci_source_checkout.py
@@ -56,6 +58,29 @@ jobs:
             requirements.txt
             requirements-ci.lock
 
+      - name: Verify pinned Python before dependency-free diagnostic gate
+        run: python -m scripts.verify_ci_python_runtime --phase before-tests
+
+      - name: Verify exact checkout before dependency-free diagnostic gate
+        run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
+
+      - name: Run dependency-free diagnostic invariants before pip installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'VERA EARLY DIAGNOSTIC: sha=%s run=%s attempt=%s event=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_EVENT_NAME" | tee "$RUNNER_TEMP/vera-stdlib-evaluation.log"
+          python -m unittest discover -s tests -p 'test_evaluation_stdlib_gate.py' -v 2>&1 | tee -a "$RUNNER_TEMP/vera-stdlib-evaluation.log"
+
+      - name: Verify exact checkout after dependency-free diagnostic gate
+        run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests
+
+      - name: Retain pre-install diagnostic evidence (90 days)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-stdlib-evaluation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vera-stdlib-evaluation.log
+          if-no-files-found: error
+          retention-days: 90
       - name: Install only pinned offline diagnostic-test dependencies
         shell: bash
         run: |
