@@ -336,7 +336,14 @@ def test_packet_verifier_rejects_hardlinked_reports_after_packet_build(packet_ca
     assert (original.stat().st_dev, original.stat().st_ino) == (
         alias.stat().st_dev, alias.stat().st_ino
     )
-    with pytest.raises(ValueError, match="Same Markdown report inode reused"):
+    # The captured-source single-link guard now fails before the older
+    # cross-run duplicate-inode check. Preserve the stricter fail-closed
+    # contract without requiring an obsolete downstream error message.
+    assert original.stat().st_nlink == alias.stat().st_nlink == 2
+    with pytest.raises(
+        ValueError,
+        match=r"report for H[0-9]+ must have exactly one filesystem link",
+    ):
         _verify(packet_case)
 
 
