@@ -1,5 +1,28 @@
 # Recover the original automated-to-human VERA evidence (no outcome reruns)
 
+## Single-link original-source preflight (14 November 2026)
+
+The offline human-evaluation packet builder now fails closed if a captured
+task manifest, treatment trace, Markdown report, or pinned evaluator input
+has more than one filesystem hardlink. An additional hardlink is an alternate
+writable path to the **same inode**, even if the source bytes and SHA-256
+currently match; checking only symlinks or reuse of a report *within* the
+selected matrix does not detect an unselected external alias. Source
+capture also rechecks file mode and link count against the opened descriptor
+and pathname, alongside inode, size, and mutation timestamps. This applies
+to source prepublication rereads as well as initial capture, before any
+annotator-facing file is reserved. Synthetic tests cover unselected external
+aliases for each source category and reuse of one report across two cells.
+
+This is a prospective local custody guard, **not** proof of independent
+archival provenance or of the original treatment/evaluator report contents.
+It does not recover expired GitHub artifacts, establish an independent
+attestation, authorize human-evaluation distribution, modify the frozen
+automated results, or generate human ratings. Any legitimately deduplicated
+source archive must be restored as distinct regular files and independently
+authenticated before packet publication; no scientific evidence is silently
+replaced by this check.
+
 **Status (2026-11-05): blocked on original report and handoff custody.**
 This is an operational inventory and recovery plan, not an experiment or human-evaluation result.
 

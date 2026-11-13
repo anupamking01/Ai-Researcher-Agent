@@ -994,7 +994,7 @@ def test_build_packet_rejects_hardlinked_report_across_distinct_runs(
     os.link(source, target)
     destination = tmp_path / "packet-aliased-report"
 
-    with pytest.raises(ValueError, match="Same Markdown report inode reused"):
+    with pytest.raises(ValueError, match="exactly one filesystem link"):
         _build_packet(trace_root, destination, tmp_path)
     assert not destination.exists()
 
@@ -1079,6 +1079,35 @@ def test_build_packet_rejects_truthy_non_boolean_completion(tmp_path, invalid_co
 
     with pytest.raises(ValueError, match="Incomplete run"):
         _build_packet(trace_root, destination, tmp_path)
+    assert not destination.exists()
+
+
+
+@pytest.mark.parametrize("source_kind", ["task_manifest", "trace", "report"])
+def test_build_packet_rejects_external_hardlink_to_source_before_publication(
+    tmp_path, source_kind
+):
+    """One source inode must not have an unselected writable pathname."""
+    trace_root = _write_complete_matrix(tmp_path)
+    task_manifest = _write_task_manifest(tmp_path)
+    sources = {
+        "task_manifest": task_manifest,
+        "trace": trace_root / "D3" / "d3-main-01.json",
+        "report": tmp_path / "outputs" / "d3-main-01" / "research_report.md",
+    }
+    # The second name is outside the selected research input tree: the
+    # existing same-report-across-cells safeguard does not cover this alias.
+    alias = tmp_path / f"unselected-{source_kind}.backup"
+    os.link(sources[source_kind], alias)
+    destination = tmp_path / f"packet-hardlinked-{source_kind}"
+
+    with pytest.raises(ValueError, match="exactly one filesystem link"):
+        build_packet(
+            trace_root,
+            destination,
+            seed=20260915,
+            task_manifest_path=task_manifest,
+        )
     assert not destination.exists()
 
 def test_build_packet_rejects_symlinked_trace_file_before_publication(tmp_path):

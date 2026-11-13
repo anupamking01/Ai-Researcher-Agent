@@ -473,11 +473,13 @@ def _byte_fingerprint(content: bytes) -> dict:
     }
 
 
-def _stat_contract(value: os.stat_result) -> tuple[int, int, int, int, int]:
-    """Return identity and mutation fields that must remain stable while reading."""
+def _stat_contract(value: os.stat_result) -> tuple[int, int, int, int, int, int, int]:
+    """Bind a captured file to its identity, mode, link count and mutation state."""
     return (
         value.st_dev,
         value.st_ino,
+        value.st_mode,
+        value.st_nlink,
         value.st_size,
         value.st_mtime_ns,
         value.st_ctime_ns,
@@ -505,6 +507,13 @@ def _read_regular_file_captured(
         file_before = os.fstat(file_fd)
         if not stat.S_ISREG(file_before.st_mode):
             raise ValueError(f"{label} must be a regular file: {path}")
+        # A hardlink outside the selected trace/report tree is an alternate
+        # writable pathname to the same evidence inode. Reject it even when
+        # its bytes currently match the expected study source fingerprint.
+        if file_before.st_nlink != 1:
+            raise ValueError(
+                f"{label} must have exactly one filesystem link: {path}"
+            )
         _require_packet_byte_limit(file_before.st_size, label=label)
 
         # Capture only the stat-pinned generation, with one growth probe.
@@ -524,8 +533,7 @@ def _read_regular_file_captured(
         parent_after = os.stat(path.parent, follow_symlinks=False)
         if (
             _stat_contract(file_before) != _stat_contract(file_after)
-            or (file_after.st_dev, file_after.st_ino)
-            != (path_after.st_dev, path_after.st_ino)
+            or _stat_contract(file_after) != _stat_contract(path_after)
             or (parent_before.st_dev, parent_before.st_ino)
             != (parent_after.st_dev, parent_after.st_ino)
         ):
