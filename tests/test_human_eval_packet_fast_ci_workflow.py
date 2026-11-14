@@ -16,6 +16,9 @@ PACKET_SCRIPTS = (
     "scripts/export_human_eval_annotator_bundle.py",
     "scripts/freeze_human_eval_ratings.py",
     "scripts/verify_human_eval_submission_preflight.py",
+    "scripts/verify_human_eval_counterbalanced_handoff.py",
+    "scripts/verify_human_eval_counterbalanced_submission_pair.py",
+    "scripts/verify_human_eval_counterbalanced_freeze_link.py",
     "scripts/verify_frozen_main_study_tasks.py",
 )
 PACKET_MODULES = (
@@ -29,6 +32,9 @@ PACKET_MODULES = (
     "tests/test_human_eval_annotator_bundle_contract.py",
     "tests/test_human_eval_annotator_export_capture_bounds.py",
     "tests/test_human_eval_annotator_export.py",
+    "tests/test_human_eval_counterbalanced_handoff.py",
+    "tests/test_human_eval_counterbalanced_submission_pair.py",
+    "tests/test_human_eval_counterbalanced_freeze_link.py",
     "tests/test_human_eval_packet_fast_ci_workflow.py",
 )
 SCOPE = (
@@ -67,7 +73,7 @@ def test_packet_lane_is_narrow_pinned_and_offline():
         assert value in command
     assert "-r requirements.txt" not in command
     compile_step = next(s for s in steps if s["name"] == "Compile packet implementation and regressions")
-    for path in (*PACKET_SCRIPTS, *PACKET_MODULES):
+    for path in (*PACKET_SCRIPTS, *PACKET_MODULES, "tests/human_eval_test_support.py"):
         assert path in compile_step["run"]
     test = next(s for s in steps if s["name"] == "Run firewalled blinded-packet regressions")
     assert test["env"]["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
@@ -77,6 +83,7 @@ def test_packet_lane_is_narrow_pinned_and_offline():
         for required in (
             *PACKET_SCRIPTS,
             *PACKET_MODULES,
+            "tests/human_eval_test_support.py",
             ".github/workflows/human-eval-packet-fast-ci.yml",
             "scripts/run_offline_pytest_firewalled.sh",
             "requirements.txt",

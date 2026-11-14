@@ -55,3 +55,28 @@ test selection and push/PR path triggers for these modules.
 Passing this selected synthetic lane verifies local software behavior only.
 It does not establish the provenance of historical reports, authorize
 distribution, or supply real human ratings.
+
+## Counterbalanced handoff and pre-freeze evidence chain
+
+The packet fast lane also executes three previously omitted synthetic suites:
+`test_human_eval_counterbalanced_handoff.py`,
+`test_human_eval_counterbalanced_submission_pair.py` and
+`test_human_eval_counterbalanced_freeze_link.py`. Together they test the
+source-bound two-order handoff, the two distinct blinded submissions and
+preflight receipts, and the link from the pair receipt to the retained
+pre-unblinding ratings freeze. The coverage includes tampering, duplicate
+identities, swapped order, original-receipt byte identity, and changes between
+serial verification stages. This is not another experiment or a new human
+agreement analysis. CI now compiles the three standalone verifiers and the
+three test modules, and path filters trigger the lane when their source or
+synthetic support fixture changes. The workflow-contract regression enforces
+those declared selections and triggers.
+
+This regression evidence is **software-only** and **conditional**: a passing
+synthetic test cannot authenticate the missing historical treatment reports,
+prove annotator eligibility or independence, substitute for genuine ratings,
+or license the frozen automated findings as prospectively confirmatory.
+The five-task pilot remains diagnostic, the automated post-collection analysis
+keeps its existing qualifications, and post-hoc sensitivity analyses remain
+exploratory. The unverified original artifacts still block actual blinded
+handoff and independent human evaluation.
