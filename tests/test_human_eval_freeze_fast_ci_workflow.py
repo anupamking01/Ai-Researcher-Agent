@@ -28,6 +28,7 @@ FREEZE_MODULES = (
     "tests/test_human_eval_freeze_tree_resource_bounds.py",
     "tests/test_human_eval_freeze_verification.py",
     "tests/test_human_eval_freeze_fast_ci_workflow.py",
+    "tests/test_human_eval_analysis_ancestor_custody.py",
 )
 SOURCE_TRIGGER_PATHS = (
     "tests/human_eval_test_support.py",

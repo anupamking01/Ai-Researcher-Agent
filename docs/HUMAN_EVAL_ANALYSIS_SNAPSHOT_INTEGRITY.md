@@ -89,3 +89,22 @@ These filesystem checks are bounded, best-effort local custody observations:
 they cannot prevent subsequent edits, prove immutable storage, independently
 authenticate historical treatment reports, or replace eligible annotators,
 consent, and genuine blinded human scores. No frozen plan or ratings change.
+
+## Entire-ancestor source custody at human-analysis capture
+
+The pre-unblinding human-analysis snapshotter also pins **every visible directory
+ancestor** for a direct rating, blinded packet, frozen governing document,
+coordinator mapping, and retained freeze-root capture. The previous leaf and
+immediate-parent checks could follow a symlink in an earlier ancestor even
+when the leaf content and parent inode were unchanged. The snapshotter now
+uses the same component-by-component `O_NOFOLLOW` directory-descriptor chain
+as the blinded-rating freeze, and rechecks the chain while it remains open
+before copying any direct-file bytes into scratch, or before completing a
+recursive freeze-root capture. An observed ancestral replacement or indirect
+symlink fails closed. Synthetic tests exercise indirect symlinks, a mid-read
+ancestor swap, recursive capture, and an ordinary nested path.
+
+This is a local path-custody safeguard, **not** proof of an atomic filesystem
+snapshot, immutable historical source reports, eligibility of real annotators,
+or human-validation results. No pilot, designated-primary automated analysis,
+retrospective exploratory sensitivity, or human score is changed.

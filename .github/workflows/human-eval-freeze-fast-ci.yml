@@ -25,6 +25,7 @@ on:
       - tests/test_human_eval_freeze_tree_resource_bounds.py
       - tests/test_human_eval_freeze_verification.py
       - tests/test_human_eval_freeze_fast_ci_workflow.py
+      - tests/test_human_eval_analysis_ancestor_custody.py
       - tests/human_eval_test_support.py
       - paper/HUMAN_EVAL_PROTOCOL.md
       - paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md
@@ -55,6 +56,7 @@ on:
       - tests/test_human_eval_freeze_tree_resource_bounds.py
       - tests/test_human_eval_freeze_verification.py
       - tests/test_human_eval_freeze_fast_ci_workflow.py
+      - tests/test_human_eval_analysis_ancestor_custody.py
       - tests/human_eval_test_support.py
       - paper/HUMAN_EVAL_PROTOCOL.md
       - paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md
@@ -110,7 +112,7 @@ jobs:
         run: |
           python -m py_compile \
             scripts/freeze_human_eval_ratings.py scripts/verify_human_eval_freeze.py scripts/human_eval_analysis_core.py scripts/build_human_eval_packet.py scripts/verify_human_eval_packet.py \
-            tests/test_human_eval_freeze.py tests/test_human_eval_freeze_capture_bounds.py tests/test_human_eval_freeze_destination.py tests/test_human_eval_freeze_inventory_bounds.py tests/test_human_eval_freeze_inventory_hardlinks.py tests/test_human_eval_freeze_json_number_integrity.py tests/test_human_eval_freeze_json_resource_bounds.py tests/test_human_eval_freeze_read_consistency.py tests/test_human_eval_freeze_tree_resource_bounds.py tests/test_human_eval_freeze_verification.py tests/test_human_eval_freeze_fast_ci_workflow.py
+            tests/test_human_eval_freeze.py tests/test_human_eval_freeze_capture_bounds.py tests/test_human_eval_freeze_destination.py tests/test_human_eval_freeze_inventory_bounds.py tests/test_human_eval_freeze_inventory_hardlinks.py tests/test_human_eval_freeze_json_number_integrity.py tests/test_human_eval_freeze_json_resource_bounds.py tests/test_human_eval_freeze_read_consistency.py tests/test_human_eval_freeze_tree_resource_bounds.py tests/test_human_eval_freeze_verification.py tests/test_human_eval_freeze_fast_ci_workflow.py tests/test_human_eval_analysis_ancestor_custody.py
 
       - name: Verify source immediately before freeze tests
         run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
@@ -121,7 +123,7 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |
           set -euo pipefail
-          bash scripts/run_offline_pytest_firewalled.sh tests/test_human_eval_freeze.py tests/test_human_eval_freeze_capture_bounds.py tests/test_human_eval_freeze_destination.py tests/test_human_eval_freeze_inventory_bounds.py tests/test_human_eval_freeze_inventory_hardlinks.py tests/test_human_eval_freeze_json_number_integrity.py tests/test_human_eval_freeze_json_resource_bounds.py tests/test_human_eval_freeze_read_consistency.py tests/test_human_eval_freeze_tree_resource_bounds.py tests/test_human_eval_freeze_verification.py tests/test_human_eval_freeze_fast_ci_workflow.py 2>&1 | tee "$RUNNER_TEMP/vera-human-freeze-tests.log"
+          bash scripts/run_offline_pytest_firewalled.sh tests/test_human_eval_freeze.py tests/test_human_eval_freeze_capture_bounds.py tests/test_human_eval_freeze_destination.py tests/test_human_eval_freeze_inventory_bounds.py tests/test_human_eval_freeze_inventory_hardlinks.py tests/test_human_eval_freeze_json_number_integrity.py tests/test_human_eval_freeze_json_resource_bounds.py tests/test_human_eval_freeze_read_consistency.py tests/test_human_eval_freeze_tree_resource_bounds.py tests/test_human_eval_freeze_verification.py tests/test_human_eval_freeze_fast_ci_workflow.py tests/test_human_eval_analysis_ancestor_custody.py 2>&1 | tee "$RUNNER_TEMP/vera-human-freeze-tests.log"
 
       - name: Verify runtime and source after freeze tests
         run: |

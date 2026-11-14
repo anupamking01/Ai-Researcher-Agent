@@ -107,14 +107,17 @@ def _snapshot_file(source, destination, *, label):
     source = Path(source)
     destination = Path(destination)
 
-    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    directory_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    # Keep the entire visible ancestry pinned across the capture. Opening
+    # source.parent alone with O_NOFOLLOW does not reject a symlink above it.
     try:
-        parent_descriptor = os.open(source.parent, directory_flags)
-    except OSError as exc:
+        directory_chain = freeze._open_nofollow_directory_chain(
+            source.parent, label=label
+        )
+    except ValueError as exc:
         raise ValueError(
             f"{label} parent must be a regular directory: {source.parent}"
         ) from exc
+    parent_descriptor = directory_chain[-1]
 
     try:
         parent = os.fstat(parent_descriptor)
@@ -168,10 +171,14 @@ def _snapshot_file(source, destination, *, label):
                 != (parent.st_dev, parent.st_ino)
             ):
                 raise ValueError(f"{label} changed while it was being snapshotted")
+            freeze._recheck_nofollow_directory_chain(
+                source.parent, directory_chain, label=label
+            )
         finally:
             os.close(descriptor)
     finally:
-        os.close(parent_descriptor)
+        for directory_fd in reversed(directory_chain):
+            os.close(directory_fd)
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     # Preserve the verified input's permission bits in the snapshot. In
@@ -195,16 +202,22 @@ def _snapshot_raw_ratings(rating_paths, root):
 
 
 def _open_snapshot_directory(path, *, label):
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    """Keep every source-root ancestor pinned until copying has finished."""
     try:
-        descriptor = os.open(path, flags)
-    except OSError as exc:
+        directory_chain = freeze._open_nofollow_directory_chain(path, label=label)
+    except ValueError as exc:
         raise ValueError(f"{label} must be a regular directory: {path}") from exc
-    if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
-        os.close(descriptor)
-        raise ValueError(f"{label} must be a regular directory: {path}")
-    return descriptor
+    return directory_chain[-1], directory_chain
+
+
+def _close_snapshot_directory(path, directory_chain, *, label):
+    try:
+        freeze._recheck_nofollow_directory_chain(
+            path, directory_chain, label=label
+        )
+    finally:
+        for descriptor in reversed(directory_chain):
+            os.close(descriptor)
 
 
 def _require_snapshot_directory_binding(path, descriptor, *, label):
@@ -483,7 +496,7 @@ def _snapshot_directory_tree(source_root, destination_root, *, label):
     """Copy one descriptor-bound tree and reject concurrent path changes."""
     source_root = Path(source_root)
     destination_root = Path(destination_root)
-    descriptor = _open_snapshot_directory(source_root, label=label)
+    descriptor, directory_chain = _open_snapshot_directory(source_root, label=label)
     try:
         _snapshot_directory_descriptor(
             source_root,
@@ -492,7 +505,7 @@ def _snapshot_directory_tree(source_root, destination_root, *, label):
             label=label,
         )
     finally:
-        os.close(descriptor)
+        _close_snapshot_directory(source_root, directory_chain, label=label)
 
 
 def _reject_undeclared_freeze_sidecars(
@@ -818,7 +831,7 @@ def _snapshot_freeze_tree(freeze_root, blind_freeze):
     """Capture every allowed freeze artifact from one bound root generation."""
     freeze_root = Path(freeze_root)
     blind_freeze = Path(blind_freeze)
-    descriptor = _open_snapshot_directory(freeze_root, label="freeze root")
+    descriptor, directory_chain = _open_snapshot_directory(freeze_root, label="freeze root")
     try:
         root_opened = os.fstat(descriptor)
         try:
@@ -894,7 +907,7 @@ def _snapshot_freeze_tree(freeze_root, blind_freeze):
             metadata,
         )
     finally:
-        os.close(descriptor)
+        _close_snapshot_directory(freeze_root, directory_chain, label="freeze root")
 
 
 def score(row, field):
