@@ -631,7 +631,7 @@ def test_analysis_rejects_freeze_root_path_aba(
     assert restored == [True]
 
 
-def test_analysis_checks_provenance_sidecars_from_bound_root_during_path_aba(
+def test_analysis_rejects_provenance_root_path_substitution_before_unblinding(
     analysis_case, monkeypatch
 ):
     case = analysis_case
@@ -692,9 +692,12 @@ def test_analysis_checks_provenance_sidecars_from_bound_root_during_path_aba(
     monkeypatch.setattr(core, "_bounded_snapshot_names", swap_root_between_inventory_reads)
     monkeypatch.setattr(core, "_snapshot_file", forbid_mapping_snapshot)
 
-    with pytest.raises(ValueError, match="provenance archive contents mismatch"):
+    # The pinned ancestor-chain gate now detects the redirected freeze root
+    # before the older provenance sidecar inventory check can be reached.
+    with pytest.raises(ValueError, match="freeze root ancestor directory changed during capture"):
         _analyze(case)
     assert swapped == [True]
+    assert restored == []  # no second read or coordinator mapping access
 
 
 def test_analysis_rejects_same_name_preflight_archive_aba(
