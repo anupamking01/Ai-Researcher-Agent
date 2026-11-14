@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import stat
 
 from scripts import select_full_ci_shard as shard_selector
 
@@ -34,6 +35,43 @@ REQUIRED_ENV = (
     "GITHUB_RUN_ATTEMPT", "GITHUB_EVENT_NAME",
 )
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def read_bounded_evidence(path: Path, *, maximum: int, label: str) -> bytes:
+    """Capture one regular evidence file with an open-descriptor byte limit.
+
+    A pre-read stat() followed by Path.read_bytes() is insufficient: a
+    replacement/growing file can exceed the published limit after stat().
+    This check protects local replay memory and rejects in-place write drift;
+    it is not attestation of the uploader or file's earlier history.
+    """
+    if type(maximum) is not int or maximum < 1:
+        raise ValueError("invalid evidence capture limit")
+    flags = (os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+             | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(f"{label} cannot be opened as a regular file") from exc
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"{label} must be a regular file")
+        if before.st_size > maximum:
+            raise ValueError(f"{label} exceeds size limit")
+        # Read at most limit+1 bytes, regardless of stat size or concurrent growth.
+        with os.fdopen(fd, "rb", closefd=False) as stream:
+            captured = stream.read(maximum + 1)
+        after = os.fstat(fd)
+        identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_size,
+                              s.st_mtime_ns, s.st_ctime_ns)
+        if identity(before) != identity(after) or len(captured) != before.st_size:
+            raise ValueError(f"{label} changed during capture")
+        if len(captured) > maximum:
+            raise ValueError(f"{label} exceeds size limit")
+        return captured
+    finally:
+        os.close(fd)
 
 
 def _verify_full_ci_selection(
@@ -177,20 +215,26 @@ def main() -> int:
     parser.add_argument("--shard", type=int)
     args = parser.parse_args()
     try:
-        if args.log.stat().st_size > MAX_LOG_BYTES:
-            raise ValueError("offline test log exceeds size limit")
+        log_bytes = read_bounded_evidence(
+            args.log, maximum=MAX_LOG_BYTES, label="offline test log"
+        )
+        selected_bytes = (
+            read_bounded_evidence(
+                args.selected_modules, maximum=MAX_SELECTED_MODULES_BYTES,
+                label="full CI selected-module inventory",
+            ) if args.selected_modules is not None else None
+        )
         checkout_sha = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip()
         receipt = build_receipt(
-            args.log.read_bytes(), context=dict(os.environ),
+            log_bytes, context=dict(os.environ),
             checkout_sha=checkout_sha,
             dependency_bytes={
                 name: (ROOT / name).read_bytes()
                 for name in ("requirements.txt", "requirements-ci.lock")
             },
-            selected_modules=(args.selected_modules.read_bytes()
-                              if args.selected_modules is not None else None),
+            selected_modules=selected_bytes,
             shard=args.shard,
         )
         # No read from treatment/evaluator artifacts, no network calls.

@@ -180,3 +180,42 @@ def test_replay_cli_rejects_modified_source_despite_same_head(
         replay.main()
     assert caught.value.code == 1
     assert "VERA RETAINED CI EVIDENCE: FAIL" in capsys.readouterr().err
+
+
+def test_replay_cli_rejects_oversized_selected_inventory_before_read(
+    tmp_path, monkeypatch, capsys,
+):
+    from pathlib import Path
+    import sys
+    _offline_replay_cli_fixture(tmp_path, monkeypatch)
+    selected = tmp_path / "untrusted-selected-modules.txt"
+    selected.write_bytes(b"x" * (producer.MAX_SELECTED_MODULES_BYTES + 1))
+    monkeypatch.setattr(sys, "argv", sys.argv + [
+        "--selected-modules", str(selected), "--shard", "0",
+    ])
+    original_read = Path.read_bytes
+
+    def reject_eager_read(path):
+        if path == selected:
+            pytest.fail("oversized inventory was read before the byte limit")
+        return original_read(path)
+
+    monkeypatch.setattr(Path, "read_bytes", reject_eager_read)
+    with pytest.raises(SystemExit) as caught:
+        replay.main()
+    assert caught.value.code == 1
+    assert "exceeds size limit" in capsys.readouterr().err
+
+
+def test_replay_cli_rejects_symlinked_retained_log_before_receipt_replay(
+    tmp_path, monkeypatch, capsys,
+):
+    _offline_replay_cli_fixture(tmp_path, monkeypatch)
+    log = tmp_path / "retained-log.txt"
+    original = tmp_path / "physical-retained-log.txt"
+    log.rename(original)
+    log.symlink_to(original.name)
+    with pytest.raises(SystemExit) as caught:
+        replay.main()
+    assert caught.value.code == 1
+    assert "regular file" in capsys.readouterr().err

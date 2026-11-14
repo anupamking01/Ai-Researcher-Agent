@@ -249,3 +249,70 @@ def test_rejects_out_of_order_nonterminal_or_forged_physical_ci_records(bad_log)
         evidence.build_receipt(
             bad_log, context=CONTEXT, checkout_sha=SHA, dependency_bytes=DEPS
         )
+
+
+def test_bounded_evidence_file_capture_at_limit_and_one_byte_over(tmp_path):
+    path = tmp_path / "ci-log.txt"
+    path.write_bytes(b"12345678")
+    assert evidence.read_bounded_evidence(
+        path, maximum=8, label="synthetic CI log"
+    ) == b"12345678"
+    with pytest.raises(ValueError, match="exceeds size limit"):
+        evidence.read_bounded_evidence(
+            path, maximum=7, label="synthetic CI log"
+        )
+
+
+def test_bounded_evidence_capture_rejects_direct_symlink_and_directory(tmp_path):
+    target = tmp_path / "target"
+    target.write_bytes(b"safe")
+    alias = tmp_path / "alias"
+    alias.symlink_to(target)
+    with pytest.raises(ValueError, match="regular file"):
+        evidence.read_bounded_evidence(alias, maximum=8, label="synthetic receipt")
+    with pytest.raises(ValueError, match="regular file"):
+        evidence.read_bounded_evidence(tmp_path, maximum=8, label="synthetic receipt")
+
+
+def test_bounded_evidence_capture_rejects_fifo_without_blocking(tmp_path):
+    import os
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("FIFO not supported on this OS")
+    fifo = tmp_path / "untrusted-pipe"
+    os.mkfifo(fifo)
+    with pytest.raises(ValueError, match="regular file"):
+        evidence.read_bounded_evidence(fifo, maximum=8, label="synthetic log")
+
+
+def test_bounded_evidence_capture_detects_same_inode_content_drift(tmp_path, monkeypatch):
+    import os
+    path = tmp_path / "ci-log.txt"
+    path.write_bytes(b"before")
+    original_fdopen = os.fdopen
+
+    class MutatingReader:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            self.stream.__enter__()
+            return self
+
+        def read(self, count):
+            original = self.stream.read(count)
+            path.write_bytes(b"after!")
+            return original
+
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+
+    monkeypatch.setattr(
+        evidence.os, "fdopen",
+        lambda fd, mode, closefd=False: MutatingReader(
+            original_fdopen(fd, mode, closefd=closefd)
+        ),
+    )
+    with pytest.raises(ValueError, match="changed during capture"):
+        evidence.read_bounded_evidence(
+            path, maximum=64, label="synthetic CI log"
+        )

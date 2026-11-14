@@ -131,20 +131,27 @@ def main() -> int:
         source_checker.verify_source_checkout(
             producer.ROOT, expected_sha=args.checkout_sha
         )
-        if args.receipt.stat().st_size > MAX_RECEIPT_BYTES:
-            raise ValueError("retained CI receipt exceeds size limit")
-        if args.log.stat().st_size > producer.MAX_LOG_BYTES:
-            raise ValueError("retained CI log exceeds size limit")
+        log_bytes = producer.read_bounded_evidence(
+            args.log, maximum=producer.MAX_LOG_BYTES, label="retained CI log"
+        )
+        receipt_bytes = producer.read_bounded_evidence(
+            args.receipt, maximum=MAX_RECEIPT_BYTES, label="retained CI receipt"
+        )
+        selected_bytes = (
+            producer.read_bounded_evidence(
+                args.selected_modules, maximum=producer.MAX_SELECTED_MODULES_BYTES,
+                label="retained full CI selected-module inventory",
+            ) if args.selected_modules is not None else None
+        )
         verify_retained_evidence(
-            args.log.read_bytes(), args.receipt.read_bytes(),
+            log_bytes, receipt_bytes,
             checkout_sha=args.checkout_sha, run_id=args.run_id,
             run_attempt=args.run_attempt, event=args.event,
             dependency_bytes={
                 name: (producer.ROOT / name).read_bytes()
                 for name in ("requirements.txt", "requirements-ci.lock")
             },
-            selected_modules=(args.selected_modules.read_bytes()
-                              if args.selected_modules is not None else None),
+            selected_modules=selected_bytes,
             shard=args.shard,
         )
     except (OSError, ValueError) as exc:

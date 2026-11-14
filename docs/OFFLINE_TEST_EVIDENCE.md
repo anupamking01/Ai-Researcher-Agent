@@ -263,3 +263,27 @@ if that was the checkout, not simply the branch tip. This safeguards
 reproducibility metadata only; original treatment/archive custody, qualified
 post-collection automated inference, exploratory bounds and independent
 blinded human validation remain separate.
+
+
+## Bounded stable evidence-file capture (15 November 2026)
+
+The producer and downloaded-receipt replay CLI now share a bounded descriptor
+reader for retained pytest logs (16 MiB), receipts (16 KiB), and optional
+eight-shard module inventories (64 KiB). Earlier code checked the byte limit
+inside the receipt builder (and stat-checked only some inputs) **after**
+`Path.read_bytes()`; a large or concurrently growing untrusted download could
+therefore allocate unbounded memory before it was rejected. The new reader
+requires a real regular file, refuses a direct symlink or FIFO, reads no more
+than limit + 1 bytes from one open descriptor, and rejects detected byte-count
+or file-generation changes during capture. Both producer and replay enforce
+the same limits before parsing or hashing. Synthetic tests cover boundary
+sizes, oversize inventory rejection before eager read, symlink/FIFO inputs,
+and in-place modification during capture.
+
+This is local input-resource and point-in-time consistency protection, not
+a cryptographic authentication of downloaded artifact origin, directory
+ancestry, or the GitHub runner. It cannot recover the missing original
+treatment traces/reports. The pilot remains diagnostic, the frozen automated
+designated-primary contrasts remain qualified by post-collection plan timing
+and evaluator comparability, retrospective sensitivities remain exploratory,
+and genuine blinded human validation remains pending.
