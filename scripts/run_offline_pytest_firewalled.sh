@@ -119,4 +119,4 @@ verify_family_policy() {
 verify_family_policy iptables
 verify_family_policy ip6tables
 echo "Offline pytest egress isolation active (IPv4 + IPv6; loopback allowed; policy inspected)."
-python -m pytest -q "$@"
+python -m pytest -q --strict-markers --strict-config "$@"

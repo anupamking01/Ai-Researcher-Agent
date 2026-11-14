@@ -187,10 +187,59 @@ def test_firewall_order_failure_rollback_and_exit_code(
         v6_check = index("v6 -w -C OUTPUT -j ")
         v4_policy = index("v4 -w -S VERA_OFFLINE_")
         v6_policy = index("v6 -w -S VERA_OFFLINE_")
-        pytest_index = index("pytest -m pytest -q")
+        pytest_index = index("pytest -m pytest -q --strict-markers --strict-config")
         assert v4_check < v4_policy < v6_policy < pytest_index
         v6_remove = index("v6 -w -D OUTPUT -j ")
         assert v4_link < v6_link < v4_check < v6_check < pytest_index < v6_remove
         assert pytest_index < v4_remove
         assert any(row.startswith("v4 -w -F VERA_OFFLINE_") for row in commands)
         assert any(row.startswith("v6 -w -X VERA_OFFLINE_") for row in commands)
+
+def test_firewalled_pytest_requires_strict_collection_and_configuration():
+    """The shared entrypoint must never certify unknown markers/config as green."""
+    command = WRAPPER.read_text(encoding="utf-8").rstrip().splitlines()[-1]
+    assert command == 'python -m pytest -q --strict-markers --strict-config "$@"'
+
+
+@pytest.mark.parametrize(
+    ("strict_option", "test_source", "config_source", "diagnostic"),
+    [
+        (
+            "--strict-markers",
+            "import pytest\n@pytest.mark.vera_typo_marker\ndef test_probe(): pass\n",
+            None,
+            "vera_typo_marker",
+        ),
+        (
+            "--strict-config",
+            "def test_probe(): pass\n",
+            "[pytest]\nvera_typo_option = true\n",
+            "Unknown config option",
+        ),
+    ],
+)
+def test_strict_pytest_rejects_silent_collection_and_configuration_errors(
+    tmp_path, strict_option, test_source, config_source, diagnostic,
+):
+    """Default pytest passes each synthetic misconfiguration; CI must not."""
+    source = tmp_path / "test_probe.py"
+    source.write_text(test_source, encoding="utf-8")
+    if config_source is not None:
+        (tmp_path / "pytest.ini").write_text(config_source, encoding="utf-8")
+    command = [
+        sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+        str(source),
+    ]
+    env = {**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}
+    ordinary = subprocess.run(
+        command, cwd=tmp_path, env=env, text=True, capture_output=True,
+        timeout=20, check=False,
+    )
+    assert ordinary.returncode == 0, ordinary.stdout + ordinary.stderr
+    strict = subprocess.run(
+        [*command[:-1], strict_option, command[-1]],
+        cwd=tmp_path, env=env, text=True, capture_output=True,
+        timeout=20, check=False,
+    )
+    assert strict.returncode != 0
+    assert diagnostic in strict.stdout + strict.stderr

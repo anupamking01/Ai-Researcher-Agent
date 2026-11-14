@@ -196,3 +196,23 @@ These checks do **not** authenticate the interpreter's executable bytes,
 OS image, system libraries, GitHub runner, firewall, or original research
 artifacts. They are CI environment reproducibility checks, not experimental
 replication, outcome verification, or human validation.
+
+## Fail-closed pytest collection and configuration (14 November 2026)
+
+The shared firewalled pytest launcher now enforces `--strict-markers` and
+`--strict-config` for every offline CI suite using it. Without these flags,
+pytest can emit warnings yet exit successfully when a misspelled or unregistered
+research test marker is present, or when a configuration option is unknown.
+That can invalidate intended collection/selection while still permitting a
+superficially green test receipt. Synthetic subprocess regressions demonstrate
+both default-green cases and strict-mode rejection; the wrapper test also pins
+the exact command. Existing firewall/cleanup ordering remains unchanged.
+
+This safeguards **test discovery/configuration validity**, not completeness of
+the underlying scientific evidence or independently attested CI execution.
+Previously cancelled broad and diagnostic workflows remain cancelled, not
+retroactively passed. The five-task pilot is diagnostic; frozen automated
+contrasts remain post-collection and order/evaluator-qualified; retrospective
+sensitivities are exploratory and real blinded human validation is pending.
+No treatment, evaluator, historical source file, frozen outcome or rating
+was regenerated or modified.
