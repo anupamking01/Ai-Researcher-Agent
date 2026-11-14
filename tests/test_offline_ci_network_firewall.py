@@ -20,10 +20,17 @@ def test_offline_ci_uses_only_firewalled_pytest_entrypoint():
     # Pipefail preserves the firewalled wrapper's exit status under tee.
     # No second unprotected pytest invocation is permitted in this job.
     run = invocations[0]["run"].strip().splitlines()
-    assert run == [
-        "set -euo pipefail",
-        'bash scripts/run_offline_pytest_firewalled.sh 2>&1 | tee "$RUNNER_TEMP/vera-offline-tests.log"',
-    ]
+    assert run[0] == "set -euo pipefail"
+    # The explicit shard inventory is generated before the sole pytest call.
+    assert "python -m scripts.select_full_ci_shard --verify-partition --shards 8" in run
+    assert any('--shard "$VERA_SHARD" --shards 8' in line for line in run)
+    assert any('mapfile -t test_modules' in line for line in run)
+    assert run[-1] == (
+        'bash scripts/run_offline_pytest_firewalled.sh "${test_modules[@]}" '
+        '2>&1 | tee -a "$RUNNER_TEMP/vera-offline-tests.log"'
+    )
+    assert sum("scripts/run_offline_pytest_firewalled.sh" in line for line in run) == 1
+    assert not any("python -m pytest" in line for line in run)
 
 
 
