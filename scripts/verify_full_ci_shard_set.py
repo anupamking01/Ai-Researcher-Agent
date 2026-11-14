@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 
 from scripts import select_full_ci_shard as selector
@@ -23,6 +24,25 @@ EVIDENCE_FILES = frozenset({
 })
 
 
+
+def _require_exact_entries(directory: Path, expected: set[str] | frozenset[str], *, message: str) -> None:
+    """Fail on the first surplus downloaded entry, without unbounded listing.
+
+    Retained artifact directories are untrusted local input. Materializing a
+    set from every name before comparing it to the expected fixed inventory
+    permits a huge directory to consume unbounded memory. The ninth shard or
+    fourth file is already proof of invalid evidence.
+    """
+    observed: set[str] = set()
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            if len(observed) >= len(expected):
+                raise ValueError(message)
+            observed.add(entry.name)
+    if observed != expected:
+        raise ValueError(message)
+
+
 def verify_shard_set(
     evidence_root: Path, *, checkout_sha: str, run_id: str,
     run_attempt: str, event: str, dependency_bytes: dict[str, bytes],
@@ -32,8 +52,10 @@ def verify_shard_set(
     if evidence_root.is_symlink() or not evidence_root.is_dir():
         raise ValueError("evidence root must be a real directory")
     expected_dirs = {f"shard-{index}" for index in range(selector.SHARDS)}
-    if {entry.name for entry in evidence_root.iterdir()} != expected_dirs:
-        raise ValueError("missing or unexpected CI shard evidence directory")
+    _require_exact_entries(
+        evidence_root, expected_dirs,
+        message="missing or unexpected CI shard evidence directory",
+    )
 
     all_modules: list[str] = []
     per_shard = []
@@ -42,8 +64,10 @@ def verify_shard_set(
         folder = evidence_root / f"shard-{index}"
         if folder.is_symlink() or not folder.is_dir():
             raise ValueError(f"shard {index} evidence directory is not real")
-        if {entry.name for entry in folder.iterdir()} != EVIDENCE_FILES:
-            raise ValueError(f"shard {index} evidence files are incomplete or unexpected")
+        _require_exact_entries(
+            folder, EVIDENCE_FILES,
+            message=f"shard {index} evidence files are incomplete or unexpected",
+        )
         log = producer.read_bounded_evidence(
             folder / "vera-offline-tests.log",
             maximum=producer.MAX_LOG_BYTES, label=f"shard {index} log",

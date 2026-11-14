@@ -68,6 +68,41 @@ def evidence(tmp_path, monkeypatch):
     return root
 
 
+
+@pytest.mark.parametrize("expected_size", [8, 3])
+def test_untrusted_directory_inventory_stops_after_first_surplus_entry(
+    tmp_path, monkeypatch, expected_size,
+):
+    """Synthetic overflow scan must never enumerate the rest of a huge input."""
+    observed = []
+
+    class FakeEntry:
+        def __init__(self, name):
+            self.name = name
+
+    class FakeScandir:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def __iter__(self):
+            for index in range(1000):
+                observed.append(index)
+                if len(observed) > expected_size + 1:
+                    raise AssertionError("unbounded evidence directory enumeration")
+                yield FakeEntry(f"unexpected-{index}")
+
+    monkeypatch.setattr(whole.os, "scandir", lambda _path: FakeScandir())
+    with pytest.raises(ValueError, match="synthetic directory inventory mismatch"):
+        whole._require_exact_entries(
+            tmp_path, {f"expected-{index}" for index in range(expected_size)},
+            message="synthetic directory inventory mismatch",
+        )
+    assert len(observed) == expected_size + 1
+
+
 def test_all_shards_replay_as_one_exact_run(evidence):
     result = whole.verify_shard_set(evidence, **KWARGS)
     assert result["shards_verified"] == 8
