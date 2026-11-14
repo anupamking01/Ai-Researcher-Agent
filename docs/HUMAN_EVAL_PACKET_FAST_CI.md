@@ -39,3 +39,19 @@ post-collection analysis with its existing chronology, order and evaluator
 comparability limitations; retrospective sensitivities remain exploratory.
 No treatment, evaluator, frozen estimate or human rating is rerun or changed
 by this CI-only improvement.
+
+## Annotator-distribution verification coverage
+
+The fast lane now additionally compiles and runs all three synthetic
+annotator-distribution suites: export, capture/resource bounds, and the
+standalone bundle contract. This closes a previously untested handoff between
+verified coordinator packets and the four-file treatment-blind distribution.
+The standalone distribution verifier also pins every ancestor directory with
+no-follow descriptors for its entire read/recheck window; it rejects an indirect
+symlink at entry and a redirect observed after the final byte replay, even
+when the source bytes are unchanged. The expanded workflow contract enforces
+test selection and push/PR path triggers for these modules.
+
+Passing this selected synthetic lane verifies local software behavior only.
+It does not establish the provenance of historical reports, authorize
+distribution, or supply real human ratings.

@@ -26,6 +26,9 @@ PACKET_MODULES = (
     "tests/test_human_eval_packet_source_numeric_integrity.py",
     "tests/test_human_eval_packet_verification.py",
     "tests/test_human_eval_packet_window_custody.py",
+    "tests/test_human_eval_annotator_bundle_contract.py",
+    "tests/test_human_eval_annotator_export_capture_bounds.py",
+    "tests/test_human_eval_annotator_export.py",
     "tests/test_human_eval_packet_fast_ci_workflow.py",
 )
 SCOPE = (

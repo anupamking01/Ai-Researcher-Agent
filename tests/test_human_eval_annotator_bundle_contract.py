@@ -15,6 +15,49 @@ import pytest
 from scripts import export_human_eval_annotator_bundle as exporter
 
 
+
+def test_standalone_bundle_accepts_nested_real_directory(tmp_path):
+    parent = tmp_path / "actual" / "nested"
+    parent.mkdir(parents=True)
+    root = _write_bundle(parent / "bundle", _rows())
+    assert exporter.verify_annotator_bundle(root)["n_reports"] == 2
+
+
+def test_standalone_bundle_rejects_indirect_symlink_ancestor(tmp_path):
+    """Leaf directory may be real while an earlier ancestor redirects it."""
+    parent = tmp_path / "actual" / "nested"
+    parent.mkdir(parents=True)
+    _write_bundle(parent / "bundle", _rows())
+    alias = tmp_path / "alias"
+    alias.symlink_to(tmp_path / "actual", target_is_directory=True)
+    with pytest.raises(ValueError, match="without symlink ancestors"):
+        exporter.verify_annotator_bundle(alias / "nested" / "bundle")
+
+
+def test_standalone_bundle_rejects_redirect_after_final_byte_replay(
+    tmp_path, monkeypatch
+):
+    """Even byte-identical files cannot justify an ancestor-path redirect."""
+    parent = tmp_path / "actual"
+    nested = parent / "nested"
+    nested.mkdir(parents=True)
+    root = _write_bundle(nested / "bundle", _rows())
+    original_check = exporter._require_annotator_verification_window_unchanged
+
+    def redirect_after_success(*args, **kwargs):
+        original_check(*args, **kwargs)
+        renamed = tmp_path / "relocated"
+        parent.rename(renamed)
+        parent.symlink_to(renamed, target_is_directory=True)
+
+    monkeypatch.setattr(
+        exporter, "_require_annotator_verification_window_unchanged",
+        redirect_after_success,
+    )
+    with pytest.raises(ValueError, match="ancestor directory changed"):
+        exporter.verify_annotator_bundle(root)
+
+
 def test_default_output_name_tracks_manifest_schema():
     assert exporter.DEFAULT_OUTPUT_ROOT.name == "annotator-bundle-v2"
 

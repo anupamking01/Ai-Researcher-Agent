@@ -25,6 +25,7 @@ import tempfile
 from pathlib import Path
 
 from scripts import build_human_eval_packet as build
+from scripts import freeze_human_eval_ratings as freeze
 from scripts.verify_human_eval_packet import verify_packet
 
 
@@ -488,7 +489,7 @@ def _require_annotator_verification_window_unchanged(
         ) from exc
 
 
-def verify_annotator_bundle(
+def _verify_annotator_bundle_contents(
     output_root: Path = DEFAULT_OUTPUT_ROOT,
     *,
     expected_manifest_sha256: str | None = None,
@@ -690,6 +691,41 @@ def verify_annotator_bundle(
         },
     )
     return receipt
+
+
+
+def verify_annotator_bundle(
+    output_root: Path = DEFAULT_OUTPUT_ROOT,
+    *,
+    expected_manifest_sha256: str | None = None,
+) -> dict:
+    """Pin all ancestor directories through the entire standalone audit.
+
+    Individual artifact captures and the final byte/identity replay validate
+    leaf files, but cannot by themselves attest that a higher directory was not
+    redirected *after* the last file replay. Reject preexisting ancestor links
+    and observable redirects before issuing the distribution receipt.
+    """
+    output_root = Path(output_root)
+    try:
+        chain = freeze._open_nofollow_directory_chain(
+            output_root, label="annotator bundle verification root",
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "annotator bundle root must be a regular directory without symlink ancestors"
+        ) from exc
+    try:
+        receipt = _verify_annotator_bundle_contents(
+            output_root, expected_manifest_sha256=expected_manifest_sha256,
+        )
+        freeze._recheck_nofollow_directory_chain(
+            output_root, chain, label="annotator bundle verification root",
+        )
+        return receipt
+    finally:
+        for directory_fd in reversed(chain):
+            os.close(directory_fd)
 
 
 def _source_bound_original_paths(
