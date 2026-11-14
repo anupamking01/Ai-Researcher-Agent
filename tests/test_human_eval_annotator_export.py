@@ -128,7 +128,9 @@ def test_source_bound_verification_rejects_exposed_coordinator_artifacts(
 def test_packet_verifier_rejects_hardlinked_coordinator_secret(packet_case, artifact_name):
     source = packet_case["packet_root"] / artifact_name
     os.link(source, packet_case["repo_root"] / f"alternate-{artifact_name}")
-    with pytest.raises(ValueError, match="coordinator-only artifact is hard-linked"):
+    # The shared bounded reader now rejects the hardlink before the later
+    # coordinator-specific gate; either rejection preserves the secret.
+    with pytest.raises(ValueError, match="coordinator-only artifact is hard-linked|must have exactly one filesystem link"):
         packet_verifier.verify_packet(
             output_root=packet_case["packet_root"],
             task_manifest_path=packet_case["task_manifest"],
@@ -467,7 +469,8 @@ def test_export_rejects_output_root_replacement_before_success(
     # later publication-level root-identity guard runs.
     with pytest.raises(
         ValueError,
-        match="annotator bundle output root changed|annotator packet.jsonl was replaced during capture",
+        match=("annotator bundle output root changed|annotator packet.jsonl was replaced during capture"
+               "|ancestor directory is not a stable, non-symlink directory"),
     ):
         _export(packet_case)
 
