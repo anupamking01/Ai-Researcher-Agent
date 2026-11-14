@@ -52,7 +52,7 @@ def test_duplicate_modules_and_empty_shards_fail_closed():
 def test_selector_rejects_symlink_modules(tmp_path):
     _make_tree(tmp_path, ["tests/test_original.py"])
     (tmp_path / "tests" / "test_alias.py").symlink_to("test_original.py")
-    with pytest.raises(ValueError, match="regular file"):
+    with pytest.raises(ValueError, match="must not be a symlink"):
         partition.discover_modules(tmp_path)
 
 
