@@ -9,8 +9,11 @@ dependency-free selector `scripts/select_full_ci_shard.py` recursively
 discovers both default Python pytest filename conventions in `tests/`,
 sorts modules, and partitions them round-robin by index. Before testing,
 each job verifies that all eight partitions cover every discovered module
-once. Duplicate inputs, invalid indices, empty shards and symlink modules
-fail closed. The full job preserves pinned Python/dependencies, source
+once. Duplicate inputs, invalid indices and empty shards fail closed. Directory
+traversal now fails on symlinked test subtrees, dangling directory aliases,
+symlinked support files or test modules, and unreadable nested directories;
+none can silently disappear from the eight-shard source inventory. These
+failures reject the checkout instead of following links outside the test tree. The full job preserves pinned Python/dependencies, source
 and runtime checks, strict pytest modes, blocked outbound IPv4/IPv6, and
 independent replay of a per-shard exact-commit test receipt. Each passing
 shard retains its uniquely named module list, log and pre-install gate receipt; the module list is also prepended

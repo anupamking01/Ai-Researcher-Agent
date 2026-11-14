@@ -56,6 +56,47 @@ def test_selector_rejects_symlink_modules(tmp_path):
         partition.discover_modules(tmp_path)
 
 
+def test_nested_symlink_directory_cannot_hide_test_modules(tmp_path):
+    _make_tree(tmp_path, [
+        "tests/real/test_nested.py", "tests/test_visible.py",
+    ])
+    (tmp_path / "tests" / "alias").symlink_to(
+        "real", target_is_directory=True,
+    )
+    with pytest.raises(ValueError, match="directory must be real"):
+        partition.discover_modules(tmp_path)
+
+
+def test_broken_directory_alias_cannot_evade_discovery(tmp_path):
+    _make_tree(tmp_path, ["tests/test_visible.py"])
+    (tmp_path / "tests" / "lost_subtree").symlink_to(
+        "no-longer-here", target_is_directory=True,
+    )
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        partition.discover_modules(tmp_path)
+
+
+def test_support_file_symlink_is_not_ignored_as_non_test(tmp_path):
+    _make_tree(tmp_path, ["tests/test_visible.py", "tests/support.py"])
+    (tmp_path / "tests" / "helper.py").symlink_to("support.py")
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        partition.discover_modules(tmp_path)
+
+
+def test_unreadable_subtree_cannot_be_silently_skipped(tmp_path, monkeypatch):
+    _make_tree(tmp_path, ["tests/test_visible.py"])
+
+    def failing_walk(*_args, **kwargs):
+        kwargs["onerror"](PermissionError(
+            13, "Permission denied", str(tmp_path / "tests" / "private"),
+        ))
+        yield None  # A generator, so the error fires at traversal time.
+
+    monkeypatch.setattr(partition.os, "walk", failing_walk)
+    with pytest.raises(ValueError, match="cannot inspect offline test directory"):
+        partition.discover_modules(tmp_path)
+
+
 def test_ci_matrix_requires_all_shards_and_retained_exact_selection():
     workflow = yaml.load(
         (Path(__file__).resolve().parents[1] / ".github/workflows/tests.yml").read_text(),

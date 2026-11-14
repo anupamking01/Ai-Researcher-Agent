@@ -5,6 +5,7 @@ Only test-module paths are partitioned; nothing is selected by research outcome.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,14 +14,43 @@ PATTERNS = ("test_*.py", "*_test.py")
 
 
 def discover_modules(root: Path = ROOT) -> tuple[str, ...]:
+    """Discover tests without silently hiding symlinked or unreadable subtrees.
+
+    pathlib.rglob() does not descend into symlink directories on Python 3.11.
+    Consequently a directory alias could otherwise remove a whole group of
+    tests from every shard while the remaining matrix still passed.
+    """
     root = Path(root)
     tests = root / "tests"
     if tests.is_symlink() or not tests.is_dir():
         raise ValueError("offline test root must be a real tests/ directory")
-    paths = set()
-    for pattern in PATTERNS:
-        for path in tests.rglob(pattern):
-            if path.is_symlink() or not path.is_file():
+
+    def on_walk_error(error: OSError) -> None:
+        raise ValueError(
+            f"cannot inspect offline test directory: {error.filename or error}"
+        ) from error
+
+    paths: set[str] = set()
+    for current, directories, filenames in os.walk(
+        tests, topdown=True, followlinks=False, onerror=on_walk_error
+    ):
+        here = Path(current)
+        # Do not follow aliases and do not silently omit test subtrees.
+        for name in sorted(directories):
+            directory = here / name
+            if directory.is_symlink() or not directory.is_dir():
+                raise ValueError(
+                    f"offline test directory must be real, not a symlink: {directory}"
+                )
+        for name in sorted(filenames):
+            path = here / name
+            # A dangling directory alias is classified as a file by os.walk.
+            # Reject even non-test-named links, including support-file aliases.
+            if path.is_symlink():
+                raise ValueError(f"offline test file must not be a symlink: {path}")
+            if not any(Path(name).match(pattern) for pattern in PATTERNS):
+                continue
+            if not path.is_file():
                 raise ValueError(f"offline test module must be a regular file: {path}")
             paths.add(path.relative_to(root).as_posix())
     if not paths:
