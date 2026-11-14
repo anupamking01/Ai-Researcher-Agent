@@ -32,6 +32,7 @@ on:
       - tests/test_pilot_trace_inventory_identity.py
       - tests/test_pilot_validator_trace_inventory.py
       - tests/test_pilot_integrity_fast_ci_workflow.py
+      - tests/test_offline_ci_network_firewall.py
       - experiments/openai_pricing_2026-09-08.json
       - experiments/results/pilot_v1_canonical_runs.csv
       - docs/PILOT_INTEGRITY_FAST_CI.md
@@ -111,7 +112,8 @@ jobs:
             tests/test_pilot_trace_capture_bounds.py \
             tests/test_pilot_trace_inventory_identity.py \
             tests/test_pilot_validator_trace_inventory.py \
-            tests/test_pilot_integrity_fast_ci_workflow.py
+            tests/test_pilot_integrity_fast_ci_workflow.py \
+            tests/test_offline_ci_network_firewall.py
 
       - name: Verify exact source immediately before pilot regressions
         run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
@@ -122,7 +124,7 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |
           set -euo pipefail
-          bash scripts/run_offline_pytest_firewalled.sh tests/test_pilot_cost_coverage.py tests/test_pilot_cost_ledger_integrity.py tests/test_pilot_csv_formula_safety.py tests/test_pilot_csv_source_reconciliation.py tests/test_pilot_json_document_integrity.py tests/test_pilot_model_usage_bucket_completeness.py tests/test_pilot_numeric_counter_integrity.py tests/test_pilot_paired_summary_reconciliation.py tests/test_pilot_postrun_token_ledger.py tests/test_pilot_pricing_source_continuity.py tests/test_pilot_progress_event_ledger.py tests/test_pilot_source_selection_integrity.py tests/test_pilot_source_url_accounting.py tests/test_pilot_summary_create_only_publication.py tests/test_pilot_summary_source_continuity.py tests/test_pilot_trace_capture_bounds.py tests/test_pilot_trace_inventory_identity.py tests/test_pilot_validator_trace_inventory.py tests/test_pilot_integrity_fast_ci_workflow.py 2>&1 | tee "$RUNNER_TEMP/vera-pilot-integrity-tests.log"
+          bash scripts/run_offline_pytest_firewalled.sh tests/test_pilot_cost_coverage.py tests/test_pilot_cost_ledger_integrity.py tests/test_pilot_csv_formula_safety.py tests/test_pilot_csv_source_reconciliation.py tests/test_pilot_json_document_integrity.py tests/test_pilot_model_usage_bucket_completeness.py tests/test_pilot_numeric_counter_integrity.py tests/test_pilot_paired_summary_reconciliation.py tests/test_pilot_postrun_token_ledger.py tests/test_pilot_pricing_source_continuity.py tests/test_pilot_progress_event_ledger.py tests/test_pilot_source_selection_integrity.py tests/test_pilot_source_url_accounting.py tests/test_pilot_summary_create_only_publication.py tests/test_pilot_summary_source_continuity.py tests/test_pilot_trace_capture_bounds.py tests/test_pilot_trace_inventory_identity.py tests/test_pilot_validator_trace_inventory.py tests/test_pilot_integrity_fast_ci_workflow.py tests/test_offline_ci_network_firewall.py 2>&1 | tee "$RUNNER_TEMP/vera-pilot-integrity-tests.log"
 
       - name: Verify checkout and runtime after pilot regressions
         run: |

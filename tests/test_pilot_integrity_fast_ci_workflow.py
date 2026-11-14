@@ -37,7 +37,8 @@ TESTS = [
     "tests/test_pilot_trace_capture_bounds.py",
     "tests/test_pilot_trace_inventory_identity.py",
     "tests/test_pilot_validator_trace_inventory.py",
-    "tests/test_pilot_integrity_fast_ci_workflow.py"
+    "tests/test_pilot_integrity_fast_ci_workflow.py",
+    "tests/test_offline_ci_network_firewall.py"
 ]
 OTHER_PATHS = [
     "experiments/openai_pricing_2026-09-08.json",

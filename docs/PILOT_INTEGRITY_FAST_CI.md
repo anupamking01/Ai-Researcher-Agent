@@ -36,3 +36,16 @@ exploratory and human validation remains pending.
 A cancelled broad workflow remains **cancelled**, not silently converted to
 passing by this narrower lane. Failures in this lane must be investigated,
 rather than filtered or cherry-picked for improved outcomes.
+
+## Shared firewalled-pytest strictness regressions (14 November 2026)
+
+The existing pilot-integrity fast lane also runs
+`tests/test_offline_ci_network_firewall.py`, because its pilot regression
+receipt depends on the shared offline pytest launcher. The selected-suite
+contract enforces this module's trigger, compilation and execution. Synthetic
+tests now verify that the launcher rejects an unknown pytest marker or
+configuration option instead of treating warning-only collection as green,
+while retaining IPv4/IPv6 firewall ordering and cleanup tests. This is
+a CI validity safeguard, **not** a rerun or new validation of the diagnostic
+pilot, original main-study evidence, prospective preregistration, exploratory
+sensitivities or human annotator outcomes.
