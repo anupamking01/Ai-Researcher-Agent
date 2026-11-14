@@ -1,0 +1,158 @@
+name: pilot-integrity-fast-ci
+
+# Read-only, offline synthetic verification of *diagnostic pilot* provenance.
+# It does not rerun experiments or upgrade the pilot to confirmatory evidence.
+on:
+  push:
+    branches:
+      - "research-*"
+    paths: &pilot_integrity_paths
+      - .github/workflows/pilot-integrity-fast-ci.yml
+      - scripts/summarize_pilot.py
+      - scripts/validate_pilot_artifacts.py
+      - scripts/audit_pilot_cost_summary.py
+      - scripts/audit_pilot_variant_summary.py
+      - scripts/audit_pilot_runs_csv.py
+      - tests/test_pilot_cost_coverage.py
+      - tests/test_pilot_cost_ledger_integrity.py
+      - tests/test_pilot_csv_formula_safety.py
+      - tests/test_pilot_csv_source_reconciliation.py
+      - tests/test_pilot_json_document_integrity.py
+      - tests/test_pilot_model_usage_bucket_completeness.py
+      - tests/test_pilot_numeric_counter_integrity.py
+      - tests/test_pilot_paired_summary_reconciliation.py
+      - tests/test_pilot_postrun_token_ledger.py
+      - tests/test_pilot_pricing_source_continuity.py
+      - tests/test_pilot_progress_event_ledger.py
+      - tests/test_pilot_source_selection_integrity.py
+      - tests/test_pilot_source_url_accounting.py
+      - tests/test_pilot_summary_create_only_publication.py
+      - tests/test_pilot_summary_source_continuity.py
+      - tests/test_pilot_trace_capture_bounds.py
+      - tests/test_pilot_trace_inventory_identity.py
+      - tests/test_pilot_validator_trace_inventory.py
+      - tests/test_pilot_integrity_fast_ci_workflow.py
+      - experiments/openai_pricing_2026-09-08.json
+      - experiments/results/pilot_v1_canonical_runs.csv
+      - docs/PILOT_INTEGRITY_FAST_CI.md
+      - scripts/run_offline_pytest_firewalled.sh
+      - scripts/verify_ci_python_runtime.py
+      - scripts/verify_ci_source_checkout.py
+      - scripts/verify_ci_test_evidence.py
+      - scripts/verify_retained_ci_test_evidence.py
+      - requirements.txt
+      - requirements-ci.lock
+      - .python-version
+  pull_request:
+    paths: *pilot_integrity_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pilot-provenance-regressions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout source without credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Pin offline Python interpreter
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+          pip-version: "26.2.1"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-ci.lock
+
+      - name: Verify checkout and runtime before dependency install
+        run: |
+          python -m scripts.verify_ci_python_runtime --phase before-tests
+          python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
+
+      - name: Install pinned offline pytest and YAML only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-deps \
+            --only-binary=:all: --retries 1 --timeout 15 \
+            --constraint requirements-ci.lock --constraint requirements.txt \
+            pytest pluggy iniconfig packaging PyYAML
+          python -m pip check
+
+      - name: Compile pilot source and all selected regressions
+        run: |
+          python -m py_compile \
+            scripts/summarize_pilot.py \
+            scripts/validate_pilot_artifacts.py \
+            scripts/audit_pilot_cost_summary.py \
+            scripts/audit_pilot_variant_summary.py \
+            scripts/audit_pilot_runs_csv.py \
+            tests/test_pilot_cost_coverage.py \
+            tests/test_pilot_cost_ledger_integrity.py \
+            tests/test_pilot_csv_formula_safety.py \
+            tests/test_pilot_csv_source_reconciliation.py \
+            tests/test_pilot_json_document_integrity.py \
+            tests/test_pilot_model_usage_bucket_completeness.py \
+            tests/test_pilot_numeric_counter_integrity.py \
+            tests/test_pilot_paired_summary_reconciliation.py \
+            tests/test_pilot_postrun_token_ledger.py \
+            tests/test_pilot_pricing_source_continuity.py \
+            tests/test_pilot_progress_event_ledger.py \
+            tests/test_pilot_source_selection_integrity.py \
+            tests/test_pilot_source_url_accounting.py \
+            tests/test_pilot_summary_create_only_publication.py \
+            tests/test_pilot_summary_source_continuity.py \
+            tests/test_pilot_trace_capture_bounds.py \
+            tests/test_pilot_trace_inventory_identity.py \
+            tests/test_pilot_validator_trace_inventory.py \
+            tests/test_pilot_integrity_fast_ci_workflow.py
+
+      - name: Verify exact source immediately before pilot regressions
+        run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
+
+      - name: Run firewalled pilot source-to-summary regressions
+        shell: bash
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: |
+          set -euo pipefail
+          bash scripts/run_offline_pytest_firewalled.sh tests/test_pilot_cost_coverage.py tests/test_pilot_cost_ledger_integrity.py tests/test_pilot_csv_formula_safety.py tests/test_pilot_csv_source_reconciliation.py tests/test_pilot_json_document_integrity.py tests/test_pilot_model_usage_bucket_completeness.py tests/test_pilot_numeric_counter_integrity.py tests/test_pilot_paired_summary_reconciliation.py tests/test_pilot_postrun_token_ledger.py tests/test_pilot_pricing_source_continuity.py tests/test_pilot_progress_event_ledger.py tests/test_pilot_source_selection_integrity.py tests/test_pilot_source_url_accounting.py tests/test_pilot_summary_create_only_publication.py tests/test_pilot_summary_source_continuity.py tests/test_pilot_trace_capture_bounds.py tests/test_pilot_trace_inventory_identity.py tests/test_pilot_validator_trace_inventory.py tests/test_pilot_integrity_fast_ci_workflow.py 2>&1 | tee "$RUNNER_TEMP/vera-pilot-integrity-tests.log"
+
+      - name: Verify checkout and runtime after pilot regressions
+        run: |
+          python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests
+          python -m scripts.verify_ci_python_runtime --phase after-tests
+
+      - name: Bind exact-commit pilot test transcript
+        run: |
+          python -m scripts.verify_ci_test_evidence \
+            --log "$RUNNER_TEMP/vera-pilot-integrity-tests.log" \
+            --out "$RUNNER_TEMP/vera-pilot-integrity-test-receipt.json"
+
+      - name: Independently replay pilot test receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.verify_retained_ci_test_evidence \
+            --log "$RUNNER_TEMP/vera-pilot-integrity-tests.log" \
+            --receipt "$RUNNER_TEMP/vera-pilot-integrity-test-receipt.json" \
+            --checkout-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --event "$GITHUB_EVENT_NAME"
+
+      - name: Retain source-bound pilot regression evidence (90 days)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-pilot-integrity-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/vera-pilot-integrity-tests.log
+            ${{ runner.temp }}/vera-pilot-integrity-test-receipt.json
+          if-no-files-found: error
+          retention-days: 90
