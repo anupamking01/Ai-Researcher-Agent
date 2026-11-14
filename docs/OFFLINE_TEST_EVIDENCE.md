@@ -216,3 +216,28 @@ contrasts remain post-collection and order/evaluator-qualified; retrospective
 sensitivities are exploratory and real blinded human validation is pending.
 No treatment, evaluator, historical source file, frozen outcome or rating
 was regenerated or modified.
+
+
+## Inherited pytest selection environment (14 November 2026)
+
+The shared offline pytest launcher now **fails before modifying host firewall
+rules** if either `PYTEST_ADDOPTS` or `PYTEST_PLUGINS` has a nonempty inherited
+value. A caller can otherwise pass an apparently complete explicit test command
+while `PYTEST_ADDOPTS=--ignore=...` silently removes source tests from
+collection (with no `deselected` counter); a plugin named by `PYTEST_PLUGINS`
+can alter collection similarly. Strict configuration/marker checks and the
+existing no-deselection receipt gate do not close these two gaps. The launcher
+continues to accept explicit, reviewable test file arguments, and the dedicated
+lanes may still set `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` to suppress unrelated
+entry-point plugins. Synthetic regressions prove rejection precedes `sudo`
+and firewall creation; existing fake-firewall regressions retain success and
+cleanup coverage for the accepted empty/unset environment.
+
+This is a fail-closed **test-selection validity** safeguard, not proof that a
+workflow selected every repository test or independently attested GitHub Actions.
+Cancelled broad-suite and diagnostic CI do not become passing because of this
+change. It does not execute or alter research treatments, evaluators, frozen
+automated scores, or human annotations: the pilot remains diagnostic; the
+main-study designated-primary analyses remain post-collection, order- and
+evaluator-qualified; sensitivity analyses are exploratory, and blinded human
+validation remains pending original-source authentication and actual ratings.

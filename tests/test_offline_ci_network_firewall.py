@@ -243,3 +243,46 @@ def test_strict_pytest_rejects_silent_collection_and_configuration_errors(
     )
     assert strict.returncode != 0
     assert diagnostic in strict.stdout + strict.stderr
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux-only firewall wrapper")
+@pytest.mark.parametrize(("variable", "value"), [
+    ("PYTEST_ADDOPTS", "--ignore=tests/test_evaluation.py"),
+    ("PYTEST_ADDOPTS", "-k nonexistent_marker"),
+    ("PYTEST_ADDOPTS", " "),
+    ("PYTEST_PLUGINS", "unreviewed_collection_plugin"),
+])
+def test_firewalled_runner_rejects_hidden_pytest_selection_environment(
+    variable: str, value: str, tmp_path: Path
+):
+    """The command must fail *before* invoking root-level firewall changes."""
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    marker = tmp_path / "sudo-was-called"
+    fake_sudo = fake_bin / "sudo"
+    fake_sudo.write_text(
+        '#!/bin/sh\\nprintf invoked > "$VERA_SUDO_MARKER"\\nexit 91\\n',
+        encoding="utf-8",
+    )
+    fake_sudo.chmod(0o755)
+    env = os.environ.copy()
+    env.pop("PYTEST_ADDOPTS", None)
+    env.pop("PYTEST_PLUGINS", None)
+    env[variable] = value
+    env["VERA_SUDO_MARKER"] = str(marker)
+    env["PATH"] = str(fake_bin) + os.pathsep + env["PATH"]
+    result = subprocess.run(
+        ["bash", str(WRAPPER)], cwd=ROOT, env=env,
+        text=True, capture_output=True, timeout=10, check=False,
+    )
+    assert result.returncode == 1
+    assert "refuses inherited PYTEST_ADDOPTS or PYTEST_PLUGINS" in result.stderr
+    assert not marker.exists(), "an untrusted pytest environment reached sudo"
+    assert "Offline pytest egress isolation active" not in result.stdout
+
+
+def test_firewalled_runner_keeps_explicit_test_arguments_with_empty_pytest_env():
+    """Existing wrapper contract keeps the call sites' explicit selection."""
+    source = WRAPPER.read_text(encoding="utf-8")
+    assert '[[ -n "${PYTEST_ADDOPTS:-}" || -n "${PYTEST_PLUGINS:-}" ]]' in source
+    assert 'python -m pytest -q --strict-markers --strict-config "$@"' in source

@@ -3,6 +3,15 @@
 # Install dependencies before invoking this wrapper, never under its firewall.
 set -Eeuo pipefail
 
+# The caller's pytest environment must not silently reduce collection via
+# --ignore/--deselect/-k or import a plugin that rewrites the test set. This
+# check runs BEFORE root firewall changes; intentional CI selection is only
+# through the wrapper's explicit positional arguments.
+if [[ -n "${PYTEST_ADDOPTS:-}" || -n "${PYTEST_PLUGINS:-}" ]]; then
+  echo "Offline pytest refuses inherited PYTEST_ADDOPTS or PYTEST_PLUGINS (unreviewed test selection/plugins)" >&2
+  exit 1
+fi
+
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "Offline firewall requires a Linux runner" >&2
   exit 1
