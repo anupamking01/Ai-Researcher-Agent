@@ -99,10 +99,12 @@ def test_workflow_keeps_piped_wrapper_and_publishes_both_evidence_files():
     )
     steps = workflow["jobs"]["unit-tests"]["steps"]
     test_step = next(s for s in steps if s.get("name") == "Run offline unit tests")
-    assert test_step["run"].strip().splitlines() == [
-        "set -euo pipefail",
-        'bash scripts/run_offline_pytest_firewalled.sh 2>&1 | tee "$RUNNER_TEMP/vera-offline-tests.log"',
-    ]
+    commands = test_step["run"]
+    assert commands.strip().splitlines()[0] == "set -euo pipefail"
+    assert "python -m scripts.select_full_ci_shard --verify-partition --shards 8" in commands
+    assert '--shard "$VERA_SHARD" --shards 8' in commands
+    assert 'bash scripts/run_offline_pytest_firewalled.sh "${test_modules[@]}" 2>&1 | tee -a "$RUNNER_TEMP/vera-offline-tests.log"' in commands
+    assert '"$RUNNER_TEMP/vera-offline-test-modules.txt"' in commands
     verify_step = next(s for s in steps if s.get("name") == "Bind exact-commit offline test evidence")
     assert "python -m scripts.verify_ci_test_evidence" in verify_step["run"]
     artifact = next(s for s in steps if s.get("name", "").startswith("Retain source-bound offline test"))
