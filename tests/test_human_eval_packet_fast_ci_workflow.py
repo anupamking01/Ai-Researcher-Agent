@@ -21,6 +21,11 @@ PACKET_SCRIPTS = (
     "scripts/verify_human_eval_counterbalanced_freeze_link.py",
     "scripts/verify_human_eval_automated_run_lineage.py",
     "scripts/verify_human_eval_automated_handoff.py",
+    "scripts/audit_human_eval_archive_readiness.py",
+    "scripts/triage_historical_archive_candidates.py",
+    "scripts/verify_historical_archive_triage_receipt.py",
+    "scripts/preflight_recovered_artifact_zip.py",
+    "scripts/audit_historical_artifact_job_logs.py",
     "scripts/verify_published_main_study_inputs.py",
     "scripts/validate_main_study_inputs.py",
     "scripts/validate_numeric_inputs.py",
@@ -44,6 +49,11 @@ PACKET_MODULES = (
     "tests/test_human_eval_counterbalanced_freeze_link.py",
     "tests/test_human_eval_automated_run_lineage.py",
     "tests/test_human_eval_automated_handoff.py",
+    "tests/test_human_eval_archive_readiness.py",
+    "tests/test_human_eval_expected_recovery_paths.py",
+    "tests/test_historical_archive_candidate_triage.py",
+    "tests/test_historical_archive_triage_receipt_replay.py",
+    "tests/test_historical_archive_triage_receipt_schema_preflight.py",
     "tests/test_human_eval_packet_fast_ci_workflow.py",
 )
 SCOPE = (

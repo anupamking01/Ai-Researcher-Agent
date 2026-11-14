@@ -107,3 +107,28 @@ establish annotator eligibility, real human ratings, or agreement. The pilot
 remains diagnostic, frozen designated-primary automated inference retains its
 post-collection timing, fixed-order and evaluator comparability limitations,
 retrospective sensitivities remain exploratory, and human validation is pending.
+
+## Historical original-artifact recovery gate (synthetic-only)
+
+The same packet lane now guards the **blocked original-report/trace recovery
+boundary**, not merely downstream packet mechanics. Five previously omitted
+offline suites test read-only original-archive readiness, exact frozen 40-cell
+recovery path accounting (including partial/unsafe archives), bounded
+all-candidate ZIP triage, independent byte-for-byte triage-receipt replay, and
+fail-closed schema/claim checks. These tests explicitly distinguish available
+candidate files from **authenticated** original evidence, and reject
+incomplete, altered or misleading receipts instead of turning archive presence
+into human-evaluation readiness. Every involved recovery implementation and
+test file is covered by the workflow's branch/PR path triggers, compile step
+and regression scope; the workflow contract verifies this coverage.
+
+This expands the **synthetic software regression selection** only. It does not
+retrieve, restore, sign or authenticate the original September treatment run
+`34620917346` or evaluator-recovery run `34783525480`, and no selected
+test's fixture is a real human annotation or original treatment report. Actual
+source-verified distribution remains blocked until independently authenticated
+original reports/traces and external custody pins are available and the
+coordinator-only handoff checks pass. The pilot remains diagnostic, the frozen
+automated designated-primary analysis has post-collection plan-timing,
+fixed-order and evaluator-comparability qualifications, retrospective
+sensitivities remain exploratory, and genuine human validation is pending.
