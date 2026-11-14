@@ -1,0 +1,240 @@
+name: historical-design-source-audit
+
+# Offline planned-design source audit: not a treatment/evaluator rerun or
+# original-execution authentication.
+on:
+  push:
+    branches:
+      - research-paper-eval-2027
+    paths:
+      - .github/workflows/historical-design-source-audit.yml
+      - scripts/audit_historical_design_source.py
+      - scripts/audit_historical_task_freeze.py
+      - scripts/audit_historical_variant_factors.py
+      - scripts/audit_historical_common_evaluator_policy.py
+      - tests/test_historical_common_evaluator_policy.py
+      - docs/HISTORICAL_COMMON_EVALUATOR_SOURCE_POLICY.md
+      - scripts/audit_historical_evaluator_measurement_partition.py
+      - tests/test_historical_evaluator_measurement_partition.py
+      - docs/HISTORICAL_EVALUATOR_MEASUREMENT_PARTITION.md
+      - scripts/analyze_evaluator_recovery_policy_bounds.py
+      - tests/test_evaluator_recovery_policy_bounds.py
+      - docs/EVALUATOR_RECOVERY_POLICY_BOUNDS.md
+      - scripts/analyze_evaluator_recovery_frontier_bounds.py
+      - tests/test_evaluator_recovery_frontier_bounds.py
+      - docs/EVALUATOR_RECOVERY_FRONTIER_BOUNDS.md
+      - tests/test_historical_variant_factors.py
+      - docs/HISTORICAL_VARIANT_FACTOR_SOURCE_AUDIT.md
+      - tests/test_historical_task_freeze.py
+      - docs/MAIN_STUDY_TASK_FREEZE_CHRONOLOGY.md
+      - scripts/audit_main_study_design_identifiability.py
+      - tests/test_historical_design_source_audit.py
+      - tests/test_main_study_design_identifiability.py
+      - docs/HISTORICAL_DESIGN_SOURCE_AUDIT.md
+  pull_request:
+    paths:
+      - .github/workflows/historical-design-source-audit.yml
+      - scripts/audit_historical_design_source.py
+      - scripts/audit_historical_task_freeze.py
+      - scripts/audit_historical_variant_factors.py
+      - scripts/audit_historical_common_evaluator_policy.py
+      - tests/test_historical_common_evaluator_policy.py
+      - docs/HISTORICAL_COMMON_EVALUATOR_SOURCE_POLICY.md
+      - scripts/audit_historical_evaluator_measurement_partition.py
+      - tests/test_historical_evaluator_measurement_partition.py
+      - docs/HISTORICAL_EVALUATOR_MEASUREMENT_PARTITION.md
+      - scripts/analyze_evaluator_recovery_policy_bounds.py
+      - tests/test_evaluator_recovery_policy_bounds.py
+      - docs/EVALUATOR_RECOVERY_POLICY_BOUNDS.md
+      - scripts/analyze_evaluator_recovery_frontier_bounds.py
+      - tests/test_evaluator_recovery_frontier_bounds.py
+      - docs/EVALUATOR_RECOVERY_FRONTIER_BOUNDS.md
+      - tests/test_historical_variant_factors.py
+      - docs/HISTORICAL_VARIANT_FACTOR_SOURCE_AUDIT.md
+      - tests/test_historical_task_freeze.py
+      - docs/MAIN_STUDY_TASK_FREEZE_CHRONOLOGY.md
+      - scripts/audit_main_study_design_identifiability.py
+      - tests/test_historical_design_source_audit.py
+      - tests/test_main_study_design_identifiability.py
+      - docs/HISTORICAL_DESIGN_SOURCE_AUDIT.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-pinned-runner-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout full Git history without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up offline Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+
+      - name: Verify historical source and exact structural rank
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --is-shallow-repository)" = false
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          mkdir -p "$RUNNER_TEMP/vera-design-audit"
+          python -m scripts.audit_historical_design_source > "$RUNNER_TEMP/vera-design-audit/receipt.json"
+          python -m scripts.audit_historical_task_freeze > "$RUNNER_TEMP/vera-design-audit/task-freeze.json"
+          python -m scripts.audit_historical_variant_factors > "$RUNNER_TEMP/vera-design-audit/variant-factors.json"
+          python -m scripts.audit_historical_common_evaluator_policy > "$RUNNER_TEMP/vera-design-audit/evaluator-policy.json"
+          python -m scripts.audit_historical_evaluator_measurement_partition > "$RUNNER_TEMP/vera-design-audit/evaluator-partition.json"
+          python -m scripts.analyze_evaluator_recovery_policy_bounds > "$RUNNER_TEMP/vera-design-audit/recovery-policy-bounds.json"
+          python -m scripts.analyze_evaluator_recovery_frontier_bounds > "$RUNNER_TEMP/vera-design-audit/recovery-frontier-bounds.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          receipt = json.loads((Path(os.environ["RUNNER_TEMP"]) /
+                               "vera-design-audit" / "receipt.json").read_text())
+          assert receipt["status"] == "historical_source_bound_planned_design_nonidentifiability"
+          assert receipt["source_linked_variant_order"] == ["D3", "D6", "P6", "P6V"]
+          assert receipt["design_rank_task_treatment_position"] == 13
+          assert receipt["historical_runner_task_then_variant_ast_checked"] is True
+          assert receipt["historical_runner_awaited_agent_call_checked"] is True
+          task = json.loads((Path(os.environ["RUNNER_TEMP"]) /
+                             "vera-design-audit" / "task-freeze.json").read_text())
+          assert task["status"] == "historical_git_task_prelaunch_freeze_only"
+          assert task["manifest_git_blob"] == "68316fdb00631856006119370f9f549b23d1bee3"
+          assert task["prelaunch_git_ancestry_verified"] is True
+          assert task["unchanged_manifest_blob_at_launch"] is True
+          assert task["task_ids"] == [f"main-{n:02d}" for n in range(1, 11)]
+          for label in ("independent_external_task_preregistration_established",
+                        "task_selection_outcome_blinding_established",
+                        "task_independence_established",
+                        "original_treatment_execution_authenticated",
+                        "original_report_trace_custody_authenticated",
+                        "human_validation_performed"):
+              assert task[label] is False, label
+          for field in (
+              "original_treatment_execution_authenticated",
+              "actual_run_timestamps_authenticated",
+              "time_varying_web_conditions_measured",
+              "causal_effects_identified",
+              "human_ratings_collected",
+          ):
+              assert receipt[field] is False, field
+          factors = json.loads((Path(os.environ["RUNNER_TEMP"]) /
+                                "vera-design-audit" / "variant-factors.json").read_text())
+          expected = {
+              "D3": {"planning_mode": "direct", "source_budget": 3,
+                     "verification_mode": "none", "stream_report": False},
+              "D6": {"planning_mode": "direct", "source_budget": 6,
+                     "verification_mode": "none", "stream_report": False},
+              "P6": {"planning_mode": "planner", "source_budget": 6,
+                     "verification_mode": "none", "stream_report": False},
+              "P6V": {"planning_mode": "planner", "source_budget": 6,
+                      "verification_mode": "verify", "stream_report": False},
+          }
+          assert factors["status"] == "historical_source_bound_planned_factor_matrix_only"
+          assert factors["historical_config_blob"] == "c98916c4a0aa17a94c38dd981489693bec5b87a7"
+          assert factors["runner_config_handoff_ast_checked"] is True
+          assert factors["source_linked_factor_matrix"] == expected
+          evaluator = json.loads((Path(os.environ["RUNNER_TEMP"]) /
+                                  "vera-design-audit" / "evaluator-policy.json").read_text())
+          assert evaluator["status"] == "pinned_historical_evaluator_source_policy_comparison_only"
+          assert evaluator["prompt_generator_bytes_identical"] is True
+          assert evaluator["score_normalizer_bytes_identical"] is True
+          assert evaluator["evaluator_core_call_ast_identical"] is True
+          assert evaluator["shared_runtime_dependency_bytes_identical"] is True
+          assert len(evaluator["shared_runtime_source_sha256"]) == 7
+          assert evaluator["recovery_zero_successful_source_sentinel_added"] is True
+          for label in ("historical_installed_package_versions_authenticated",
+                        "historical_provider_execution_authenticated",
+                        "entire_evaluator_input_policy_identical",
+                        "historical_execution_authenticated",
+                        "original_37_evaluations_authenticated",
+                        "recovered_3_evaluations_authenticated",
+                        "per_cell_evidence_status_authenticated",
+                        "equal_evaluator_outputs_established",
+                        "human_validation_performed"):
+              assert evaluator[label] is False, label
+          partition = json.loads((Path(os.environ["RUNNER_TEMP"]) /
+                                  "vera-design-audit" / "evaluator-partition.json").read_text())
+          assert partition["status"] == "published_summary_recovery_partition_source_concordance_only"
+          assert partition["cells"] == 40
+          assert partition["historical_source_policy_audited"] is True
+          assert partition["frozen_treatment_evaluator_summary_preflight_passed"] is True
+          assert partition["recovery_cells_by_arm"] == {"D3": 0, "D6": 0, "P6": 0, "P6V": 3}
+          assert partition["recovered_share_of_p6v_cells"] == "3/10"
+          assert partition["frozen_summary_blank_legacy_status_cells"] == 37
+          assert partition["recovered_zero_evidence_status_cells"] == ["P6V/main-10"]
+          for label in (
+              "original_trace_report_custody_authenticated",
+              "original_evaluator_execution_authenticated",
+              "recovered_evaluator_execution_authenticated",
+              "recovered_sentinel_provider_call_authenticated",
+              "bias_direction_or_magnitude_established",
+              "automated_inference_recomputed",
+              "human_validation_performed",
+          ):
+              assert partition[label] is False, label
+          recovery_bounds = json.loads((Path(os.environ["RUNNER_TEMP"]) /
+                                        "vera-design-audit" / "recovery-policy-bounds.json").read_text())
+          assert recovery_bounds["status"] == "post_hoc_exploratory_recovery_policy_measurement_envelope_only"
+          assert recovery_bounds["historical_recovery_source_and_summary_audited"] is True
+          assert recovery_bounds["recovered_cells_allowed_to_vary"] == 3
+          assert recovery_bounds["worst_case_width_fraction"] == "3/10"
+          assert recovery_bounds["worst_case_lower"] <= recovery_bounds["frozen_observed_contrast"] <= recovery_bounds["worst_case_upper"]
+          for label in ("original_report_trace_custody_authenticated",
+                        "historical_evaluator_execution_authenticated",
+                        "actual_measurement_bias_identified",
+                        "causal_effect_identified", "new_statistical_inference_performed",
+                        "frozen_primary_inference_modified", "human_validation_performed"):
+              assert recovery_bounds[label] is False, label
+          frontier = json.loads((Path(os.environ["RUNNER_TEMP"]) /
+                                 "vera-design-audit" / "recovery-frontier-bounds.json").read_text())
+          assert frontier["status"] == "post_hoc_exploratory_recovery_policy_pareto_envelope_only"
+          assert frontier["historical_recovery_policy_source_audited"] is True
+          assert frontier["p6v_quality_lower_exact"] == "7/12"
+          assert frontier["p6v_quality_upper_exact"] == "53/60"
+          assert frontier["frozen_frontier"] == ["D3"]
+          assert frontier["lower_endpoint_frontier"] == ["D3"]
+          assert frontier["upper_endpoint_frontier"] == ["D3", "P6V"]
+          assert frontier["guaranteed_frontier_members"] == ["D3"]
+          assert frontier["possible_frontier_members"] == ["D3", "P6V"]
+          assert frontier["frontier_invariant_across_envelope"] is False
+          assert frontier["p6v_frontier_entry_quality_boundary_exact"] == "67/80"
+          assert frontier["p6v_frontier_entry_requires_strictly_higher_quality"] is True
+          assert frontier["p6v_recovered_observed_score_sum_exact"] == "11/8"
+          assert frontier["p6v_recovered_score_sum_entry_boundary_exact"] == "61/24"
+          assert frontier["p6v_maximum_quality_with_at_most_k_replacements_exact"] == [
+              "173/240", "197/240", "103/120", "53/60",
+          ]
+          assert frontier["p6v_can_enter_frontier_with_at_most_k_replacements"] == [
+              False, False, True, True,
+          ]
+          assert frontier["p6v_minimum_recovered_measurements_to_replace_for_frontier_entry"] == 2
+          assert frontier["replacement_count_is_algebraic_not_an_observed_policy_change"] is True
+          for label in ("measurement_bias_estimated",
+                        "new_confirmatory_inference_performed",
+                        "original_report_trace_custody_authenticated",
+                        "original_evaluator_execution_authenticated",
+                        "human_validation_performed"):
+              assert frontier[label] is False, label
+          for field in ("original_treatment_execution_authenticated",
+                        "original_report_trace_custody_authenticated",
+                        "actual_factor_values_in_original_traces_verified",
+                        "equal_total_compute_established", "causal_effects_identified",
+                        "human_validation_performed"):
+              assert factors[field] is False, field
+          PY
+
+      - name: Retain planned-design audit receipt (90 days)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-historical-design-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vera-design-audit/
+          if-no-files-found: error
+          retention-days: 90

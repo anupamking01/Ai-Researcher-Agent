@@ -1,0 +1,75 @@
+name: qualified-main-study-report
+
+# Publish only a source-verified, explicitly NONCANONICAL reading copy.
+# No network APIs, treatment/evaluator reexecution, or inference recomputation.
+on:
+  workflow_dispatch:
+  push:
+    branches: [research-paper-eval-2027]
+    paths: &reporting_paths
+      - .github/workflows/qualified-main-study-report.yml
+      - scripts/assemble_qualified_main_study_report.py
+      - scripts/verify_qualified_reporting_copy.py
+      - scripts/verify_qualified_reporting_artifact.py
+      - scripts/verify_qualified_reporting_zip.py
+      - scripts/verify_published_main_study_inputs.py
+      - scripts/verify_main_study_outputs.py
+      - scripts/verify_research_artifact_manifest.py
+      - scripts/fingerprint_research_artifacts.py
+      - scripts/analyze_main_study.py
+      - tests/test_qualified_main_study_report.py
+      - tests/test_qualified_reporting_ci.py
+      - tests/test_qualified_reporting_artifact.py
+      - tests/test_qualified_reporting_zip.py
+      - docs/MAIN_STUDY_QUALIFIED_REPORTING.md
+      - paper/MAIN_STUDY_REPORTING_COVER.md
+      - paper/MAIN_STUDY_INFERENCE.md
+      - outputs/main_study_inference.json
+      - outputs/main_study_runs.csv
+      - outputs/posthoc_support_runs.csv
+      - outputs/main_study_analysis_inputs_manifest.json
+  pull_request:
+    paths: *reporting_paths
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qualified-main-study-report-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-qualified-report:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout source snapshot (no persisted credentials)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+      - name: Assemble and independently verify the exact distributable copy
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/vera-qualified-report"
+          python -m scripts.assemble_qualified_main_study_report \
+            > "$RUNNER_TEMP/vera-qualified-report/qualified_main_study.md"
+          python -m scripts.verify_qualified_reporting_copy \
+            --report "$RUNNER_TEMP/vera-qualified-report/qualified_main_study.md" \
+            --receipt "$RUNNER_TEMP/vera-qualified-report/verification_receipt.json"
+          python -m scripts.verify_qualified_reporting_artifact \
+            --report "$RUNNER_TEMP/vera-qualified-report/qualified_main_study.md" \
+            --receipt "$RUNNER_TEMP/vera-qualified-report/verification_receipt.json"
+          git diff --exit-code
+          test -z "$(git status --porcelain)"
+      - name: Retain noncanonical report and source-bound receipt (90 days)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-qualified-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vera-qualified-report/
+          if-no-files-found: error
+          retention-days: 90

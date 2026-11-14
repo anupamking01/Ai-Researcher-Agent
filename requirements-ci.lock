@@ -1,0 +1,4 @@
+iniconfig==2.3.1
+pluggy==1.7.0
+primp==2.0.1
+pytest==8.3.2

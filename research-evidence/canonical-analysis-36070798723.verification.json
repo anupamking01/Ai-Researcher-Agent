@@ -1,0 +1,78 @@
+{
+  "archive_sha256_observed_now": "226f009ba6b158b77fc98f4e56ec96e1943d1749bc818b0876e90f76077de4b5",
+  "canonical_run_id": 36070798723,
+  "checkout_concordance": {
+    "archive_sha256_observed_now": "226f009ba6b158b77fc98f4e56ec96e1943d1749bc818b0876e90f76077de4b5",
+    "archived_provenance_receipt_sha256": "73f12a725f3cf4d27748a95e1f380ca5cfcac3b8fdd5adeda7abaa2f3f6e10e0",
+    "experimental_treatments_rerun": false,
+    "historical_evidence_authenticated": false,
+    "historical_workflow_receipt_exception_used": true,
+    "historical_workflow_receipt_pin_source": "github_retained_artifact_10837878458_observed_2026-10-29",
+    "human_evaluation_ready": false,
+    "human_ratings_generated": false,
+    "independently_supplied_archive_pin_matched": false,
+    "matched_files": [
+      {
+        "bytes": 243,
+        "match_basis": "verified_checkout",
+        "path": "outputs/canonical_analysis_source.json",
+        "sha256": "2b0859f29e6e51cd3781081e6e02abfcc5549d71c9c8fa9830c04d6c27ea61cf"
+      },
+      {
+        "bytes": 491,
+        "match_basis": "verified_checkout",
+        "path": "outputs/main_study_analysis_inputs_manifest.json",
+        "sha256": "ceb217e0aa5e176528faa8acdb01f399d1660eb41746b428aa8f792749c473ca"
+      },
+      {
+        "bytes": 2492,
+        "match_basis": "pinned_github_workflow_v1_receipt",
+        "path": "outputs/main_study_analysis_provenance.json",
+        "sha256": "73f12a725f3cf4d27748a95e1f380ca5cfcac3b8fdd5adeda7abaa2f3f6e10e0"
+      },
+      {
+        "bytes": 21625,
+        "match_basis": "verified_checkout",
+        "path": "outputs/main_study_inference.json",
+        "sha256": "bbf439aabf0db38afd5430a885aff107014c6b924c05c62d6d724d16e00f450f"
+      },
+      {
+        "bytes": 5440,
+        "match_basis": "verified_checkout",
+        "path": "outputs/main_study_runs.csv",
+        "sha256": "966ea80519af5ea7b832c86d7868525a4ef75874f396f242291e3be949382a0e"
+      },
+      {
+        "bytes": 3652,
+        "match_basis": "verified_checkout",
+        "path": "outputs/posthoc_support_runs.csv",
+        "sha256": "5acd80d6115f269c7fab40180dec0d778a45eaafd7d5c23cb79c43fd7837773c"
+      },
+      {
+        "bytes": 2085,
+        "match_basis": "verified_checkout",
+        "path": "paper/MAIN_STUDY_INFERENCE.md",
+        "sha256": "9356cbad9711012850baef349c7d16a104d63987e1d7be2e53184456a8cb2f1c"
+      }
+    ],
+    "original_treatment_traces_authenticated": false,
+    "schema_version": 2,
+    "status": "canonical_archive_matches_checkout_and_pinned_historical_receipt_not_original_evidence",
+    "verified_checkout_inference_sha256": "bbf439aabf0db38afd5430a885aff107014c6b924c05c62d6d724d16e00f450f",
+    "verified_checkout_provenance_receipt_sha256": "60dae74fbf138c6343a793cdb6cfb6c7d420d9e1e350e0ac77272fdfaedc1dab"
+  },
+  "historical_head_sha": "06c6a9ab0b1d01257e8985fbb09c999cef115779",
+  "human_evaluation_ready": false,
+  "human_ratings_generated": false,
+  "independent_historical_custody_authenticated": false,
+  "original_treatment_traces_authenticated": false,
+  "provider_reported_zip_sha256_matched": true,
+  "published_provider_observed_zip_sha256_matched": true,
+  "repository": "anupamking01/Ai-Researcher-Agent",
+  "schema_version": 1,
+  "source_artifact_expires_at": "2026-12-23T23:03:46+00:00",
+  "source_artifact_id": 10837878458,
+  "source_artifact_name": "canonical-main-study-analysis-36070798723",
+  "status": "provider_observed_canonical_archive_concordance_verified_not_original_evidence",
+  "treatments_or_evaluators_rerun": false
+}

@@ -1,0 +1,1674 @@
+"""Apply one common post-hoc support evaluator to every completed main-study report.
+
+The evaluator is measurement-only. It does not repair reports and it evaluates
+all variants with the same prompt, model, 12-claim cap, evidence restriction,
+and frozen cost accounting. A separate $1.25 evaluator spend guard preserves
+the user's fixed remaining API-credit budget.
+
+A completed treatment run with zero successful retrieved sources is a valid
+experimental outcome, not missing data. For that edge case the evaluator gets
+an explicit no-evidence sentinel so it can identify report claims under the
+same rubric while being prohibited from using outside knowledge. If a trace
+claims successful sources but its saved evidence is missing, evaluation still
+fails as a provenance error.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import hashlib
+import io
+import json
+import math
+import os
+import stat
+import sys
+import tempfile
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+TRACE_ROOT = REPO_ROOT / "outputs" / "experiment_traces"
+EVAL_ROOT = REPO_ROOT / "outputs" / "posthoc_evaluations"
+PRICING_FILE = REPO_ROOT / "experiments" / "openai_pricing_2026-09-08.json"
+TASK_FILE = REPO_ROOT / "experiments" / "main_budget_tasks.json"
+VARIANTS = ("D3", "D6", "P6", "P6V")
+MAX_CLAIMS = 12
+# Bound even ignored JSON numbers in local treatment traces and evaluator caches.
+MAX_EVALUATOR_JSON_NUMBER_TOKEN_CHARS = 128
+# Untrusted replay inputs must not trigger unbounded reads or enormous prompts.
+# Bounds are operational safety limits, not replacements for frozen study data.
+MAX_EVALUATOR_JSON_BYTES = 16 * 1024 * 1024
+MAX_EVALUATOR_TEXT_FILE_BYTES = 2 * 1024 * 1024
+MAX_EVALUATOR_EVIDENCE_BYTES = 4 * 1024 * 1024
+STUDY_ID = "budget-main-v1"
+NONCANONICAL_EVALUATOR_REPLAY_ACK = "NONCANONICAL_EVALUATOR_RECOVERY"
+ORIGINAL_EVALUATOR_RECOVERY_ACTIONS_RUN_ID = 34783525480
+ORIGINAL_TREATMENT_ACTIONS_RUN_ID = 34620917346
+FROZEN_EVALUATOR_MODEL = "gpt-5.6-terra"
+FROZEN_EVALUATOR_TEMPERATURE = 1.0
+NO_EVIDENCE_SENTINEL = (
+    "[NO RETRIEVED EVIDENCE WAS AVAILABLE FOR THIS TREATMENT RUN. "
+    "The run recorded zero successful retrieved sources. Do not use outside knowledge.]"
+)
+
+
+def _require_noncanonical_evaluator_replay_ack(value: str | None) -> None:
+    """Refuse historical-looking remeasurement before credential or source access."""
+    if value != NONCANONICAL_EVALUATOR_REPLAY_ACK:
+        raise SystemExit(
+            "Refusing evaluator replay without explicit noncanonical acknowledgement: "
+            "--noncanonical-evaluator-replay-ack NONCANONICAL_EVALUATOR_RECOVERY. "
+            "New measurements cannot replace the frozen historical evaluator results."
+        )
+
+
+def _noncanonical_evaluator_replay_provenance() -> dict:
+    """Label newly produced measurements without authenticating reused caches."""
+    return {
+        "classification": "noncanonical_evaluator_replay",
+        "original_frozen_study_id": STUDY_ID,
+        "original_actions_evaluator_recovery_run_id": ORIGINAL_EVALUATOR_RECOVERY_ACTIONS_RUN_ID,
+        "original_actions_treatment_run_id": ORIGINAL_TREATMENT_ACTIONS_RUN_ID,
+        "can_replace_original_evaluator_evidence": False,
+        "historical_archive_custody_authenticated": False,
+    }
+
+
+def _validate_frozen_evaluator_config(model: str, temperature: float) -> None:
+    """Require the evaluator configuration frozen before main-study recovery."""
+    if model != FROZEN_EVALUATOR_MODEL:
+        raise SystemExit(
+            "SMART_LLM_MODEL must equal frozen evaluator model "
+            f"{FROZEN_EVALUATOR_MODEL}"
+        )
+    if temperature != FROZEN_EVALUATOR_TEMPERATURE:
+        raise SystemExit(
+            "TEMPERATURE must equal frozen evaluator temperature "
+            f"{FROZEN_EVALUATOR_TEMPERATURE}"
+        )
+
+
+def _require_regular_file(path: Path, *, label: str) -> None:
+    path = Path(path)
+    if path.parent.is_symlink() or not path.parent.is_dir():
+        raise SystemExit(
+            f"{label} directory must be a regular non-symlink directory: "
+            f"{path.parent}"
+        )
+    if path.is_symlink() or not path.is_file():
+        raise SystemExit(
+            f"{label} must be a regular non-symlink file: {path}"
+        )
+
+
+def _read_regular_bytes(
+    path: Path, *, label: str, max_bytes: int | None = None
+) -> bytes:
+    """Capture one stable regular-file source from its selected pathname.
+
+    Pin the directory and file descriptors, but also compare the original
+    pathname identities with the opened objects and the visible paths after
+    capture. A descriptor alone cannot detect a regular-file/parent-directory
+    replacement that redirects future reads of the same research evidence.
+    This is not an atomic multi-file experiment snapshot.
+    """
+    path = Path(path)
+    _require_regular_file(path, label=label)
+    if not all(
+        hasattr(os, flag) for flag in ("O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK")
+    ):
+        raise SystemExit(
+            "Secure evaluator input reads require POSIX directory/no-follow "
+            "open flags; refusing an unsafe fallback"
+        )
+
+    identity_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+
+    def same_identity(left: os.stat_result, right: os.stat_result) -> bool:
+        return all(
+            getattr(left, field) == getattr(right, field)
+            for field in identity_fields
+        )
+
+    directory_fd: int | None = None
+    input_fd: int | None = None
+    try:
+        selected_parent = os.stat(path.parent, follow_symlinks=False)
+        selected_file = os.stat(path, follow_symlinks=False)
+        if not stat.S_ISDIR(selected_parent.st_mode) or not stat.S_ISREG(
+            selected_file.st_mode
+        ):
+            raise SystemExit(
+                f"Cannot read {label} {path}: selected source must remain "
+                "a regular file in a regular non-symlink directory"
+            )
+        directory_fd = os.open(
+            path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        )
+        opened_parent = os.fstat(directory_fd)
+        if not same_identity(selected_parent, opened_parent):
+            raise SystemExit(
+                f"{label} directory pathname changed before read: {path}"
+            )
+        input_fd = os.open(
+            path.name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+            dir_fd=directory_fd,
+        )
+        before = os.fstat(input_fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise SystemExit(
+                f"{label} must remain a regular file during read: {path}"
+            )
+        if not same_identity(selected_file, before):
+            raise SystemExit(
+                f"{label} source pathname changed before read: {path}"
+            )
+        with os.fdopen(input_fd, "rb") as handle:
+            input_fd = None  # fdopen now owns and closes this descriptor.
+            raw = handle.read() if max_bytes is None else handle.read(max_bytes + 1)
+            after = os.fstat(handle.fileno())
+        # Check the pinned directory entry and the still-visible parent path.
+        # The open file descriptor alone cannot reveal regular-file swaps.
+        visible_file = os.stat(
+            path.name, dir_fd=directory_fd, follow_symlinks=False
+        )
+        visible_parent = os.stat(path.parent, follow_symlinks=False)
+    except OSError as exc:
+        raise SystemExit(f"Cannot read {label} {path}: {exc}") from exc
+    finally:
+        if input_fd is not None:
+            os.close(input_fd)
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+    if not same_identity(before, after):
+        raise SystemExit(
+            f"{label} changed during read: {path}; "
+            "review source provenance rather than measuring unstable bytes"
+        )
+    if not same_identity(selected_file, visible_file):
+        raise SystemExit(
+            f"{label} source pathname changed during read: {path}; "
+            "review provenance rather than measuring an unbound source"
+        )
+    if not same_identity(selected_parent, visible_parent) or not same_identity(
+        opened_parent, visible_parent
+    ):
+        raise SystemExit(
+            f"{label} directory pathname changed during read: {path}; "
+            "review provenance rather than measuring an unbound source"
+        )
+    if max_bytes is not None and len(raw) > max_bytes:
+        raise SystemExit(
+            f"{label} exceeds maximum {max_bytes} bytes: {path}; "
+            "review source provenance rather than truncating input"
+        )
+    return raw
+
+
+def _read_regular_text(path: Path, *, label: str) -> str:
+    raw = _read_regular_bytes(
+        path, label=label, max_bytes=MAX_EVALUATOR_TEXT_FILE_BYTES
+    )
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SystemExit(f"{label} must contain valid UTF-8: {path}") from exc
+
+
+def _text_fingerprint(text: str) -> dict:
+    content = text.encode("utf-8")
+    return {
+        "byte_size": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
+def _evaluator_input_fingerprints(
+    *, question: str, report: str, evidence: str, prompt: str
+) -> dict:
+    return {
+        "algorithm": "sha256",
+        "encoding": "utf-8",
+        "question": _text_fingerprint(question),
+        "report": _text_fingerprint(report),
+        "evidence": _text_fingerprint(evidence),
+        "prompt": _text_fingerprint(prompt),
+    }
+
+
+def _load_json(
+    path: Path, *, include_sha256: bool = False
+) -> dict | tuple[dict, str]:
+    """Reject nonfinite or pathological numbers, including unused metadata."""
+    from scripts.run_budget_main_study import _reject_duplicate_json_keys
+
+    def reject_nonstandard_constant(token: str):
+        raise ValueError(f"nonstandard JSON numeric constant: {token}")
+
+    def bounded_integer(token: str) -> int:
+        if len(token) > MAX_EVALUATOR_JSON_NUMBER_TOKEN_CHARS:
+            raise ValueError("oversized JSON numeric token")
+        return int(token)
+
+    def finite_float(token: str) -> float:
+        if len(token) > MAX_EVALUATOR_JSON_NUMBER_TOKEN_CHARS:
+            raise ValueError("oversized JSON numeric token")
+        number = float(token)
+        if not math.isfinite(number):
+            raise ValueError("nonfinite JSON numeric value")
+        return number
+
+    try:
+        raw = _read_regular_bytes(
+            path, label="JSON input", max_bytes=MAX_EVALUATOR_JSON_BYTES
+        )
+        payload = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=reject_nonstandard_constant,
+            parse_int=bounded_integer,
+            parse_float=finite_float,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError) as exc:
+        raise SystemExit(f"Invalid JSON file {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise SystemExit(f"Invalid JSON file {path}: top level must be an object")
+    # Bind replay source custody to the same captured bytes that were parsed.
+    # Cache reads retain the original dict-only interface.
+    return (payload, hashlib.sha256(raw).hexdigest()) if include_sha256 else payload
+
+
+def _require_preflight_treatment_trace_unchanged(
+    path: Path, expected_sha256: str
+) -> None:
+    """Reject changes to the full treatment trace after its parsed snapshot.
+
+    The report/prompt continuity check does not cover unused trace metadata,
+    cost counters, or experiment identity fields. A byte-exact fingerprint
+    binds these too, without reparsing or repairing original treatment data.
+    """
+    raw = _read_regular_bytes(
+        path, label="Treatment trace", max_bytes=MAX_EVALUATOR_JSON_BYTES
+    )
+    if hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise SystemExit(
+            f"Treatment trace changed after preflight: {path}; "
+            "refusing noncanonical replay without provenance review"
+        )
+
+
+def _load_frozen_task_contract(
+    path: Path | None = None,
+) -> tuple[str, dict[str, str]]:
+    """Load the exact task-set identity and question bound to each task ID."""
+    from scripts.run_budget_main_study import _load_task_file
+
+    task_set_id, tasks, _snapshot = _load_task_file(
+        TASK_FILE if path is None else Path(path)
+    )
+    return task_set_id, {task["id"]: task["question"] for task in tasks}
+
+
+def _validate_trace_task_contract(
+    payload: dict,
+    *,
+    path: Path,
+    expected_task_set_id: str,
+    expected_questions: dict[str, str],
+) -> None:
+    """Bind a captured trace to the frozen task set and exact question text."""
+    experiment = payload.get("experiment")
+    trace = payload.get("trace")
+    if not isinstance(experiment, dict) or not isinstance(trace, dict):
+        raise SystemExit(f"Treatment trace must contain object metadata: {path}")
+
+    if (
+        experiment.get("task_set_id") != expected_task_set_id
+        or trace.get("task_set_id") != expected_task_set_id
+    ):
+        raise SystemExit(
+            f"Treatment trace {path} task_set_id must match frozen task set "
+            f"{expected_task_set_id}"
+        )
+
+    task_id = trace.get("task_id")
+    expected_question = expected_questions.get(task_id)
+    if expected_question is None:
+        raise SystemExit(
+            f"Treatment trace {path} task_id is absent from frozen task set: "
+            f"{task_id}"
+        )
+    if trace.get("question") != expected_question:
+        raise SystemExit(
+            f"Treatment trace {path} question must match frozen task definition "
+            f"for {task_id}"
+        )
+
+
+def _require_complete_frozen_treatment_matrix(
+    expected: list[tuple[str, Path, dict, str, str]],
+    expected_questions: dict[str, str],
+) -> None:
+    """Reject partial, repeated, or substituted frozen cells before API calls.
+
+    This is structural preflight for an acknowledged *noncanonical* replay;
+    it does not authenticate original treatment traces or evaluator results.
+    """
+    frozen_ids = {f"main-{index:02d}" for index in range(1, 11)}
+    if set(expected_questions) != frozen_ids:
+        raise SystemExit(
+            "Refusing evaluator replay: expected exactly the ten frozen "
+            "main-01..main-10 task identifiers"
+        )
+
+    required = {(variant, task_id) for variant in VARIANTS for task_id in frozen_ids}
+    found: set[tuple[str, str]] = set()
+    duplicates: set[tuple[str, str]] = set()
+    seen_run_ids: set[str] = set()
+    repeated_run_ids: set[str] = set()
+    for variant, _trace_path, _trace, task_id, run_id in expected:
+        cell = (variant, task_id)
+        if cell in found:
+            duplicates.add(cell)
+        found.add(cell)
+        if run_id in seen_run_ids:
+            repeated_run_ids.add(run_id)
+        seen_run_ids.add(run_id)
+
+    missing = required - found
+    unexpected = found - required
+    if missing or unexpected or duplicates or repeated_run_ids:
+        raise SystemExit(
+            "Refusing evaluator replay: incomplete or ambiguous frozen "
+            "40-cell treatment matrix; "
+            f"missing={sorted(missing)} unexpected={sorted(unexpected)} "
+            f"duplicate_cells={sorted(duplicates)} "
+            f"reused_run_ids={sorted(repeated_run_ids)}"
+        )
+
+
+def _inventory_evaluator_treatment_trace_tree(
+    root: Path, *, variants: tuple[str, ...] = VARIANTS
+) -> dict[str, list[Path]]:
+    """Inventory the full replay trace tree without silently selecting files.
+
+    The evaluator previously globbed only known variants/*.json, so hidden,
+    misnamed, nested, symlinked, or alternate-variant traces could be omitted
+    while a valid-looking 40-cell subset was evaluated. Inspect every immediate
+    entry with bounded scandir iteration before parsing any treatment trace.
+    This is local selection integrity, not historical archive authentication.
+    """
+    root = Path(root)
+    if root.is_symlink() or not root.is_dir():
+        raise SystemExit(
+            "Refusing evaluator replay: treatment trace root must be a "
+            f"regular non-symlink directory: {root}"
+        )
+
+    found: dict[str, list[Path]] = {variant: [] for variant in variants}
+    try:
+        with os.scandir(root) as root_entries:
+            for root_count, variant_entry in enumerate(root_entries, 1):
+                if root_count > len(variants):
+                    raise SystemExit(
+                        "Refusing evaluator replay: unselected treatment trace "
+                        "files or directories; more root entries than frozen variants"
+                    )
+                if (
+                    variant_entry.name not in found
+                    or variant_entry.is_symlink()
+                    or not variant_entry.is_dir(follow_symlinks=False)
+                ):
+                    raise SystemExit(
+                        "Refusing evaluator replay: unselected treatment trace "
+                        f"files or nonregular variant directory: {variant_entry.path}"
+                    )
+                with os.scandir(variant_entry.path) as variant_entries:
+                    for trace_count, trace_entry in enumerate(variant_entries, 1):
+                        if trace_count > 10:
+                            raise SystemExit(
+                                "Refusing evaluator replay: more than ten treatment "
+                                f"trace entries in {variant_entry.path}"
+                            )
+                        if (
+                            trace_entry.is_symlink()
+                            or not trace_entry.is_file(follow_symlinks=False)
+                            or not trace_entry.name.endswith(".json")
+                        ):
+                            raise SystemExit(
+                                "Refusing evaluator replay: unselected treatment "
+                                f"trace files or nonregular trace: {trace_entry.path}"
+                            )
+                        found[variant_entry.name].append(Path(trace_entry.path))
+    except OSError as exc:
+        raise SystemExit(
+            f"Refusing evaluator replay: cannot inventory treatment traces: {exc}"
+        ) from exc
+
+    return {variant: sorted(paths) for variant, paths in found.items()}
+
+
+def _inventory_evaluator_cache_tree(
+    root: Path, *, variants: tuple[str, ...] = VARIANTS
+) -> set[Path]:
+    """Inventory all local evaluator caches before reuse or spend accounting.
+
+    A glob of known arms/*.json silently excluded backup files, alternate
+    arms, symlinks and nested caches while using the remaining cached scores.
+    A missing root means no measurements yet; a nonregular root is invalid.
+    This is local selection integrity, not authentication of historical caches.
+    """
+    root = Path(root)
+    if root.is_symlink():
+        raise SystemExit(
+            "Refusing evaluator replay: evaluator cache root is a symlink: "
+            f"{root}"
+        )
+    if not root.exists():
+        return set()
+    if not root.is_dir():
+        raise SystemExit(
+            "Refusing evaluator replay: evaluator cache root must be a directory: "
+            f"{root}"
+        )
+
+    found: set[Path] = set()
+    try:
+        with os.scandir(root) as root_entries:
+            for root_count, variant_entry in enumerate(root_entries, 1):
+                if root_count > len(variants):
+                    raise SystemExit(
+                        "Refusing evaluator replay: unselected evaluator cache "
+                        "entries exceed frozen variant count"
+                    )
+                if (
+                    variant_entry.name not in variants
+                    or variant_entry.is_symlink()
+                    or not variant_entry.is_dir(follow_symlinks=False)
+                ):
+                    raise SystemExit(
+                        "Refusing evaluator replay: unselected evaluator cache "
+                        f"entry or nonregular variant directory: {variant_entry.path}"
+                    )
+                with os.scandir(variant_entry.path) as cache_entries:
+                    for cache_count, cache_entry in enumerate(cache_entries, 1):
+                        if cache_count > 10:
+                            raise SystemExit(
+                                "Refusing evaluator replay: more than ten evaluator "
+                                f"cache entries in {variant_entry.path}"
+                            )
+                        if (
+                            cache_entry.is_symlink()
+                            or not cache_entry.is_file(follow_symlinks=False)
+                            or not cache_entry.name.endswith(".json")
+                        ):
+                            raise SystemExit(
+                                "Refusing evaluator replay: unselected evaluator "
+                                f"cache file or nonregular cache: {cache_entry.path}; "
+                                "must be a regular non-symlink file"
+                            )
+                        found.add(Path(cache_entry.path))
+    except OSError as exc:
+        raise SystemExit(
+            f"Refusing evaluator replay: cannot inventory evaluator caches: {exc}"
+        ) from exc
+    return found
+
+
+def _serialized_evaluation_cache_bytes(record: dict) -> bytes:
+    """Use identical serialization for create-only cache publication and custody."""
+    return (json.dumps(record, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _publish_evaluation_cache(path: Path, record: dict) -> None:
+    """Durably publish one evaluator result without exposing partial bytes."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = _serialized_evaluation_cache_bytes(record)
+    descriptor, staging_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    staging_path = Path(staging_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            os.fchmod(handle.fileno(), 0o644)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(staging_path, path)
+        directory_descriptor = os.open(
+            path.parent,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+        )
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        staging_path.unlink(missing_ok=True)
+
+
+def _stage_durable_output(path: Path, content: bytes) -> Path:
+    """Write and sync one complete output beside its final destination."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, staging_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    staging_path = Path(staging_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            os.fchmod(handle.fileno(), 0o644)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        staging_path.unlink(missing_ok=True)
+        raise
+    return staging_path
+
+
+def _publish_aggregate_outputs(
+    summary_path: Path,
+    csv_path: Path,
+    summary: dict,
+    rows: list[dict],
+) -> None:
+    """Stage every aggregate artifact before replacing either final file."""
+    fieldnames = [
+        "variant_id",
+        "task_id",
+        "run_id",
+        "evidence_status",
+        "claims_checked",
+        "supported",
+        "partially_supported",
+        "unsupported",
+        "contradicted",
+        "strict_support_rate",
+        "total_tokens",
+        "estimated_cost_usd",
+    ]
+    csv_buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(csv_buffer, fieldnames=fieldnames)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({key: row.get(key) for key in fieldnames})
+    csv_content = csv_buffer.getvalue().encode("utf-8")
+    summary["posthoc_support_runs_sha256"] = hashlib.sha256(
+        csv_content
+    ).hexdigest()
+
+    outputs = [
+        (
+            Path(summary_path),
+            json.dumps(summary, indent=2, sort_keys=True).encode("utf-8"),
+        ),
+        (Path(csv_path), csv_content),
+    ]
+    staged: list[tuple[Path, Path]] = []
+    try:
+        for final_path, content in outputs:
+            staged.append((final_path, _stage_durable_output(final_path, content)))
+        for final_path, staging_path in staged:
+            os.replace(staging_path, final_path)
+
+        for directory in {path.parent for path, _staging in staged}:
+            directory_descriptor = os.open(
+                directory,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            )
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+    finally:
+        for _final_path, staging_path in staged:
+            staging_path.unlink(missing_ok=True)
+
+
+def _verify_aggregate_outputs(summary_path: Path, csv_path: Path) -> None:
+    """Require the aggregate summary to bind the exact run-level CSV bytes."""
+    summary = _load_json(Path(summary_path))
+    expected = summary.get("posthoc_support_runs_sha256")
+    if (
+        not isinstance(expected, str)
+        or len(expected) != 64
+        or any(character not in "0123456789abcdef" for character in expected)
+    ):
+        raise SystemExit(
+            "Post-hoc aggregate summary lacks a valid CSV generation fingerprint"
+        )
+    observed = hashlib.sha256(
+        _read_regular_bytes(Path(csv_path), label="post-hoc aggregate CSV")
+    ).hexdigest()
+    if observed != expected:
+        raise SystemExit(
+            "post-hoc aggregate generation mismatch: summary binds CSV "
+            f"{expected}, observed {observed}"
+        )
+
+
+
+def _snapshot_noncanonical_aggregate_destinations(
+    summary_path: Path, csv_path: Path
+) -> tuple[str, str] | None:
+    """Refuse to replace historical or unclassifiable aggregate evidence.
+
+    A previous noncanonical replay may be refreshed only if *both* existing
+    outputs agree on their CSV bytes and the summary explicitly carries the
+    current noncanonical provenance contract. Partial or legacy output pairs
+    must be preserved for provenance review, not overwritten to look valid.
+    """
+    summary_path = Path(summary_path)
+    csv_path = Path(csv_path)
+    has_summary = summary_path.exists() or summary_path.is_symlink()
+    has_csv = csv_path.exists() or csv_path.is_symlink()
+    if not has_summary and not has_csv:
+        return None
+    if not has_summary or not has_csv:
+        raise SystemExit(
+            "Refusing noncanonical aggregate replacement: existing summary/CSV "
+            "pair is incomplete; preserve it for provenance review"
+        )
+
+    prior, summary_sha256 = _load_json(summary_path, include_sha256=True)
+    provenance = prior.get("replay_provenance")
+    frozen_marker = _noncanonical_evaluator_replay_provenance()
+    if (
+        prior.get("study_id") != STUDY_ID
+        or not isinstance(provenance, dict)
+        or any(provenance.get(key) != value for key, value in frozen_marker.items())
+    ):
+        raise SystemExit(
+            "Refusing noncanonical aggregate replacement: existing summary "
+            "lacks matching explicit noncanonical replay provenance; it may "
+            "be a frozen historical output"
+        )
+
+    csv_bytes = _read_regular_bytes(
+        csv_path,
+        label="Existing post-hoc aggregate CSV",
+        max_bytes=MAX_EVALUATOR_JSON_BYTES,
+    )
+    csv_sha256 = hashlib.sha256(csv_bytes).hexdigest()
+    if prior.get("posthoc_support_runs_sha256") != csv_sha256:
+        raise SystemExit(
+            "Refusing noncanonical aggregate replacement: existing summary "
+            "does not bind the retained CSV bytes"
+        )
+    return summary_sha256, csv_sha256
+
+
+def _require_noncanonical_aggregate_destinations_unchanged(
+    summary_path: Path,
+    csv_path: Path,
+    original_snapshot: tuple[str, str] | None,
+) -> None:
+    """Do not replace a different aggregate pair introduced during replay."""
+    if _snapshot_noncanonical_aggregate_destinations(
+        summary_path, csv_path
+    ) != original_snapshot:
+        raise SystemExit(
+            "Noncanonical aggregate destinations changed after preflight; "
+            "refusing publication without provenance review"
+        )
+
+
+def _normalize_evaluator_output(raw_result: str) -> dict:
+    from logic.experiment import normalize_verifier_output
+
+    return normalize_verifier_output(raw_result, max_claims=MAX_CLAIMS)
+
+
+
+def _require_zero_evidence_classifications(
+    record: dict, *, evidence_status: str, label: str
+) -> None:
+    """Enforce the frozen evidence-only rubric for a zero-source sentinel.
+
+    Without retrieved evidence, a factual claim cannot be supported, partially
+    supported, or contradicted *by that evidence*. Keep the original report
+    and its valid zero-source outcome; reject an incoherent measurement rather
+    than silently inflating support or rerunning the treatment/evaluator.
+    """
+    if evidence_status != "zero_successful_sources":
+        return
+    checked = record.get("claims_checked")
+    if (
+        type(checked) is not int
+        or checked <= 0
+        or type(record.get("unsupported")) is not int
+        or record["unsupported"] != checked
+        or any(
+            type(record.get(field)) is not int or record[field] != 0
+            for field in ("supported", "partially_supported", "contradicted")
+        )
+    ):
+        raise SystemExit(
+            f"{label}: zero successful sources requires every evaluated "
+            "claim to be unsupported under the evidence-only rubric"
+        )
+
+def _load_cached_evaluation(
+    path: Path,
+    *,
+    expected_variant: str,
+    expected_task_id: str,
+    expected_run_id: str,
+    expected_evaluator_model: str,
+    expected_temperature: float,
+    expected_evidence_status: str,
+    pricing: dict,
+    expected_input_fingerprints: dict | None = None,
+    capture_source_sha256: bool = False,
+) -> dict | tuple[dict, str]:
+    loaded = _load_json(path, include_sha256=capture_source_sha256)
+    if capture_source_sha256:
+        payload, source_sha256 = loaded
+    else:
+        payload = loaded
+    validated = _validate_cached_evaluation(
+        payload,
+        path=path,
+        expected_variant=expected_variant,
+        expected_task_id=expected_task_id,
+        expected_run_id=expected_run_id,
+        expected_evaluator_model=expected_evaluator_model,
+        expected_temperature=expected_temperature,
+        expected_evidence_status=expected_evidence_status,
+        pricing=pricing,
+        expected_input_fingerprints=expected_input_fingerprints,
+    )
+    return (validated, source_sha256) if capture_source_sha256 else validated
+
+
+def _validate_cached_evaluation(
+    payload: dict,
+    *,
+    path: Path,
+    expected_variant: str,
+    expected_task_id: str,
+    expected_run_id: str,
+    expected_evaluator_model: str,
+    expected_temperature: float,
+    expected_evidence_status: str,
+    pricing: dict,
+    expected_input_fingerprints: dict | None = None,
+) -> dict:
+    """Validate one already-captured evaluator record against its bound cell."""
+    schema_version = payload.get("schema_version")
+    if type(schema_version) is not int or schema_version not in (1, 2):
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} schema_version must equal 1 or 2"
+        )
+    if schema_version == 1:
+        if "input_fingerprints" in payload:
+            raise SystemExit(
+                f"Cached post-hoc evaluation {path} schema_version 1 must not "
+                "declare input_fingerprints"
+            )
+    else:
+        fingerprints = payload.get("input_fingerprints")
+        valid_fingerprints = (
+            isinstance(fingerprints, dict)
+            and set(fingerprints)
+            == {"algorithm", "encoding", "question", "report", "evidence", "prompt"}
+            and fingerprints.get("algorithm") == "sha256"
+            and fingerprints.get("encoding") == "utf-8"
+        )
+        if valid_fingerprints:
+            for name in ("question", "report", "evidence", "prompt"):
+                entry = fingerprints.get(name)
+                if not (
+                    isinstance(entry, dict)
+                    and set(entry) == {"byte_size", "sha256"}
+                    and type(entry.get("byte_size")) is int
+                    and entry["byte_size"] >= 0
+                    and isinstance(entry.get("sha256"), str)
+                    and len(entry["sha256"]) == 64
+                    and all(char in "0123456789abcdef" for char in entry["sha256"])
+                ):
+                    valid_fingerprints = False
+                    break
+        if not valid_fingerprints:
+            raise SystemExit(
+                f"Cached post-hoc evaluation {path} input_fingerprints are invalid"
+            )
+        if (
+            expected_input_fingerprints is not None
+            and fingerprints != expected_input_fingerprints
+        ):
+            raise SystemExit(
+                f"Cached post-hoc evaluation {path} input_fingerprints must match "
+                "the current evaluator prompt inputs"
+            )
+    expected_identity = {
+        "study_id": STUDY_ID,
+        "variant_id": expected_variant,
+        "task_id": expected_task_id,
+        "run_id": expected_run_id,
+    }
+    for field, expected_value in expected_identity.items():
+        if payload.get(field) != expected_value:
+            raise SystemExit(
+                f"Cached post-hoc evaluation {path} {field} must equal "
+                f"{expected_value}"
+            )
+
+    recorded_evidence_status = payload.get("evidence_status")
+    if (
+        recorded_evidence_status != expected_evidence_status
+        and not (schema_version == 1 and recorded_evidence_status is None)
+    ):
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} evidence_status must equal "
+            f"{expected_evidence_status}"
+        )
+    if recorded_evidence_status is None:
+        payload = dict(payload)
+        payload["evidence_status"] = expected_evidence_status
+
+    declared_cap = payload.get("max_claims")
+    if (
+        isinstance(declared_cap, bool)
+        or not isinstance(declared_cap, int)
+        or declared_cap != MAX_CLAIMS
+    ):
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} max_claims metadata must equal "
+            f"{MAX_CLAIMS}"
+        )
+    try:
+        _normalize_evaluator_output(json.dumps(payload))
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} is invalid: {exc}"
+        ) from exc
+
+    claims_checked = payload["claims_checked"]
+    if claims_checked <= 0:
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} claims_checked must be positive"
+        )
+    _require_zero_evidence_classifications(
+        payload,
+        evidence_status=expected_evidence_status,
+        label=f"Cached post-hoc evaluation {path}",
+    )
+    expected_rate = payload["supported"] / claims_checked
+    stored_rate = payload.get("strict_support_rate")
+    if (
+        isinstance(stored_rate, bool)
+        or not isinstance(stored_rate, (int, float))
+        or not math.isfinite(stored_rate)
+        or float(stored_rate) != expected_rate
+    ):
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} strict_support_rate must equal "
+            "supported / claims_checked"
+        )
+    _validated_cache_accounting(
+        payload,
+        path=path,
+        pricing=pricing,
+        expected_evaluator_model=expected_evaluator_model,
+        expected_temperature=expected_temperature,
+    )
+    # Historical schema-1 records predate evaluator-input fingerprints. They
+    # remain inspectable on their original terms, but direct replay supplies
+    # expected fingerprints and must not silently reuse scores against
+    # potentially different report, question, retrieval or prompt bytes.
+    if schema_version == 1 and expected_input_fingerprints is not None:
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} is unbound legacy schema_version 1: "
+            "no input_fingerprints; refusing noncanonical evaluator replay. "
+            "Preserve the old record for provenance review, not silent reuse."
+        )
+    return payload
+
+
+def _validated_completed_trace(
+    path: Path,
+    payload: dict,
+    *,
+    expected_variant: str,
+) -> tuple[dict, str, str]:
+    experiment = payload.get("experiment")
+    trace = payload.get("trace")
+    if not isinstance(experiment, dict) or not isinstance(trace, dict):
+        raise SystemExit(f"Completed trace must contain object metadata: {path}")
+    if trace.get("completed") is not True:
+        raise SystemExit(f"Trace is not completed: {path}")
+
+    identities: dict[str, str] = {}
+    for field in ("variant_id", "task_id"):
+        experiment_value = experiment.get(field)
+        trace_value = trace.get(field)
+        if not isinstance(experiment_value, str) or not experiment_value.strip():
+            raise SystemExit(f"Completed trace missing {field} in experiment: {path}")
+        if not isinstance(trace_value, str) or not trace_value.strip():
+            raise SystemExit(f"Completed trace missing {field} in trace: {path}")
+        if experiment_value != experiment_value.strip() or trace_value != trace_value.strip():
+            raise SystemExit(f"Completed trace invalid {field} whitespace: {path}")
+        if experiment_value != trace_value:
+            raise SystemExit(f"Completed trace {field} mismatch: {path}")
+        identities[field] = trace_value
+
+    if identities["variant_id"] != expected_variant or path.parent.name != expected_variant:
+        raise SystemExit(f"Completed trace variant_id mismatch: {path}")
+
+    run_id = trace.get("run_id")
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise SystemExit(f"Completed trace missing run_id: {path}")
+    if run_id != run_id.strip():
+        raise SystemExit(f"Completed trace invalid run_id whitespace: {path}")
+    if path.stem != run_id:
+        raise SystemExit(f"Completed trace filename does not match run_id: {path}")
+
+    return trace, identities["task_id"], run_id
+
+
+def _cost_usage(usage_by_model: dict, pricing: dict) -> float:
+    from scripts.summarize_pilot import _estimate_reported_token_cost
+
+    cost, status = _estimate_reported_token_cost(usage_by_model, pricing)
+    if cost is None:
+        raise RuntimeError(f"Evaluator cost unavailable: {status}")
+    return float(cost)
+
+
+def _validated_cache_accounting(
+    payload: dict,
+    *,
+    path: Path,
+    pricing: dict,
+    expected_evaluator_model: str,
+    expected_temperature: float,
+) -> float:
+    if payload.get("evaluator_model") != expected_evaluator_model:
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} evaluator_model must equal frozen "
+            f"evaluator model {expected_evaluator_model}"
+        )
+
+    temperature = payload.get("temperature")
+    if (
+        isinstance(temperature, bool)
+        or not isinstance(temperature, (int, float))
+        or not math.isfinite(temperature)
+        or float(temperature) != expected_temperature
+    ):
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} temperature must equal "
+            f"{expected_temperature}"
+        )
+    if payload.get("cost_method") != "frozen uncached rates":
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} cost_method must equal "
+            "frozen uncached rates"
+        )
+
+    usage_by_model = payload.get("provider_usage_by_model")
+    valid_usage = (
+        isinstance(usage_by_model, dict)
+        and set(usage_by_model) == {expected_evaluator_model}
+        and isinstance(usage_by_model.get(expected_evaluator_model), dict)
+    )
+    if valid_usage:
+        usage = usage_by_model[expected_evaluator_model]
+        required_fields = (
+            "model_calls",
+            "unavailable_calls",
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+        )
+        valid_usage = all(
+            type(usage.get(field)) is int and usage[field] >= 0
+            for field in required_fields
+        )
+        if valid_usage:
+            prompt_tokens = usage["prompt_tokens"]
+            completion_tokens = usage["completion_tokens"]
+            expected_total = prompt_tokens + completion_tokens
+            valid_usage = (
+                usage["model_calls"] == 1
+                and usage["unavailable_calls"] == 0
+                and expected_total > 0
+                and usage["total_tokens"] == expected_total
+            )
+    if not valid_usage:
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} provider_usage_by_model is invalid"
+        )
+
+    total_tokens = payload.get("total_tokens")
+    if type(total_tokens) is not int or total_tokens != expected_total:
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} total_tokens must equal provider usage"
+        )
+
+    try:
+        recomputed_cost = _cost_usage(usage_by_model, pricing)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} cost cannot be recomputed: {exc}"
+        ) from exc
+    stored_cost = payload.get("estimated_cost_usd")
+    if (
+        isinstance(stored_cost, bool)
+        or not isinstance(stored_cost, (int, float))
+        or not math.isfinite(stored_cost)
+        or float(stored_cost) != recomputed_cost
+    ):
+        raise SystemExit(
+            f"Cached post-hoc evaluation {path} estimated_cost_usd must equal "
+            "recomputed cost"
+        )
+    return recomputed_cost
+
+
+def _inventory_evaluator_run_evidence(run_dir: Path) -> list[Path]:
+    """Reject unselected local report/evidence files before evaluator input use.
+
+    The frozen runner writes numbered query text files, a Markdown report,
+    optionally a PDF, and optionally a verification JSON. Wildcard evidence
+    selection could omit shadow text files. This checks all immediate entries
+    with bounded enumeration, not historical authentication or an atomic view.
+    """
+    run_dir = Path(run_dir)
+    if run_dir.is_symlink() or not run_dir.is_dir():
+        raise SystemExit(
+            "Evaluator run directory must be a regular non-symlink directory: "
+            f"{run_dir}"
+        )
+    query_names = {f"research-query-{number:02d}.txt" for number in range(1, 5)}
+    allowed = query_names | {
+        "research_report.md",
+        "research_report.pdf",
+        "verification.json",
+    }
+    observed: set[str] = set()
+    try:
+        with os.scandir(run_dir) as entries:
+            for count, entry in enumerate(entries, 1):
+                if count > len(allowed):
+                    raise SystemExit(
+                        "Refusing evaluator replay: unselected report/evidence "
+                        f"entries exceed frozen writer contract: {run_dir}"
+                    )
+                if entry.name == "research_report.md" and (
+                    entry.is_symlink()
+                    or not entry.is_file(follow_symlinks=False)
+                ):
+                    raise SystemExit(
+                        "Evaluator report must be a regular non-symlink file: "
+                        f"{entry.path}"
+                    )
+                if (
+                    entry.name not in allowed
+                    or entry.is_symlink()
+                    or not entry.is_file(follow_symlinks=False)
+                ):
+                    raise SystemExit(
+                        "Refusing evaluator replay: unselected or nonregular "
+                        f"report/evidence file: {entry.path}"
+                    )
+                observed.add(entry.name)
+    except OSError as exc:
+        raise SystemExit(
+            "Refusing evaluator replay: cannot inventory report/evidence "
+            f"files in {run_dir}: {exc}"
+        ) from exc
+
+    numbers = [
+        number for number in range(1, 5)
+        if f"research-query-{number:02d}.txt" in observed
+    ]
+    if numbers and numbers != list(range(1, numbers[-1] + 1)):
+        raise SystemExit(
+            "Refusing evaluator replay: noncontiguous research-query file "
+            f"sequence in {run_dir}: {numbers}"
+        )
+    return [run_dir / f"research-query-{number:02d}.txt" for number in numbers]
+
+
+def _research_context(run_id: str, *, root: Path | None = None) -> str:
+    root = REPO_ROOT if root is None else Path(root)
+    run_dir = root / "outputs" / run_id
+    parts = []
+    for path in _inventory_evaluator_run_evidence(run_dir):
+        text = _read_regular_text(path, label="Evaluator evidence").strip()
+        if text:
+            parts.append(text)
+    context = "\n\n".join(parts)
+    if len(context.encode("utf-8")) > MAX_EVALUATOR_EVIDENCE_BYTES:
+        raise SystemExit(
+            f"Evaluator evidence for {run_id} exceeds combined "
+            f"{MAX_EVALUATOR_EVIDENCE_BYTES}-byte limit; "
+            "review source provenance rather than truncating evidence"
+        )
+    return context
+
+
+def _report_text(run_id: str, *, root: Path | None = None) -> str:
+    root = REPO_ROOT if root is None else Path(root)
+    path = root / "outputs" / run_id / "research_report.md"
+    return _read_regular_text(path, label="Evaluator report")
+
+
+def _existing_evaluator_cost(
+    pricing: dict,
+    *,
+    expected_evaluator_model: str,
+    expected_temperature: float,
+) -> float:
+    total = 0.0
+    if not EVAL_ROOT.exists():
+        return total
+    for path in sorted(_inventory_evaluator_cache_tree(EVAL_ROOT)):
+        payload = _load_json(path)
+        total += _validated_cache_accounting(
+            payload,
+            path=path,
+            pricing=pricing,
+            expected_evaluator_model=expected_evaluator_model,
+            expected_temperature=expected_temperature,
+        )
+    return total
+
+
+def _evidence_for_trace(
+    trace: dict,
+    variant: str,
+    task_id: str,
+    run_id: str,
+    *,
+    root: Path | None = None,
+) -> tuple[str, str]:
+    # Counts and saved retrieval bytes must describe the same treatment.
+    # Checking presence alone can turn a frozen zero-source outcome into a
+    # seemingly evidence-backed measurement during noncanonical replay.
+    successful_sources = trace.get("successful_source_count", 0)
+    if type(successful_sources) is not int or successful_sources < 0:
+        raise SystemExit(
+            f"Invalid successful_source_count for {variant}/{task_id}: "
+            "must be a nonnegative integer"
+        )
+
+    evidence = _research_context(run_id, root=root)
+    if successful_sources == 0:
+        if evidence.strip():
+            raise SystemExit(
+                f"Saved evidence contradicts zero successful sources for "
+                f"{variant}/{task_id}; refusing evaluator replay"
+            )
+        return NO_EVIDENCE_SENTINEL, "zero_successful_sources"
+    if not evidence.strip():
+        raise SystemExit(
+            f"Saved evidence missing for {variant}/{task_id} despite "
+            f"successful_source_count={successful_sources}"
+        )
+    return evidence, "retrieved_evidence"
+
+
+def _prepare_evaluator_input(
+    trace: dict,
+    variant: str,
+    task_id: str,
+    run_id: str,
+    *,
+    root: Path | None = None,
+) -> dict:
+    from logic.prompts import generate_verification_prompt
+
+    evidence, evidence_status = _evidence_for_trace(
+        trace,
+        variant,
+        task_id,
+        run_id,
+        root=root,
+    )
+    report = _report_text(run_id, root=root)
+    question = str(trace.get("question", ""))
+    prompt = generate_verification_prompt(
+        question, report, evidence, max_claims=MAX_CLAIMS
+    )
+    return {
+        "evidence_status": evidence_status,
+        "prompt": prompt,
+        "input_fingerprints": _evaluator_input_fingerprints(
+            question=question,
+            report=report,
+            evidence=evidence,
+            prompt=prompt,
+        ),
+    }
+
+
+def _require_preflight_evaluator_input_unchanged(
+    item: dict, *, trace: dict, root: Path | None = None
+) -> None:
+    """Fail closed if report/evidence change after the complete replay preflight.
+
+    A descriptor-pinned read protects one capture, not the longer interval
+    before a provider call or subsequent measurement publication.
+    """
+    current = _prepare_evaluator_input(
+        trace, item["variant"], item["task_id"], item["run_id"], root=root
+    )
+    frozen_preflight = {
+        key: item[key]
+        for key in ("evidence_status", "prompt", "input_fingerprints")
+    }
+    if current != frozen_preflight:
+        raise SystemExit(
+            "Evaluator source changed after preflight for "
+            f"{item['variant']}/{item['task_id']}/{item['run_id']}; "
+            "refusing noncanonical replay without provenance review."
+        )
+
+
+def _require_final_evaluator_source_continuity(
+    expected: list[tuple[str, Path, dict, str, str]],
+    rows: list[dict],
+    *,
+    root: Path | None = None,
+) -> None:
+    """Check every cached and newly measured report/evidence at publication.
+
+    Schema-2 cache fingerprints were checked against the prepared inputs at
+    preflight; new records retain those same fingerprints. A fully cached
+    replay must not publish an aggregate after any report/evidence drift.
+    """
+    records = {}
+    for row in rows:
+        key = (row["variant_id"], row["task_id"], row["run_id"])
+        if key in records:
+            raise SystemExit(
+                f"Duplicate evaluator measurement at final source check: {key}"
+            )
+        records[key] = row
+    if len(records) != len(expected):
+        raise SystemExit(
+            "Final evaluator source check requires one measurement per treatment"
+        )
+
+    for variant, _trace_path, trace, task_id, run_id in expected:
+        key = (variant, task_id, run_id)
+        record = records.get(key)
+        if record is None:
+            raise SystemExit(
+                f"Missing evaluator measurement at final source check: {key}"
+            )
+        current = _prepare_evaluator_input(
+            trace, variant, task_id, run_id, root=root
+        )
+        if (
+            record.get("evidence_status") != current["evidence_status"]
+            or record.get("input_fingerprints") != current["input_fingerprints"]
+        ):
+            raise SystemExit(
+                "Evaluator source changed after preflight for "
+                f"{variant}/{task_id}/{run_id}; refusing aggregate publication."
+            )
+
+
+def _require_evaluator_cache_source_continuity(
+    expected_sha256_by_path: dict[Path, str], *, root: Path | None = None
+) -> None:
+    """Bind aggregate publication to the exact cached measurement bytes.
+
+    Input fingerprint checks bind measurements to report/evidence. They do not
+    notice a reused or newly written evaluator cache being removed, replaced,
+    or silently supplemented while another cell is being evaluated.
+    """
+    cache_root = EVAL_ROOT if root is None else Path(root)
+    actual_paths = _inventory_evaluator_cache_tree(cache_root)
+    expected_paths = set(expected_sha256_by_path)
+    if actual_paths != expected_paths:
+        raise SystemExit(
+            "Evaluator cache inventory changed during replay; refusing "
+            "aggregate publication (missing or unexpected measurements)"
+        )
+    for path, expected_sha256 in sorted(expected_sha256_by_path.items()):
+        raw = _read_regular_bytes(
+            path, label="Evaluator cache continuity",
+            max_bytes=MAX_EVALUATOR_JSON_BYTES,
+        )
+        if hashlib.sha256(raw).hexdigest() != expected_sha256:
+            raise SystemExit(
+                "Evaluator cache changed during replay: "
+                f"{path}; refusing aggregate publication"
+            )
+
+
+def _preflight_evaluator_resume(
+    expected: list[tuple[str, Path, dict, str, str]],
+    *,
+    pricing: dict,
+    evaluator_model: str,
+    evaluator_temperature: float,
+    capture_cache_source_hashes: bool = False,
+) -> tuple[list[dict], list[dict]] | tuple[list[dict], list[dict], dict[Path, str]]:
+    """Snapshot and validate the entire resume state before any model call."""
+    expected_paths: set[Path] = set()
+    for variant, trace_path, _trace, task_id, run_id in expected:
+        out_path = EVAL_ROOT / variant / f"{task_id}.json"
+        if out_path in expected_paths:
+            raise SystemExit(
+                "Completed traces map to duplicate evaluator destination "
+                f"{out_path}: {variant}/{task_id}/{run_id} ({trace_path})"
+            )
+        expected_paths.add(out_path)
+    existing_paths = _inventory_evaluator_cache_tree(EVAL_ROOT)
+    unexpected_paths = sorted(existing_paths - expected_paths)
+    if unexpected_paths:
+        raise SystemExit(
+            "Unexpected cached post-hoc evaluation files: "
+            + ", ".join(str(path) for path in unexpected_paths)
+        )
+
+    rows: list[dict] = []
+    pending: list[dict] = []
+    cache_source_hashes: dict[Path, str] = {}
+    for variant, _trace_path, trace, task_id, run_id in expected:
+        prepared = _prepare_evaluator_input(trace, variant, task_id, run_id)
+        evidence_status = prepared["evidence_status"]
+        prompt = prepared["prompt"]
+        input_fingerprints = prepared["input_fingerprints"]
+        out_path = EVAL_ROOT / variant / f"{task_id}.json"
+        if out_path.exists() or out_path.is_symlink():
+            _require_regular_file(out_path, label="Evaluator cache")
+            validated = _load_cached_evaluation(
+                out_path,
+                expected_variant=variant,
+                expected_task_id=task_id,
+                expected_run_id=run_id,
+                expected_evaluator_model=evaluator_model,
+                expected_temperature=evaluator_temperature,
+                expected_evidence_status=evidence_status,
+                pricing=pricing,
+                expected_input_fingerprints=input_fingerprints,
+                capture_source_sha256=capture_cache_source_hashes,
+            )
+            if capture_cache_source_hashes:
+                record, raw_sha256 = validated
+                rows.append(record)
+                cache_source_hashes[out_path] = raw_sha256
+            else:
+                rows.append(validated)
+            continue
+        pending.append(
+            {
+                "variant": variant,
+                "task_id": task_id,
+                "run_id": run_id,
+                "out_path": out_path,
+                "evidence_status": evidence_status,
+                "prompt": prompt,
+                "input_fingerprints": input_fingerprints,
+            }
+        )
+    if capture_cache_source_hashes:
+        return rows, pending, cache_source_hashes
+    return rows, pending
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--max-evaluator-cost-usd", type=float, default=1.25)
+    parser.add_argument("--noncanonical-evaluator-replay-ack", default=None)
+    args = parser.parse_args()
+    _require_noncanonical_evaluator_replay_ack(args.noncanonical_evaluator_replay_ack)
+    print(
+        "NONCANONICAL EVALUATOR REPLAY: new measurements cannot replace frozen "
+        "historical recovery or authenticate missing treatment evidence.",
+        flush=True,
+    )
+    if (
+        not math.isfinite(args.max_evaluator_cost_usd)
+        or args.max_evaluator_cost_usd <= 0
+    ):
+        raise SystemExit("--max-evaluator-cost-usd must be finite and positive")
+    for name in ("OPENAI_API_KEY", "SMART_LLM_MODEL", "TEMPERATURE"):
+        if not os.getenv(name):
+            raise SystemExit(f"Missing required environment variable: {name}")
+
+    from scripts.run_budget_main_study import _load_pricing, _validated_trace_cost
+
+    pricing, _pricing_snapshot = _load_pricing(PRICING_FILE)
+    task_set_id, expected_questions = _load_frozen_task_contract()
+    evaluator_model = os.environ["SMART_LLM_MODEL"]
+    evaluator_temperature = float(os.environ["TEMPERATURE"])
+    if not math.isfinite(evaluator_temperature):
+        raise SystemExit("TEMPERATURE must be finite")
+    _validate_frozen_evaluator_config(evaluator_model, evaluator_temperature)
+    summary_path = REPO_ROOT / "outputs" / "posthoc_support_summary.json"
+    csv_path = REPO_ROOT / "outputs" / "posthoc_support_runs.csv"
+    aggregate_destination_snapshot = _snapshot_noncanonical_aggregate_destinations(
+        summary_path, csv_path
+    )
+    # Reject unselected or nonregular evidence before reading any trace body.
+    trace_files = _inventory_evaluator_treatment_trace_tree(
+        TRACE_ROOT, variants=VARIANTS
+    )
+    expected = []
+    trace_sources: dict[tuple[str, str, str], tuple[Path, str]] = {}
+    for variant in VARIANTS:
+        for trace_path in trace_files[variant]:
+            payload, trace_sha256 = _load_json(trace_path, include_sha256=True)
+            raw_trace = payload.get("trace")
+            if not isinstance(raw_trace, dict):
+                raise SystemExit(f"Trace metadata must be an object: {trace_path}")
+            completed = raw_trace.get("completed")
+            if type(completed) is not bool:
+                raise SystemExit(
+                    f"Invalid treatment trace {trace_path}: completed must be a "
+                    "boolean"
+                )
+            _validate_trace_task_contract(
+                payload,
+                path=trace_path,
+                expected_task_set_id=task_set_id,
+                expected_questions=expected_questions,
+            )
+            if not completed:
+                raise SystemExit(
+                    "Refusing evaluator replay: incomplete treatment trace "
+                    f"{trace_path}"
+                )
+            _validated_trace_cost(
+                payload,
+                path=trace_path,
+                pricing=pricing,
+            )
+            trace, task_id, run_id = _validated_completed_trace(
+                trace_path,
+                payload,
+                expected_variant=variant,
+            )
+            expected.append((variant, trace_path, trace, task_id, run_id))
+            trace_sources[(variant, task_id, run_id)] = (trace_path, trace_sha256)
+
+    _require_complete_frozen_treatment_matrix(expected, expected_questions)
+
+    rows, pending, cache_source_hashes = _preflight_evaluator_resume(
+        expected,
+        pricing=pricing,
+        evaluator_model=evaluator_model,
+        evaluator_temperature=evaluator_temperature,
+        capture_cache_source_hashes=True,
+    )
+    spent = sum(float(row["estimated_cost_usd"]) for row in rows)
+    original_traces = {
+        (variant, task_id, run_id): trace
+        for variant, _trace_path, trace, task_id, run_id in expected
+    }
+
+    from agent.llm_utils import UsageTracker, create_chat_completion
+    for item in pending:
+        variant = item["variant"]
+        task_id = item["task_id"]
+        run_id = item["run_id"]
+        out_path = item["out_path"]
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        if out_path.exists() or out_path.is_symlink():
+            raise SystemExit(
+                "Evaluator resume state changed after preflight: "
+                f"cache now exists for {variant}/{task_id}: {out_path}"
+            )
+        if spent >= args.max_evaluator_cost_usd:
+            raise SystemExit(
+                f"Evaluator spend guard reached ${spent:.4f} before {variant}/{task_id}; "
+                f"cap=${args.max_evaluator_cost_usd:.2f}"
+            )
+
+        evidence_status = item["evidence_status"]
+        original_trace = original_traces[(variant, task_id, run_id)]
+        trace_path, trace_sha256 = trace_sources[(variant, task_id, run_id)]
+        # Recheck both original trace bytes and the prepared prompt inputs.
+        _require_preflight_treatment_trace_unchanged(trace_path, trace_sha256)
+        _require_preflight_evaluator_input_unchanged(item, trace=original_trace)
+
+        tracker = UsageTracker()
+        prompt = item["prompt"]
+        raw = create_chat_completion(
+            model=evaluator_model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=evaluator_temperature,
+            usage_tracker=tracker,
+            request_timeout_seconds=120,
+        )
+        result = _normalize_evaluator_output(raw)
+        _require_zero_evidence_classifications(
+            result,
+            evidence_status=evidence_status,
+            label=f"Common evaluator {variant}/{task_id}",
+        )
+        usage = tracker.snapshot()
+        if int(result.get("claims_checked", 0) or 0) <= 0:
+            raise SystemExit(f"Common evaluator checked zero claims for {variant}/{task_id}")
+        if int(usage.get("unavailable_calls", 0) or 0) != 0:
+            raise SystemExit(f"Provider usage missing for common evaluator {variant}/{task_id}")
+
+        cost = _cost_usage(usage.get("by_model", {}), pricing)
+        record = {
+            "schema_version": 2,
+            "study_id": STUDY_ID,
+            "variant_id": variant,
+            "task_id": task_id,
+            "run_id": run_id,
+            "evaluator_model": evaluator_model,
+            "temperature": evaluator_temperature,
+            "max_claims": MAX_CLAIMS,
+            "evidence_status": evidence_status,
+            "input_fingerprints": item["input_fingerprints"],
+            "claims_checked": result["claims_checked"],
+            "supported": result["supported"],
+            "partially_supported": result["partially_supported"],
+            "unsupported": result["unsupported"],
+            "contradicted": result["contradicted"],
+            "strict_support_rate": result["supported"] / result["claims_checked"],
+            "examples": result.get("examples", []),
+            "provider_usage_by_model": usage.get("by_model", {}),
+            "total_tokens": int(usage.get("total_tokens", 0) or 0),
+            "estimated_cost_usd": cost,
+            "cost_method": "frozen uncached rates",
+        }
+        record["replay_provenance"] = _noncanonical_evaluator_replay_provenance()
+        # A report/evidence mutation during the provider call must not be
+        # published as a measurement from stable original local sources.
+        _require_preflight_treatment_trace_unchanged(trace_path, trace_sha256)
+        _require_preflight_evaluator_input_unchanged(item, trace=original_trace)
+        try:
+            _publish_evaluation_cache(out_path, record)
+        except FileExistsError as exc:
+            raise SystemExit(
+                "Evaluator cache appeared during model call; refusing to overwrite "
+                f"{variant}/{task_id}: {out_path}"
+            ) from exc
+        # Hash the precise bytes intended for create-only publication, not
+        # a later, potentially swapped pathname read.
+        cache_source_hashes[out_path] = hashlib.sha256(
+            _serialized_evaluation_cache_bytes(record)
+        ).hexdigest()
+        rows.append(record)
+        spent += cost
+        print(
+            f"evaluated {variant}/{task_id}: evidence={evidence_status} "
+            f"claims={result['claims_checked']} support={record['strict_support_rate']:.3f} "
+            f"cost=${cost:.4f}",
+            flush=True,
+        )
+
+    rows = sorted(rows, key=lambda r: (r["task_id"], VARIANTS.index(r["variant_id"])))
+    summary = {
+        "schema_version": 1,
+        "study_id": STUDY_ID,
+        "n_evaluations": len(rows),
+        "expected_evaluations": len(expected),
+        "max_claims_per_report": MAX_CLAIMS,
+        "estimated_evaluator_cost_usd": sum(float(r["estimated_cost_usd"]) for r in rows),
+        "zero_evidence_evaluations": sum(
+            1 for r in rows if r.get("evidence_status") == "zero_successful_sources"
+        ),
+        "variant_summary": {},
+        "replay_provenance": {
+            **_noncanonical_evaluator_replay_provenance(),
+            "reused_cached_measurements": len(rows) - len(pending),
+            "new_noncanonical_measurements": len(pending),
+        },
+    }
+    for variant in VARIANTS:
+        items = [r for r in rows if r["variant_id"] == variant]
+        summary["variant_summary"][variant] = {
+            "n": len(items),
+            "claims_checked": sum(r["claims_checked"] for r in items),
+            "supported": sum(r["supported"] for r in items),
+            "partially_supported": sum(r["partially_supported"] for r in items),
+            "unsupported": sum(r["unsupported"] for r in items),
+            "contradicted": sum(r["contradicted"] for r in items),
+            "macro_strict_support_rate": (
+                sum(r["strict_support_rate"] for r in items) / len(items) if items else None
+            ),
+        }
+
+    if len(rows) != len(expected):
+        raise SystemExit(f"Post-hoc evaluator incomplete: {len(rows)}/{len(expected)}")
+    if summary["estimated_evaluator_cost_usd"] > args.max_evaluator_cost_usd:
+        raise SystemExit(
+            f"Evaluator completed but exceeded cap: ${summary['estimated_evaluator_cost_usd']:.4f} "
+            f"> ${args.max_evaluator_cost_usd:.2f}"
+        )
+
+    # Even a completely cached replay must not publish aggregates against
+    # treatment traces that drifted after the full-matrix preflight.
+    for trace_path, trace_sha256 in trace_sources.values():
+        _require_preflight_treatment_trace_unchanged(trace_path, trace_sha256)
+    # This also covers cached cells that never entered the model-call loop.
+    _require_final_evaluator_source_continuity(expected, rows)
+    _require_evaluator_cache_source_continuity(cache_source_hashes)
+
+    _require_noncanonical_aggregate_destinations_unchanged(
+        summary_path, csv_path, aggregate_destination_snapshot
+    )
+    _publish_aggregate_outputs(summary_path, csv_path, summary, rows)
+    _verify_aggregate_outputs(summary_path, csv_path)
+    print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

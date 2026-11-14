@@ -1,0 +1,110 @@
+# Human-evaluation analysis snapshot integrity
+
+`scripts/human_eval_analysis_core.py` now binds verification and analysis to the
+same captured bytes.
+
+Before any treatment identity is opened, the analyzer snapshots the archived raw
+rating inputs, blinded packet, frozen ratings, agreement artifact, freeze
+manifest, protocol, assignment plan, treatment-blind annotator guide, and
+human-analysis plan into private temporary scratch space. Evidence-bound freezes
+also carry the complete retained `submission_preflights/` tree into that same
+snapshot. This preserves every neutralized intake receipt and treatment-blind
+distribution bundle, including undeclared entries that the independent verifier
+must reject, rather than laundering them away through selective copying.
+The analyzer holds each source directory by descriptor, compares entry
+inventories before and after copying, and rechecks each directory and file
+binding. It also binds the freeze-root inventory across the optional-archive
+decision. Replacements, late additions, symlinks, and other non-regular entries
+therefore fail before unblinding. The pre-unblinding freeze verifier runs
+against those snapshots and independently replays the retained receipt chain.
+If that gate passes and the frozen two-rater requirement is satisfied, the
+analyzer then reads the coordinator-only mapping artifacts.
+
+The captured human-analysis plan must also match the literal SHA-256 anchor in
+the analysis implementation before any coordinator mapping is read. Merely
+fingerprinting an arbitrary supplied plan in the eventual result is not enough:
+plan drift or substitution now stops the analysis while ratings remain blinded.
+Updating the frozen plan therefore requires an explicit reviewed source change,
+not only a different `--analysis-plan` file.
+
+The packet manifest, blinding key, ratings template, and frozen task manifest are
+captured only after the blinded gate. The packet verifier runs against that
+second snapshot, using the already captured blinded packet. All report-level
+aggregation, treatment mapping, agreement inclusion, and provenance hashes are
+computed from the verified snapshots rather than reopening the live source paths.
+The canonical analysis provenance records the exact captured protocol,
+assignment plan, and annotator guide under stable repository-logical paths, so a
+published result remains directly attributable to the instructions that governed
+collection even when the freeze archive is stored separately.
+
+This closes a time-of-check/time-of-use gap where an editor save after a verifier
+returned could previously change the scores, task universe, treatment mapping,
+agreement payload, or provenance that the analysis actually consumed.
+
+The scratch copies are ephemeral and are deleted when analysis exits. They are
+not a replacement for retaining the original archived ratings, packet bundle,
+freeze bundle, or Git-tracked analysis plan. Source trace and report provenance
+continues to be checked by the packet verifier against the repository; treatment
+and evaluator runs are not regenerated.
+
+
+## Resource-bounded snapshot capture
+
+The human-analysis snapshotter rejects an individual input larger than
+**16 MiB**, before copying it into scratch space. This applies consistently to
+direct captures (including submitted ratings, the blinded packet, governing
+documents, the frozen analysis plan, and the coordinator mapping/task files)
+and to every file within the retained freeze-artifact tree, including nested
+submission preflight receipts. The limit is a defensive input-snapshot rule,
+not a requirement on research treatment outputs or a change to the frozen
+statistical analysis plan.
+
+Reads are limited to the size observed on the opened regular-file descriptor.
+An extra one-byte probe detects growth beyond that observed size; premature
+EOF fails closed. Existing inode/metadata/path and recursive directory-inventory
+checks still run after capture. Consequently an unexpectedly oversized,
+truncated, or growing source cannot be silently copied as verified evidence
+or consume unbounded snapshot memory. These checks do not provide an atomic
+filesystem snapshot or authenticate historical source origins; hostile
+same-size in-place edits remain subject to observable metadata checks.
+
+This hardening uses synthetic-only regression fixtures. No ratings, paired
+effects, agreement statistics, treatment runs, or existing published results
+are generated or changed.
+
+## Hardlink alias custody boundary
+
+For both direct rating/packet snapshots and recursive retained-freeze inputs,
+source files must be regular files with **exactly one filesystem hardlink**.
+The snapshotter now compares link counts alongside file mode, device/inode,
+size, and modification/change timestamps before and after content capture, and
+also includes link counts in the recursive final inventory recheck. This
+rejects an otherwise invisible hardlink outside the inventoried freeze tree
+that can modify the same source inode through an untracked path. An alias
+created during capture is treated as source-generation drift, not as an
+additional valid rating or a reason to repeat scoring. Ordinary single-link
+freeze files remain supported.
+
+These filesystem checks are bounded, best-effort local custody observations:
+they cannot prevent subsequent edits, prove immutable storage, independently
+authenticate historical treatment reports, or replace eligible annotators,
+consent, and genuine blinded human scores. No frozen plan or ratings change.
+
+## Entire-ancestor source custody at human-analysis capture
+
+The pre-unblinding human-analysis snapshotter also pins **every visible directory
+ancestor** for a direct rating, blinded packet, frozen governing document,
+coordinator mapping, and retained freeze-root capture. The previous leaf and
+immediate-parent checks could follow a symlink in an earlier ancestor even
+when the leaf content and parent inode were unchanged. The snapshotter now
+uses the same component-by-component `O_NOFOLLOW` directory-descriptor chain
+as the blinded-rating freeze, and rechecks the chain while it remains open
+before copying any direct-file bytes into scratch, or before completing a
+recursive freeze-root capture. An observed ancestral replacement or indirect
+symlink fails closed. Synthetic tests exercise indirect symlinks, a mid-read
+ancestor swap, recursive capture, and an ordinary nested path.
+
+This is a local path-custody safeguard, **not** proof of an atomic filesystem
+snapshot, immutable historical source reports, eligibility of real annotators,
+or human-validation results. No pilot, designated-primary automated analysis,
+retrospective exploratory sensitivity, or human score is changed.

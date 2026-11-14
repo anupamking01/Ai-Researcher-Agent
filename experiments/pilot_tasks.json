@@ -1,0 +1,32 @@
+{
+  "task_set_id": "pilot-v1-2026-09-08",
+  "frozen_before_main_experiments": true,
+  "purpose": "Small diagnostic task set for validating whether D6, P6, and P6V produce measurable differences before a full benchmark run.",
+  "tasks": [
+    {
+      "id": "pilot-01",
+      "category": "technical_comparison",
+      "question": "For a production retrieval-augmented generation system, what are the practical trade-offs between vector-only retrieval and graph-enhanced retrieval, and under what conditions is each approach preferable?"
+    },
+    {
+      "id": "pilot-02",
+      "category": "multi_source_synthesis",
+      "question": "What evidence supports and challenges the claim that remote work improves software-engineering productivity, and which measurement choices explain disagreements across studies?"
+    },
+    {
+      "id": "pilot-03",
+      "category": "conflicting_sources",
+      "question": "Does increasing the number of retrieved documents generally improve RAG answer quality, or can retrieval depth reduce quality? Synthesize the mechanisms and evidence on both sides."
+    },
+    {
+      "id": "pilot-04",
+      "category": "primary_source_preference",
+      "question": "What are the main architectural differences between Kubernetes Deployments and StatefulSets, and how should those differences affect the design of a stateful production service?"
+    },
+    {
+      "id": "pilot-05",
+      "category": "fixed_cutoff_current_information",
+      "question": "Using information available no later than September 1, 2026, what are the most consequential changes introduced in Python 3.14 for application developers, and which changes are likely to affect existing production code?"
+    }
+  ]
+}

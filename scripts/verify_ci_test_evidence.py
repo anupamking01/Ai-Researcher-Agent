@@ -1,0 +1,205 @@
+"""Create a source-bound, diagnostic receipt for one successful offline CI run.
+
+The GitHub job must run the firewalled pytest wrapper with bash pipefail and
+tee the exact output. This verifier audits that completed local output; it
+cannot independently attest the runner or the correctness of tests.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+from scripts import select_full_ci_shard as shard_selector
+
+MAX_LOG_BYTES = 16 * 1024 * 1024
+MAX_SELECTED_MODULES_BYTES = 64 * 1024
+FIREWALL_MARKER = (
+    "Offline pytest egress isolation active "
+    "(IPv4 + IPv6; loopback allowed; policy inspected)."
+)
+SUMMARY = re.compile(
+    r"(?P<counts>[1-9][0-9]* passed(?:, [0-9]+ "
+    r"(?:skipped|xfailed|xpassed|warnings|deselected))*) "
+    r"in (?P<elapsed>[0-9]+(?:\.[0-9]+)?)s"
+    r"(?: \([0-9:.]+\))?"
+)
+REQUIRED_ENV = (
+    "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_RUN_ID",
+    "GITHUB_RUN_ATTEMPT", "GITHUB_EVENT_NAME",
+)
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _verify_full_ci_selection(
+    log_text: str, *, selected_modules: bytes, shard: int, checkout_sha: str,
+) -> dict:
+    """Bind the saved shard inventory to this exact checkout and test transcript.
+
+    This is a local source/log consistency check, not independent proof that
+    every pytest test function executed or that the GitHub runner was honest.
+    """
+    if type(shard) is not int or not 0 <= shard < shard_selector.SHARDS:
+        raise ValueError("invalid full CI shard identity")
+    if (type(selected_modules) is not bytes or
+            not 0 < len(selected_modules) <= MAX_SELECTED_MODULES_BYTES):
+        raise ValueError("full CI selected-module inventory missing or oversized")
+    discovered = shard_selector.discover_modules(ROOT)
+    shard_selector.verify_partition(discovered)
+    expected = shard_selector.select_shard(discovered, shard=shard)
+    expected_bytes = ("".join(f"{name}\n" for name in expected)).encode("utf-8")
+    if selected_modules != expected_bytes:
+        raise ValueError("full CI selected-module inventory differs from checkout")
+    header = (
+        f"VERA full-suite shard {shard}/{shard_selector.SHARDS}; "
+        f"selected {len(expected)} modules; checkout {checkout_sha}"
+    )
+    lines = log_text.split("\n")
+    anchors = [i for i, line in enumerate(lines) if line == header]
+    if len(anchors) != 1 or lines[anchors[0]:anchors[0] + 1 + len(expected)] != [
+        header, *expected,
+    ]:
+        raise ValueError("full CI selected-module inventory is not in the test log")
+    return {
+        "full_ci_shard": shard,
+        "full_ci_total_modules": len(discovered),
+        "full_ci_selected_module_count": len(expected),
+        "full_ci_selected_modules_sha256": hashlib.sha256(selected_modules).hexdigest(),
+    }
+
+
+def build_receipt(log: bytes, *, context: dict[str, str],
+                  checkout_sha: str, dependency_bytes: dict[str, bytes],
+                  selected_modules: bytes | None = None,
+                  shard: int | None = None) -> dict:
+    """Do not publish a PASS for absent, ambiguous, or failing pytest output."""
+    if type(log) is not bytes or not 0 < len(log) <= MAX_LOG_BYTES:
+        raise ValueError("offline test log is missing or exceeds size limit")
+    try:
+        decoded = log.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("offline test log is not UTF-8") from exc
+    # Preserve *physical* LF/CRLF records. str.splitlines() would also accept
+    # Unicode separators and bare CR as forged pytest/runner log boundaries.
+    if not decoded.endswith("\n") or "\x00" in decoded:
+        raise ValueError("offline test log has no complete terminal record")
+    if any(sep in decoded for sep in ("\x85", "\u2028", "\u2029", "\x0b", "\x0c")):
+        raise ValueError("offline test log has unsupported record separators")
+    if "\r" in decoded.replace("\r\n", ""):
+        raise ValueError("offline test log has bare carriage returns")
+    lines = [line.removesuffix("\r") for line in decoded.split("\n")]
+    markers = [i for i, line in enumerate(lines) if line == FIREWALL_MARKER]
+    if len(markers) != 1:
+        raise ValueError("missing or repeated physical offline firewall marker")
+    matches = [(i, match) for i, line in enumerate(lines)
+               if (match := SUMMARY.fullmatch(line))]
+    if len(matches) != 1:
+        raise ValueError("offline pytest success summary missing or ambiguous")
+    summary_index, match = matches[0]
+    if summary_index <= markers[0]:
+        raise ValueError("offline pytest success precedes firewall activation")
+    if summary_index != max(i for i, line in enumerate(lines) if line):
+        raise ValueError("offline pytest success is not the final nonempty log record")
+    parsed = {}
+    for token in match["counts"].split(", "):
+        count, label = token.split(" ", 1)
+        if label in parsed:
+            raise ValueError("duplicate offline test outcome category")
+        parsed[label] = int(count)
+    if any(label not in {"passed", "skipped", "xfailed", "xpassed",
+                         "warnings", "deselected"} for label in parsed):
+        raise ValueError("unsupported offline test result category")
+    # A zero-exit pytest run can still hide narrowed test collection or an
+    # unexpectedly passing known-failure case. Neither is complete validation
+    # of the source-bound CI test scope, even with a green pytest summary.
+    if parsed.get("deselected", 0):
+        raise ValueError("deselected tests cannot produce a complete CI test receipt")
+    if parsed.get("xpassed", 0):
+        raise ValueError("unexpectedly passing tests cannot produce a CI test receipt")
+    if not re.fullmatch(r"[0-9a-f]{40}", checkout_sha):
+        raise ValueError("invalid checked-out commit identity")
+    if any(not context.get(key) for key in REQUIRED_ENV):
+        raise ValueError("missing GitHub Actions run identity")
+    if context["GITHUB_SHA"] != checkout_sha:
+        raise ValueError("workflow commit does not match checked-out source")
+    if context["GITHUB_REPOSITORY"] != "anupamking01/Ai-Researcher-Agent":
+        raise ValueError("unexpected repository for VERA research receipt")
+    if (context["GITHUB_EVENT_NAME"] not in {"push", "pull_request", "workflow_dispatch"}
+            or any(not context[key].isdigit() or int(context[key]) < 1
+                   for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"))):
+        raise ValueError("invalid GitHub Actions event or run identity")
+    if (selected_modules is None) != (shard is None):
+        raise ValueError("full CI shard identity and module inventory must be supplied together")
+    full_ci = (
+        _verify_full_ci_selection(
+            decoded, selected_modules=selected_modules,
+            shard=shard, checkout_sha=checkout_sha,
+        ) if selected_modules is not None else {}
+    )
+    expected_dependencies = {"requirements.txt", "requirements-ci.lock"}
+    if set(dependency_bytes) != expected_dependencies:
+        raise ValueError("offline test dependencies must be fully fingerprinted")
+    return {
+        "schema_version": 1,
+        "status": "source_bound_offline_ci_log_consistent_not_independently_attested",
+        "repository": context["GITHUB_REPOSITORY"],
+        "checkout_sha": checkout_sha,
+        "workflow_event": context["GITHUB_EVENT_NAME"],
+        "workflow_run_id": context["GITHUB_RUN_ID"],
+        "workflow_run_attempt": context["GITHUB_RUN_ATTEMPT"],
+        "python_version": sys.version.split()[0],
+        "test_counts": parsed,
+        "pytest_elapsed_seconds": match["elapsed"],
+        "log_bytes": len(log),
+        "log_sha256": hashlib.sha256(log).hexdigest(),
+        "dependency_sha256": {
+            name: hashlib.sha256(dependency_bytes[name]).hexdigest()
+            for name in sorted(expected_dependencies)
+        },
+        "firewall_activation_marker_observed": True,
+        "actual_egress_independently_attested": False,
+        "experimental_treatments_or_evaluators_run": False,
+        "human_validation_performed": False,
+        **full_ci,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--log", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--selected-modules", type=Path)
+    parser.add_argument("--shard", type=int)
+    args = parser.parse_args()
+    try:
+        if args.log.stat().st_size > MAX_LOG_BYTES:
+            raise ValueError("offline test log exceeds size limit")
+        checkout_sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+        ).strip()
+        receipt = build_receipt(
+            args.log.read_bytes(), context=dict(os.environ),
+            checkout_sha=checkout_sha,
+            dependency_bytes={
+                name: (ROOT / name).read_bytes()
+                for name in ("requirements.txt", "requirements-ci.lock")
+            },
+            selected_modules=(args.selected_modules.read_bytes()
+                              if args.selected_modules is not None else None),
+            shard=args.shard,
+        )
+        # No read from treatment/evaluator artifacts, no network calls.
+        args.out.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+                            encoding="utf-8")
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+        parser.exit(1, f"VERA OFFLINE TEST EVIDENCE: FAIL: {exc}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

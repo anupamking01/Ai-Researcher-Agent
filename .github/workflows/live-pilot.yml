@@ -1,0 +1,162 @@
+name: live-research-pilot
+
+on:
+  workflow_dispatch:
+    inputs:
+      pilot_ack:
+        description: "Type NONCANONICAL_LIVE_PILOT to authorize a paid diagnostic; this cannot reproduce frozen original evidence"
+        required: true
+        type: string
+      smart_model:
+        description: Exact OpenAI model ID for planning/report/verifier calls
+        required: true
+        default: "gpt-5.6-terra"
+        type: string
+      fast_model:
+        description: Exact OpenAI model ID for per-source summarization calls
+        required: true
+        default: "gpt-5.6-luna"
+        type: string
+      temperature:
+        description: Sampling temperature; GPT-5.6 currently supports the provider default of 1
+        required: true
+        default: "1"
+        type: string
+      variants:
+        description: Space-separated variants to run
+        required: true
+        default: "D6 P6 P6V"
+        type: string
+      task_ids:
+        description: Optional space-separated task IDs for a targeted diagnostic rerun
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: live-research-pilot-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  pilot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    env:
+      SMART_LLM_MODEL: ${{ github.event.inputs.smart_model }}
+      FAST_LLM_MODEL: ${{ github.event.inputs.fast_model }}
+      TEMPERATURE: ${{ github.event.inputs.temperature }}
+      PILOT_VARIANTS: ${{ github.event.inputs.variants }}
+      PILOT_TASK_IDS: ${{ github.event.inputs.task_ids }}
+      USE_WEB_BROWSER: chrome
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      # Gate before checkout or credential use; no automatic cancellation of other runs.
+      - name: Require explicit noncanonical live-pilot acknowledgement
+        shell: bash
+        env:
+          VERA_PILOT_ACK: ${{ inputs.pilot_ack }}
+        run: |
+          if [ "$VERA_PILOT_ACK" != "NONCANONICAL_LIVE_PILOT" ]; then
+            echo "::error::Paid diagnostic pilot requires NONCANONICAL_LIVE_PILOT acknowledgement."
+            exit 1
+          fi
+          echo "## NONCANONICAL DIAGNOSTIC PILOT" >> "$GITHUB_STEP_SUMMARY"
+          echo "Not the original five-task pilot, a prospectively confirmatory experiment, archival recovery, or human validation." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check out research branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+          pip-version: "26.2.1"
+          cache: pip
+
+      - name: Validate API secret is configured
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "OPENAI_API_KEY repository secret is not configured."
+            exit 1
+          fi
+
+      - name: Show frozen pilot configuration
+        run: |
+          echo "SMART_LLM_MODEL=$SMART_LLM_MODEL"
+          echo "FAST_LLM_MODEL=$FAST_LLM_MODEL"
+          echo "TEMPERATURE=$TEMPERATURE"
+          echo "PILOT_VARIANTS=$PILOT_VARIANTS"
+          echo "PILOT_TASK_IDS=$PILOT_TASK_IDS"
+
+      - name: Show browser version
+        run: google-chrome --version || google-chrome-stable --version
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --no-deps -r requirements.txt
+          python -m pip install --no-deps -r requirements-ci.lock
+          python -m pip check
+
+      - name: Compile and run offline tests first
+        run: |
+          python -m compileall -q agent logic scripts tests settings scrape text_preprocess
+          bash scripts/run_offline_pytest_firewalled.sh
+
+      - name: Preflight live search and concurrent browser extraction
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        timeout-minutes: 5
+        run: python scripts/preflight_live_pilot.py
+
+      - name: Run frozen live pilot
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        timeout-minutes: 125
+        shell: bash
+        run: |
+          read -r -a variants <<< "$PILOT_VARIANTS"
+          args=(--variants "${variants[@]}")
+          if [ -n "$PILOT_TASK_IDS" ]; then
+            read -r -a task_ids <<< "$PILOT_TASK_IDS"
+            for task_id in "${task_ids[@]}"; do
+              args+=(--task-id "$task_id")
+            done
+          fi
+          python scripts/run_pilot.py "${args[@]}"
+
+      - name: Summarize pilot
+        if: always()
+        run: |
+          if find outputs/experiment_traces -name '*.json' -print -quit 2>/dev/null | grep -q .; then
+            python scripts/summarize_pilot.py
+          else
+            echo "No experiment traces were produced."
+          fi
+
+      - name: Validate research artifacts
+        if: always()
+        run: python scripts/validate_pilot_artifacts.py
+
+      - name: Upload research artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: noncanonical-diagnostic-pilot-${{ github.run_id }}
+          path: |
+            outputs/pilot_manifest.json
+            outputs/pilot_progress.json
+            outputs/pilot_summary.json
+            outputs/pilot_runs.csv
+            outputs/experiment_traces/**
+            outputs/*/research_report.md
+            outputs/*/verification.json
+          if-no-files-found: warn
+          retention-days: 30

@@ -1,0 +1,148 @@
+name: independent-primary-inference-audit
+
+# Independently recompute frozen September automated paired arithmetic from
+# the *published* CSVs; no treatment/evaluator calls or new hypothesis tests.
+on:
+  push:
+    branches: [research-paper-eval-2027]
+    paths: &inference_paths
+      - .github/workflows/independent-primary-inference-audit.yml
+      - scripts/audit_primary_inference_independently.py
+      - scripts/audit_frozen_analysis_csv_inputs.py
+      - scripts/validate_main_study_inputs.py
+      - scripts/validate_numeric_inputs.py
+      - scripts/verify_published_main_study_inputs.py
+      - scripts/verify_research_artifact_manifest.py
+      - scripts/fingerprint_research_artifacts.py
+      - scripts/verify_ci_source_checkout.py
+      - tests/test_independent_primary_inference_ci_workflow.py
+      - outputs/main_study_runs.csv
+      - outputs/posthoc_support_runs.csv
+      - outputs/main_study_inference.json
+      - outputs/main_study_analysis_inputs_manifest.json
+      - docs/INDEPENDENT_PRIMARY_INFERENCE_CI.md
+  pull_request:
+    paths: *inference_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  independent-primary-inference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact research snapshot without stored credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Pin offline Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+
+      - name: Verify exact checkout and compile standalone arithmetic
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
+          python -m py_compile scripts/audit_primary_inference_independently.py scripts/verify_published_main_study_inputs.py
+          python -m unittest discover -s tests -p test_independent_primary_inference_ci_workflow.py -v
+
+      - name: Audit independently and bind to published sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          from scripts.audit_primary_inference_independently import audit_files
+          from scripts.verify_published_main_study_inputs import verify_published_frozen_inputs
+
+          inference = Path("outputs/main_study_inference.json")
+          before = verify_published_frozen_inputs()
+          inference_before = hashlib.sha256(inference.read_bytes()).hexdigest()
+          audited = audit_files(
+              Path("outputs/main_study_runs.csv"),
+              Path("outputs/posthoc_support_runs.csv"),
+              inference,
+          )
+          after = verify_published_frozen_inputs()
+          if before != after or inference_before != hashlib.sha256(inference.read_bytes()).hexdigest():
+              raise SystemExit("frozen sources changed during independent arithmetic audit")
+          if audited != {
+              "status": "independent_primary_arithmetic_consistent_not_provenance",
+              "paired_tasks": 10,
+              "primary_contrasts_checked": 3,
+              "bootstrap_intervals_checked": True,
+              "secondary_variant_means_checked": 32,
+              "secondary_paired_descriptives_checked": 24,
+              "secondary_bootstrap_intervals_checked": 24,
+              "cost_quality_pareto_checked": True,
+          }:
+              raise SystemExit("independent arithmetic audit returned an unexpected contract")
+          receipt = {
+              "schema_version": 1,
+              "status": "frozen_primary_arithmetic_independently_checked_not_historical_custody",
+              "checkout_sha": os.environ["GITHUB_SHA"],
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "published_input_aggregate_sha256": before["published_aggregate_sha256"],
+              "frozen_input_sha256": before["verified_input_sha256"],
+              "inference_json_sha256": inference_before,
+              "arithmetic": audited,
+              "original_treatment_reports_authenticated": False,
+              "precollection_statistical_preregistration_established": False,
+              "human_validation_performed": False,
+          }
+          destination = Path(os.environ["RUNNER_TEMP"]) / "vera-independent-primary-inference.json"
+          destination.write_text(json.dumps(receipt, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+          print("Independent archived primary + descriptive arithmetic verified against published CSV inputs.")
+          PY
+
+      - name: Independently check receipt binding and immutable checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          from scripts.verify_published_main_study_inputs import verify_published_frozen_inputs
+
+          path = Path(os.environ["RUNNER_TEMP"]) / "vera-independent-primary-inference.json"
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          bound = verify_published_frozen_inputs()
+          assert receipt["status"] == "frozen_primary_arithmetic_independently_checked_not_historical_custody"
+          assert receipt["checkout_sha"] == os.environ["GITHUB_SHA"]
+          assert receipt["repository"] == os.environ["GITHUB_REPOSITORY"]
+          assert receipt["run_id"] == os.environ["GITHUB_RUN_ID"]
+          assert receipt["run_attempt"] == os.environ["GITHUB_RUN_ATTEMPT"]
+          assert receipt["published_input_aggregate_sha256"] == bound["published_aggregate_sha256"]
+          assert receipt["frozen_input_sha256"] == bound["verified_input_sha256"]
+          assert receipt["inference_json_sha256"] == hashlib.sha256(
+              Path("outputs/main_study_inference.json").read_bytes()
+          ).hexdigest()
+          assert receipt["arithmetic"]["primary_contrasts_checked"] == 3
+          assert receipt["arithmetic"]["bootstrap_intervals_checked"] is True
+          assert receipt["arithmetic"]["secondary_bootstrap_intervals_checked"] == 24
+          assert receipt["original_treatment_reports_authenticated"] is False
+          assert receipt["precollection_statistical_preregistration_established"] is False
+          assert receipt["human_validation_performed"] is False
+          PY
+          python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests
+          test -z "$(git status --porcelain)"
+
+      - name: Retain source-bound independent arithmetic receipt for 90 days
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-independent-primary-inference-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vera-independent-primary-inference.json
+          if-no-files-found: error
+          retention-days: 90
