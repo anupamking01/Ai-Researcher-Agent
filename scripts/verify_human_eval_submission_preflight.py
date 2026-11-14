@@ -160,16 +160,18 @@ def _require_same_object(current: os.stat_result, opened: os.stat_result) -> Non
 def _retained_receipt_window(receipt_root: Path):
     """Keep the sole non-symlink receipt bound while the caller verifies it."""
     receipt_root = Path(receipt_root)
-    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(
-        os, "O_NOFOLLOW", 0
-    )
+    # O_NOFOLLOW on the leaf alone does not reject a symlinked ancestor.
+    # Pin each visible component before reading or replaying any receipt.
     try:
-        root_fd = os.open(receipt_root, directory_flags)
-    except OSError as exc:
+        directory_chain = freeze._open_nofollow_directory_chain(
+            receipt_root, label="human-evaluation preflight receipt root",
+        )
+    except ValueError as exc:
         raise ValueError(
-            "human-evaluation preflight receipt root must be a regular directory: "
-            f"{receipt_root}"
+            "human-evaluation preflight receipt root must be a regular directory "
+            f"without symlink ancestors: {receipt_root}"
         ) from exc
+    root_fd = directory_chain[-1]
     try:
         opened_root = os.fstat(root_fd)
         if not stat.S_ISDIR(opened_root.st_mode):
@@ -283,10 +285,16 @@ def _retained_receipt_window(receipt_root: Path):
                     "human-evaluation preflight receipt changed during verification"
                 )
             _require_same_object(visible_root, opened_root)
+            # A redirect to byte-identical evidence still breaks path custody.
+            freeze._recheck_nofollow_directory_chain(
+                receipt_root, directory_chain,
+                label="human-evaluation preflight receipt root",
+            )
         finally:
             os.close(receipt_fd)
     finally:
-        os.close(root_fd)
+        for directory_fd in reversed(directory_chain):
+            os.close(directory_fd)
 
 
 def _is_sha256(value: object) -> bool:

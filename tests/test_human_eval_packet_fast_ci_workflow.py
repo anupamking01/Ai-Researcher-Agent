@@ -15,10 +15,12 @@ PACKET_SCRIPTS = (
     "scripts/verify_human_eval_packet.py",
     "scripts/export_human_eval_annotator_bundle.py",
     "scripts/freeze_human_eval_ratings.py",
+    "scripts/verify_human_eval_submission_preflight.py",
     "scripts/verify_frozen_main_study_tasks.py",
 )
 PACKET_MODULES = (
     "tests/test_human_eval.py",
+    "tests/test_human_eval_submission_preflight.py",
     "tests/test_human_eval_packet_capture_bounds.py",
     "tests/test_human_eval_packet_record_boundaries.py",
     "tests/test_human_eval_packet_source_numeric_integrity.py",

@@ -86,6 +86,17 @@ ratings CSV alone remains syntactically valid. This proves a byte-level chain
 between blinded intake and freeze; it does not prove who completed the file,
 that scoring was independent, or that the declarations are true.
 
+The standalone blinded submission-preflight receipt verifier now pins each
+visible ancestor of the receipt directory with no-follow descriptors and
+rechecks that full chain after recomputing the blinded submission preflight.
+A symlink in an indirect ancestor, or a redirect during replay even to
+byte-identical evidence, is rejected in addition to leaf symlinks, hardlinks,
+unbounded inventories, changed metadata and modified receipt bytes. The final
+rating-freeze intake invokes this same verifier. Synthetic tests for indirect
+aliases, mid-replay redirection and ordinary nested paths run in the independent
+packet CI lane. This ensures observed local path custody, not external
+timestamping, real annotator independence or original treatment provenance.
+
 Every individual file read performed directly by the independent freeze
 verifier uses the same descriptor-bound capture contract as freeze creation.
 This includes the manifest, retained governing inputs and attestations,

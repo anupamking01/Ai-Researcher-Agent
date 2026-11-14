@@ -916,6 +916,68 @@ def test_receipt_verifier_rejects_extra_entry_added_during_recomputation(
         )
 
 
+def test_receipt_verifier_rejects_indirect_ancestor_symlink_before_replay(
+    tmp_path, monkeypatch
+):
+    """A regular receipt leaf cannot be reached through an aliased ancestor."""
+    real = tmp_path / "real"
+    real.mkdir()
+    receipt_root, submission, bundle = _published_receipt(real)
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+
+    def unexpected_replay(*_args, **_kwargs):
+        pytest.fail("aliased receipt must fail before blinded submission replay")
+
+    monkeypatch.setattr(freeze, "preflight_annotator_submission", unexpected_replay)
+    with pytest.raises(ValueError, match="regular directory"):
+        verify.verify_preflight_receipt(
+            receipt_root=alias / receipt_root.name,
+            rating_path=submission,
+            annotator_bundle_root=bundle,
+        )
+
+
+def test_receipt_verifier_rejects_ancestor_redirect_during_replay(
+    tmp_path, monkeypatch
+):
+    """Redirection to identical bytes during replay fails source custody."""
+    ancestor = tmp_path / "source"
+    ancestor.mkdir()
+    receipt_root, submission, bundle = _published_receipt(ancestor)
+    displaced = tmp_path / "source-moved"
+    original_replay = freeze.preflight_annotator_submission
+    swapped = []
+
+    def redirect_ancestor(*args, **kwargs):
+        result = original_replay(*args, **kwargs)
+        ancestor.rename(displaced)
+        ancestor.symlink_to(displaced, target_is_directory=True)
+        swapped.append(True)
+        return result
+
+    monkeypatch.setattr(freeze, "preflight_annotator_submission", redirect_ancestor)
+    with pytest.raises(ValueError, match="ancestor directory changed during capture"):
+        verify.verify_preflight_receipt(
+            receipt_root=receipt_root,
+            rating_path=submission,
+            annotator_bundle_root=bundle,
+        )
+    assert swapped == [True]
+
+
+def test_receipt_verifier_accepts_ordinary_nested_root(tmp_path):
+    nested = tmp_path / "real" / "nested"
+    nested.mkdir(parents=True)
+    receipt_root, submission, bundle = _published_receipt(nested)
+    retained = verify.verify_preflight_receipt(
+        receipt_root=receipt_root,
+        rating_path=submission,
+        annotator_bundle_root=bundle,
+    )
+    assert retained["status"] == "human_eval_annotator_submission_verified"
+
+
 def test_receipt_verifier_rejects_symlinked_receipt_root(tmp_path):
     receipt_root, submission, bundle = _published_receipt(tmp_path)
     linked_root = tmp_path / "linked-receipt"
