@@ -144,7 +144,9 @@ def test_bounded_scan_accepts_exact_limit_without_listdir(tmp_path, monkeypatch)
             core.os, "listdir",
             lambda *args, **kwargs: pytest.fail("unbounded listdir called"),
         )
-        descriptor = core._open_snapshot_directory(root, label="synthetic")
+        descriptor, directory_chain = core._open_snapshot_directory(
+            root, label="synthetic"
+        )
         try:
             assert core._bounded_snapshot_names(
                 descriptor, maximum=3, label="synthetic"
@@ -152,7 +154,7 @@ def test_bounded_scan_accepts_exact_limit_without_listdir(tmp_path, monkeypatch)
             copy = tmp_path / "copy"
             core._snapshot_directory_tree(root, copy, label="synthetic")
         finally:
-            core.os.close(descriptor)
+            core._close_snapshot_directory(root, directory_chain, label="synthetic")
     assert original_listdir is core.os.listdir
     assert sorted(path.name for path in copy.iterdir()) == ["a", "m", "z"]
 
@@ -216,12 +218,36 @@ def test_inventory_scan_rejects_overflow_without_listdir(tmp_path, monkeypatch):
             core.os, "listdir",
             lambda *args, **kwargs: pytest.fail("unbounded listdir called"),
         )
-        descriptor = core._open_snapshot_directory(root, label="synthetic")
+        descriptor, directory_chain = core._open_snapshot_directory(
+            root, label="synthetic"
+        )
         try:
             with pytest.raises(ValueError, match="freeze snapshot entry limit"):
                 core._snapshot_directory_inventory(root, descriptor, label="synthetic")
         finally:
-            core.os.close(descriptor)
+            core._close_snapshot_directory(root, directory_chain, label="synthetic")
+
+
+
+def test_snapshot_directory_close_rejects_ancestor_swap_and_releases_every_fd(tmp_path):
+    """Even a failed ancestry recheck must release the entire pinned chain."""
+    ancestor = tmp_path / "original"
+    root = ancestor / "nested"
+    root.mkdir(parents=True)
+    descriptor, directory_chain = core._open_snapshot_directory(
+        root, label="synthetic"
+    )
+    assert descriptor == directory_chain[-1]
+    assert all(core.os.fstat(fd).st_ino for fd in directory_chain)
+
+    displaced = tmp_path / "relocated"
+    ancestor.rename(displaced)
+    ancestor.symlink_to(displaced, target_is_directory=True)
+    with pytest.raises(ValueError, match="ancestor directory changed during capture"):
+        core._close_snapshot_directory(root, directory_chain, label="synthetic")
+    for fd in directory_chain:
+        with pytest.raises(OSError, match="Bad file descriptor"):
+            core.os.fstat(fd)
 
 
 def test_freeze_root_rejects_overflow_before_inventory_or_copy(tmp_path, monkeypatch):
