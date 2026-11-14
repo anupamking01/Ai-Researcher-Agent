@@ -54,6 +54,7 @@ PACKET_MODULES = (
     "tests/test_historical_archive_candidate_triage.py",
     "tests/test_historical_archive_triage_receipt_replay.py",
     "tests/test_historical_archive_triage_receipt_schema_preflight.py",
+    "tests/test_recovered_artifact_zip_preflight.py",
     "tests/test_human_eval_packet_fast_ci_workflow.py",
 )
 SCOPE = (

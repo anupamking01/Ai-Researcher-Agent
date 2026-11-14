@@ -7,6 +7,7 @@ digest computed here is NOT a previously retained independent archive pin.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -333,6 +334,64 @@ def _unchanged(original: os.stat_result, current: os.stat_result) -> bool:
     )
 
 
+
+@contextmanager
+def _open_archive_with_pinned_parents(path: Path):
+    """Pin each archive parent against symlinks and observed path replacement.
+
+    A no-follow open of the leaf ZIP alone is insufficient: a symlinked
+    ancestor could redirect an otherwise regular ZIP or permit its pathname
+    to be substituted after the descriptor was opened. Walk from the root
+    using directory-relative, no-follow descriptors and recheck the visible
+    chain after the caller has finished inspecting the archive.
+    """
+    path = Path(path)
+    if ".." in path.parts:
+        raise RecoveredArchiveError("archive path must not traverse parent components")
+    if not hasattr(os, "O_DIRECTORY") or not hasattr(os, "O_NOFOLLOW"):
+        raise RecoveredArchiveError("archive path custody requires no-follow directory opens")
+    absolute = Path(os.path.abspath(path))
+    directory_flags = (
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    archive_flags = (
+        os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    directory_fds: list[int] = []
+    try:
+        directory_fds.append(os.open(absolute.anchor, directory_flags))
+        for component in absolute.parent.parts[1:]:
+            directory_fds.append(
+                os.open(component, directory_flags, dir_fd=directory_fds[-1])
+            )
+        archive_fd = os.open(
+            absolute.name, archive_flags, dir_fd=directory_fds[-1]
+        )
+        with os.fdopen(archive_fd, "rb") as handle:
+            yield handle
+            for index, component in enumerate(absolute.parent.parts[1:], 1):
+                opened = os.fstat(directory_fds[index])
+                visible = os.stat(
+                    component, dir_fd=directory_fds[index - 1],
+                    follow_symlinks=False,
+                )
+                if (
+                    not stat.S_ISDIR(visible.st_mode)
+                    or (opened.st_dev, opened.st_ino, opened.st_mode)
+                    != (visible.st_dev, visible.st_ino, visible.st_mode)
+                ):
+                    raise RecoveredArchiveError(
+                        "archive parent directory changed during inspection"
+                    )
+    except OSError as exc:
+        raise RecoveredArchiveError(f"cannot safely inspect ZIP: {exc}") from exc
+    finally:
+        for fd in reversed(directory_fds):
+            os.close(fd)
+
+
 def audit_recovered_zip(
     path: Path, *, expected_archive_sha256: str | None = None,
     github_job_log_artifact: str | None = None,
@@ -367,10 +426,8 @@ def audit_recovered_zip(
         GITHUB_JOB_LOG_ARCHIVES[github_job_log_artifact]
         if github_job_log_artifact is not None else None
     )
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
     try:
-        with os.fdopen(os.open(path, flags), "rb") as handle:
+        with _open_archive_with_pinned_parents(path) as handle:
             before = os.fstat(handle.fileno())
             path_before = os.stat(path, follow_symlinks=False)
             if (

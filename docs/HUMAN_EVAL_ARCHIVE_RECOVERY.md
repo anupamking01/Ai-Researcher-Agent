@@ -1,5 +1,29 @@
 # Recover the original automated-to-human VERA evidence (no outcome reruns)
 
+## Recovered ZIP ancestor-directory custody (14 November 2026)
+
+The read-only offline candidate-ZIP preflight now opens each directory
+component from the filesystem root using pinned, descriptor-relative
+`O_NOFOLLOW` opens, then rechecks those ancestors before it accepts a
+structural ZIP receipt. Previously, no-follow protection covered only the
+ZIP leaf: a stable symlink in an upper backup directory could redirect
+an apparently regular candidate, and replacing a parent directory with
+a symlink back to the **same opened ZIP inode** could escape final
+file-inode and digest comparisons. Explicit `..` parent traversal and
+platforms lacking these directory-open safeguards fail closed.
+
+Synthetic regressions reject pre-existing ancestor aliases *before ZIP
+hashing*, and a post-open ancestor swap even where the original archive
+bytes and inode remain identical. Nested ordinary directories still pass.
+The existing batch triage and receipt replay inherit the source guard;
+the offline packet CI lane now tests it directly. This establishes only
+present-day local candidate-path consistency. It does **not** recover
+original expired treatment/evaluator artifacts, establish independent
+historical custody, authenticate original reports/traces, authorize
+blinded human distribution, or change pilot, frozen automated, exploratory,
+or human-validation claims.
+
+
 ## Indirect source-directory alias custody (14 November 2026)
 
 Original-source capture now opens **each absolute directory component** from

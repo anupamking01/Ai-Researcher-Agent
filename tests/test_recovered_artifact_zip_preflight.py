@@ -186,6 +186,73 @@ def test_symbolic_link_member_is_rejected(tmp_path):
         audit.audit_recovered_zip(path)
 
 
+
+def test_nested_real_archive_parent_is_supported(tmp_path):
+    nested = tmp_path / "offline" / "original" / "archive"
+    nested.mkdir(parents=True)
+    archive = _zip(nested / "source.zip", {"synthetic/report.md": b"not history"})
+    result = audit.audit_recovered_zip(archive)
+    assert result["file_count"] == 1
+    assert result["historical_evidence_authenticated"] is False
+    assert result["human_evaluation_ready"] is False
+
+
+def test_symlinked_archive_ancestor_is_rejected_before_any_zip_read(
+    tmp_path, monkeypatch,
+):
+    original = tmp_path / "original"
+    (original / "nested").mkdir(parents=True)
+    _zip(original / "nested" / "candidate.zip", {"report.md": b"synthetic"})
+    (tmp_path / "alias").symlink_to(original, target_is_directory=True)
+
+    def forbidden_hash(*_args, **_kwargs):
+        pytest.fail("a redirected ancestor must be rejected before archive reads")
+
+    monkeypatch.setattr(audit, "_fingerprint", forbidden_hash)
+    with pytest.raises(
+        audit.RecoveredArchiveError, match="cannot safely inspect ZIP"
+    ):
+        audit.audit_recovered_zip(tmp_path / "alias" / "nested" / "candidate.zip")
+
+
+def test_archive_ancestor_replacement_is_rejected_even_for_same_open_inode(
+    tmp_path, monkeypatch,
+):
+    original = tmp_path / "source-dir"
+    original.mkdir()
+    archive = _zip(original / "candidate.zip", {"report.md": b"synthetic"})
+    moved = tmp_path / "moved-dir"
+    actual_hash = audit._fingerprint
+    replaced = False
+
+    def replace_with_alias(handle, *, expected_bytes):
+        nonlocal replaced
+        if not replaced:
+            replaced = True
+            original.rename(moved)
+            original.symlink_to(moved, target_is_directory=True)
+        return actual_hash(handle, expected_bytes=expected_bytes)
+
+    monkeypatch.setattr(audit, "_fingerprint", replace_with_alias)
+    with pytest.raises(
+        audit.RecoveredArchiveError, match="archive parent directory changed during inspection"
+    ):
+        audit.audit_recovered_zip(archive)
+    assert replaced
+    # Although the parent became an alias, the old leaf still resolves to
+    # the very same archive inode. Only ancestor custody detects this.
+    assert archive.stat().st_ino == (moved / "candidate.zip").stat().st_ino
+
+
+def test_archive_lexical_parent_traversal_is_not_silently_normalized(tmp_path):
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    _zip(nested / "candidate.zip", {"report.md": b"synthetic"})
+    disguised = nested / ".." / "nested" / "candidate.zip"
+    with pytest.raises(audit.RecoveredArchiveError, match="parent components"):
+        audit.audit_recovered_zip(disguised)
+
+
 def test_symlink_archive_is_rejected(tmp_path):
     target = _zip(tmp_path / "real.zip", {"good.txt": b"data"})
     alias = tmp_path / "alias.zip"
