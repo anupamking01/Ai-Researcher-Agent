@@ -108,3 +108,75 @@ def test_rejects_modified_receipt_fields_even_if_canonically_serialized(key, val
 def test_rejects_noncanonical_ambiguous_or_invalid_receipts(corrupt):
     with pytest.raises(ValueError):
         _verify(receipt=corrupt)
+
+# The replay function above verifies receipt arithmetic. The CLI additionally
+# must verify the *actual checkout bytes*: rev-parse HEAD alone accepts a dirty
+# working tree with unchanged revision and unchanged receipt inputs.
+def _offline_replay_cli_fixture(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+
+    def git(*arguments):
+        return subprocess.check_output(
+            ["git", "-C", str(checkout), *arguments],
+            text=True,
+        ).strip()
+
+    git("init", "-q")
+    git("config", "user.email", "vera-synthetic@example.invalid")
+    git("config", "user.name", "VERA Synthetic")
+    (checkout / "source.py").write_text("VALUE = 1\n", encoding="utf-8")
+    for name, content in DEPS.items():
+        (checkout / name).write_bytes(content)
+    git("add", ".")
+    git("commit", "-qm", "synthetic clean replay checkout")
+    sha = git("rev-parse", "HEAD")
+
+    log_file = tmp_path / "retained-log.txt"
+    receipt_file = tmp_path / "retained-receipt.json"
+    log_file.write_bytes(LOG)
+    receipt_file.write_bytes(_receipt(context={**CONTEXT, "GITHUB_SHA": sha}))
+
+    monkeypatch.setattr(producer, "ROOT", checkout)
+    monkeypatch.setattr(sys, "argv", [
+        "verify_retained_ci_test_evidence",
+        "--log", str(log_file),
+        "--receipt", str(receipt_file),
+        "--checkout-sha", sha,
+        "--run-id", RUN_ID,
+        "--run-attempt", "1",
+        "--event", "push",
+    ])
+    return checkout, git
+
+
+def test_replay_cli_accepts_clean_exact_source_checkout(tmp_path, monkeypatch, capsys):
+    _offline_replay_cli_fixture(tmp_path, monkeypatch)
+    assert replay.main() == 0
+    assert "LOCALLY CONSISTENT" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("change", ["tracked_edit", "hidden_tracked_edit", "untracked_file"])
+def test_replay_cli_rejects_modified_source_despite_same_head(
+    tmp_path, monkeypatch, capsys, change,
+):
+    checkout, git = _offline_replay_cli_fixture(tmp_path, monkeypatch)
+    if change == "hidden_tracked_edit":
+        git("update-index", "--assume-unchanged", "source.py")
+    if change in ("tracked_edit", "hidden_tracked_edit"):
+        (checkout / "source.py").write_text("VALUE = 2\n", encoding="utf-8")
+    else:
+        (checkout / "unreviewed_test.py").write_text(
+            "def test_other(): pass\n", encoding="utf-8"
+        )
+    # All three cases still have the original Git HEAD. The hidden edit even
+    # preserves an apparently clean porcelain status.
+    if change == "hidden_tracked_edit":
+        assert git("status", "--porcelain") == ""
+    with pytest.raises(SystemExit) as caught:
+        replay.main()
+    assert caught.value.code == 1
+    assert "VERA RETAINED CI EVIDENCE: FAIL" in capsys.readouterr().err

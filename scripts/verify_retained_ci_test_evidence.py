@@ -1,7 +1,7 @@
 """Offline replay of a downloaded VERA CI log and its exact-revision receipt.
 
 A successful replay establishes local consistency with explicitly supplied run
-identity and checked-out dependency pins; it does not attest GitHub Actions,
+identity and byte-verified checked-out sources/dependency pins; it does not attest GitHub Actions,
 runner network isolation, or scientific experiment provenance.
 """
 from __future__ import annotations
@@ -10,8 +10,8 @@ import argparse
 import json
 from pathlib import Path
 import re
-import subprocess
 
+from scripts import verify_ci_source_checkout as source_checker
 from scripts import verify_ci_test_evidence as producer
 from scripts import verify_ci_python_runtime as runtime
 
@@ -124,13 +124,13 @@ def main() -> int:
     parser.add_argument("--shard", type=int)
     args = parser.parse_args()
     try:
-        # Checkout must already be exactly the tested SHA, including synthetic
-        # merge commits for pull-request workflows.
-        current_sha = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=producer.ROOT, text=True
-        ).strip()
-        if current_sha != args.checkout_sha:
-            raise ValueError("current checkout is not the explicitly supplied tested SHA")
+        # HEAD alone is insufficient: a checkout with edited tracked files or
+        # an untracked test plugin can still report the expected commit SHA.
+        # Reuse the same byte-level source gate as producer CI before replay.
+        # PR receipts may refer to synthetic merge commits, not branch HEADs.
+        source_checker.verify_source_checkout(
+            producer.ROOT, expected_sha=args.checkout_sha
+        )
         if args.receipt.stat().st_size > MAX_RECEIPT_BYTES:
             raise ValueError("retained CI receipt exceeds size limit")
         if args.log.stat().st_size > producer.MAX_LOG_BYTES:
@@ -147,7 +147,7 @@ def main() -> int:
                               if args.selected_modules is not None else None),
             shard=args.shard,
         )
-    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+    except (OSError, ValueError) as exc:
         parser.exit(1, f"VERA RETAINED CI EVIDENCE: FAIL: {exc}\n")
     print("VERA RETAINED CI EVIDENCE: LOCALLY CONSISTENT (not independently attested)")
     return 0

@@ -241,3 +241,25 @@ automated scores, or human annotations: the pilot remains diagnostic; the
 main-study designated-primary analyses remain post-collection, order- and
 evaluator-qualified; sensitivity analyses are exploratory, and blinded human
 validation remains pending original-source authentication and actual ratings.
+
+## Byte-verified checkout required for offline receipt replay (15 November 2026)
+
+The downloaded-receipt **CLI** now invokes the same complete tracked-source
+checkout verifier used in CI before accepting a replay. Merely checking
+`git rev-parse HEAD` was insufficient: an edited tracked source with a
+still-matching commit ID, including an `assume-unchanged` edit, or an
+unexpected nonignored untracked test/plugin file could survive that comparison
+without affecting the retained log or receipt. This is especially important
+when a second investigator replays the retained evidence in a separate checkout.
+Synthetic Git fixtures cover clean replay, modified tracked content, hidden
+tracked edits, and nonignored untracked files.
+
+The verifier rejects local source changes before reading the retained
+receipt, but it does **not** attest GitHub's execution, a genuine egress
+firewall, ignored files, or exact source immutability during historical CI.
+As before, obtain the expected SHA and run/attempt/event from an independent
+GitHub workflow record. For pull requests use the tested synthetic merge SHA
+if that was the checkout, not simply the branch tip. This safeguards
+reproducibility metadata only; original treatment/archive custody, qualified
+post-collection automated inference, exploratory bounds and independent
+blinded human validation remain separate.
