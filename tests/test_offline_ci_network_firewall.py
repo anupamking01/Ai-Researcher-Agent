@@ -261,7 +261,7 @@ def test_firewalled_runner_rejects_hidden_pytest_selection_environment(
     marker = tmp_path / "sudo-was-called"
     fake_sudo = fake_bin / "sudo"
     fake_sudo.write_text(
-        '#!/bin/sh\\nprintf invoked > "$VERA_SUDO_MARKER"\\nexit 91\\n',
+        '#!/bin/sh\nprintf invoked > "$VERA_SUDO_MARKER"\nexit 91\n',
         encoding="utf-8",
     )
     fake_sudo.chmod(0o755)
