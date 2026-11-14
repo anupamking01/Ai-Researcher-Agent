@@ -15,7 +15,10 @@ import re
 import subprocess
 import sys
 
+from scripts import select_full_ci_shard as shard_selector
+
 MAX_LOG_BYTES = 16 * 1024 * 1024
+MAX_SELECTED_MODULES_BYTES = 64 * 1024
 FIREWALL_MARKER = (
     "Offline pytest egress isolation active "
     "(IPv4 + IPv6; loopback allowed; policy inspected)."
@@ -33,8 +36,47 @@ REQUIRED_ENV = (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _verify_full_ci_selection(
+    log_text: str, *, selected_modules: bytes, shard: int, checkout_sha: str,
+) -> dict:
+    """Bind the saved shard inventory to this exact checkout and test transcript.
+
+    This is a local source/log consistency check, not independent proof that
+    every pytest test function executed or that the GitHub runner was honest.
+    """
+    if type(shard) is not int or not 0 <= shard < shard_selector.SHARDS:
+        raise ValueError("invalid full CI shard identity")
+    if (type(selected_modules) is not bytes or
+            not 0 < len(selected_modules) <= MAX_SELECTED_MODULES_BYTES):
+        raise ValueError("full CI selected-module inventory missing or oversized")
+    discovered = shard_selector.discover_modules(ROOT)
+    shard_selector.verify_partition(discovered)
+    expected = shard_selector.select_shard(discovered, shard=shard)
+    expected_bytes = ("".join(f"{name}\n" for name in expected)).encode("utf-8")
+    if selected_modules != expected_bytes:
+        raise ValueError("full CI selected-module inventory differs from checkout")
+    header = (
+        f"VERA full-suite shard {shard}/{shard_selector.SHARDS}; "
+        f"selected {len(expected)} modules; checkout {checkout_sha}"
+    )
+    lines = log_text.split("\n")
+    anchors = [i for i, line in enumerate(lines) if line == header]
+    if len(anchors) != 1 or lines[anchors[0]:anchors[0] + 1 + len(expected)] != [
+        header, *expected,
+    ]:
+        raise ValueError("full CI selected-module inventory is not in the test log")
+    return {
+        "full_ci_shard": shard,
+        "full_ci_total_modules": len(discovered),
+        "full_ci_selected_module_count": len(expected),
+        "full_ci_selected_modules_sha256": hashlib.sha256(selected_modules).hexdigest(),
+    }
+
+
 def build_receipt(log: bytes, *, context: dict[str, str],
-                  checkout_sha: str, dependency_bytes: dict[str, bytes]) -> dict:
+                  checkout_sha: str, dependency_bytes: dict[str, bytes],
+                  selected_modules: bytes | None = None,
+                  shard: int | None = None) -> dict:
     """Do not publish a PASS for absent, ambiguous, or failing pytest output."""
     if type(log) is not bytes or not 0 < len(log) <= MAX_LOG_BYTES:
         raise ValueError("offline test log is missing or exceeds size limit")
@@ -91,6 +133,14 @@ def build_receipt(log: bytes, *, context: dict[str, str],
             or any(not context[key].isdigit() or int(context[key]) < 1
                    for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"))):
         raise ValueError("invalid GitHub Actions event or run identity")
+    if (selected_modules is None) != (shard is None):
+        raise ValueError("full CI shard identity and module inventory must be supplied together")
+    full_ci = (
+        _verify_full_ci_selection(
+            decoded, selected_modules=selected_modules,
+            shard=shard, checkout_sha=checkout_sha,
+        ) if selected_modules is not None else {}
+    )
     expected_dependencies = {"requirements.txt", "requirements-ci.lock"}
     if set(dependency_bytes) != expected_dependencies:
         raise ValueError("offline test dependencies must be fully fingerprinted")
@@ -115,6 +165,7 @@ def build_receipt(log: bytes, *, context: dict[str, str],
         "actual_egress_independently_attested": False,
         "experimental_treatments_or_evaluators_run": False,
         "human_validation_performed": False,
+        **full_ci,
     }
 
 
@@ -122,6 +173,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--selected-modules", type=Path)
+    parser.add_argument("--shard", type=int)
     args = parser.parse_args()
     try:
         if args.log.stat().st_size > MAX_LOG_BYTES:
@@ -136,6 +189,9 @@ def main() -> int:
                 name: (ROOT / name).read_bytes()
                 for name in ("requirements.txt", "requirements-ci.lock")
             },
+            selected_modules=(args.selected_modules.read_bytes()
+                              if args.selected_modules is not None else None),
+            shard=args.shard,
         )
         # No read from treatment/evaluator artifacts, no network calls.
         args.out.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n",

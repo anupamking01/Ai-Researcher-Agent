@@ -127,7 +127,9 @@ jobs:
         run: |
           python -m scripts.verify_ci_test_evidence \
             --log "$RUNNER_TEMP/vera-offline-tests.log" \
-            --out "$RUNNER_TEMP/vera-offline-test-receipt.json"
+            --out "$RUNNER_TEMP/vera-offline-test-receipt.json" \
+            --selected-modules "$RUNNER_TEMP/vera-offline-test-modules.txt" \
+            --shard "${{ matrix.shard }}"
 
       - name: Replay exact-commit offline test evidence before upload
         shell: bash
@@ -139,7 +141,9 @@ jobs:
             --checkout-sha "$GITHUB_SHA" \
             --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --event "$GITHUB_EVENT_NAME"
+            --event "$GITHUB_EVENT_NAME" \
+            --selected-modules "$RUNNER_TEMP/vera-offline-test-modules.txt" \
+            --shard "${{ matrix.shard }}"
 
       - name: Retain source-bound offline test evidence (90 days)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

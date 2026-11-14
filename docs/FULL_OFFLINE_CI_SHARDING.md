@@ -21,7 +21,16 @@ to the receipt-hashed transcript.
 
 **Only eight passing jobs at the same commit constitute a full-suite pass.**
 Passing one shard, one fast lane or the pre-install diagnostic gate does
-not. This covers the source-tree default Python test-file conventions,
+not. The full-suite receipt now additionally hashes the retained newline-delimited
+selected-module file, checks that its exact bytes equal the deterministic
+selection recomputed from the checked-out source tree for that shard, and
+requires the same ordered module records after the shard header in the
+receipt-hashed pytest transcript. The independent retained-evidence replay
+requires that same module file and externally supplied shard index. A changed,
+missing or exchanged selection file can no longer accompany an otherwise
+valid per-shard test receipt. This strengthens source-to-evidence custody; it
+does not independently attest collection of every test function or runner
+honesty. This covers the source-tree default Python test-file conventions,
 not an independent attestation of every collected pytest test function.
 New custom discovery patterns require a separately reviewed selector
 update. Sharding changes execution scheduling only: no estimates,

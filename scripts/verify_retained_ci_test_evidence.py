@@ -60,6 +60,8 @@ def verify_retained_evidence(
     run_attempt: str,
     event: str,
     dependency_bytes: dict[str, bytes],
+    selected_modules: bytes | None = None,
+    shard: int | None = None,
 ) -> dict:
     """Recompute all fields except informational producer Python patch version.
 
@@ -100,6 +102,8 @@ def verify_retained_evidence(
         },
         checkout_sha=checkout_sha,
         dependency_bytes=dependency_bytes,
+        selected_modules=selected_modules,
+        shard=shard,
     )
     # The audit host need not use the same Python patch release as CI.
     expected["python_version"] = version
@@ -116,6 +120,8 @@ def main() -> int:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--run-attempt", required=True)
     parser.add_argument("--event", choices=("push", "pull_request", "workflow_dispatch"), required=True)
+    parser.add_argument("--selected-modules", type=Path)
+    parser.add_argument("--shard", type=int)
     args = parser.parse_args()
     try:
         # Checkout must already be exactly the tested SHA, including synthetic
@@ -137,6 +143,9 @@ def main() -> int:
                 name: (producer.ROOT / name).read_bytes()
                 for name in ("requirements.txt", "requirements-ci.lock")
             },
+            selected_modules=(args.selected_modules.read_bytes()
+                              if args.selected_modules is not None else None),
+            shard=args.shard,
         )
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         parser.exit(1, f"VERA RETAINED CI EVIDENCE: FAIL: {exc}\n")

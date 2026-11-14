@@ -84,6 +84,75 @@ def test_explicit_expected_skips_and_xfails_remain_visible_not_hidden():
     }
 
 
+def _synthetic_full_shard(tmp_path, monkeypatch):
+    from scripts import select_full_ci_shard as selector
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    for index in range(selector.SHARDS):
+        (test_root / f"test_{index:02d}.py").write_text(
+            "def test_ok(): assert True\n", encoding="utf-8"
+        )
+    monkeypatch.setattr(evidence, "ROOT", tmp_path)
+    manifest = b"tests/test_00.py\n"
+    header = f"VERA full-suite shard 0/8; selected 1 modules; checkout {SHA}"
+    log = (header + "\ntests/test_00.py\n" + evidence.FIREWALL_MARKER
+           + "\n1 passed in 0.2s\n").encode()
+    return log, manifest
+
+
+def test_full_ci_receipt_binds_actual_source_shard_and_log(tmp_path, monkeypatch):
+    import hashlib
+    log, manifest = _synthetic_full_shard(tmp_path, monkeypatch)
+    receipt = evidence.build_receipt(
+        log, context=CONTEXT, checkout_sha=SHA, dependency_bytes=DEPS,
+        selected_modules=manifest, shard=0,
+    )
+    assert receipt["full_ci_shard"] == 0
+    assert receipt["full_ci_selected_module_count"] == 1
+    assert receipt["full_ci_total_modules"] == 8
+    assert receipt["full_ci_selected_modules_sha256"] == hashlib.sha256(manifest).hexdigest()
+
+
+@pytest.mark.parametrize("failure", ["wrong_bytes", "wrong_shard", "missing", "log_changed", "duplicate_header"])
+def test_full_ci_rejects_unbound_selection_or_transcript(tmp_path, monkeypatch, failure):
+    log, manifest = _synthetic_full_shard(tmp_path, monkeypatch)
+    shard = 0
+    if failure == "wrong_bytes":
+        manifest = b"tests/test_01.py\n"
+    elif failure == "wrong_shard":
+        shard = 1
+    elif failure == "missing":
+        manifest = None
+    elif failure == "log_changed":
+        log = log.replace(b"tests/test_00.py\n", b"tests/test_01.py\n")
+    elif failure == "duplicate_header":
+        log = log.replace(evidence.FIREWALL_MARKER.encode(), log.split(b"\n")[0] + b"\n" + evidence.FIREWALL_MARKER.encode())
+    with pytest.raises(ValueError, match="shard|inventory|module|together"):
+        evidence.build_receipt(
+            log, context=CONTEXT, checkout_sha=SHA, dependency_bytes=DEPS,
+            selected_modules=manifest, shard=shard,
+        )
+
+
+def test_retained_full_ci_receipt_requires_exact_manifest(tmp_path, monkeypatch):
+    import json
+    from scripts import verify_retained_ci_test_evidence as replay
+    log, manifest = _synthetic_full_shard(tmp_path, monkeypatch)
+    receipt = evidence.build_receipt(
+        log, context=CONTEXT, checkout_sha=SHA, dependency_bytes=DEPS,
+        selected_modules=manifest, shard=0,
+    )
+    receipt["python_version"] = replay.runtime.PINNED_VERSION_TEXT
+    payload = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode()
+    kwargs = dict(checkout_sha=SHA, run_id="123456", run_attempt="1",
+                  event="push", dependency_bytes=DEPS, shard=0)
+    assert replay.verify_retained_evidence(log, payload, selected_modules=manifest, **kwargs) == receipt
+    with pytest.raises(ValueError, match="inventory"):
+        replay.verify_retained_evidence(
+            log, payload, selected_modules=b"tests/test_01.py\n", **kwargs
+        )
+
+
 def test_missing_dependency_pin_fails_closed():
     with pytest.raises(ValueError):
         evidence.build_receipt(
@@ -107,6 +176,10 @@ def test_workflow_keeps_piped_wrapper_and_publishes_both_evidence_files():
     assert '"$RUNNER_TEMP/vera-offline-test-modules.txt"' in commands
     verify_step = next(s for s in steps if s.get("name") == "Bind exact-commit offline test evidence")
     assert "python -m scripts.verify_ci_test_evidence" in verify_step["run"]
+    for step in (verify_step, next(s for s in steps if
+                s.get("name") == "Replay exact-commit offline test evidence before upload")):
+        assert '--selected-modules "$RUNNER_TEMP/vera-offline-test-modules.txt"' in step["run"]
+        assert '--shard "${{ matrix.shard }}"' in step["run"]
     artifact = next(s for s in steps if s.get("name", "").startswith("Retain source-bound offline test"))
     assert artifact["with"]["if-no-files-found"] == "error"
     assert "vera-offline-tests.log" in artifact["with"]["path"]
