@@ -11,6 +11,9 @@ import unittest
 from logic.evaluation import (
     RunTrace,
     MAX_DIAGNOSTIC_REFERENCE_TASKS,
+    MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS,
+    MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES,
+    bootstrap_confidence_interval,
     aggregate_runs_by_task,
     paired_bootstrap_confidence_interval_by_task,
     paired_metric_comparison_by_task,
@@ -144,6 +147,29 @@ class DependencyFreeEvaluationGate(unittest.TestCase):
             "reference": MAX_DIAGNOSTIC_REFERENCE_TASKS + 1,
             "baseline": 0, "candidate": 0,
         })
+
+    def test_unending_bootstrap_producer_is_bounded_in_preinstall_gate(self):
+        reads = 0
+
+        def unending():
+            nonlocal reads
+            while True:
+                reads += 1
+                yield 0.25
+
+        with self.assertRaisesRegex(ValueError, "bootstrap sample exceeds"):
+            bootstrap_confidence_interval(unending(), n_resamples=2)
+        self.assertEqual(reads, MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS + 1)
+
+    def test_overlarge_bootstrap_plan_fails_before_producer_access(self):
+        class NoObservations:
+            def __iter__(self):
+                raise AssertionError("invalid sampling plan consumed inputs")
+
+        with self.assertRaisesRegex(ValueError, "n_resamples exceeds"):
+            bootstrap_confidence_interval(
+                NoObservations(), n_resamples=MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES + 1
+            )
 
     def test_invalid_sampling_temperature_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "temperature"):

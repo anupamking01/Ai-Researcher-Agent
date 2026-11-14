@@ -18,6 +18,14 @@ from typing import Callable, Iterable, Sequence
 # This does not apply to frozen automated results or source research archives.
 MAX_DIAGNOSTIC_REFERENCE_TASKS = 10_000
 
+# In-memory diagnostic bootstrap ceilings, not limits on frozen historical
+# inference or an invitation to change its archived data or estimators.
+# Count both samples and draws so a small manifest cannot request effectively
+# unbounded CPU work, and an endless iterator cannot exhaust memory.
+MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS = 10_000
+MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES = 100_000
+MAX_DIAGNOSTIC_BOOTSTRAP_DRAWS = 20_000_000
+
 
 @dataclass(frozen=True)
 class RunTrace:
@@ -262,6 +270,11 @@ def _validate_bootstrap_settings(
         raise ValueError("confidence must be a finite number between 0 and 1")
     if type(n_resamples) is not int or n_resamples < 2:
         raise ValueError("n_resamples must be an integer >= 2")
+    if n_resamples > MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES:
+        raise ValueError(
+            f"n_resamples exceeds {MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES} "
+            "diagnostic bootstrap resamples"
+        )
     if type(seed) is not int:
         raise ValueError("seed must be an integer")
 
@@ -281,7 +294,19 @@ def bootstrap_confidence_interval(
     """
     _validate_bootstrap_settings(confidence, n_resamples, seed)
 
-    sample = _finite_values(values, label="bootstrap sample")
+    sample: list[float] = []
+    for value in values:
+        if len(sample) >= MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS:
+            raise ValueError(
+                f"bootstrap sample exceeds {MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS} "
+                "diagnostic observations"
+            )
+        sample.append(_finite_float(value, label="bootstrap sample"))
+    if len(sample) * n_resamples > MAX_DIAGNOSTIC_BOOTSTRAP_DRAWS:
+        raise ValueError(
+            f"bootstrap work budget exceeds {MAX_DIAGNOSTIC_BOOTSTRAP_DRAWS} "
+            "resampled observations"
+        )
     if not sample:
         return {
             "estimate": 0.0,

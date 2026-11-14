@@ -6,6 +6,9 @@ import pytest
 from logic.evaluation import (
     RunTrace,
     MAX_DIAGNOSTIC_REFERENCE_TASKS,
+    MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS,
+    MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES,
+    MAX_DIAGNOSTIC_BOOTSTRAP_DRAWS,
     _validated_reference_task_manifest,
     aggregate_runs,
     aggregate_runs_by_task,
@@ -369,6 +372,60 @@ def test_bootstrap_confidence_interval_is_reproducible_and_bounded():
     assert first["estimate"] == 3.0
     assert 1.0 <= first["lower"] <= first["estimate"] <= first["upper"] <= 5.0
 
+
+
+def test_bootstrap_rejects_excessive_resamples_before_reading_any_observations():
+    class MustNotRead:
+        def __iter__(self):
+            raise AssertionError("invalid bootstrap plan read observations")
+
+    with pytest.raises(ValueError, match="n_resamples exceeds"):
+        bootstrap_confidence_interval(
+            MustNotRead(), n_resamples=MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES + 1
+        )
+
+
+def test_bootstrap_bounds_unending_one_pass_diagnostic_samples():
+    reads = 0
+
+    def infinite_observations():
+        nonlocal reads
+        while True:
+            reads += 1
+            yield 0.25
+
+    with pytest.raises(ValueError, match="bootstrap sample exceeds"):
+        bootstrap_confidence_interval(infinite_observations(), n_resamples=2)
+    assert reads == MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS + 1
+
+
+def test_bootstrap_rejects_oversized_draw_plan_before_statistic_execution():
+    called = False
+
+    def forbidden_statistic(_values):
+        nonlocal called
+        called = True
+        raise AssertionError("over-budget bootstrap ran statistic")
+
+    samples = [0.25] * MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS
+    requested = MAX_DIAGNOSTIC_BOOTSTRAP_DRAWS // len(samples) + 1
+    assert requested <= MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES
+    with pytest.raises(ValueError, match="bootstrap work budget exceeds"):
+        bootstrap_confidence_interval(
+            samples, statistic=forbidden_statistic, n_resamples=requested
+        )
+    assert called is False
+
+
+def test_bootstrap_resource_limits_preserve_small_seeded_diagnostic_intervals():
+    first = bootstrap_confidence_interval(
+        (v for v in (0.0, 0.5, 1.0)), n_resamples=50, seed=37
+    )
+    second = bootstrap_confidence_interval(
+        [0.0, 0.5, 1.0], n_resamples=50, seed=37
+    )
+    assert first == second
+    assert first["estimate"] == 0.5
 
 def test_bootstrap_confidence_interval_handles_empty_and_invalid_settings():
     empty = bootstrap_confidence_interval([], n_resamples=10)
