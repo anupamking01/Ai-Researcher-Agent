@@ -26,7 +26,7 @@ FIREWALL_MARKER = (
 )
 SUMMARY = re.compile(
     r"(?P<counts>[1-9][0-9]* passed(?:, [0-9]+ "
-    r"(?:skipped|xfailed|xpassed|warnings|deselected))*) "
+    r"(?:skipped|xfailed|xpassed|warnings?|deselected))*) "
     r"in (?P<elapsed>[0-9]+(?:\.[0-9]+)?)s"
     r"(?: \([0-9:.]+\))?"
 )
@@ -146,6 +146,9 @@ def build_receipt(log: bytes, *, context: dict[str, str],
     parsed = {}
     for token in match["counts"].split(", "):
         count, label = token.split(" ", 1)
+        # Pytest prints "1 warning" but "2 warnings"; record one stable key.
+        if label == "warning":
+            label = "warnings"
         if label in parsed:
             raise ValueError("duplicate offline test outcome category")
         parsed[label] = int(count)

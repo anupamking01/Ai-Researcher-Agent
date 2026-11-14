@@ -316,3 +316,21 @@ def test_bounded_evidence_capture_detects_same_inode_content_drift(tmp_path, mon
         evidence.read_bounded_evidence(
             path, maximum=64, label="synthetic CI log"
         )
+
+
+def test_single_pytest_warning_is_a_valid_complete_receipt():
+    # Real pytest writes "1 warning", not "1 warnings"; a passing shard
+    # must not fail receipt replay merely for this grammatical variation.
+    result = evidence.build_receipt(
+        _log("832 passed, 1 warning in 12.81s"),
+        context=CONTEXT, checkout_sha=SHA, dependency_bytes=DEPS,
+    )
+    assert result["test_counts"] == {"passed": 832, "warnings": 1}
+
+
+def test_mixed_singular_plural_warning_counts_remain_ambiguous():
+    with pytest.raises(ValueError, match="duplicate"):
+        evidence.build_receipt(
+            _log("1 passed, 1 warning, 2 warnings in 0.1s"),
+            context=CONTEXT, checkout_sha=SHA, dependency_bytes=DEPS,
+        )

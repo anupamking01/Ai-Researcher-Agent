@@ -287,3 +287,17 @@ treatment traces/reports. The pilot remains diagnostic, the frozen automated
 designated-primary contrasts remain qualified by post-collection plan timing
 and evaluator comparability, retrospective sensitivities remain exploratory,
 and genuine blinded human validation remains pending.
+
+
+## Pytest singular warning receipt compatibility (15 November 2026)
+
+Pytest emits the terminal category as "1 warning", but as "2 warnings"
+for multiple warnings. The CI receipt parser previously accepted only the
+plural spelling and could reject an otherwise successful exact-source shard
+with a single warning, despite the actual test process exiting successfully.
+Both producer and independent replay now parse either spelling and normalize
+both to the single receipt field "warnings"; a transcript containing both
+spellings is rejected as duplicate category data. Synthetic tests cover the
+actual one-warning summary and ambiguous mixed tokens. This repairs evidence
+accounting only, not a pytest failure, selection of research outcomes, or
+the original experimental data.
