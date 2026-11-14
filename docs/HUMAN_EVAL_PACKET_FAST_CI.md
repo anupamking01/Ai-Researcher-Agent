@@ -80,3 +80,30 @@ The five-task pilot remains diagnostic, the automated post-collection analysis
 keeps its existing qualifications, and post-hoc sensitivity analyses remain
 exploratory. The unverified original artifacts still block actual blinded
 handoff and independent human evaluation.
+
+## Automated-run lineage before human distribution
+
+The packet lane also runs `tests/test_human_eval_automated_run_lineage.py` and
+`tests/test_human_eval_automated_handoff.py`. This previously omitted, distinct
+**automated-to-human source-linkage gate** checks that each blinded report's
+run ID matches the frozen evaluator's run ID for the same treatment/task cell,
+including mirrored claim counts, strict-support rates and evaluator cost.
+The joint coordinator-only handoff tests then require independently pinned
+research and packet manifest *file* hashes, the published frozen CSV aggregate,
+the original treatment task-list bytes, and both counterbalanced bundles to
+remain coherent across the verification window. It is possible for two
+counterbalanced handoffs to agree with each other while still referring to
+reports other than the ones measured by the frozen automated evaluator;
+packet-only distribution tests cannot detect that discrepancy.
+
+The two synthetic suites, their verification scripts, and transitive source
+validators are included in compilation, firewalled execution and both push
+and PR path triggers, all enforced by the workflow contract. A passing
+exact-commit receipt attests these local regressions only; original historical
+report/trace artifacts and independently retained manifest-file SHA-256 pins
+are still required before any actual source-authenticated distribution.
+Synthetic fixtures do not reconstruct the missing original evidence or
+establish annotator eligibility, real human ratings, or agreement. The pilot
+remains diagnostic, frozen designated-primary automated inference retains its
+post-collection timing, fixed-order and evaluator comparability limitations,
+retrospective sensitivities remain exploratory, and human validation is pending.

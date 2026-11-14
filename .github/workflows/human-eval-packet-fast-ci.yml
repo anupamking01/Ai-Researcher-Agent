@@ -16,6 +16,13 @@ on:
       - scripts/verify_human_eval_counterbalanced_handoff.py
       - scripts/verify_human_eval_counterbalanced_submission_pair.py
       - scripts/verify_human_eval_counterbalanced_freeze_link.py
+      - scripts/verify_human_eval_automated_run_lineage.py
+      - scripts/verify_human_eval_automated_handoff.py
+      - scripts/verify_published_main_study_inputs.py
+      - scripts/validate_main_study_inputs.py
+      - scripts/validate_numeric_inputs.py
+      - scripts/verify_research_artifact_manifest.py
+      - scripts/fingerprint_research_artifacts.py
       - scripts/verify_frozen_main_study_tasks.py
       - tests/test_human_eval.py
       - tests/test_human_eval_submission_preflight.py
@@ -31,6 +38,8 @@ on:
       - tests/test_human_eval_counterbalanced_handoff.py
       - tests/test_human_eval_counterbalanced_submission_pair.py
       - tests/test_human_eval_counterbalanced_freeze_link.py
+      - tests/test_human_eval_automated_run_lineage.py
+      - tests/test_human_eval_automated_handoff.py
       - tests/human_eval_test_support.py
       - scripts/run_offline_pytest_firewalled.sh
       - scripts/verify_ci_python_runtime.py
@@ -50,6 +59,13 @@ on:
       - scripts/verify_human_eval_counterbalanced_handoff.py
       - scripts/verify_human_eval_counterbalanced_submission_pair.py
       - scripts/verify_human_eval_counterbalanced_freeze_link.py
+      - scripts/verify_human_eval_automated_run_lineage.py
+      - scripts/verify_human_eval_automated_handoff.py
+      - scripts/verify_published_main_study_inputs.py
+      - scripts/validate_main_study_inputs.py
+      - scripts/validate_numeric_inputs.py
+      - scripts/verify_research_artifact_manifest.py
+      - scripts/fingerprint_research_artifacts.py
       - scripts/verify_frozen_main_study_tasks.py
       - tests/test_human_eval.py
       - tests/test_human_eval_submission_preflight.py
@@ -65,6 +81,8 @@ on:
       - tests/test_human_eval_counterbalanced_handoff.py
       - tests/test_human_eval_counterbalanced_submission_pair.py
       - tests/test_human_eval_counterbalanced_freeze_link.py
+      - tests/test_human_eval_automated_run_lineage.py
+      - tests/test_human_eval_automated_handoff.py
       - tests/human_eval_test_support.py
       - scripts/run_offline_pytest_firewalled.sh
       - scripts/verify_ci_python_runtime.py
@@ -116,8 +134,8 @@ jobs:
       - name: Compile packet implementation and regressions
         run: |
           python -m py_compile \
-            scripts/build_human_eval_packet.py scripts/verify_human_eval_packet.py scripts/export_human_eval_annotator_bundle.py scripts/freeze_human_eval_ratings.py scripts/verify_frozen_main_study_tasks.py scripts/verify_human_eval_submission_preflight.py scripts/verify_human_eval_counterbalanced_handoff.py scripts/verify_human_eval_counterbalanced_submission_pair.py scripts/verify_human_eval_counterbalanced_freeze_link.py \
-            tests/test_human_eval.py tests/test_human_eval_submission_preflight.py tests/test_human_eval_packet_capture_bounds.py tests/test_human_eval_packet_record_boundaries.py tests/test_human_eval_packet_source_numeric_integrity.py tests/test_human_eval_packet_verification.py tests/test_human_eval_packet_window_custody.py tests/test_human_eval_annotator_bundle_contract.py tests/test_human_eval_annotator_export_capture_bounds.py tests/test_human_eval_annotator_export.py tests/test_human_eval_counterbalanced_handoff.py tests/test_human_eval_counterbalanced_submission_pair.py tests/test_human_eval_counterbalanced_freeze_link.py tests/test_human_eval_packet_fast_ci_workflow.py tests/human_eval_test_support.py
+            scripts/build_human_eval_packet.py scripts/verify_human_eval_packet.py scripts/export_human_eval_annotator_bundle.py scripts/freeze_human_eval_ratings.py scripts/verify_frozen_main_study_tasks.py scripts/verify_human_eval_submission_preflight.py scripts/verify_human_eval_counterbalanced_handoff.py scripts/verify_human_eval_counterbalanced_submission_pair.py scripts/verify_human_eval_counterbalanced_freeze_link.py scripts/verify_human_eval_automated_run_lineage.py scripts/verify_human_eval_automated_handoff.py scripts/verify_published_main_study_inputs.py scripts/validate_main_study_inputs.py scripts/validate_numeric_inputs.py scripts/verify_research_artifact_manifest.py scripts/fingerprint_research_artifacts.py \
+            tests/test_human_eval.py tests/test_human_eval_submission_preflight.py tests/test_human_eval_packet_capture_bounds.py tests/test_human_eval_packet_record_boundaries.py tests/test_human_eval_packet_source_numeric_integrity.py tests/test_human_eval_packet_verification.py tests/test_human_eval_packet_window_custody.py tests/test_human_eval_annotator_bundle_contract.py tests/test_human_eval_annotator_export_capture_bounds.py tests/test_human_eval_annotator_export.py tests/test_human_eval_counterbalanced_handoff.py tests/test_human_eval_counterbalanced_submission_pair.py tests/test_human_eval_counterbalanced_freeze_link.py tests/test_human_eval_automated_run_lineage.py tests/test_human_eval_automated_handoff.py tests/test_human_eval_packet_fast_ci_workflow.py tests/human_eval_test_support.py
 
       - name: Verify source immediately before packet tests
         run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
@@ -128,7 +146,7 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |
           set -euo pipefail
-          bash scripts/run_offline_pytest_firewalled.sh tests/test_human_eval.py tests/test_human_eval_submission_preflight.py tests/test_human_eval_packet_capture_bounds.py tests/test_human_eval_packet_record_boundaries.py tests/test_human_eval_packet_source_numeric_integrity.py tests/test_human_eval_packet_verification.py tests/test_human_eval_packet_window_custody.py tests/test_human_eval_annotator_bundle_contract.py tests/test_human_eval_annotator_export_capture_bounds.py tests/test_human_eval_annotator_export.py tests/test_human_eval_counterbalanced_handoff.py tests/test_human_eval_counterbalanced_submission_pair.py tests/test_human_eval_counterbalanced_freeze_link.py tests/test_human_eval_packet_fast_ci_workflow.py 2>&1 | tee "$RUNNER_TEMP/vera-human-packet-tests.log"
+          bash scripts/run_offline_pytest_firewalled.sh tests/test_human_eval.py tests/test_human_eval_submission_preflight.py tests/test_human_eval_packet_capture_bounds.py tests/test_human_eval_packet_record_boundaries.py tests/test_human_eval_packet_source_numeric_integrity.py tests/test_human_eval_packet_verification.py tests/test_human_eval_packet_window_custody.py tests/test_human_eval_annotator_bundle_contract.py tests/test_human_eval_annotator_export_capture_bounds.py tests/test_human_eval_annotator_export.py tests/test_human_eval_counterbalanced_handoff.py tests/test_human_eval_counterbalanced_submission_pair.py tests/test_human_eval_counterbalanced_freeze_link.py tests/test_human_eval_automated_run_lineage.py tests/test_human_eval_automated_handoff.py tests/test_human_eval_packet_fast_ci_workflow.py 2>&1 | tee "$RUNNER_TEMP/vera-human-packet-tests.log"
 
       - name: Verify runtime and source after packet tests
         run: |

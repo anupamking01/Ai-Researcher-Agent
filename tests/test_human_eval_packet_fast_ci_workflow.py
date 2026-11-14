@@ -19,6 +19,13 @@ PACKET_SCRIPTS = (
     "scripts/verify_human_eval_counterbalanced_handoff.py",
     "scripts/verify_human_eval_counterbalanced_submission_pair.py",
     "scripts/verify_human_eval_counterbalanced_freeze_link.py",
+    "scripts/verify_human_eval_automated_run_lineage.py",
+    "scripts/verify_human_eval_automated_handoff.py",
+    "scripts/verify_published_main_study_inputs.py",
+    "scripts/validate_main_study_inputs.py",
+    "scripts/validate_numeric_inputs.py",
+    "scripts/verify_research_artifact_manifest.py",
+    "scripts/fingerprint_research_artifacts.py",
     "scripts/verify_frozen_main_study_tasks.py",
 )
 PACKET_MODULES = (
@@ -35,6 +42,8 @@ PACKET_MODULES = (
     "tests/test_human_eval_counterbalanced_handoff.py",
     "tests/test_human_eval_counterbalanced_submission_pair.py",
     "tests/test_human_eval_counterbalanced_freeze_link.py",
+    "tests/test_human_eval_automated_run_lineage.py",
+    "tests/test_human_eval_automated_handoff.py",
     "tests/test_human_eval_packet_fast_ci_workflow.py",
 )
 SCOPE = (
