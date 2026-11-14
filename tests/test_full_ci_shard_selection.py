@@ -74,6 +74,9 @@ def test_ci_matrix_requires_all_shards_and_retained_exact_selection():
     assert "tee -a" in run["run"]
     artifact = next(s for s in steps if s.get("name", "").startswith("Retain source-bound offline test"))
     assert "shard-${{ matrix.shard }}" in artifact["with"]["name"]
+    preinstall = next(s for s in steps if s.get("name", "").startswith("Retain pre-install diagnostic"))
+    assert "shard-${{ matrix.shard }}" in preinstall["with"]["name"]
+    assert preinstall["with"]["if-no-files-found"] == "error"
     assert "vera-offline-test-modules.txt" in artifact["with"]["path"]
     assert artifact["with"]["if-no-files-found"] == "error"
 

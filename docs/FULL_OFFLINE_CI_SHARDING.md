@@ -13,7 +13,7 @@ once. Duplicate inputs, invalid indices, empty shards and symlink modules
 fail closed. The full job preserves pinned Python/dependencies, source
 and runtime checks, strict pytest modes, blocked outbound IPv4/IPv6, and
 independent replay of a per-shard exact-commit test receipt. Each passing
-shard retains its module list and log; the module list is also prepended
+shard retains its uniquely named module list, log and pre-install gate receipt; the module list is also prepended
 to the receipt-hashed transcript.
 
 **Only eight passing jobs at the same commit constitute a full-suite pass.**
