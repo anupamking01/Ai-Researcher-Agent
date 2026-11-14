@@ -155,3 +155,72 @@ jobs:
             ${{ runner.temp }}/vera-offline-test-modules.txt
           if-no-files-found: error
           retention-days: 90
+
+  # This gate only runs after all eight test jobs finish successfully.
+  # It verifies their *downloaded* evidence as one complete exact-run set.
+  replay-complete-shard-set:
+    needs: unit-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact tested sources for full-set replay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up pinned Python for full-set replay
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+          pip-version: "26.2.1"
+
+      - name: Verify Python and checkout before full-set replay
+        run: |
+          python -m scripts.verify_ci_python_runtime --phase before-tests
+          python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
+
+      - name: Download current-attempt shard evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: vera-offline-tests-shard-*-${{ github.run_id }}-${{ github.run_attempt }}
+          merge-multiple: false
+          path: ${{ runner.temp }}/vera-downloaded-shard-artifacts
+
+      - name: Stage exact-attempt shard directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/vera-downloaded-shard-artifacts"
+          target="$RUNNER_TEMP/vera-eight-shard-evidence"
+          mkdir "$target"
+          for shard in {0..7}; do
+            source="$base/vera-offline-tests-shard-${shard}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            test -d "$source"
+            test ! -L "$source"
+            mv -- "$source" "$target/shard-$shard"
+          done
+          test -z "$(find "$base" -mindepth 1 -print -quit)"
+
+      - name: Independently replay all eight downloaded shard receipts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.verify_full_ci_shard_set \
+            --evidence-root "$RUNNER_TEMP/vera-eight-shard-evidence" \
+            --checkout-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --event "$GITHUB_EVENT_NAME" \
+            > "$RUNNER_TEMP/vera-full-shard-replay.json"
+          cat "$RUNNER_TEMP/vera-full-shard-replay.json"
+
+      - name: Verify exact checkout after full-set replay
+        run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests
+
+      - name: Retain verified eight-shard replay (90 days)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-full-shard-replay-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vera-full-shard-replay.json
+          if-no-files-found: error
+          retention-days: 90

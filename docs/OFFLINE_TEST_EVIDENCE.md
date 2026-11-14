@@ -301,3 +301,37 @@ spellings is rejected as duplicate category data. Synthetic tests cover the
 actual one-warning summary and ambiguous mixed tokens. This repairs evidence
 accounting only, not a pytest failure, selection of research outcomes, or
 the original experimental data.
+
+
+## Full eight-shard replay as a downstream CI gate (15 November 2026)
+
+The complete-set checker `scripts/verify_full_ci_shard_set.py` was initially an
+optional offline command for a researcher after downloading eight shard
+artifacts. The ordinary `tests.yml` workflow now runs it in a **separate
+downstream job**, only when the eight upstream matrix test jobs all succeed.
+It downloads the eight source-bound log/receipt/inventory bundles **from the
+same current GitHub workflow run and attempt**, stages one bundle under
+`shard-0` through `shard-7`, and independently replays all receipt identities,
+source selections, byte hashes and union coverage against the checked-out
+Git revision. The job retains the resulting machine-readable aggregate
+receipt with the independently supplied run/attempt/event/checkout identifiers
+and per-shard hashes. All downloaded files remain outside the checkout,
+and exact source-byte verification runs before and after the replay.
+
+A green test matrix **alone** is not the new whole-run evidence-replay result:
+check that `replay-complete-shard-set` itself concludes success and that its
+aggregate artifact exists. If only a failed shard is rerun at a later
+`GITHUB_RUN_ATTEMPT`, surviving artifacts from a previous attempt are
+intentionally **not** accepted as a single-attempt complete set. Rerun all
+jobs to recreate all eight shard receipts for that attempt. An absent,
+cancelled or mismatched shard fails closed; never reinterpret partial pytest
+success as a full-run passing receipt.
+
+This adds a CI integration and retained audit artifact, **not independent
+attestation of GitHub's runner or actual collection of every test function**.
+It does not recover the historical original treatment/report/trace archives,
+validate experimental outcomes, or authorize blinded human distribution.
+The pilot remains diagnostic, the frozen designated-primary automated
+analysis retains post-collection/fixed-order/evaluator-comparability
+qualifications, retrospective bounds remain exploratory, and real human
+validation remains pending.
