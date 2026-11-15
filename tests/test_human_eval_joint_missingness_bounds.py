@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from itertools import product
 
 import pytest
 
@@ -55,6 +56,28 @@ def _fixture(*, counts=None, differences=None, per_dimension_counts=None):
                 },
             }
         blocks[name] = left_right
+    # Synthetic score assignments make the histogram consistent with observed
+    # differences, not merely the expected number of raw ratings.
+    arm_order = ("D3", "D6", "P6", "P6V")
+    possible_scores = (3, 1, 5, 2, 4)
+    synthetic_scores = {}
+    for dimension in core.DIMS:
+        for task in TASKS:
+            for candidate in product(possible_scores, repeat=4):
+                values = dict(zip(arm_order, candidate))
+                if all(
+                    not (rater_count(task, left, dimension)
+                         and rater_count(task, right, dimension))
+                    or values[right] - values[left] == differences.get((task, name), 0)
+                    for left, right, name in core.CONTRASTS
+                ):
+                    break
+            else:
+                # Deliberately impossible paired-input fixtures must reach the
+                # existing shared-arm contradiction guard before this gate.
+                values = {arm: 3 for arm in arm_order}
+            for arm in arm_order:
+                synthetic_scores[(dimension, task, arm)] = values[arm]
     variant_summary = {}
     for arm in ("D3", "D6", "P6", "P6V"):
         variant_summary[arm] = {}
@@ -66,7 +89,11 @@ def _fixture(*, counts=None, differences=None, per_dimension_counts=None):
                 "n_reports_scored": sum(n > 0 for n in counts_for_arm),
                 "n_raw_scores": total,
                 "raw_score_distribution": {
-                    str(score): total if score == 3 else 0
+                    str(score): sum(
+                        rater_count(task, arm, dimension)
+                        for task in TASKS
+                        if synthetic_scores[(dimension, task, arm)] == score
+                    )
                     for score in range(1, 6)
                 },
             }
@@ -287,3 +314,59 @@ def test_joint_bounds_allow_legitimate_dimension_specific_rater_missingness():
     assert first[core.DIMS[0]]["incomplete_original_rater_tasks"] == []
     assert first[core.DIMS[-1]]["incomplete_original_rater_tasks"] == ["main-01"]
 
+
+
+def test_histogram_rejects_correct_denominator_but_incompatible_score_bins():
+    payload = _fixture(differences={
+        ("main-01", "P6_minus_D6_planning"): 4,
+    })
+    bins = payload["variant_summary"]["D6"][core.DIMS[0]]["raw_score_distribution"]
+    assert bins["1"] == 2
+    bins["1"] -= 2
+    bins["3"] += 2  # Preserve the number of ratings; lose required score 1.
+    with pytest.raises(ValueError, match="published score histogram cannot match"):
+        joint.audit_joint_shared_arm_bounds(payload)
+
+
+def test_histogram_accepts_feasible_extreme_observed_difference():
+    result = joint.audit_joint_shared_arm_bounds(_fixture(differences={
+        ("main-01", "P6_minus_D6_planning"): 4,
+    }))
+    assert result["raw_histogram_feasibility_is_necessary_not_sufficient"] is True
+
+
+def test_histogram_accepts_distinct_raw_scores_with_unchanged_mean():
+    payload = _fixture()
+    bins = payload["variant_summary"]["D6"][core.DIMS[0]]["raw_score_distribution"]
+    bins["3"] -= 2
+    bins["1"] += 1
+    bins["5"] += 1  # A 1+5 report has mean 3, just like 3+3.
+    assert _cell(joint.audit_joint_shared_arm_bounds(payload))[
+        "shared_arm_conditioned_all_task_bounds"
+    ] == [0, 0]
+
+
+def test_histogram_rejects_insufficient_required_score_multiplicity():
+    payload = _fixture(differences={
+        ("main-01", "P6_minus_D6_planning"): 4,
+        ("main-02", "P6_minus_D6_planning"): 4,
+    })
+    bins = payload["variant_summary"]["D6"][core.DIMS[0]]["raw_score_distribution"]
+    assert bins["1"] == 4
+    bins["1"] -= 2
+    bins["3"] += 2
+    with pytest.raises(ValueError, match="published score histogram cannot match"):
+        joint.audit_joint_shared_arm_bounds(payload)
+
+
+def test_histogram_handles_halfpoint_two_rater_report_mean():
+    payload = _fixture()
+    dim = core.DIMS[0]
+    block = payload["paired_contrasts"]["D6_minus_D3_retrieval_depth"][dim]
+    block["task_differences"]["main-01"] = 0.5
+    block["mean_difference"] = 0.05
+    for arm in ("D6", "P6", "P6V"):
+        bins = payload["variant_summary"][arm][dim]["raw_score_distribution"]
+        bins["3"] -= 1
+        bins["4"] += 1
+    joint.audit_joint_shared_arm_bounds(payload)

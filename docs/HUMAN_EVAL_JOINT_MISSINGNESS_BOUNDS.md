@@ -143,3 +143,32 @@ plan's requirement for two independent genuine human annotators per
 report, certify a protocol deviation, enable unverified packet
 distribution, or establish human validation. Results remain blocked
 until source custody and actual verified human ratings are available.
+
+
+## Raw-score histogram feasibility across tasks
+
+The exploratory joint auditor now rejects raw-score histograms that have
+the correct number of scores but cannot arise from the published
+task-specific paired differences and original-rater coverage. For
+example, an observed P6–D6 difference of +4 requires D6's scored
+report to have mean 1; a D6 raw-score histogram containing only 3s
+cannot represent that report, irrespective of its total count.
+
+For each task and rubric dimension, the auditor enumerates *possible
+integer original-rating sums* for four shared reports, enforcing every
+observed adjacent difference. It then checks each treatment arm's
+published 1–5 raw-score bins over all ten tasks using a bounded,
+five-counter dynamic program. The program respects the number of
+actual original ratings per report, score multiplicities, and the
+integer/half-point rating lattice. It neither infers individuals'
+ratings nor changes the frozen analysis or existing sensitivity bounds.
+
+**Scope:** Per-arm histogram feasibility is a necessary consistency
+condition, not proof that all four arm histograms can be simultaneously
+realized by one globally joint assignment. The source-verified CLI
+continues to require independent recomputation from genuine frozen
+human inputs; none are currently available. Synthetic tests cover
+histogram-content contradictions with unchanged denominator, two
+required extremes across separate tasks, permissible 1+5 versus 3+3
+mean equivalence, and half-point report means. All outputs remain
+exploratory and cannot establish human-validation findings.

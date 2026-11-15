@@ -147,6 +147,93 @@ def _validate_published_arm_denominators(
             )
 
 
+
+def _possible_original_score_sums(
+    counts: list[int], fixed_edges: list[int | None], *, label: str,
+) -> list[set[int]]:
+    """Project feasible original score sums on the four shared reports.
+
+    The sums range over *possible* integer 1–5 ratings; this neither
+    reconstructs individual human scores nor asserts that ratings exist.
+    """
+    options = [range(n, 5 * n + 1) if n else (0,) for n in counts]
+    projected = [set() for _ in counts]
+    for sums in product(*options):
+        if any(
+            edge is not None and (
+                not counts[i] or not counts[i + 1]
+                or 2 * (sums[i + 1] * counts[i] - sums[i] * counts[i + 1])
+                != edge * counts[i] * counts[i + 1]
+            )
+            for i, edge in enumerate(fixed_edges)
+        ):
+            continue
+        for target, value in zip(projected, sums):
+            target.add(value)
+    if any(not domain for domain in projected):
+        raise ValueError(f"{label}: no jointly feasible original rating sums")
+    return projected
+
+
+def _raw_score_histogram_options(count: int, allowed_sums: set[int]) -> set[tuple[int, ...]]:
+    """All raw 1–5 histograms for one zero-, one-, or two-rated report."""
+    if count == 0:
+        return {(0, 0, 0, 0, 0)}
+    options = set()
+    for first in range(1, 6):
+        for second in (range(first, 6) if count == 2 else (0,)):
+            if first + second not in allowed_sums:
+                continue
+            bins = [0] * 5
+            bins[first - 1] += 1
+            if count == 2:
+                bins[second - 1] += 1
+            options.add(tuple(bins))
+    return options
+
+
+def _validate_published_score_histograms(
+    analysis: dict, arms: list[str], dimension: str,
+    report_counts: dict[str, list[int]], score_domains: dict[str, list[set[int]]],
+) -> None:
+    """Require each arm's published histogram to be reachable across tasks.
+
+    This is a *necessary* per-arm condition, not proof that the four separate
+    arm histograms have one simultaneously feasible cross-arm assignment.
+    The observed adjacent task differences still constrain each report's
+    possible score sums through the same four-arm chain.
+    """
+    for arm in arms:
+        histogram = analysis["variant_summary"][arm][dimension]["raw_score_distribution"]
+        target = tuple(histogram[str(score)] for score in range(1, 6))
+        reachable = {(0, 0, 0, 0, 0)}
+        for task_index, (count, sums) in enumerate(
+            zip(report_counts[arm], score_domains[arm], strict=True), start=1
+        ):
+            choices = _raw_score_histogram_options(count, sums)
+            if not choices:
+                raise ValueError(
+                    f"{arm}/{dimension}: no possible original raw scores for task {task_index}"
+                )
+            updated = set()
+            for current in reachable:
+                for increment in choices:
+                    vector = tuple(a + b for a, b in zip(current, increment))
+                    if all(a <= b for a, b in zip(vector, target)):
+                        updated.add(vector)
+            if not updated:
+                raise ValueError(
+                    f"{arm}/{dimension}: published score histogram cannot match "
+                    f"task differences and rater coverage by task {task_index}"
+                )
+            reachable = updated
+        if target not in reachable:
+            raise ValueError(
+                f"{arm}/{dimension}: published score histogram cannot match "
+                "task differences and rater coverage"
+            )
+
+
 def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
     """Tighten missing-*pair* envelopes jointly within each task and dimension.
 
@@ -180,6 +267,7 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
         sums = {name: [0, 0] for _, _, name in core.CONTRASTS}
         completed_sums = {name: [0, 0] for _, _, name in core.CONTRASTS}
         report_counts = {arm: [] for arm in arms}
+        score_domains = {arm: [] for arm in arms}
         missing_tasks = {name: {} for _, _, name in core.CONTRASTS}
         incomplete_rater_tasks = {name: {} for _, _, name in core.CONTRASTS}
         for task_id in tasks:
@@ -217,6 +305,13 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
                 fixed_edges,
                 label=f"{dimension}/{task_id}",
             )
+            projected = _possible_original_score_sums(
+                [arm_counts[arm] for arm in arms],
+                fixed_edges, label=f"{dimension}/{task_id}",
+            )
+            for arm, possible_sums in zip(arms, projected):
+                score_domains[arm].append(possible_sums)
+
             for i, (left, right, name) in enumerate(core.CONTRASTS):
                 sums[name][0] += lows[i]
                 sums[name][1] += highs[i]
@@ -231,6 +326,9 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
 
         _validate_published_arm_denominators(
             analysis, arms, dimension, report_counts, len(tasks),
+        )
+        _validate_published_score_histograms(
+            analysis, arms, dimension, report_counts, score_domains,
         )
 
         for _, _, name in core.CONTRASTS:
@@ -263,6 +361,7 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
         "no_imputation_or_new_ratings": True,
         "hypothetical_full_two_rater_completion_is_exploratory_only": True,
         "no_change_to_frozen_analysis": True,
+        "raw_histogram_feasibility_is_necessary_not_sufficient": True,
         "task_ids": tasks,
         "bounds_by_contrast_and_dimension": output,
     }
