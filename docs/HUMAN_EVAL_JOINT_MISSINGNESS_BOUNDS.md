@@ -230,3 +230,33 @@ remains mandatory for real use. Synthetic tests cover fully double-rated
 means, impossible singleton-score lattices, malformed/nonfinite means,
 unrated arms, and valid partial-coverage cases. The frozen analysis,
 rubric, measured outcomes and all exploratory envelopes are unchanged.
+
+
+## Cross-contrast feasibility of published report means
+
+A separate **necessary, not sufficient** integrity gate checks that published
+per-arm `mean_report_score` values agree with the *same* per-task paired
+differences used by the frozen human analysis. The earlier raw-histogram
+aggregate check conservatively allowed multiple singleton-score allocations;
+those possibilities may still include zero even when the **published** arm
+means imply a nonzero all-task contrast. Such conflicting summaries must not
+be used to produce a sensitivity result.
+
+For each arm with `N` scored reports, `M` missing reports and published mean
+`m`, its all-task **doubled** report-score sum lies in
+`[2*N*m + 2*M, 2*N*m + 10*M]`. The second term is only a mathematical
+rubric envelope for reports with no original ratings, not an imputation. For
+each frozen adjacent contrast, subtract the right and left arm intervals and
+require overlap with the separately computed task-wise shared-arm edge bounds.
+When all reports are scored, the mean-implied contrast sum is fixed, even if
+some observed reports had only one rater. An inconsistent published mean now
+fails closed. Missing reports retain their full 1–5 hypothetical latitude.
+
+This test preserves the independent source-verification prerequisite and
+leaves the frozen analysis, rater assignments, raw histograms, all existing
+sensitivity intervals, and scientific claim classifications unchanged.
+Synthetic regressions cover a contradiction that passes the preceding
+per-arm singleton-mean and histogram-aggregate guards, legitimate missing
+reports, and completely unrated arms. These arithmetic gates cannot establish
+real human scores, independently authenticated treatment evidence, or
+prospective confirmatory findings.

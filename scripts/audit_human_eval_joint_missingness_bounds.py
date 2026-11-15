@@ -327,6 +327,44 @@ def _validate_published_report_means(
             )
 
 
+def _validate_cross_arm_published_report_means(
+    analysis: dict, arms: list[str], dimension: str,
+    report_counts: dict[str, list[int]],
+    task_edge_bounds: dict[str, list[int]],
+) -> None:
+    """Check published arm means against the *same* task-paired differences.
+
+    For each arm, the observed mean fixes the sum of doubled report means
+    over scored reports. Every genuinely unscored report may contribute any
+    doubled value from 2 to 10. Comparing the resulting cross-arm interval
+    with the independently computed task-edge envelope is a necessary gate.
+    This does not impute missing ratings or assert joint histogram feasibility.
+    """
+    totals = {}
+    for arm in arms:
+        counts = report_counts[arm]
+        scored = sum(count > 0 for count in counts)
+        missing = len(counts) - scored
+        reported = analysis["variant_summary"][arm][dimension]["mean_report_score"]
+        observed_total = 2 * scored * reported if scored else 0
+        totals[arm] = (
+            observed_total + 2 * missing,
+            observed_total + 10 * missing,
+        )
+    # Preserve serialization rounding safety without allowing a material
+    # discrepancy on the half-point 1..5 rating lattice.
+    tolerance = 1e-9
+    for left, right, name in core.CONTRASTS:
+        task_min, task_max = task_edge_bounds[name]
+        mean_min = totals[right][0] - totals[left][1]
+        mean_max = totals[right][1] - totals[left][0]
+        if task_max < mean_min - tolerance or mean_max < task_min - tolerance:
+            raise ValueError(
+                f"{name}/{dimension}: published cross-arm report means "
+                "contradict the paired task-difference bounds"
+            )
+
+
 def _validate_cross_arm_histogram_aggregates(
     analysis: dict, arms: list[str], dimension: str,
     report_counts: dict[str, list[int]],
@@ -460,6 +498,9 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
         _validate_published_report_means(
             analysis, arms, dimension, report_counts,
         )
+        _validate_cross_arm_published_report_means(
+            analysis, arms, dimension, report_counts, sums,
+        )
 
         for _, _, name in core.CONTRASTS:
             bounds = [value / (2 * len(tasks)) for value in sums[name]]
@@ -494,6 +535,7 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
         "raw_histogram_feasibility_is_necessary_not_sufficient": True,
         "cross_arm_histogram_aggregates_are_necessary_not_sufficient": True,
         "published_report_mean_feasibility_is_necessary_not_sufficient": True,
+        "cross_arm_report_mean_consistency_is_necessary_not_sufficient": True,
         "task_ids": tasks,
         "bounds_by_contrast_and_dimension": output,
     }

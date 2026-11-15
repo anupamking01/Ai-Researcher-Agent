@@ -479,3 +479,45 @@ def test_published_report_mean_accepts_valid_partial_rater_summary():
     payload = _fixture(counts={"main-01": {"D3": 1, "D6": 1}})
     result = joint.audit_joint_shared_arm_bounds(payload)
     assert result["published_report_mean_feasibility_is_necessary_not_sufficient"]
+
+
+def test_cross_arm_published_means_reject_incompatible_singleton_all_task_contrast():
+    # The two original singleton reports are *both scored* and their paired
+    # difference is zero. Per-arm histogram feasibility and singleton mean
+    # feasibility allow D6's one 2 and one 4 to be allocated independently,
+    # but mean(D6)=2.95 cannot coexist with mean(D3)=3 and all zero edges.
+    # This tests a contradiction missed by the older interval-only guards.
+    payload = _fixture(counts={"main-01": {"D3": 1, "D6": 1}})
+    dim = core.DIMS[0]
+    record = payload["variant_summary"]["D6"][dim]
+    record["raw_score_distribution"]["3"] -= 2
+    record["raw_score_distribution"]["2"] += 1
+    record["raw_score_distribution"]["4"] += 1
+    record["mean_report_score"] = 2.95
+    arms = ["D3", "D6", "P6", "P6V"]
+    counts = {arm: [2] * len(TASKS) for arm in arms}
+    counts["D3"][0] = counts["D6"][0] = 1
+    domains = {arm: [set(range(2, 11)) for _ in TASKS] for arm in arms}
+    joint._validate_published_score_histograms(payload, arms, dim, counts, domains)
+    joint._validate_published_report_means(payload, arms, dim, counts)
+    joint._validate_cross_arm_histogram_aggregates(
+        payload, arms, dim, counts, {name: [0, 0] for _, _, name in core.CONTRASTS}
+    )
+    with pytest.raises(ValueError, match="published cross-arm report means"):
+        joint.audit_joint_shared_arm_bounds(payload)
+
+
+def test_cross_arm_published_means_allow_missing_reports_with_unknown_scores():
+    # A genuinely unrated report still contributes a possible doubled
+    # mean in [2,10] for all-task sensitivity. It must not be set to zero.
+    payload = _fixture(counts={"main-01": {"D3": 0}})
+    result = joint.audit_joint_shared_arm_bounds(payload)
+    assert result["cross_arm_report_mean_consistency_is_necessary_not_sufficient"]
+    assert _cell(result)["shared_arm_conditioned_all_task_bounds"] == [-0.4, 0.4]
+
+
+def test_cross_arm_published_means_allow_no_scored_reports():
+    counts = {task: {"D3": 0, "D6": 0, "P6": 0, "P6V": 0} for task in TASKS}
+    result = joint.audit_joint_shared_arm_bounds(_fixture(counts=counts))
+    assert result["cross_arm_report_mean_consistency_is_necessary_not_sufficient"]
+    assert _cell(result)["shared_arm_conditioned_all_task_bounds"] == [-4, 4]
