@@ -112,3 +112,37 @@ and evaluator-recovery comparability limitations, and is **not** modified.
 Historical retrospective analyses remain exploratory. No human ratings,
 agreement or automated–human reconciliation results currently exist; these
 synthetic regression tests are **not** human-validation results.
+
+## Coverage-conditioned attainable completion envelope (ancillary)
+
+The auditor additionally reports
+`coverage_conditioned_two_rater_completion_bounds`. Unlike the prior
+conservative `hypothetical_two_rater_completion_bounds`, this separate
+envelope enumerates every **possible integer 1–5 observed score sum** on each
+included task that agrees with its independently verified paired difference
+and its original-rater counts (1/1, 1/2, 2/1, or 2/2). It then optimizes the
+remaining one or two hypothetical second-rater scores over 1–5. All arithmetic
+uses exact integer doubled differences; an impossible half-point difference
+for two singly rated reports now fails closed.
+
+This yields **attainable extrema conditional only on the published paired
+difference and original-rater counts**, rather than allowing changes that
+cannot arise from any combination of integer scores. It is generally narrower
+than, or equal to, the original conservative envelope. In particular, it
+preserves exact equality for fully double-rated pairs. Excluded pairs still
+receive the deliberately broad [-4,+4] range, even if one report had a score.
+
+The attainable extrema are **not necessarily sharp conditional on the
+underlying raw annotations**, because the summary omits each report's observed
+mean; those means could further constrain possible missing ratings. The tool
+does not reconstruct real rating records, fill in missing ratings, replace the
+frozen observed-pair estimand, compute a confidence interval, or establish
+human validation. The established conservative envelope is retained unchanged
+for audit continuity. Synthetic tests independently enumerate all four
+planned integer ratings for each possible original-rater count pattern to
+check the score-sum optimization, including infeasible combinations.
+
+The five-task pilot remains diagnostic, historical automated designated-primary
+inference is post-collection-planned and treatment-order/evaluator-qualified,
+and retrospective sensitivities (including both completion envelopes) are
+exploratory, not prospective confirmatory or human-validation findings.

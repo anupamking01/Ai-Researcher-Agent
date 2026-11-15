@@ -79,6 +79,54 @@ def _validate_rater_coverage(coverage: object, *, tasks: list, included: list, l
         raise ValueError(f"{label} original-rater coverage omits frozen tasks")
     return by_task
 
+
+def _attainable_completion_twice(
+    observed_twice: int, *, left_count: int, right_count: int,
+) -> tuple[int, int]:
+    """Sharp hypothetical completion endpoints from counts and a paired difference.
+
+    Enumerate *possible score sums*, not hypothetical annotator records. Each
+    original 1–5 integer score gives a report sum between n and 5n, and every
+    integer in that range is attainable. Use integer cross-products so the
+    original half-point lattice cannot be rounded into an impossible case.
+
+    This is sharp only conditional on the published *difference and counts*;
+    original individual report means (not in this summary) can narrow it.
+    """
+    if (
+        type(observed_twice) is not int
+        or type(left_count) is not int or left_count not in (1, 2)
+        or type(right_count) is not int or right_count not in (1, 2)
+    ):
+        raise ValueError("invalid original-rater coverage or paired difference")
+    missing_left, missing_right = 2 - left_count, 2 - right_count
+    lower = upper = None
+    for left_sum in range(left_count * RUBRIC_MIN, left_count * RUBRIC_MAX + 1):
+        for right_sum in range(right_count * RUBRIC_MIN, right_count * RUBRIC_MAX + 1):
+            if (
+                2 * (right_sum * left_count - left_sum * right_count)
+                != observed_twice * left_count * right_count
+            ):
+                continue
+            # Complete two-rater difference times two is right_sum - left_sum
+            # after assigning each absent score to a permissible 1–5 endpoint.
+            candidate_lower = (
+                right_sum + missing_right * RUBRIC_MIN
+                - left_sum - missing_left * RUBRIC_MAX
+            )
+            candidate_upper = (
+                right_sum + missing_right * RUBRIC_MAX
+                - left_sum - missing_left * RUBRIC_MIN
+            )
+            lower = candidate_lower if lower is None else min(lower, candidate_lower)
+            upper = candidate_upper if upper is None else max(upper, candidate_upper)
+    if lower is None or upper is None:
+        raise ValueError(
+            "observed paired difference is incompatible with original-rater "
+            "coverage and the integer 1–5 rubric"
+        )
+    return lower, upper
+
 def audit_missing_pair_bounds(analysis: dict) -> dict:
     """Bound the all-task mean by assigning each unobserved *pair* [-4, +4].
 
@@ -169,6 +217,8 @@ def audit_missing_pair_bounds(analysis: dict) -> dict:
             upper = (observed_twice + 2 * MAX_PAIR_DIFFERENCE * unknown) / (2 * len(tasks))
             completion_lower_twice = -2 * MAX_PAIR_DIFFERENCE * unknown
             completion_upper_twice = 2 * MAX_PAIR_DIFFERENCE * unknown
+            attainable_lower_twice = -2 * MAX_PAIR_DIFFERENCE * unknown
+            attainable_upper_twice = 2 * MAX_PAIR_DIFFERENCE * unknown
             missing_second_rater_slots = 0
             for task_id in included:
                 left_count, right_count = by_task[task_id]
@@ -177,6 +227,11 @@ def audit_missing_pair_bounds(analysis: dict) -> dict:
                 difference_twice = _halfpoint_twice(
                     diffs[task_id], label=f"{name}/{dimension}/{task_id}",
                 )
+                attainable_lower, attainable_upper = _attainable_completion_twice(
+                    difference_twice, left_count=left_count, right_count=right_count,
+                )
+                attainable_lower_twice += attainable_lower
+                attainable_upper_twice += attainable_upper
                 # Each unobserved second rating can move the pair difference
                 # by at most two points. Clip to the physical [-4,+4] rubric
                 # range; this conservative envelope need not be sharp without
@@ -201,6 +256,10 @@ def audit_missing_pair_bounds(analysis: dict) -> dict:
                 "bound_collapses_to_observed_mean": unknown == 0,
                 "unobserved_second_rater_slots_on_included_pairs": missing_second_rater_slots,
                 "hypothetical_two_rater_completion_bounds": completion_bounds,
+                "coverage_conditioned_two_rater_completion_bounds": [
+                    attainable_lower_twice / (2 * len(tasks)),
+                    attainable_upper_twice / (2 * len(tasks)),
+                ],
                 "completion_bounds_collapse_to_observed_mean": (
                     unknown == 0 and missing_second_rater_slots == 0
                 ),
@@ -213,6 +272,7 @@ def audit_missing_pair_bounds(analysis: dict) -> dict:
         "no_imputation_or_edited_frozen_analysis": True,
         "partially_observed_raters_on_included_pairs_are_held_fixed": True,
         "hypothetical_two_rater_completion_is_exploratory_only": True,
+        "coverage_conditioned_bounds_are_exploratory_and_summary_conditional": True,
         "hypothetical_completion_changes_no_frozen_scores": True,
         "ratings_generated": False,
         "hypothesis_tests_performed": False,

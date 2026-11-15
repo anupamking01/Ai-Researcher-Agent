@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from itertools import product
 
 import pytest
 
@@ -213,3 +214,61 @@ def test_verified_byte_identity_uses_pure_bound_helper(monkeypatch, tmp_path):
     result = audit.audit_verified_bundle(tmp_path)
     assert _cell(result)["worst_case_all_task_mean_difference"] == [-0.4, 1.2]
     assert result["verified_source"]["independent_recomputation_verified"] is True
+
+
+def test_coverage_conditioned_completion_sharpens_conservative_envelope():
+    payload = _analysis(observed_difference=1.0)
+    _assign_cell(payload, "main-01", "1/1")
+    cell = _cell(audit.audit_missing_pair_bounds(payload))
+    assert cell["worst_case_all_task_mean_difference"] == [1.0, 1.0]
+    assert cell["hypothetical_two_rater_completion_bounds"] == [0.6, 1.3]
+    assert cell["coverage_conditioned_two_rater_completion_bounds"] == [0.75, 1.15]
+
+
+def test_coverage_conditioned_bounds_preserve_complete_and_missing_pair_cases():
+    complete = _cell(audit.audit_missing_pair_bounds(_analysis()))
+    absent = _cell(audit.audit_missing_pair_bounds(_analysis(included=8)))
+    assert complete["coverage_conditioned_two_rater_completion_bounds"] == [0.5, 0.5]
+    assert absent["coverage_conditioned_two_rater_completion_bounds"] == [-0.4, 1.2]
+
+
+def test_impossible_halfpoint_difference_for_two_single_raters_fails_closed():
+    payload = _analysis(observed_difference=0.5)
+    _assign_cell(payload, "main-01", "1/1")
+    with pytest.raises(ValueError, match="incompatible with original-rater coverage"):
+        audit.audit_missing_pair_bounds(payload)
+
+
+@pytest.mark.parametrize(("left_count", "right_count"), [
+    (1, 1), (1, 2), (2, 1), (2, 2),
+])
+def test_score_sum_endpoints_match_independent_four_rating_oracle(
+    left_count, right_count,
+):
+    """Synthetic exhaustive oracle enumerates four integer scores, not sums."""
+    expected = {}
+    for left in product(range(1, 6), repeat=2):
+        for right in product(range(1, 6), repeat=2):
+            left_observed = sum(left[:left_count])
+            right_observed = sum(right[:right_count])
+            numerator = 2 * (
+                right_observed * left_count - left_observed * right_count
+            )
+            denominator = left_count * right_count
+            assert numerator % denominator == 0
+            observed_twice = numerator // denominator
+            completed_twice = sum(right) - sum(left)
+            expected.setdefault(observed_twice, []).append(completed_twice)
+
+    for observed_twice in range(-8, 9):
+        if observed_twice in expected:
+            assert audit._attainable_completion_twice(
+                observed_twice, left_count=left_count, right_count=right_count,
+            ) == (
+                min(expected[observed_twice]), max(expected[observed_twice])
+            )
+        else:
+            with pytest.raises(ValueError, match="incompatible"):
+                audit._attainable_completion_twice(
+                    observed_twice, left_count=left_count, right_count=right_count,
+                )
