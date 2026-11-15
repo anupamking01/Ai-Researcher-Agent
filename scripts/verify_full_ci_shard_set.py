@@ -51,16 +51,21 @@ def _pinned_directory_chain(path: Path):
             parent_fd = opened[-1][2]
             fd = os.open(component, flags, dir_fd=parent_fd)
             opened.append((parent_fd, component, fd))
-        yield
-        for parent_fd, component, fd in opened[1:]:
-            pinned = os.fstat(fd)
-            visible = os.stat(component, dir_fd=parent_fd, follow_symlinks=False)
-            if (
-                not stat.S_ISDIR(visible.st_mode)
-                or (pinned.st_dev, pinned.st_ino, pinned.st_mode)
-                != (visible.st_dev, visible.st_ino, visible.st_mode)
-            ):
-                raise ValueError("CI evidence directory changed during replay")
+        try:
+            yield
+        finally:
+            # A failed evidence read can be caused by a swapped ancestor.
+            # Verify pinned custody even when the consumer is unwinding a
+            # different error, rather than masking the observed replacement.
+            for parent_fd, component, fd in opened[1:]:
+                pinned = os.fstat(fd)
+                visible = os.stat(component, dir_fd=parent_fd, follow_symlinks=False)
+                if (
+                    not stat.S_ISDIR(visible.st_mode)
+                    or (pinned.st_dev, pinned.st_ino, pinned.st_mode)
+                    != (visible.st_dev, visible.st_ino, visible.st_mode)
+                ):
+                    raise ValueError("CI evidence directory changed during replay")
     except OSError as exc:
         raise ValueError("CI evidence directory is missing, aliased, or changed") from exc
     finally:

@@ -429,3 +429,30 @@ defeat a transient alteration entirely between observations, retrieve missing
 historical reports/traces, establish preregistration or validate human
 ratings. CI success on the exact commit is still required before relying
 on this updated reader.
+
+
+## Report observed evidence-directory changes even when replay fails (15 November 2026)
+
+The complete eight-shard replay holds no-follow descriptors for the downloaded
+evidence root and every shard directory. Previously it compared those held
+directory descriptors to their visible paths **only after a normal return**
+from the replay body. When a path was replaced during capture, the next
+bounded leaf read could fail with a generic file-open error before the
+directory check ran. Thus, although no false PASS was produced, a concrete
+mid-replay namespace change was obscured, and both exact-head CI suites
+rejected the expected custody-specific failure classification.
+
+The directory-chain check now also runs while unwinding an unsuccessful
+replay. If a parent pathname was visibly replaced, that custody violation
+takes precedence over the downstream read/parse exception; otherwise the
+original consumer error is preserved. Synthetic regressions cover both cases
+and an ancestor removed during an unsuccessful replay. The existing complete
+shard and retained receipt checks remain mandatory.
+
+This is a **local, observed path-consistency and failure-diagnosis** safeguard,
+not proof of continuous custody under unobservable races or independent
+GitHub runner attestation. It does not authenticate missing historical
+treatment reports/traces, establish human annotation readiness, alter frozen
+automated outcomes, or run experimental treatments. Pilot, qualified
+post-collection designated-primary, exploratory, and pending human-validation
+claims remain separate.

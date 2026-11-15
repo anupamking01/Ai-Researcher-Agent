@@ -141,6 +141,32 @@ def test_redirecting_evidence_parent_to_same_bytes_mid_replay_is_rejected(
     assert changed
 
 
+def test_pinned_evidence_directory_preserves_unrelated_failure(evidence):
+    """An ordinary consumer failure retains its diagnostic when paths are stable."""
+    with pytest.raises(ValueError, match="^synthetic receipt parse failure$"):
+        with whole._pinned_directory_chain(evidence):
+            raise ValueError("synthetic receipt parse failure")
+
+
+def test_pinned_evidence_directory_detects_swap_during_failed_replay(evidence):
+    """Check pinned ancestry on exception unwind, not only after a PASS."""
+    moved = evidence.parent / "saved-evidence-on-error"
+    with pytest.raises(ValueError, match="changed during replay"):
+        with whole._pinned_directory_chain(evidence):
+            evidence.rename(moved)
+            evidence.symlink_to(moved, target_is_directory=True)
+            raise ValueError("synthetic receipt parse failure")
+
+
+def test_pinned_evidence_directory_detects_removal_during_failed_replay(evidence):
+    """A vanished ancestor must not be mislabeled as a receipt parse failure."""
+    moved = evidence.parent / "saved-evidence-removed"
+    with pytest.raises(ValueError, match="missing, aliased, or changed"):
+        with whole._pinned_directory_chain(evidence):
+            evidence.rename(moved)
+            raise ValueError("synthetic receipt parse failure")
+
+
 def test_all_shards_replay_as_one_exact_run(evidence):
     result = whole.verify_shard_set(evidence, **KWARGS)
     assert result["shards_verified"] == 8
