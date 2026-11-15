@@ -154,3 +154,55 @@ def test_verified_cli_uses_byte_identical_synthetic_analysis(monkeypatch, tmp_pa
     result = joint.audit_verified_bundle(tmp_path)
     assert _cell(result)["shared_arm_conditioned_all_task_bounds"] == [-0.4, 0.4]
     assert result["verified_source"]["independent_recomputation_verified"] is True
+
+
+def test_joint_completion_exposes_partial_rater_uncertainty_hidden_by_fixed_edges():
+    # D3 is unobserved, D6 and P6 are singly rated, and their original
+    # planning difference is +4. The shared observed scores force D6=1,
+    # P6=5, but an unobserved D6 second score may reach 5. The new
+    # *counterfactual completion* envelope must not be mislabeled as the
+    # original fixed-observation envelope.
+    payload = _fixture(
+        counts={"main-01": {"D3": 0, "D6": 1, "P6": 1}},
+        differences={("main-01", "P6_minus_D6_planning"): 4},
+    )
+    cell = _cell(joint.audit_joint_shared_arm_bounds(payload))
+    assert cell["shared_arm_conditioned_all_task_bounds"] == [-0.4, 0]
+    assert cell["hypothetical_shared_arm_two_rater_all_task_bounds"] == [-0.4, 0.2]
+    assert cell["incomplete_original_rater_tasks"] == ["main-01"]
+    assert cell["hypothetical_completed_task_difference_bounds"] == {
+        "main-01": [-4, 2]
+    }
+
+
+def test_completed_planning_difference_respects_rater_lattice():
+    payload = _fixture(
+        counts={"main-01": {"D6": 1, "P6": 1}},
+        differences={("main-01", "P6_minus_D6_planning"): 4},
+    )
+    result = joint.audit_joint_shared_arm_bounds(payload)
+    cell = result["bounds_by_contrast_and_dimension"][
+        "P6_minus_D6_planning"
+    ][core.DIMS[0]]
+    assert cell["shared_arm_conditioned_all_task_bounds"] == [0.4, 0.4]
+    assert cell["hypothetical_shared_arm_two_rater_all_task_bounds"] == [0, 0.4]
+    assert result["hypothetical_full_two_rater_completion_is_exploratory_only"]
+
+
+def test_full_double_rating_completion_does_not_change_any_edge():
+    result = joint.audit_joint_shared_arm_bounds(_fixture())
+    for _, _, name in core.CONTRASTS:
+        for dimension in core.DIMS:
+            block = result["bounds_by_contrast_and_dimension"][name][dimension]
+            assert block["hypothetical_shared_arm_two_rater_all_task_bounds"] == [0, 0]
+            assert block["incomplete_original_rater_tasks"] == []
+            assert block["hypothetical_completed_task_difference_bounds"] == {}
+
+
+def test_joint_completion_rejects_cross_arm_impossible_observed_differences():
+    payload = _fixture(differences={
+        ("main-01", "D6_minus_D3_retrieval_depth"): 4,
+        ("main-01", "P6_minus_D6_planning"): 4,
+    })
+    with pytest.raises(ValueError, match="cross-contrast observed differences"):
+        joint.audit_joint_shared_arm_bounds(payload)

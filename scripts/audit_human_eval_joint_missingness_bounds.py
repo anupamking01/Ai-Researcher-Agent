@@ -47,6 +47,60 @@ def _feasible_task_edge_bounds(domains: list, fixed_edges: list, *, label: str) 
     return lower, upper
 
 
+
+def _feasible_completed_task_edge_bounds(
+    arm_counts: list[int], fixed_edges: list[int | None], *, label: str,
+) -> tuple[list[int], list[int]]:
+    """Marginal endpoints after hypothetically completing all four reports to 2/2.
+
+    Enumerate *possible observed rating sums*, not invented annotator scores.
+    For count n, each integer sum n..5n is achievable with n genuine 1–5
+    scores; count zero contributes an empty sum. A known adjacent difference
+    constrains both report sums on the same task. Complete every missing
+    rating at its permitted endpoint for the requested edge, respecting
+    shared-arm observed sums. Bounds are separately attainable per edge,
+    not necessarily all three at once.
+    """
+    if len(arm_counts) != 4 or len(fixed_edges) != 3 or any(
+        type(n) is not int or n not in (0, 1, 2) for n in arm_counts
+    ):
+        raise ValueError(f"{label}: invalid original-rater counts or contrast chain")
+    domains = [range(n, 5 * n + 1) if n else (0,) for n in arm_counts]
+    lower = [None] * 3
+    upper = [None] * 3
+    for sums in product(*domains):
+        if any(
+            difference is not None and (
+                arm_counts[i] == 0 or arm_counts[i + 1] == 0
+                or 2 * (
+                    sums[i + 1] * arm_counts[i]
+                    - sums[i] * arm_counts[i + 1]
+                ) != difference * arm_counts[i] * arm_counts[i + 1]
+            )
+            for i, difference in enumerate(fixed_edges)
+        ):
+            continue
+        for i in range(3):
+            # A fully completed report mean, doubled, is its two-rating
+            # sum. Unknown ratings contribute integer values in [1,5].
+            minimum = (
+                sums[i + 1] + (2 - arm_counts[i + 1])
+                - sums[i] - 5 * (2 - arm_counts[i])
+            )
+            maximum = (
+                sums[i + 1] + 5 * (2 - arm_counts[i + 1])
+                - sums[i] - (2 - arm_counts[i])
+            )
+            lower[i] = minimum if lower[i] is None else min(lower[i], minimum)
+            upper[i] = maximum if upper[i] is None else max(upper[i], maximum)
+    if any(value is None for value in lower):
+        raise ValueError(
+            f"{label}: hypothetical two-rater completion is inconsistent "
+            "with the observed shared-arm score differences"
+        )
+    return lower, upper
+
+
 def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
     """Tighten missing-*pair* envelopes jointly within each task and dimension.
 
@@ -78,7 +132,9 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
             )
 
         sums = {name: [0, 0] for _, _, name in core.CONTRASTS}
+        completed_sums = {name: [0, 0] for _, _, name in core.CONTRASTS}
         missing_tasks = {name: {} for _, _, name in core.CONTRASTS}
+        incomplete_rater_tasks = {name: {} for _, _, name in core.CONTRASTS}
         for task_id in tasks:
             arm_counts = {}
             fixed_edges = []
@@ -106,11 +162,22 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
             lows, highs = _feasible_task_edge_bounds(
                 domains, fixed_edges, label=f"{dimension}/{task_id}",
             )
-            for i, (_, _, name) in enumerate(core.CONTRASTS):
+            completed_lows, completed_highs = _feasible_completed_task_edge_bounds(
+                [arm_counts[arm] for arm in arms],
+                fixed_edges,
+                label=f"{dimension}/{task_id}",
+            )
+            for i, (left, right, name) in enumerate(core.CONTRASTS):
                 sums[name][0] += lows[i]
                 sums[name][1] += highs[i]
+                completed_sums[name][0] += completed_lows[i]
+                completed_sums[name][1] += completed_highs[i]
                 if fixed_edges[i] is None:
                     missing_tasks[name][task_id] = [lows[i] / 2, highs[i] / 2]
+                if arm_counts[left] < 2 or arm_counts[right] < 2:
+                    incomplete_rater_tasks[name][task_id] = [
+                        completed_lows[i] / 2, completed_highs[i] / 2,
+                    ]
 
         for _, _, name in core.CONTRASTS:
             bounds = [value / (2 * len(tasks)) for value in sums[name]]
@@ -126,6 +193,11 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
                 "prior_rubric_only_all_task_bounds": wide,
                 "shared_arm_conditioned_all_task_bounds": bounds,
                 "missing_task_difference_bounds": missing_tasks[name],
+                "hypothetical_shared_arm_two_rater_all_task_bounds": [
+                    value / (2 * len(tasks)) for value in completed_sums[name]
+                ],
+                "incomplete_original_rater_tasks": list(incomplete_rater_tasks[name]),
+                "hypothetical_completed_task_difference_bounds": incomplete_rater_tasks[name],
             }
 
     return {
@@ -135,6 +207,7 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
         "not_a_confidence_interval": True,
         "bounds_are_marginal_not_simultaneously_jointly_attainable": True,
         "no_imputation_or_new_ratings": True,
+        "hypothetical_full_two_rater_completion_is_exploratory_only": True,
         "no_change_to_frozen_analysis": True,
         "task_ids": tasks,
         "bounds_by_contrast_and_dimension": output,

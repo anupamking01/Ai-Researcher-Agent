@@ -81,3 +81,43 @@ the historical automated designated-primary analysis was planned
 post-collection and retains fixed-order/evaluator-comparability caveats;
 this and other retrospective missingness tools are **exploratory**, not
 prospective confirmatory or human-validation findings.
+
+
+## Additional counterfactual: joint missing pairs **and** second-rater completion
+
+A separate field, `hypothetical_shared_arm_two_rater_all_task_bounds`,
+asks what the **all-ten-task** adjacent difference could be if every report
+also received both planned 1–5 human ratings. This is distinct from the
+original `shared_arm_conditioned_all_task_bounds`, which keeps *observed*
+paired differences fixed, even when a report has only one recorded rating.
+
+For each frozen task and rubric dimension, the auditor enumerates all
+mathematically possible *original score sums* (0 for an unrated report,
+integers 1–5 for one rating, and integers 2–10 for two ratings) compatible
+with every observed adjacent difference. It reuses **one** possible score
+sum for D6 and P6 across their two adjacent contrasts. Each as-yet-unseen
+second rating is then allowed any integer value 1–5, and attainable
+marginal lower/upper endpoints of each *completed* paired difference are
+summed across the ten frozen tasks. The per-task endpoints for contrasts
+with incomplete rater coverage are reported separately. It neither fills
+actual rating files nor substitutes a completed dataset for the frozen
+complete-case analysis.
+
+**Synthetic illustration only:** D3 has no ratings on task 1; D6 and P6
+have one rating each; P6–D6 was observed as +4 (forcing observed D6=1
+and P6=5); P6V has two ratings. If every other task has two ratings and
+zero differences, the *fixed-observation* retrieval envelope is
+[-0.4,0], but the hypothetical **two-rater completion** retrieval
+envelope is [-0.4,0.2]. The latter can be wider because the unseen D6
+rating could change its report mean. Neither range is a measured VERA
+finding, a confidence interval, a plausible-rater forecast, or a
+prospectively specified treatment effect.
+
+These two envelopes answer **different counterfactual questions**.
+Both sets of endpoints are marginal: extreme values for the three
+contrasts cannot necessarily occur simultaneously. No missing-at-random
+assumption is made. This tool does not relax the frozen assignment
+plan's requirement for two independent genuine human annotators per
+report, certify a protocol deviation, enable unverified packet
+distribution, or establish human validation. Results remain blocked
+until source custody and actual verified human ratings are available.
