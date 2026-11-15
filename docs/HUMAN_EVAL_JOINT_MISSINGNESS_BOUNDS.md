@@ -172,3 +172,34 @@ histogram-content contradictions with unchanged denominator, two
 required extremes across separate tasks, permissible 1+5 versus 3+3
 mean equivalence, and half-point report means. All outputs remain
 exploratory and cannot establish human-validation findings.
+
+## Cross-arm aggregate raw-score consistency (necessary, not sufficient)
+
+A further outcome-blind guard reconciles **aggregate weighted raw-rating
+histograms across adjacent treatment arms** with the existing task-level
+paired-difference bounds. Four independently feasible arm histograms are
+not automatically compatible with each other: with ten 2/2-rated task
+pairs and every D6–D3 difference equal to zero, the D6 and D3 total raw
+score sums must be equal. A D6 histogram with two 3s replaced by two
+4s violates that identity even though each arm's histogram can be
+constructed independently with task means inside 1–5.
+
+For each arm, let `S` be the sum of all published raw score values,
+`s` the number of singly rated reports, and `m` the number of unrated
+reports. Twice the aggregate observed report means equals `S` plus
+the sum of the `s` singleton scores. Without guessing which reports
+received those raw scores, the minimum/maximum singleton sums come from
+the smallest/largest `s` published scores. For each wholly unrated
+report add a hypothetical doubled report mean between 2 and 10.
+The difference between two resulting arm intervals must overlap the
+sum of the already-computed, shared-arm-constrained task differences
+for that contrast. Disjoint intervals fail closed.
+
+This is an **additional conservative necessary consistency check**.
+The singleton assignment and unrated-score bounds deliberately ignore
+some per-task constraints, so passing does *not* prove one simultaneous
+four-arm histogram assignment exists. Synthetic regression tests cover
+a 2/2 histogram contradiction that passes the prior per-arm check, an
+unequal singleton/partial-rater contradiction, a feasible mixed 1/2
+rating allocation, and entirely missing reports. No human scores,
+treatment outcomes, or frozen inferences are generated or revised.

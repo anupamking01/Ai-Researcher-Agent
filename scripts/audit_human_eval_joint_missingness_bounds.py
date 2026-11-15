@@ -234,6 +234,63 @@ def _validate_published_score_histograms(
             )
 
 
+def _arm_total_doubled_mean_bounds(
+    histogram: dict[str, int], counts: list[int],
+) -> tuple[int, int]:
+    """Conservative aggregate score bounds from raw bins and rater coverage.
+
+    Twice the sum of observed report means equals the raw score total plus
+    the sum of scores assigned to singly rated reports. To avoid inferring
+    which raw score belonged to which report, bound that singleton subtotal
+    by choosing the smallest or largest available scores. Completely
+    unrated reports contribute hypothetical doubled means of 2..10.
+    """
+    raw_scores = [
+        score for score in range(1, 6)
+        for _ in range(histogram[str(score)])
+    ]
+    n_single = sum(count == 1 for count in counts)
+    n_missing = sum(count == 0 for count in counts)
+    raw_total = sum(raw_scores)
+    low_single = sum(raw_scores[:n_single])
+    high_single = sum(raw_scores[-n_single:]) if n_single else 0
+    return (
+        raw_total + low_single + 2 * n_missing,
+        raw_total + high_single + 10 * n_missing,
+    )
+
+
+def _validate_cross_arm_histogram_aggregates(
+    analysis: dict, arms: list[str], dimension: str,
+    report_counts: dict[str, list[int]],
+    task_edge_bounds: dict[str, list[int]],
+) -> None:
+    """Reject aggregate raw-score totals incompatible with paired contrasts.
+
+    Each contrast's task-level lower/upper sum (in doubled-score units) must
+    overlap the conservative difference of its two arms' independently
+    published raw-score histograms. This necessary check detects some
+    cross-arm contradictions that every per-arm histogram DP alone accepts.
+    The intervals need not admit a globally joint task-by-task assignment.
+    """
+    totals = {
+        arm: _arm_total_doubled_mean_bounds(
+            analysis["variant_summary"][arm][dimension]["raw_score_distribution"],
+            report_counts[arm],
+        )
+        for arm in arms
+    }
+    for left, right, name in core.CONTRASTS:
+        task_min, task_max = task_edge_bounds[name]
+        histogram_min = totals[right][0] - totals[left][1]
+        histogram_max = totals[right][1] - totals[left][0]
+        if task_max < histogram_min or histogram_max < task_min:
+            raise ValueError(
+                f"{name}/{dimension}: published cross-arm raw-score histogram "
+                "totals contradict the paired task-difference bounds"
+            )
+
+
 def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
     """Tighten missing-*pair* envelopes jointly within each task and dimension.
 
@@ -330,6 +387,9 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
         _validate_published_score_histograms(
             analysis, arms, dimension, report_counts, score_domains,
         )
+        _validate_cross_arm_histogram_aggregates(
+            analysis, arms, dimension, report_counts, sums,
+        )
 
         for _, _, name in core.CONTRASTS:
             bounds = [value / (2 * len(tasks)) for value in sums[name]]
@@ -362,6 +422,7 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
         "hypothetical_full_two_rater_completion_is_exploratory_only": True,
         "no_change_to_frozen_analysis": True,
         "raw_histogram_feasibility_is_necessary_not_sufficient": True,
+        "cross_arm_histogram_aggregates_are_necessary_not_sufficient": True,
         "task_ids": tasks,
         "bounds_by_contrast_and_dimension": output,
     }

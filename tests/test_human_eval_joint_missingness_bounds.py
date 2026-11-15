@@ -370,3 +370,59 @@ def test_histogram_handles_halfpoint_two_rater_report_mean():
         bins["3"] -= 1
         bins["4"] += 1
     joint.audit_joint_shared_arm_bounds(payload)
+
+def test_cross_arm_histogram_totals_reject_mismatched_all_task_means():
+    # Every adjacent paired difference is zero. Each arm's raw histogram
+    # separately admits feasible task scores, but D6's aggregate score sum
+    # is too high to match D3's unchanged raw histogram.
+    payload = _fixture()
+    dim = core.DIMS[0]
+    bins = payload["variant_summary"]["D6"][dim]["raw_score_distribution"]
+    bins["3"] -= 2
+    bins["4"] += 2
+    arms = ["D3", "D6", "P6", "P6V"]
+    counts = {arm: [2] * len(TASKS) for arm in arms}
+    score_domains = {
+        arm: [set(range(2, 11)) for _ in TASKS] for arm in arms
+    }
+    # The previous arm-by-arm guard accepts this contradiction.
+    joint._validate_published_score_histograms(
+        payload, arms, dim, counts, score_domains,
+    )
+    with pytest.raises(ValueError, match="cross-arm raw-score histogram totals"):
+        joint.audit_joint_shared_arm_bounds(payload)
+
+
+def test_cross_arm_histogram_total_rejects_partial_rater_contradiction():
+    # With one original score on the same task for D3 and D6, the raw
+    # singleton identity is unknown. Even after allowing either assignment,
+    # changing one D6 3 to a 4 cannot produce a zero all-task difference.
+    payload = _fixture(counts={"main-01": {"D3": 1, "D6": 1}})
+    bins = payload["variant_summary"]["D6"][core.DIMS[0]]["raw_score_distribution"]
+    bins["3"] -= 1
+    bins["4"] += 1
+    with pytest.raises(ValueError, match="cross-arm raw-score histogram totals"):
+        joint.audit_joint_shared_arm_bounds(payload)
+
+
+def test_cross_arm_aggregate_accepts_feasible_mixed_rater_histogram():
+    # D6's original singly rated report can remain 3, while another
+    # two-rated report scores 2+4 instead of 3+3. Both mean 3; the frozen
+    # zero differences and all published aggregate bins remain attainable.
+    payload = _fixture(counts={"main-01": {"D3": 1, "D6": 1}})
+    bins = payload["variant_summary"]["D6"][core.DIMS[0]]["raw_score_distribution"]
+    bins["3"] -= 2
+    bins["2"] += 1
+    bins["4"] += 1
+    result = joint.audit_joint_shared_arm_bounds(payload)
+    assert result["cross_arm_histogram_aggregates_are_necessary_not_sufficient"]
+    assert _cell(result)["shared_arm_conditioned_all_task_bounds"] == [0, 0]
+
+
+def test_cross_arm_aggregate_missing_reports_keep_conservative_range():
+    # With the entire original D3 report missing, its hypothetical 1..5
+    # report mean must remain available; the guard must not assume zero.
+    payload = _fixture(counts={"main-01": {"D3": 0}})
+    result = joint.audit_joint_shared_arm_bounds(payload)
+    assert _cell(result)["shared_arm_conditioned_all_task_bounds"] == [-0.4, 0.4]
+
