@@ -404,3 +404,28 @@ safety safeguard, **not** GitHub-runner attestation or recovery of the missing
 historical 40 report/trace artifacts. Cancelled full CI runs remain incomplete;
 no pilot, qualified automated primary, exploratory or human-validation result
 is changed or newly asserted.
+
+
+## Descriptor-bound CI evidence ancestry (15 November 2026)
+
+The standard-library-only bounded evidence reader used by the full-suite CI
+receipt producer/replay and by the pre-install early diagnostic receipt now
+holds **no-follow directory descriptors for the entire pathname ancestry**.
+Previously it checked the leaf's inode, link count, size and byte identity
+before and after reading, but an otherwise regular file behind a **symlinked
+parent** could still be accepted; swapping a parent directory while retaining
+the originally opened leaf also could escape a leaf-only recheck. The reader
+now rejects symlinked ancestors, parent-traversal components, and parent
+replacements detected during capture, alongside the existing final-leaf,
+hardlink, bounded-read and source-hash safeguards. It fails closed when the
+platform lacks the required directory/no-follow primitives.
+
+Synthetic regressions cover regular nested evidence, redirected parent
+directories, an in-read same-byte parent replacement, parent traversal, and
+the shared early/full CI reader. No receipt schema, historic test result,
+scientific artifact or workflow permission changed. This is **local path
+continuity only**: it does not independently authenticate GitHub's runner,
+defeat a transient alteration entirely between observations, retrieve missing
+historical reports/traces, establish preregistration or validate human
+ratings. CI success on the exact commit is still required before relying
+on this updated reader.

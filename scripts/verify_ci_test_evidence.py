@@ -7,6 +7,7 @@ cannot independently attest the runner or the correctness of tests.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import hashlib
 import json
 import os
@@ -38,51 +39,88 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def read_bounded_evidence(path: Path, *, maximum: int, label: str) -> bytes:
-    """Capture bounded evidence from one pathname-bound, single-link file.
+    """Capture single-link CI evidence through held, no-follow ancestor FDs.
 
-    Check the pathname both before and after opening/reading the descriptor:
-    stable descriptor bytes alone do not detect an atomic replacement of the
-    downloaded filename. Reject hardlinks that allow out-of-tree mutation.
-    This remains a local consistency guard, not uploader attestation.
+    A stable leaf descriptor is insufficient when an intermediate pathname
+    redirects to another evidence tree or is replaced during capture. Recheck
+    the entire ancestor chain before accepting the exact retained bytes.
+    This verifies local pathname continuity, not independent runner custody.
     """
     if type(maximum) is not int or maximum < 1:
         raise ValueError("invalid evidence capture limit")
-    flags = (os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-             | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    path = Path(path)
+    if ".." in path.parts:
+        raise ValueError(f"{label} path may not contain parent traversal")
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise ValueError(f"{label} cannot enforce no-follow ancestor capture")
+    absolute = path.absolute()
+    dir_flags = (os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                 | getattr(os, "O_CLOEXEC", 0))
+    file_flags = (os.O_RDONLY | os.O_NOFOLLOW
+                  | getattr(os, "O_CLOEXEC", 0)
+                  | getattr(os, "O_NONBLOCK", 0))
+
+    def generation(st):
+        return (st.st_dev, st.st_ino, st.st_mode, st.st_size,
+                st.st_mtime_ns, st.st_ctime_ns)
+
+    def file_identity(st):
+        return (*generation(st), st.st_nlink)
+
     try:
-        path_before = os.stat(path, follow_symlinks=False)
-        fd = os.open(path, flags)
+        with ExitStack() as stack:
+            parent_fd = os.open(absolute.anchor, dir_flags)
+            stack.callback(os.close, parent_fd)
+            ancestors = []
+            for component in absolute.parts[1:-1]:
+                child_fd = os.open(component, dir_flags, dir_fd=parent_fd)
+                stack.callback(os.close, child_fd)
+                if generation(os.fstat(child_fd)) != generation(os.stat(
+                    component, dir_fd=parent_fd, follow_symlinks=False
+                )):
+                    raise ValueError(f"{label} parent directory changed before capture")
+                ancestors.append((parent_fd, component, child_fd))
+                parent_fd = child_fd
+
+            path_before = os.stat(
+                absolute.name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            fd = os.open(absolute.name, file_flags, dir_fd=parent_fd)
+            stack.callback(os.close, fd)
+            before = os.fstat(fd)
+            if (not stat.S_ISREG(before.st_mode)
+                    or not stat.S_ISREG(path_before.st_mode)):
+                raise ValueError(f"{label} must be a regular file")
+            if before.st_nlink != 1:
+                raise ValueError(f"{label} must have exactly one filesystem link")
+            if file_identity(path_before) != file_identity(before):
+                raise ValueError(f"{label} pathname changed before capture")
+            if before.st_size > maximum:
+                raise ValueError(f"{label} exceeds size limit")
+
+            # Retain the descriptor while reading bounded bytes; do not follow
+            # a new pathname if either the file or an ancestor is replaced.
+            with os.fdopen(fd, "rb", closefd=False) as stream:
+                captured = stream.read(maximum + 1)
+            after = os.fstat(fd)
+            path_after = os.stat(
+                absolute.name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if (file_identity(before) != file_identity(after)
+                    or file_identity(after) != file_identity(path_after)
+                    or len(captured) != before.st_size):
+                raise ValueError(f"{label} changed during capture")
+            if len(captured) > maximum:
+                raise ValueError(f"{label} exceeds size limit")
+
+            for holder_fd, component, child_fd in ancestors:
+                if generation(os.fstat(child_fd)) != generation(os.stat(
+                    component, dir_fd=holder_fd, follow_symlinks=False
+                )):
+                    raise ValueError(f"{label} parent directory changed during capture")
+            return captured
     except OSError as exc:
         raise ValueError(f"{label} cannot be opened as a regular file") from exc
-    try:
-        before = os.fstat(fd)
-        if not stat.S_ISREG(before.st_mode):
-            raise ValueError(f"{label} must be a regular file")
-        if before.st_nlink != 1:
-            raise ValueError(f"{label} must have exactly one filesystem link")
-        identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_nlink,
-                              s.st_size, s.st_mtime_ns, s.st_ctime_ns)
-        if identity(path_before) != identity(before):
-            raise ValueError(f"{label} pathname changed during capture")
-        if before.st_size > maximum:
-            raise ValueError(f"{label} exceeds size limit")
-        # Read at most limit+1 bytes, regardless of stat size or concurrent growth.
-        with os.fdopen(fd, "rb", closefd=False) as stream:
-            captured = stream.read(maximum + 1)
-        after = os.fstat(fd)
-        try:
-            path_after = os.stat(path, follow_symlinks=False)
-        except OSError as exc:
-            raise ValueError(f"{label} pathname changed during capture") from exc
-        if (identity(before) != identity(after)
-                or identity(after) != identity(path_after)
-                or len(captured) != before.st_size):
-            raise ValueError(f"{label} changed during capture")
-        if len(captured) > maximum:
-            raise ValueError(f"{label} exceeds size limit")
-        return captured
-    finally:
-        os.close(fd)
 
 
 def _verify_full_ci_selection(
