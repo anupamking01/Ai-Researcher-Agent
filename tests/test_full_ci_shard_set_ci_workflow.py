@@ -107,3 +107,61 @@ def test_shell_staging_fails_closed_on_missing_or_mixed_downloads(tmp_path, case
         assert not list(downloaded.iterdir())
     else:
         assert result.returncode != 0
+
+
+def test_failure_diagnostics_are_distinct_from_verified_success_receipts():
+    """Preserve negative CI evidence without certifying an incomplete shard."""
+    workflow, replay_job, replay_steps = _steps()
+    steps = workflow["jobs"]["unit-tests"]["steps"]
+    failing = [
+        step for step in steps
+        if step.get("name") == "Retain unverified diagnostics on CI failure (90 days)"
+    ]
+    assert len(failing) == 1
+    failed = failing[0]
+    assert failed["if"] == "${{ failure() && !cancelled() }}"
+    assert failed["uses"] == (
+        "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+    )
+    assert failed["with"]["name"] == (
+        "vera-unverified-failure-shard-${{ matrix.shard }}-"
+        "${{ github.run_id }}-${{ github.run_attempt }}"
+    )
+    assert failed["with"]["retention-days"] == "90"
+    # A failed test, source gate or replay might have no files, or only a
+    # partial transcript. Missing files must not mask the original failure.
+    assert failed["with"]["if-no-files-found"] == "warn"
+    paths = failed["with"]["path"].splitlines()
+    assert paths == [
+        "${{ runner.temp }}/vera-offline-tests.log",
+        "${{ runner.temp }}/vera-offline-test-modules.txt",
+    ]
+    assert not any("receipt" in path for path in paths)
+    valid = next(step for step in steps if step.get("name") ==
+                 "Retain source-bound offline test evidence (90 days)")
+    assert "if" not in valid  # default success-only retention
+    assert steps.index(failed) > steps.index(valid)
+    assert replay_job["needs"] == "unit-tests"
+    assert "if" not in replay_job  # failure skips the aggregate success gate
+    download = replay_steps["Download current-attempt shard evidence"]["with"]
+    assert download["pattern"].startswith("vera-offline-tests-shard-")
+    assert "unverified" not in download["pattern"]
+
+
+def test_synthetic_failed_pipeline_keeps_output_without_turning_green(tmp_path):
+    """The actual CI wrapper uses pipefail with tee; failures remain failures."""
+    command = (
+        "set -euo pipefail; "
+        "bash -c 'printf \\\"synthetic failing pytest\\\\n\\\"; exit 7' "
+        '| tee "$RUNNER_TEMP/vera-offline-tests.log"'
+    )
+    proc = subprocess.run(
+        ["bash", "-c", command],
+        env={**os.environ, "RUNNER_TEMP": str(tmp_path)},
+        text=True, capture_output=True, timeout=10, check=False,
+    )
+    assert proc.returncode == 7
+    assert "synthetic failing pytest" in (
+        tmp_path / "vera-offline-tests.log"
+    ).read_text(encoding="utf-8")
+    assert not (tmp_path / "vera-offline-test-receipt.json").exists()

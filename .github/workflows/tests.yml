@@ -156,6 +156,20 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+      # A failed pytest/source/receipt gate should not erase its raw diagnostic
+      # transcript. These files are NOT validated success receipts and must
+      # never be part of the downstream eight-shard success-only replay.
+      - name: Retain unverified diagnostics on CI failure (90 days)
+        if: ${{ failure() && !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-unverified-failure-shard-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/vera-offline-tests.log
+            ${{ runner.temp }}/vera-offline-test-modules.txt
+          if-no-files-found: warn
+          retention-days: 90
+
   # This gate only runs after all eight test jobs finish successfully.
   # It verifies their *downloaded* evidence as one complete exact-run set.
   replay-complete-shard-set:

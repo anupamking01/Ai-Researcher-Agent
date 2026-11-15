@@ -24,6 +24,34 @@ automated analysis retains the post-collection plan qualification; exploratory
 bounds and future human validation remain separate.
 
 
+## Preserve failing CI transcripts without implying successful verification (15 November 2026)
+
+Ordinary successful eight-shard CI retains one *verified* per-shard
+`vera-offline-tests-shard-...` evidence bundle only **after** the exact-source,
+installed-dependency, runtime, successful-pytest receipt, and independent
+single-shard replay gates pass. This strict success contract is unchanged.
+
+Previously, a failure in offline pytest, a source/dependency postcheck or
+receipt replay skipped the normal success-only upload, so the per-shard
+diagnostic log and selected-test inventory could disappear with the runner.
+Each shard now has a separate `failure() && !cancelled()` upload step that
+retains any extant raw `vera-offline-tests.log` and
+`vera-offline-test-modules.txt` under a **distinct**
+`vera-unverified-failure-shard-<shard>-<run>-<attempt>` artifact name
+for 90 days. The upload intentionally **excludes** a success receipt;
+`if-no-files-found: warn` preserves the original failure when setup exits
+before files exist. An incomplete log is not repaired or silently certified.
+Cancelled jobs may be unable to execute the failure-upload step at all.
+
+The downstream eight-shard gate still depends on **all eight successful
+unit-test jobs** and downloads only the `vera-offline-tests-shard-...`
+pattern, never these unverified diagnostic artifacts. These negative-case
+files are for investigation, not evidence of successful CI, runner attestation,
+historical treatment/recovery source custody, or recovered human-evaluation
+readiness. Offline workflow-contract and synthetic shell regressions pin the
+separate naming, conditions, strict success-only gate and `pipefail` behavior.
+No treatments, evaluators, frozen estimates or human scores are rerun or changed.
+
 ## Fail closed on pruned or unexpectedly passing test suites (13 November 2026)
 
 A zero-exit pytest summary can still include **deselected** tests (for example,
