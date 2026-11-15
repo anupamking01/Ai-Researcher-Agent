@@ -101,6 +101,52 @@ def _feasible_completed_task_edge_bounds(
     return lower, upper
 
 
+
+def _validate_published_arm_denominators(
+    analysis: dict, arms: list[str], dimension: str,
+    report_counts: dict[str, list[int]], task_count: int,
+) -> None:
+    """Reconcile pair-level rater coverage against independent arm summaries.
+
+    The same report enters two adjacent contrasts. Its original rating count
+    must also agree with the per-arm analysis denominator and the raw-score
+    histogram. No individual rating or treatment score is reconstructed.
+    Counts are dimension-specific: an annotator may leave one rubric field
+    unscored while completing another.
+    """
+    summaries = analysis.get("variant_summary")
+    if type(summaries) is not dict or set(summaries) != set(arms):
+        raise ValueError("joint missingness requires every frozen variant summary")
+    for arm in arms:
+        per_dimension = summaries[arm]
+        if type(per_dimension) is not dict or set(per_dimension) != set(core.DIMS):
+            raise ValueError(f"{arm}: incomplete frozen variant summary dimensions")
+        record = per_dimension[dimension]
+        if type(record) is not dict:
+            raise ValueError(f"{arm}/{dimension}: invalid variant summary")
+        counts = report_counts[arm]
+        histogram = record.get("raw_score_distribution")
+        if (
+            type(histogram) is not dict
+            or set(histogram) != {str(score) for score in range(1, 6)}
+            or any(type(n) is not int or n < 0 for n in histogram.values())
+        ):
+            raise ValueError(f"{arm}/{dimension}: invalid raw-score distribution")
+        if (
+            type(record.get("n_reports_total")) is not int
+            or record["n_reports_total"] != task_count
+            or type(record.get("n_reports_scored")) is not int
+            or record["n_reports_scored"] != sum(n > 0 for n in counts)
+            or type(record.get("n_raw_scores")) is not int
+            or record["n_raw_scores"] != sum(counts)
+            or sum(histogram.values()) != sum(counts)
+        ):
+            raise ValueError(
+                f"{arm}/{dimension}: published arm denominators disagree "
+                "with shared-report rater coverage"
+            )
+
+
 def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
     """Tighten missing-*pair* envelopes jointly within each task and dimension.
 
@@ -133,6 +179,7 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
 
         sums = {name: [0, 0] for _, _, name in core.CONTRASTS}
         completed_sums = {name: [0, 0] for _, _, name in core.CONTRASTS}
+        report_counts = {arm: [] for arm in arms}
         missing_tasks = {name: {} for _, _, name in core.CONTRASTS}
         incomplete_rater_tasks = {name: {} for _, _, name in core.CONTRASTS}
         for task_id in tasks:
@@ -154,6 +201,9 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
                     ))
                 else:
                     fixed_edges.append(None)
+
+            for arm in arms:
+                report_counts[arm].append(arm_counts[arm])
 
             domains = [
                 range(2, 11, 2) if arm_counts[arm] == 1 else range(2, 11)
@@ -178,6 +228,10 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
                     incomplete_rater_tasks[name][task_id] = [
                         completed_lows[i] / 2, completed_highs[i] / 2,
                     ]
+
+        _validate_published_arm_denominators(
+            analysis, arms, dimension, report_counts, len(tasks),
+        )
 
         for _, _, name in core.CONTRASTS:
             bounds = [value / (2 * len(tasks)) for value in sums[name]]

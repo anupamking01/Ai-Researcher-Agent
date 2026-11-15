@@ -13,10 +13,17 @@ from scripts import human_eval_analysis_core as core
 TASKS = [f"main-{i:02d}" for i in range(1, 11)]
 
 
-def _fixture(*, counts=None, differences=None):
+def _fixture(*, counts=None, differences=None, per_dimension_counts=None):
     """Construct consistent per-report coverage shared by adjacent contrasts."""
     counts = counts or {}
     differences = differences or {}
+    per_dimension_counts = per_dimension_counts or {}
+
+    def rater_count(task, arm, dimension):
+        return per_dimension_counts.get(
+            (dimension, task, arm), counts.get(task, {}).get(arm, 2)
+        )
+
     blocks = {}
     for left, right, name in core.CONTRASTS:
         left_right = {}
@@ -24,8 +31,8 @@ def _fixture(*, counts=None, differences=None):
             per_cell = {cell: [] for cell in core.RATER_COVERAGE_CELLS}
             included, missing, deltas = [], [], {}
             for task in TASKS:
-                left_n = counts.get(task, {}).get(left, 2)
-                right_n = counts.get(task, {}).get(right, 2)
+                left_n = rater_count(task, left, dimension)
+                right_n = rater_count(task, right, dimension)
                 per_cell[f"{left_n}/{right_n}"].append(task)
                 if left_n and right_n:
                     included.append(task)
@@ -48,7 +55,23 @@ def _fixture(*, counts=None, differences=None):
                 },
             }
         blocks[name] = left_right
+    variant_summary = {}
+    for arm in ("D3", "D6", "P6", "P6V"):
+        variant_summary[arm] = {}
+        for dimension in core.DIMS:
+            counts_for_arm = [rater_count(task, arm, dimension) for task in TASKS]
+            total = sum(counts_for_arm)
+            variant_summary[arm][dimension] = {
+                "n_reports_total": len(TASKS),
+                "n_reports_scored": sum(n > 0 for n in counts_for_arm),
+                "n_raw_scores": total,
+                "raw_score_distribution": {
+                    str(score): total if score == 3 else 0
+                    for score in range(1, 6)
+                },
+            }
     return {
+        "variant_summary": variant_summary,
         "study_id": "budget-main-v1",
         "status": "human_validation_analysis",
         "analysis_scope": "complementary_not_main_confirmatory",
@@ -206,3 +229,61 @@ def test_joint_completion_rejects_cross_arm_impossible_observed_differences():
     })
     with pytest.raises(ValueError, match="cross-contrast observed differences"):
         joint.audit_joint_shared_arm_bounds(payload)
+
+
+def test_joint_bounds_reconcile_per_arm_summary_denominators():
+    payload = _fixture(counts={"main-01": {"D3": 0, "D6": 1}})
+    result = joint.audit_joint_shared_arm_bounds(payload)
+    assert _cell(result)["missing_pair_tasks"] == ["main-01"]
+
+
+@pytest.mark.parametrize("field,mutation", [
+    ("n_reports_total", 9),
+    ("n_reports_scored", 9),
+    ("n_raw_scores", 19),
+])
+def test_joint_bounds_reject_contradictory_variant_summary_counts(field, mutation):
+    payload = _fixture(counts={"main-01": {"D3": 0}})
+    payload["variant_summary"]["D3"][core.DIMS[0]][field] = mutation
+    with pytest.raises(ValueError, match="published arm denominators disagree"):
+        joint.audit_joint_shared_arm_bounds(payload)
+
+
+def test_joint_bounds_reject_wrong_histogram_total_and_invalid_counter_type():
+    payload = _fixture()
+    payload["variant_summary"]["P6"][core.DIMS[0]]["raw_score_distribution"]["1"] += 1
+    with pytest.raises(ValueError, match="published arm denominators disagree"):
+        joint.audit_joint_shared_arm_bounds(payload)
+
+    payload = _fixture()
+    payload["variant_summary"]["P6"][core.DIMS[0]]["raw_score_distribution"]["1"] = True
+    with pytest.raises(ValueError, match="invalid raw-score distribution"):
+        joint.audit_joint_shared_arm_bounds(payload)
+
+
+def test_joint_bounds_require_all_arm_summaries_and_dimensions():
+    payload = _fixture()
+    del payload["variant_summary"]["P6V"]
+    with pytest.raises(ValueError, match="every frozen variant summary"):
+        joint.audit_joint_shared_arm_bounds(payload)
+
+    payload = _fixture()
+    del payload["variant_summary"]["D6"][core.DIMS[-1]]
+    with pytest.raises(ValueError, match="incomplete frozen variant summary"):
+        joint.audit_joint_shared_arm_bounds(payload)
+
+
+def test_joint_bounds_allow_legitimate_dimension_specific_rater_missingness():
+    # Each rubric field may have its own observed-rater count. There is no
+    # cross-dimension equality requirement; only the same report across
+    # adjacent contrasts must have consistent counts within a dimension.
+    payload = _fixture(per_dimension_counts={
+        (core.DIMS[-1], "main-01", "D6"): 1,
+    })
+    result = joint.audit_joint_shared_arm_bounds(payload)
+    first = result["bounds_by_contrast_and_dimension"][
+        "P6_minus_D6_planning"
+    ]
+    assert first[core.DIMS[0]]["incomplete_original_rater_tasks"] == []
+    assert first[core.DIMS[-1]]["incomplete_original_rater_tasks"] == ["main-01"]
+

@@ -52,6 +52,28 @@ observed adjacent differences of +4 and +4 on the same task. Additional
 tests check shared-rater identity conflicts, uninformative neighbors,
 all-missing inputs, and source-verification fail-closed behavior.
 
+
+## Cross-table denominator provenance guard
+
+The exploratory joint audit now requires the published **per-variant,
+per-dimension summary** to agree with the independently reported nine-cell
+rater-coverage partitions. For each of the four arms and five rubric
+dimensions it reconstructs only the *number* of scored reports and raw rating
+slots from each distinct task/report. Those counts must equal
+`variant_summary[*][*].n_reports_scored` and `n_raw_scores`; the reported
+`n_reports_total` must equal the frozen ten tasks, and the five raw-score
+histogram bins must contain exactly `n_raw_scores` entries.
+
+This detects a contradictory denominator or omitted/raw-score histogram
+entry before the sensitivity bounds can be reported. It does **not** infer,
+reconstruct, or validate unobserved individual ratings or score values; the
+CLI still requires the complete independently recomputed source-verification
+gate. Rubric dimensions are checked **separately**: a partially rated
+correctness field need not have the same observed-rater count as clarity.
+Only within one dimension must each shared treatment report agree across
+the adjacent contrast summaries. Synthetic tests exercise discrepancies,
+invalid histogram counters and legitimate dimension-dependent missingness.
+
 ## Only after source-verified human ratings exist
 
 After the frozen original human-input archive, verified blinded packet,
