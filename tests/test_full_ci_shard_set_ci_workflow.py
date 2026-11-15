@@ -152,7 +152,7 @@ def test_synthetic_failed_pipeline_keeps_output_without_turning_green(tmp_path):
     """The actual CI wrapper uses pipefail with tee; failures remain failures."""
     command = (
         "set -euo pipefail; "
-        "bash -c 'printf \\\"synthetic failing pytest\\\\n\\\"; exit 7' "
+        "bash -c 'echo synthetic-failing-pytest; exit 7' "
         '| tee "$RUNNER_TEMP/vera-offline-tests.log"'
     )
     proc = subprocess.run(
@@ -161,7 +161,7 @@ def test_synthetic_failed_pipeline_keeps_output_without_turning_green(tmp_path):
         text=True, capture_output=True, timeout=10, check=False,
     )
     assert proc.returncode == 7
-    assert "synthetic failing pytest" in (
+    assert "synthetic-failing-pytest" in (
         tmp_path / "vera-offline-tests.log"
     ).read_text(encoding="utf-8")
     assert not (tmp_path / "vera-offline-test-receipt.json").exists()
