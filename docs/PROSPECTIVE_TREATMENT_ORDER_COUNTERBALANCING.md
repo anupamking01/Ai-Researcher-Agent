@@ -287,3 +287,44 @@ fingerprinting. It neither proves task independence, execution or
 provenance, nor repairs historical fixed-order confounding. The frozen
 pilot and automated confirmatory measurements, exploratory analysis,
 and pending blinded human validation remain unchanged.
+
+
+## Pre-execution category-order exposure audit (prospective only)
+
+Global Williams position and pair-precedence balance does **not** guarantee
+balance **within frozen task categories**. If, for example, task topics cluster
+by assignment slot, a pooled schedule can look balanced while a particular
+topic stratum sees one treatment consistently earlier. This matters for a
+future stratified analysis but does not establish that such a bias occurred.
+
+Once a new ten-task manifest and its schedule receipt have been **independently
+frozen**, inspect that design *before* any proposed treatment execution:
+
+~~~bash
+python -m scripts.audit_prospective_category_order \
+  --task-manifest /path/to/new_frozen_ten_tasks.json \
+  --plan-file /path/to/proposed_order_receipt.json
+~~~
+
+The auditor independently rebuilds and verifies the supplied receipt against
+the **exact** proposed task source before reporting, for each original frozen
+category label, the number of tasks, the four within-task positions occupied
+by each treatment, and the directional precedence count for each of the six
+primary treatment pairs. It also reports the largest per-treatment position
+spread and largest directional precedence gap within each category. Category
+totals must reconcile exactly to the plan's global margins. Optional
+\`--expected-task-manifest-sha256\` and \`--expected-plan-file-sha256\` flags
+enforce separately retained source/receipt fingerprints; self-computed pins do
+not constitute independent preregistration evidence.
+
+The diagnostic **does not rebalance assignments**, reject an otherwise valid
+fixed schedule for unfavorable strata, introduce an optimization seed, or
+read any treatment scores. A concerning imbalance should be recorded and
+addressed, if necessary, in an independently reviewed *new versioned*
+prospective design **before any execution**, never by choosing among schedules
+after viewing results. Strata of one task necessarily have coarse margins, and
+an odd-sized stratum cannot have equal precedence directions for a pair.
+Observed margins are descriptive planning facts, not estimates of carryover,
+causal bias, task independence, or valid human annotation. The frozen 2026
+pilot/automated measurements and exploratory analyses remain unchanged; the
+original archive-authentication and human-validation gates remain blocked.
