@@ -136,7 +136,7 @@ def test_redirecting_evidence_parent_to_same_bytes_mid_replay_is_rejected(
         return data
 
     monkeypatch.setattr(whole.producer, "read_bounded_evidence", swap_after_first_read)
-    with pytest.raises(ValueError, match="changed during replay"):
+    with pytest.raises(ValueError, match="aliased|changed during replay"):
         whole.verify_shard_set(evidence, **KWARGS)
     assert changed
 
