@@ -103,9 +103,12 @@ def read_bounded_evidence(path: Path, *, maximum: int, label: str) -> bytes:
             with os.fdopen(fd, "rb", closefd=False) as stream:
                 captured = stream.read(maximum + 1)
             after = os.fstat(fd)
-            path_after = os.stat(
-                absolute.name, dir_fd=parent_fd, follow_symlinks=False
-            )
+            try:
+                path_after = os.stat(
+                    absolute.name, dir_fd=parent_fd, follow_symlinks=False
+                )
+            except OSError as exc:
+                raise ValueError(f"{label} changed during capture") from exc
             if (file_identity(before) != file_identity(after)
                     or file_identity(after) != file_identity(path_after)
                     or len(captured) != before.st_size):
@@ -114,9 +117,15 @@ def read_bounded_evidence(path: Path, *, maximum: int, label: str) -> bytes:
                 raise ValueError(f"{label} exceeds size limit")
 
             for holder_fd, component, child_fd in ancestors:
-                if generation(os.fstat(child_fd)) != generation(os.stat(
-                    component, dir_fd=holder_fd, follow_symlinks=False
-                )):
+                try:
+                    linked = os.stat(
+                        component, dir_fd=holder_fd, follow_symlinks=False
+                    )
+                except OSError as exc:
+                    raise ValueError(
+                        f"{label} parent directory changed during capture"
+                    ) from exc
+                if generation(os.fstat(child_fd)) != generation(linked):
                     raise ValueError(f"{label} parent directory changed during capture")
             return captured
     except OSError as exc:
