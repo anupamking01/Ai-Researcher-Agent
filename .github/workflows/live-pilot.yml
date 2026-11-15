@@ -55,6 +55,7 @@ jobs:
     steps:
       # Gate before checkout or credential use; no automatic cancellation of other runs.
       - name: Require explicit noncanonical live-pilot acknowledgement
+        id: pilot_guard
         shell: bash
         env:
           VERA_PILOT_ACK: ${{ inputs.pilot_ack }}
@@ -132,8 +133,10 @@ jobs:
           fi
           python scripts/run_pilot.py "${args[@]}"
 
+      # Keep partial diagnostic evidence after any authorized failure, but never
+      # invoke postflight processing or publication for a rejected dispatch.
       - name: Summarize pilot
-        if: always()
+        if: ${{ always() && steps.pilot_guard.outcome == 'success' }}
         run: |
           if find outputs/experiment_traces -name '*.json' -print -quit 2>/dev/null | grep -q .; then
             python scripts/summarize_pilot.py
@@ -142,11 +145,11 @@ jobs:
           fi
 
       - name: Validate research artifacts
-        if: always()
+        if: ${{ always() && steps.pilot_guard.outcome == 'success' }}
         run: python scripts/validate_pilot_artifacts.py
 
       - name: Upload research artifacts
-        if: always()
+        if: ${{ always() && steps.pilot_guard.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: noncanonical-diagnostic-pilot-${{ github.run_id }}

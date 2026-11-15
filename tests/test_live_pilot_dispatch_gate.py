@@ -49,7 +49,8 @@ def dispatch_gate_problems(source: str) -> list[str]:
         return faults + ["missing first-step pilot acknowledgement guard"]
     first = steps[0]
     if (
-        first.get("name") != GUARD or first.get("if") is not None
+        first.get("name") != GUARD or first.get("id") != "pilot_guard"
+        or first.get("if") is not None
         or first.get("continue-on-error") is not None
         or first.get("shell") != "bash"
     ):
@@ -115,6 +116,20 @@ def dispatch_gate_problems(source: str) -> list[str]:
         uploads[0]["with"].get("name") != ARCHIVE
     ):
         faults.append("future pilot archives must be labelled noncanonical")
+    # GitHub's always() bypasses a failed first-step acknowledgement.
+    # Postflight retention must survive authorized failures but never run for
+    # a rejected dispatch, even when the job itself has already failed.
+    for label in ("Summarize pilot", "Validate research artifacts", "Upload research artifacts"):
+        matches = [
+            step for step in steps
+            if isinstance(step, dict) and step.get("name") == label
+        ]
+        if len(matches) != 1 or (
+            matches[0].get("if") !=
+            "${{ always() && steps.pilot_guard.outcome == 'success' }}"
+            or matches[0].get("continue-on-error") is not None
+        ):
+            faults.append(f"{label}: postflight must require accepted pilot acknowledgement")
     return faults
 
 
@@ -239,3 +254,30 @@ def test_reintroduced_actions_token_rejected():
     )
     assert any("must not cancel other authorized runs" in p
                for p in dispatch_gate_problems(changed))
+
+
+@pytest.mark.parametrize(
+    "label", ["Summarize pilot", "Validate research artifacts", "Upload research artifacts"]
+)
+@pytest.mark.parametrize(
+    "unsafe_condition", ["always()", "failure()", "${{ always() }}"]
+)
+def test_pilot_postflight_cannot_bypass_rejected_dispatch(label, unsafe_condition):
+    source = WORKFLOW.read_text(encoding="utf-8")
+    marker = (
+        "      - name: " + label + "\n"
+        "        if: ${{ always() && steps.pilot_guard.outcome == 'success' }}"
+    )
+    assert marker in source
+    changed = source.replace(marker, "      - name: " + label + "\n"
+                             "        if: " + unsafe_condition, 1)
+    assert any("postflight must require accepted pilot acknowledgement" in fault
+               for fault in dispatch_gate_problems(changed))
+
+
+def test_pilot_postflight_guard_id_cannot_be_removed():
+    source = WORKFLOW.read_text(encoding="utf-8")
+    changed = source.replace("        id: pilot_guard\n", "", 1)
+    assert changed != source
+    assert any("unconditional first step" in fault
+               for fault in dispatch_gate_problems(changed))

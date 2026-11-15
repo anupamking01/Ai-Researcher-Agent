@@ -66,6 +66,7 @@ def dispatch_problems(source: str) -> list[str]:
     first = steps[0]
     if (
         first.get("name") != GUARD
+        or first.get("id") != "smoke_guard"
         or first.get("if") is not None
         or first.get("continue-on-error") is not None
         or first.get("shell") != "bash"
@@ -136,6 +137,19 @@ def dispatch_problems(source: str) -> list[str]:
     ]
     if len(actual_smoke) != 1 or actual_smoke[0].get("name") != SMOKE:
         faults.append("expected one explicit live smoke entrypoint")
+    # always() alone also runs after the first-step consent failure.
+    # Preserve evidence on later authorized failures, not rejected dispatches.
+    for label in ("Preserve server log", "Stop FastAPI application", "Upload smoke-test evidence"):
+        matches = [
+            step for step in steps
+            if isinstance(step, dict) and step.get("name") == label
+        ]
+        if len(matches) != 1 or (
+            matches[0].get("if") !=
+            "${{ always() && steps.smoke_guard.outcome == 'success' }}"
+            or matches[0].get("continue-on-error") is not None
+        ):
+            faults.append(f"{label}: postflight must require accepted smoke acknowledgement")
     return faults
 
 
@@ -307,3 +321,30 @@ def test_rejects_unqualified_smoke_artifact_label():
     changed = source.replace("name: " + ARCHIVE, "name: live-app-smoke-legacy", 1)
     assert any("diagnostically labelled" in issue
                for issue in dispatch_problems(changed))
+
+
+@pytest.mark.parametrize(
+    "label", ["Preserve server log", "Stop FastAPI application", "Upload smoke-test evidence"]
+)
+@pytest.mark.parametrize(
+    "unsafe_condition", ["always()", "failure()", "${{ always() }}"]
+)
+def test_smoke_postflight_cannot_bypass_rejected_dispatch(label, unsafe_condition):
+    source = WORKFLOW.read_text(encoding="utf-8")
+    marker = (
+        "      - name: " + label + "\n"
+        "        if: ${{ always() && steps.smoke_guard.outcome == 'success' }}"
+    )
+    assert marker in source
+    changed = source.replace(marker, "      - name: " + label + "\n"
+                             "        if: " + unsafe_condition, 1)
+    assert any("postflight must require accepted smoke acknowledgement" in fault
+               for fault in dispatch_problems(changed))
+
+
+def test_smoke_postflight_guard_id_cannot_be_removed():
+    source = WORKFLOW.read_text(encoding="utf-8")
+    changed = source.replace("        id: smoke_guard\n", "", 1)
+    assert changed != source
+    assert any("failure-enforcing first step" in fault
+               for fault in dispatch_problems(changed))

@@ -41,6 +41,7 @@ jobs:
       # Never launch paid API-backed smoke tests implicitly on ordinary pushes.
       # This diagnostic is not evidence recovery or a canonical treatment run.
       - name: Require explicit noncanonical live-smoke acknowledgement
+        id: smoke_guard
         shell: bash
         env:
           VERA_LIVE_SMOKE_ACK: ${{ inputs.smoke_ack }}
@@ -116,15 +117,17 @@ jobs:
             --base-url http://127.0.0.1:8000 \
             --timeout-seconds 520
 
+      # Capture failed authorized diagnostics; never run postflight steps after
+      # the initial acknowledgement was rejected.
       - name: Preserve server log
-        if: always()
+        if: ${{ always() && steps.smoke_guard.outcome == 'success' }}
         shell: bash
         run: |
           mkdir -p outputs/smoke
           cp /tmp/live-app.log outputs/smoke/server.log 2>/dev/null || true
 
       - name: Stop FastAPI application
-        if: always()
+        if: ${{ always() && steps.smoke_guard.outcome == 'success' }}
         shell: bash
         run: |
           if [ -f /tmp/live-app.pid ]; then
@@ -132,7 +135,7 @@ jobs:
           fi
 
       - name: Upload smoke-test evidence
-        if: always()
+        if: ${{ always() && steps.smoke_guard.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: noncanonical-diagnostic-live-smoke-${{ github.run_id }}
