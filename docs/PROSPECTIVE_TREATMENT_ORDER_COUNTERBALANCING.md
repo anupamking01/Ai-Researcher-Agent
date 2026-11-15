@@ -420,3 +420,32 @@ externally archived manifest/receipt pins and execution chronology if a
 separate future study is authorized. Nothing here modifies the 2026 pilot,
 the fixed-order original main study, frozen paired outcomes, exploratory
 sensitivity work, or pending blinded human validation.
+
+
+## Joint category × planned-time treatment-order exposure (prospective only)
+
+Separate category totals and early-versus-late arm-order summaries cannot tell
+whether an apparent temporal exposure is concentrated in one preselected task
+category. The outcome-blind category/order auditor now reports the **joint**
+table `category_by_chronological_half_order_summaries`: for every frozen
+category and both immutable task-index windows (1–5 and 6–10), it records the
+exact 1-based planned task indices, task count, four arm-by-position
+distributions, and six pairwise-precedence counts. Even a category with
+**zero tasks** in one half receives an explicit all-zero cell; an absent
+category is not interpreted as balanced or assigned an invented rate.
+
+Each cell is counted from the manifest-bound, independently verified schedule.
+Both projections of the joint table must reconcile exactly with the existing
+per-category and per-half totals, or the audit fails. Synthetic tests independently
+recount exact scheduled rows and cover both mixed and fully blocked categories.
+The auditor never rearranges tasks or treatments, reads scores, or compares
+alternative schedules to select a favorable result.
+
+This is a **descriptive pre-execution interaction diagnostic**, not proof of
+actual wall-clock order, observed temporal drift, category representativeness,
+carryover, or a treatment effect. Small and empty category × half cells prevent
+reliable subgroup inference; no acceptance threshold or post-outcome subgroup
+test is supplied. Any scientific adjustment would require a separately reviewed
+and frozen future design before collection. The original 2026 fixed-order
+automated results, diagnostic pilot, exploratory sensitivity findings, missing
+historical report/trace custody and pending human ratings remain unchanged.

@@ -343,3 +343,88 @@ def test_early_late_diagnostic_is_deterministic_for_single_category_plan():
     assert first["max_between_half_pairwise_precedence_count_gap"] == (
         second["max_between_half_pairwise_precedence_count_gap"]
     )
+
+
+def test_category_by_half_joint_cells_recount_exact_schedule_independently():
+    # A joint category x chronology table cannot be reconstructed from its
+    # category-only and window-only margins. Check each exact task row.
+    labels = ["science", "policy", "science", "policy", "medicine",
+              "science", "medicine", "policy", "medicine", "policy"]
+    manifest = _manifest(labels)
+    schedule = design.build_plan(manifest)["schedule"]
+    report = audit.audit_category_order(manifest, _receipt(manifest))
+    joint = report["category_by_chronological_half_order_summaries"]
+    assert len(joint) == 6
+    assert [(item["window"], item["category"]) for item in joint] == [
+        (window, category)
+        for window in ("first_half", "second_half")
+        for category in ("medicine", "policy", "science")
+    ]
+    for cell in joint:
+        start, stop = (0, 5) if cell["window"] == "first_half" else (5, 10)
+        indices = [
+            index for index in range(start, stop)
+            if labels[index] == cell["category"]
+        ]
+        assert cell["task_indices_1based"] == [index + 1 for index in indices]
+        assert cell["task_count"] == len(indices)
+        for arm in design.VARIANTS:
+            assert cell["position_counts"][arm] == [
+                sum(schedule[index]["arm_order"][slot] == arm for index in indices)
+                for slot in range(4)
+            ]
+        for left_index, left in enumerate(design.VARIANTS):
+            for right in design.VARIANTS[left_index + 1:]:
+                name = f"{left}_before_{right}"
+                assert cell["pairwise_precedence_counts"][name] == sum(
+                    schedule[index]["arm_order"].index(left)
+                    < schedule[index]["arm_order"].index(right)
+                    for index in indices
+                )
+    # Collapse by time and by category to independently verified one-way margins.
+    for window in report["chronological_half_order_summaries"]:
+        cells = [cell for cell in joint if cell["window"] == window["window"]]
+        assert sum(cell["task_count"] for cell in cells) == window["task_count"]
+        for arm in design.VARIANTS:
+            assert [sum(cell["position_counts"][arm][i] for cell in cells)
+                    for i in range(4)] == window["position_counts"][arm]
+        for name, count in window["pairwise_precedence_counts"].items():
+            assert sum(cell["pairwise_precedence_counts"][name]
+                       for cell in cells) == count
+    for category in report["category_summaries"]:
+        cells = [cell for cell in joint
+                 if cell["category"] == category["category"]]
+        assert sum(cell["task_count"] for cell in cells) == category["task_count"]
+        for arm in design.VARIANTS:
+            assert [sum(cell["position_counts"][arm][i] for cell in cells)
+                    for i in range(4)] == category["position_counts"][arm]
+        for name, count in category["pairwise_precedence_counts"].items():
+            assert sum(cell["pairwise_precedence_counts"][name]
+                       for cell in cells) == count
+    assert report["category_time_interaction_is_descriptive_only"] is True
+    assert report["actual_execution_timing_authenticated"] is False
+
+
+def test_category_by_half_keeps_zero_exposure_cells_in_blocked_manifest():
+    manifest = _manifest(["science"] * 5 + ["policy"] * 5)
+    receipt = _receipt(manifest)
+    report = audit.audit_category_order(manifest, receipt)
+    cells = {(item["category"], item["window"]): item
+             for item in report["category_by_chronological_half_order_summaries"]}
+    assert {(category, window): cell["task_count"]
+            for (category, window), cell in cells.items()} == {
+        ("policy", "first_half"): 0,
+        ("policy", "second_half"): 5,
+        ("science", "first_half"): 5,
+        ("science", "second_half"): 0,
+    }
+    for category, window in (("policy", "first_half"), ("science", "second_half")):
+        empty = cells[(category, window)]
+        assert empty["task_indices_1based"] == []
+        assert all(slots == [0, 0, 0, 0]
+                   for slots in empty["position_counts"].values())
+        assert set(empty["pairwise_precedence_counts"].values()) == {0}
+    assert hashlib.sha256(receipt).hexdigest() == report["plan_file_sha256"]
+    assert audit.audit_category_order(manifest, receipt) == report
+    assert report["historical_2026_study_reanalyzed"] is False
+    assert report["human_validation_performed"] is False

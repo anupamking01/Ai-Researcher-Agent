@@ -252,6 +252,84 @@ def audit_category_order(
         for _, _, name in pair_names
     )
 
+
+    # Separate category and early/late margins do not determine the joint
+    # category-by-time treatment-order exposure. Preserve even empty cells:
+    # zero tasks in one half is a limitation, not evidence of balance.
+    category_half_exposures = []
+    for window_name, start, stop in (
+        ("first_half", 0, split),
+        ("second_half", split, plan["task_count"]),
+    ):
+        for category in sorted(by_category):
+            chosen = [
+                (index + 1, plan["schedule"][index])
+                for index in range(start, stop)
+                if task_categories[plan["schedule"][index]["task_id"]] == category
+            ]
+            position_counts = {
+                arm: [0] * len(design.VARIANTS) for arm in design.VARIANTS
+            }
+            precedence_counts = {name: 0 for _, _, name in pair_names}
+            for _, row in chosen:
+                positions = {
+                    arm: slot for slot, arm in enumerate(row["arm_order"])
+                }
+                for arm, slot in positions.items():
+                    position_counts[arm][slot] += 1
+                for left, right, name in pair_names:
+                    precedence_counts[name] += int(
+                        positions[left] < positions[right]
+                    )
+            category_half_exposures.append({
+                "category": category,
+                "window": window_name,
+                "task_count": len(chosen),
+                "task_indices_1based": [index for index, _ in chosen],
+                "position_counts": position_counts,
+                "pairwise_precedence_counts": precedence_counts,
+            })
+
+    # Independently reconcile both projections of this joint table to the
+    # previously checked margins. A category can be absent in a time window,
+    # but no planned task, position or directed precedence may disappear.
+    for window in chronological_windows:
+        rows = [
+            entry for entry in category_half_exposures
+            if entry["window"] == window["window"]
+        ]
+        if sum(entry["task_count"] for entry in rows) != window["task_count"]:
+            raise design.DesignError("category-by-half task totals disagree with window")
+        for arm in design.VARIANTS:
+            if [
+                sum(entry["position_counts"][arm][slot] for entry in rows)
+                for slot in range(len(design.VARIANTS))
+            ] != window["position_counts"][arm]:
+                raise design.DesignError("category-by-half positions disagree with window")
+        for _, _, name in pair_names:
+            if sum(entry["pairwise_precedence_counts"][name] for entry in rows) != (
+                window["pairwise_precedence_counts"][name]
+            ):
+                raise design.DesignError("category-by-half precedence disagrees with window")
+    for category_row in strata:
+        rows = [
+            entry for entry in category_half_exposures
+            if entry["category"] == category_row["category"]
+        ]
+        if sum(entry["task_count"] for entry in rows) != category_row["task_count"]:
+            raise design.DesignError("category-by-half task totals disagree with category")
+        for arm in design.VARIANTS:
+            if [
+                sum(entry["position_counts"][arm][slot] for entry in rows)
+                for slot in range(len(design.VARIANTS))
+            ] != category_row["position_counts"][arm]:
+                raise design.DesignError("category-by-half positions disagree with category")
+        for _, _, name in pair_names:
+            if sum(entry["pairwise_precedence_counts"][name] for entry in rows) != (
+                category_row["pairwise_precedence_counts"][name]
+            ):
+                raise design.DesignError("category-by-half precedence disagrees with category")
+
     return {
         "schema_version": 1,
         "classification": "prospective_outcome_blind_category_order_diagnostic_only",
@@ -276,6 +354,8 @@ def audit_category_order(
         ),
         "task_order_category_clustering_is_descriptive_only": True,
         "chronological_half_order_summaries": chronological_windows,
+        "category_by_chronological_half_order_summaries": category_half_exposures,
+        "category_time_interaction_is_descriptive_only": True,
         "max_between_half_arm_position_count_gap": between_half_position_count_gap,
         "max_between_half_pairwise_precedence_count_gap": between_half_precedence_count_gap,
         "chronological_half_balance_is_descriptive_only": True,
