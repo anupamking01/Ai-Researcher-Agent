@@ -52,6 +52,13 @@ def test_single_stratum_reconciles_global_williams_margins_without_outcomes():
     assert set(category["pairwise_precedence_counts"].values()) == {5}
     assert category["max_position_spread"] == 1
     assert category["max_pairwise_precedence_direction_gap"] == 0
+    # Global first-order carryover is 30 transitions among 12 directed pairs:
+    # six twice, six three times. This is not proof of actual carryover.
+    adjacent = category["directed_adjacent_transition_counts"]
+    assert sorted(adjacent.values()) == [2] * 6 + [3] * 6
+    assert category["total_directed_adjacent_transitions"] == 30
+    assert category["max_directed_adjacent_transition_count_spread"] == 1
+    assert adjacent == report["global_directed_adjacent_transition_counts"]
     assert report["global_order_balance_does_not_guarantee_category_balance"] is True
     assert report["category_selection_or_executions_authenticated"] is False
     assert report["historical_2026_study_reanalyzed"] is False
@@ -76,6 +83,28 @@ def test_multiple_frozen_categories_reconcile_each_position_and_pair():
         assert sum(
             row["pairwise_precedence_counts"][pair_name] for row in strata
         ) == total
+    # Independent direct scan of the immutable schedule (not the production
+    # carryover helper): each pair's category counts must sum to the global
+    # occurrence count, even if the category-level balance is poor.
+    expected_adjacency = {
+        f"{left}_to_{right}": sum(
+            a == left and b == right
+            for schedule_row in expected["schedule"]
+            for a, b in zip(
+                schedule_row["arm_order"], schedule_row["arm_order"][1:]
+            )
+        )
+        for left in design.VARIANTS
+        for right in design.VARIANTS if left != right
+    }
+    assert report["global_directed_adjacent_transition_counts"] == expected_adjacency
+    for name, count in expected_adjacency.items():
+        assert sum(
+            row["directed_adjacent_transition_counts"][name] for row in strata
+        ) == count
+    assert sum(
+        row["total_directed_adjacent_transitions"] for row in strata
+    ) == 30
     for row in strata:
         n = row["task_count"]
         assert all(sum(values) == n for values in row["position_counts"].values())
@@ -86,6 +115,12 @@ def test_multiple_frozen_categories_reconcile_each_position_and_pair():
         assert row["max_pairwise_precedence_direction_gap"] == max(
             abs(2 * count - n)
             for count in row["pairwise_precedence_counts"].values()
+        )
+        adjacent = row["directed_adjacent_transition_counts"]
+        assert set(adjacent) == set(expected_adjacency)
+        assert row["total_directed_adjacent_transitions"] == 3 * n
+        assert row["max_directed_adjacent_transition_count_spread"] == (
+            max(adjacent.values()) - min(adjacent.values())
         )
 
 

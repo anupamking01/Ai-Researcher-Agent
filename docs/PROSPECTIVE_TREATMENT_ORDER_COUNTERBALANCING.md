@@ -328,3 +328,38 @@ Observed margins are descriptive planning facts, not estimates of carryover,
 causal bias, task independence, or valid human annotation. The frozen 2026
 pilot/automated measurements and exploratory analyses remain unchanged; the
 original archive-authentication and human-validation gates remain blocked.
+
+## Frozen-category directed first-order adjacency audit (prospective only)
+
+The standalone, outcome-blind `scripts.audit_prospective_category_order`
+diagnostic now reports **all 12 directed neighboring arm transitions** within
+each frozen task category. For each category it records
+`directed_adjacent_transition_counts` (e.g. `D3_to_D6` differs from
+`D6_to_D3`), `total_directed_adjacent_transitions` (exactly three per
+task), and `max_directed_adjacent_transition_count_spread` across the 12
+directions. It also emits `global_directed_adjacent_transition_counts`.
+Every directed count is independently reconciled against the exact
+manifest-replayed, receipt-verified ten-task schedule. The diagnostic rejects
+a modified task-to-order mapping even when aggregated margins are unchanged;
+tests independently scan synthetic schedules and verify both per-stratum and
+global transition counts.
+
+A globally Williams-balanced ten-task design guarantees six directed pairs
+occur twice and six three times across the **whole** schedule, but does not
+guarantee those same margins separately inside science, policy, or any other
+preselected category. A stratum with only one task necessarily contains only
+three transitions and nine zero-count directions. Therefore the reported
+spread is a **descriptive exposure diagnostic, not a goodness-of-fit test or a
+category-specific balance pass/fail threshold**. Neither categories nor
+assignment rows are changed to improve the margins; no outcomes, treatment
+reruns, evaluator calls, or human ratings are involved.
+
+Use this audit after separately freezing and retaining the exact new task
+manifest and proposed design receipt, and disclose category-specific order
+concentration before prospective execution. It does not prove that category
+definitions were independently selected, that historical results were
+precollection preregistered, that a future schedule was executed, or that
+carryover or time drift exists. Original 2026 fixed-order limitations,
+unavailable original treatment/report artifacts, diagnostic pilot status,
+exploratory sensitivity work and pending human-validation gates remain
+unchanged.

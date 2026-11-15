@@ -42,6 +42,15 @@ def audit_category_order(
         for index, left in enumerate(design.VARIANTS)
         for right in design.VARIANTS[index + 1:]
     )
+    # Direction matters: a transition into P6V is not interchangeable with
+    # a transition out of P6V. Global Williams carryover balance can conceal
+    # concentration within a frozen question category.
+    adjacency_names = {
+        (before, after): f"{before}_to_{after}"
+        for before in design.VARIANTS
+        for after in design.VARIANTS
+        if before != after
+    }
     by_category: dict[str, dict] = {}
     for row in plan["schedule"]:
         category = task_categories[row["task_id"]]
@@ -57,6 +66,9 @@ def audit_category_order(
                 "pairwise_precedence_counts": {
                     name: 0 for _, _, name in pair_names
                 },
+                "directed_adjacent_transition_counts": {
+                    name: 0 for name in adjacency_names.values()
+                },
             },
         )
         entry["task_count"] += 1
@@ -67,6 +79,10 @@ def audit_category_order(
             entry["pairwise_precedence_counts"][name] += int(
                 positions[left] < positions[right]
             )
+        for before, after in zip(row["arm_order"], row["arm_order"][1:]):
+            entry["directed_adjacent_transition_counts"][
+                adjacency_names[(before, after)]
+            ] += 1
 
     strata = []
     for category in sorted(by_category):
@@ -81,6 +97,15 @@ def audit_category_order(
         entry["max_pairwise_precedence_direction_gap"] = max(
             abs(2 * before - count)
             for before in entry["pairwise_precedence_counts"].values()
+        )
+        adjacency = entry["directed_adjacent_transition_counts"]
+        entry["total_directed_adjacent_transitions"] = sum(adjacency.values())
+        if entry["total_directed_adjacent_transitions"] != (
+            count * (len(design.VARIANTS) - 1)
+        ):
+            raise design.DesignError("category adjacent-transition total disagrees with task count")
+        entry["max_directed_adjacent_transition_count_spread"] = (
+            max(adjacency.values()) - min(adjacency.values())
         )
         strata.append(entry)
 
@@ -98,6 +123,17 @@ def audit_category_order(
         ) != plan["pairwise_precedence_counts"][pair_name]:
             raise design.DesignError("category pair-order counts disagree with the frozen plan")
 
+    # Independent of aggregate position/precedence margins: verify every
+    # directed neighboring pair against the exact, manifest-replayed schedule.
+    global_adjacency = design._directed_carryover_counts(plan["schedule"])
+    for pair, name in adjacency_names.items():
+        if sum(
+            row["directed_adjacent_transition_counts"][name] for row in strata
+        ) != global_adjacency[pair]:
+            raise design.DesignError(
+                "category directed adjacency disagrees with the frozen plan"
+            )
+
     return {
         "schema_version": 1,
         "classification": "prospective_outcome_blind_category_order_diagnostic_only",
@@ -112,6 +148,10 @@ def audit_category_order(
         "task_count": plan["task_count"],
         "category_count": len(strata),
         "category_summaries": strata,
+        "global_directed_adjacent_transition_counts": {
+            name: global_adjacency[pair]
+            for pair, name in adjacency_names.items()
+        },
         "global_order_balance_does_not_guarantee_category_balance": True,
         "category_selection_or_executions_authenticated": False,
         "historical_2026_study_reanalyzed": False,
