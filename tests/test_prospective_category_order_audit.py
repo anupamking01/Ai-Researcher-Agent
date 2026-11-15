@@ -197,3 +197,58 @@ def test_cli_is_read_only_diagnostic_with_no_treatment_execution(
     assert {path.name for path in tmp_path.iterdir()} == {
         "future.json", "plan.json"
     }
+
+
+def test_blocked_frozen_category_order_exposes_task_major_time_concentration():
+    # Same category marginals can be clustered in successive task-major
+    # positions, even though every Williams treatment order remains fixed.
+    labels = ["science"] * 3 + ["policy"] * 5 + ["medicine"] * 2
+    manifest = _manifest(labels)
+    report = audit.audit_category_order(manifest, _receipt(manifest))
+    by_name = {item["category"]: item for item in report["category_summaries"]}
+    assert report["task_order_same_category_adjacent_boundaries"] == 7
+    assert report["task_order_category_switch_boundaries"] == 2
+    assert report["task_order_category_clustering_is_descriptive_only"] is True
+    assert {
+        name: (entry["first_task_index"], entry["last_task_index"],
+               entry["first_half_task_count"], entry["second_half_task_count"],
+               entry["longest_consecutive_task_run"],
+               entry["adjacent_same_category_task_boundaries"])
+        for name, entry in by_name.items()
+    } == {
+        "science": (1, 3, 3, 0, 3, 2),
+        "policy": (4, 8, 2, 3, 5, 4),
+        "medicine": (9, 10, 0, 2, 2, 1),
+    }
+
+
+def test_alternating_category_order_has_no_same_category_task_boundaries():
+    labels = ["science", "policy"] * 5
+    manifest = _manifest(labels)
+    report = audit.audit_category_order(manifest, _receipt(manifest))
+    by_name = {item["category"]: item for item in report["category_summaries"]}
+    assert report["task_order_same_category_adjacent_boundaries"] == 0
+    assert report["task_order_category_switch_boundaries"] == 9
+    assert [by_name[name]["longest_consecutive_task_run"]
+            for name in ("science", "policy")] == [1, 1]
+    assert [by_name[name]["first_half_task_count"]
+            for name in ("science", "policy")] == [3, 2]
+    assert [by_name[name]["second_half_task_count"]
+            for name in ("science", "policy")] == [2, 3]
+    assert sum(row["adjacent_same_category_task_boundaries"]
+               for row in by_name.values()) == 0
+
+
+def test_task_category_sequence_metric_is_not_only_a_stratum_size_metric():
+    blocked = _manifest(["science"] * 5 + ["policy"] * 5)
+    alternated = _manifest(["science", "policy"] * 5)
+    blocked_report = audit.audit_category_order(blocked, _receipt(blocked))
+    alternated_report = audit.audit_category_order(alternated, _receipt(alternated))
+    assert [entry["task_count"] for entry in blocked_report["category_summaries"]] == [5, 5]
+    assert [entry["task_count"] for entry in alternated_report["category_summaries"]] == [5, 5]
+    assert blocked_report["task_order_same_category_adjacent_boundaries"] == 8
+    assert alternated_report["task_order_same_category_adjacent_boundaries"] == 0
+    assert sum(entry["first_half_task_count"]
+               for entry in blocked_report["category_summaries"]) == 5
+    assert sum(entry["second_half_task_count"]
+               for entry in blocked_report["category_summaries"]) == 5

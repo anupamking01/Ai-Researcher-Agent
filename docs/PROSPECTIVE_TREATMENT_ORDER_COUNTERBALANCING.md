@@ -363,3 +363,36 @@ carryover or time drift exists. Original 2026 fixed-order limitations,
 unavailable original treatment/report artifacts, diagnostic pilot status,
 exploratory sensitivity work and pending human-validation gates remain
 unchanged.
+
+
+## Frozen-category task-sequence concentration (prospective only)
+
+The category/order diagnostic also checks the **order of the ten tasks
+themselves**, a distinct exposure from the within-task treatment positions
+and first-order treatment adjacencies. The proposed execution convention is
+task-major: all four arms for task 1 precede those for task 2, and so on.
+If similar questions occur in one contiguous block of the frozen manifest,
+their category can coincide with a particular web/provider time window even
+when the *overall* Williams arm-order margins are balanced.
+
+For each exact frozen category, the read-only audit records its
+`first_task_index` and `last_task_index` (1-based positions in the
+manifest-bound schedule), `first_half_task_count` and
+`second_half_task_count` (tasks 1–5 versus 6–10),
+`adjacent_same_category_task_boundaries`, and
+`longest_consecutive_task_run`. Across the ten-task schedule it reports
+`task_order_same_category_adjacent_boundaries` and
+`task_order_category_switch_boundaries`; these necessarily sum to nine.
+Synthetic tests distinguish fully blocked, mixed-block and alternating
+category arrangements **without using treatment outcomes**, and the auditor
+reconciles the category-level counts with the verified exact schedule.
+
+These are **descriptive pre-execution design diagnostics**, not proof of
+actual temporal drift, category-independent sampling, random assignment,
+bias magnitude, or verified chronology. They do not impose a post-hoc
+balance threshold, change the frozen task order, run any treatments, or
+authorize choosing a favorable order. If prospective task-order randomization
+or blocking is scientifically required, it needs a separately reviewed,
+versioned and independently frozen protocol before execution. This
+does not repair the 2026 fixed-order study or advance its blocked original
+artifact authentication or human-rating gates.

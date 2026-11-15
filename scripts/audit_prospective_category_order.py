@@ -134,6 +134,50 @@ def audit_category_order(
                 "category directed adjacency disagrees with the frozen plan"
             )
 
+    # A balanced *within-task* Williams schedule does not randomize the
+    # order of the tasks themselves. Under the prospective task-major
+    # execution contract, consecutive categories can coincide with a shared
+    # web/provider time window. Audit the exact manifest-bound row order
+    # without relabeling tasks, editing the plan, or looking at outcomes.
+    ordered_categories = [
+        task_categories[row["task_id"]] for row in plan["schedule"]
+    ]
+    boundaries = list(zip(ordered_categories, ordered_categories[1:]))
+    same_category_boundaries = sum(
+        before == after for before, after in boundaries
+    )
+    for entry in strata:
+        category = entry["category"]
+        indices = [
+            index for index, label in enumerate(ordered_categories, start=1)
+            if label == category
+        ]
+        if len(indices) != entry["task_count"]:
+            raise design.DesignError("category task chronology disagrees with frozen plan")
+        entry["first_task_index"] = indices[0]
+        entry["last_task_index"] = indices[-1]
+        entry["first_half_task_count"] = sum(
+            index <= plan["task_count"] // 2 for index in indices
+        )
+        entry["second_half_task_count"] = (
+            entry["task_count"] - entry["first_half_task_count"]
+        )
+        entry["adjacent_same_category_task_boundaries"] = sum(
+            before == category and after == category
+            for before, after in boundaries
+        )
+        current_run = longest_run = 0
+        for label in ordered_categories:
+            current_run = current_run + 1 if label == category else 0
+            longest_run = max(longest_run, current_run)
+        entry["longest_consecutive_task_run"] = longest_run
+    if sum(
+        entry["adjacent_same_category_task_boundaries"] for entry in strata
+    ) != same_category_boundaries:
+        raise design.DesignError("category task chronology boundary totals disagree")
+    if sum(entry["first_half_task_count"] for entry in strata) != plan["task_count"] // 2:
+        raise design.DesignError("category first-half task totals disagree")
+
     return {
         "schema_version": 1,
         "classification": "prospective_outcome_blind_category_order_diagnostic_only",
@@ -152,6 +196,11 @@ def audit_category_order(
             name: global_adjacency[pair]
             for pair, name in adjacency_names.items()
         },
+        "task_order_same_category_adjacent_boundaries": same_category_boundaries,
+        "task_order_category_switch_boundaries": (
+            len(boundaries) - same_category_boundaries
+        ),
+        "task_order_category_clustering_is_descriptive_only": True,
         "global_order_balance_does_not_guarantee_category_balance": True,
         "category_selection_or_executions_authenticated": False,
         "historical_2026_study_reanalyzed": False,
