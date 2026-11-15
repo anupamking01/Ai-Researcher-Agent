@@ -239,7 +239,7 @@ def test_joint_bounds_reconcile_per_arm_summary_denominators():
 
 @pytest.mark.parametrize("field,mutation", [
     ("n_reports_total", 9),
-    ("n_reports_scored", 9),
+    ("n_reports_scored", 10),
     ("n_raw_scores", 19),
 ])
 def test_joint_bounds_reject_contradictory_variant_summary_counts(field, mutation):
