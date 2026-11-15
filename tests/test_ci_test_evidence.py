@@ -134,6 +134,32 @@ def test_full_ci_rejects_unbound_selection_or_transcript(tmp_path, monkeypatch, 
         )
 
 
+
+def test_full_ci_crlf_transcript_preserves_manifest_and_original_byte_digest(
+    tmp_path, monkeypatch,
+):
+    """Valid CRLF evidence must bind the same exact selection without rewriting it."""
+    import hashlib
+
+    log, manifest = _synthetic_full_shard(tmp_path, monkeypatch)
+    crlf_log = log.replace(b"\n", b"\r\n")
+    receipt = evidence.build_receipt(
+        crlf_log, context=CONTEXT, checkout_sha=SHA, dependency_bytes=DEPS,
+        selected_modules=manifest, shard=0,
+    )
+    assert receipt["full_ci_shard"] == 0
+    assert receipt["full_ci_selected_module_count"] == 1
+    assert receipt["log_sha256"] == hashlib.sha256(crlf_log).hexdigest()
+    assert receipt["log_bytes"] == len(crlf_log)
+    # Do not accidentally permit a bare CR to forge a separate physical record.
+    with pytest.raises(ValueError, match="bare carriage"):
+        evidence.build_receipt(
+            crlf_log.replace(b"\r\n", b"\r", 1),
+            context=CONTEXT, checkout_sha=SHA, dependency_bytes=DEPS,
+            selected_modules=manifest, shard=0,
+        )
+
+
 def test_retained_full_ci_receipt_requires_exact_manifest(tmp_path, monkeypatch):
     import json
     from scripts import verify_retained_ci_test_evidence as replay

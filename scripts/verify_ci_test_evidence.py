@@ -108,7 +108,9 @@ def _verify_full_ci_selection(
         f"VERA full-suite shard {shard}/{shard_selector.SHARDS}; "
         f"selected {len(expected)} modules; checkout {checkout_sha}"
     )
-    lines = log_text.split("\n")
+    # build_receipt already validates physical LF/CRLF framing. Match shard
+    # anchors on normalized record text, but hash the original log bytes.
+    lines = [line.removesuffix("\r") for line in log_text.split("\n")]
     anchors = [i for i, line in enumerate(lines) if line == header]
     if len(anchors) != 1 or lines[anchors[0]:anchors[0] + 1 + len(expected)] != [
         header, *expected,

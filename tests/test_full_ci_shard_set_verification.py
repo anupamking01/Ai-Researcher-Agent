@@ -152,6 +152,32 @@ def test_all_shards_replay_as_one_exact_run(evidence):
     assert result["status"].endswith("not_independently_attested")
 
 
+
+def test_full_eight_shard_replay_accepts_crlf_logs_without_rewriting_bytes(
+    evidence,
+):
+    """All retained receipts bind original CRLF bytes and unchanged LF module lists."""
+    for shard in range(selector.SHARDS):
+        folder = evidence / f"shard-{shard}"
+        log_path = folder / "vera-offline-tests.log"
+        manifest = (folder / "vera-offline-test-modules.txt").read_bytes()
+        crlf_log = log_path.read_bytes().replace(b"\n", b"\r\n")
+        receipt = producer.build_receipt(
+            crlf_log, context=CONTEXT, checkout_sha=SHA,
+            dependency_bytes=DEPENDENCIES, selected_modules=manifest, shard=shard,
+        )
+        receipt["python_version"] = replay.runtime.PINNED_VERSION_TEXT
+        log_path.write_bytes(crlf_log)
+        (folder / "vera-offline-test-receipt.json").write_bytes(
+            (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode()
+        )
+
+    result = whole.verify_shard_set(evidence, **KWARGS)
+    assert result["shards_verified"] == selector.SHARDS
+    assert result["source_test_modules_covered"] == 16
+    assert result["aggregate_test_counts"] == {"passed": 16}
+
+
 @pytest.mark.parametrize("case", [
     "missing_shard", "extra_shard", "duplicated_shard",
     "mixed_run", "mixed_attempt", "wrong_source",
