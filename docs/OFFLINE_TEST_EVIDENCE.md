@@ -386,3 +386,21 @@ independent authentication of GitHub's artifact upload, or evidence of
 historical study report/trace custody. It changes no pilot, qualified frozen
 automated primary, exploratory sensitivity, or pending human-validation
 result; no treatments, evaluators, or ratings are run by the reader.
+
+## Bounded dependency-free early CI evidence capture (15 November 2026)
+
+The pre-install `verify_ci_early_gate_evidence.py` producer/replay CLI used
+`stat()` followed by unrestricted `read_bytes()` for its early unittest
+transcript and retained JSON receipt. A previously checked size did not bind
+the opened pathname or bound a concurrently growing read; file aliases could
+also be accepted. The CLI now reuses the project's **standard-library-only**
+bounded, single-link, no-follow pathname-checked reader for the log, receipt,
+and source files. The imported reader and its shard-selector dependency are
+included in the early CI receipt's tracked-source SHA-256 inventory.
+
+Synthetic CLI regression cases cover unchanged create/replay and symlink and
+hardlink refusal in both modes. This is a local evidence-custody and resource
+safety safeguard, **not** GitHub-runner attestation or recovery of the missing
+historical 40 report/trace artifacts. Cancelled full CI runs remain incomplete;
+no pilot, qualified automated primary, exploratory or human-validation result
+is changed or newly asserted.

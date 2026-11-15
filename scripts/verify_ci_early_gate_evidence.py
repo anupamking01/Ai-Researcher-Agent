@@ -14,13 +14,19 @@ import json
 from pathlib import Path
 import re
 
+from scripts.verify_ci_test_evidence import read_bounded_evidence
+
 ROOT = Path(__file__).resolve().parents[1]
 MAX_LOG_BYTES = 256 * 1024
 MAX_RECEIPT_BYTES = 16 * 1024
+MAX_SOURCE_BYTES = 256 * 1024
 SOURCES = (
     "logic/evaluation.py",
     "tests/test_evaluation_stdlib_gate.py",
     "scripts/verify_ci_early_gate_evidence.py",
+    # Imported capture logic must be source-bound, including its dependency.
+    "scripts/verify_ci_test_evidence.py",
+    "scripts/select_full_ci_shard.py",
 )
 CASE = re.compile(
     r"^(test_[A-Za-z0-9_]+) "
@@ -174,21 +180,31 @@ def main() -> int:
     parser.add_argument("--repository", required=True)
     args = parser.parse_args()
     try:
-        if args.log.stat().st_size > MAX_LOG_BYTES:
-            raise ValueError("early test log exceeds byte limit")
+        # stat() followed by unbounded read_bytes() accepts aliased or growing
+        # paths. Reuse the dependency-free, pathname-bound snapshot reader.
         expected = build_receipt(
-            args.log.read_bytes(), sha=args.checkout_sha, run_id=args.run_id,
+            read_bounded_evidence(
+                args.log, maximum=MAX_LOG_BYTES, label="early test log"
+            ),
+            sha=args.checkout_sha, run_id=args.run_id,
             attempt=args.run_attempt, event=args.event, repository=args.repository,
-            sources={name: (ROOT / name).read_bytes() for name in SOURCES},
+            sources={
+                name: read_bounded_evidence(
+                    ROOT / name, maximum=MAX_SOURCE_BYTES,
+                    label=f"early gate source {name}",
+                )
+                for name in SOURCES
+            },
         )
         canonical = _canonical(expected)
         if args.mode == "create":
             with args.receipt.open("xb") as output:
                 output.write(canonical)
         else:
-            if args.receipt.stat().st_size > MAX_RECEIPT_BYTES:
-                raise ValueError("retained early test receipt exceeds byte limit")
-            original = args.receipt.read_bytes()
+            original = read_bounded_evidence(
+                args.receipt, maximum=MAX_RECEIPT_BYTES,
+                label="retained early test receipt",
+            )
             observed = json.loads(
                 original.decode("utf-8"), object_pairs_hook=_unique_pairs,
                 parse_float=lambda _: (_ for _ in ()).throw(ValueError("float in receipt")),
