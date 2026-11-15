@@ -178,6 +178,80 @@ def audit_category_order(
     if sum(entry["first_half_task_count"] for entry in strata) != plan["task_count"] // 2:
         raise design.DesignError("category first-half task totals disagree")
 
+    # Global Williams margins can mask position and precedence concentration
+    # in early versus late *planned task-major* execution. Split the immutable
+    # ten-row schedule into equal contiguous windows, without moving any task
+    # or using measured outcomes. This is exposure accounting, not a test of
+    # temporal drift or evidence that the plan was actually executed.
+    split = plan["task_count"] // 2
+    chronological_windows = []
+    for window_name, start, stop in (
+        ("first_half", 0, split),
+        ("second_half", split, plan["task_count"]),
+    ):
+        rows = plan["schedule"][start:stop]
+        positions_by_arm = {
+            variant: [0] * len(design.VARIANTS)
+            for variant in design.VARIANTS
+        }
+        precedence_by_pair = {name: 0 for _, _, name in pair_names}
+        for row in rows:
+            arm_positions = {
+                arm: slot for slot, arm in enumerate(row["arm_order"])
+            }
+            for arm, slot in arm_positions.items():
+                positions_by_arm[arm][slot] += 1
+            for left, right, name in pair_names:
+                precedence_by_pair[name] += int(
+                    arm_positions[left] < arm_positions[right]
+                )
+        chronological_windows.append({
+            "window": window_name,
+            "task_index_range_1based_inclusive": [start + 1, stop],
+            "task_count": len(rows),
+            "position_counts": positions_by_arm,
+            "pairwise_precedence_counts": precedence_by_pair,
+            "max_position_spread": max(
+                max(slots) - min(slots)
+                for slots in positions_by_arm.values()
+            ),
+            "max_pairwise_precedence_direction_gap": max(
+                abs(2 * count - len(rows))
+                for count in precedence_by_pair.values()
+            ),
+        })
+    early, late = chronological_windows
+    for arm in design.VARIANTS:
+        for slot in range(len(design.VARIANTS)):
+            if (
+                early["position_counts"][arm][slot]
+                + late["position_counts"][arm][slot]
+                != plan["position_counts"][arm][slot]
+            ):
+                raise design.DesignError(
+                    "chronological half position totals disagree with frozen plan"
+                )
+    for _, _, pair_name in pair_names:
+        if (
+            early["pairwise_precedence_counts"][pair_name]
+            + late["pairwise_precedence_counts"][pair_name]
+            != plan["pairwise_precedence_counts"][pair_name]
+        ):
+            raise design.DesignError(
+                "chronological half precedence totals disagree with frozen plan"
+            )
+    between_half_position_count_gap = max(
+        abs(early["position_counts"][arm][slot]
+            - late["position_counts"][arm][slot])
+        for arm in design.VARIANTS
+        for slot in range(len(design.VARIANTS))
+    )
+    between_half_precedence_count_gap = max(
+        abs(early["pairwise_precedence_counts"][name]
+            - late["pairwise_precedence_counts"][name])
+        for _, _, name in pair_names
+    )
+
     return {
         "schema_version": 1,
         "classification": "prospective_outcome_blind_category_order_diagnostic_only",
@@ -201,6 +275,11 @@ def audit_category_order(
             len(boundaries) - same_category_boundaries
         ),
         "task_order_category_clustering_is_descriptive_only": True,
+        "chronological_half_order_summaries": chronological_windows,
+        "max_between_half_arm_position_count_gap": between_half_position_count_gap,
+        "max_between_half_pairwise_precedence_count_gap": between_half_precedence_count_gap,
+        "chronological_half_balance_is_descriptive_only": True,
+        "actual_execution_timing_authenticated": False,
         "global_order_balance_does_not_guarantee_category_balance": True,
         "category_selection_or_executions_authenticated": False,
         "historical_2026_study_reanalyzed": False,

@@ -396,3 +396,27 @@ or blocking is scientifically required, it needs a separately reviewed,
 versioned and independently frozen protocol before execution. This
 does not repair the 2026 fixed-order study or advance its blocked original
 artifact authentication or human-rating gates.
+
+
+## Planned early/late arm-order exposure (outcome-blind diagnostic)
+
+The optional `scripts/audit_prospective_category_order.py` additionally divides
+the **immutable, manifest-verified ten-task schedule** into task-major positions
+1–5 and 6–10. It reports all four arm-by-position counts and six pairwise
+precedence counts separately for each five-task window, their within-window
+spreads, and the maximum absolute early-versus-late count gaps. Each count
+reconciles to the independently recomputed full-design margins. These windows
+measure **planned temporal exposure** that global Williams balance can hide:
+an arm can disproportionately occupy an early slot (or precede another arm)
+among early tasks even when its full ten-task margins are balanced.
+
+This is a descriptive *pre-execution* diagnostic, not a second schedule
+optimizer, acceptance rule, randomization test, post-hoc treatment subgroup,
+or measure of observed temporal confounding. The two five-task windows are a
+conventional split, not outcome-selected intervals; no exposure statistic
+establishes actual job ordering, provider conditions, carryover, task
+independence or a prospectively registered statistical claim. Retain the
+externally archived manifest/receipt pins and execution chronology if a
+separate future study is authorized. Nothing here modifies the 2026 pilot,
+the fixed-order original main study, frozen paired outcomes, exploratory
+sensitivity work, or pending blinded human validation.

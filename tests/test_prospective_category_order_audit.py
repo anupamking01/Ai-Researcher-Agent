@@ -252,3 +252,94 @@ def test_task_category_sequence_metric_is_not_only_a_stratum_size_metric():
                for entry in blocked_report["category_summaries"]) == 5
     assert sum(entry["second_half_task_count"]
                for entry in blocked_report["category_summaries"]) == 5
+
+
+def test_planned_early_late_arm_exposure_recounts_exact_frozen_task_order():
+    # Use an independent row-level oracle, not the audit's aggregates.
+    manifest = _manifest(["science", "policy"] * 5)
+    receipt = _receipt(manifest)
+    schedule = design.build_plan(manifest)["schedule"]
+    report = audit.audit_category_order(manifest, receipt)
+    windows = report["chronological_half_order_summaries"]
+    assert [window["window"] for window in windows] == [
+        "first_half", "second_half"
+    ]
+    assert [window["task_index_range_1based_inclusive"] for window in windows] == [
+        [1, 5], [6, 10]
+    ]
+    assert [window["task_count"] for window in windows] == [5, 5]
+    for window, rows in zip(windows, (schedule[:5], schedule[5:])):
+        for arm in design.VARIANTS:
+            assert window["position_counts"][arm] == [
+                sum(row["arm_order"][slot] == arm for row in rows)
+                for slot in range(len(design.VARIANTS))
+            ]
+        for left_index, left in enumerate(design.VARIANTS):
+            for right in design.VARIANTS[left_index + 1:]:
+                name = f"{left}_before_{right}"
+                assert window["pairwise_precedence_counts"][name] == sum(
+                    row["arm_order"].index(left) < row["arm_order"].index(right)
+                    for row in rows
+                )
+        assert all(sum(counts) == len(rows)
+                   for counts in window["position_counts"].values())
+        assert window["max_position_spread"] == max(
+            max(counts) - min(counts)
+            for counts in window["position_counts"].values()
+        )
+        assert window["max_pairwise_precedence_direction_gap"] == max(
+            abs(2 * before - len(rows))
+            for before in window["pairwise_precedence_counts"].values()
+        )
+    assert hashlib.sha256(receipt).hexdigest() == report["plan_file_sha256"]
+
+
+def test_early_late_windows_reconcile_to_full_williams_margins_without_outcomes():
+    manifest = _manifest(["medicine"] * 2 + ["science"] * 3 + ["policy"] * 5)
+    plan = design.build_plan(manifest)
+    report = audit.audit_category_order(manifest, _receipt(manifest))
+    first, second = report["chronological_half_order_summaries"]
+    assert all(
+        first["position_counts"][arm][slot]
+        + second["position_counts"][arm][slot]
+        == plan["position_counts"][arm][slot]
+        for arm in design.VARIANTS
+        for slot in range(len(design.VARIANTS))
+    )
+    assert all(
+        first["pairwise_precedence_counts"][name]
+        + second["pairwise_precedence_counts"][name]
+        == value
+        for name, value in plan["pairwise_precedence_counts"].items()
+    )
+    assert report["max_between_half_arm_position_count_gap"] == max(
+        abs(first["position_counts"][arm][slot]
+            - second["position_counts"][arm][slot])
+        for arm in design.VARIANTS
+        for slot in range(len(design.VARIANTS))
+    )
+    assert report["max_between_half_pairwise_precedence_count_gap"] == max(
+        abs(first["pairwise_precedence_counts"][name]
+            - second["pairwise_precedence_counts"][name])
+        for name in plan["pairwise_precedence_counts"]
+    )
+    assert report["chronological_half_balance_is_descriptive_only"] is True
+    assert report["actual_execution_timing_authenticated"] is False
+    assert report["historical_2026_study_reanalyzed"] is False
+    assert report["human_validation_performed"] is False
+
+
+def test_early_late_diagnostic_is_deterministic_for_single_category_plan():
+    manifest = _manifest()
+    receipt = _receipt(manifest)
+    first = audit.audit_category_order(manifest, receipt)
+    second = audit.audit_category_order(manifest, receipt)
+    assert first["chronological_half_order_summaries"] == (
+        second["chronological_half_order_summaries"]
+    )
+    assert first["max_between_half_arm_position_count_gap"] == (
+        second["max_between_half_arm_position_count_gap"]
+    )
+    assert first["max_between_half_pairwise_precedence_count_gap"] == (
+        second["max_between_half_pairwise_precedence_count_gap"]
+    )
