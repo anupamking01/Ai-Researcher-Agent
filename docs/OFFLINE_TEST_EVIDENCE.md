@@ -335,3 +335,26 @@ The pilot remains diagnostic, the frozen designated-primary automated
 analysis retains post-collection/fixed-order/evaluator-comparability
 qualifications, retrospective bounds remain exploratory, and real human
 validation remains pending.
+
+
+## Pathname and single-link custody of downloaded CI evidence (15 November 2026)
+
+The shared bounded reader for the source-bound pytest log, JSON receipt, and
+selected-test inventory now checks **both the opened file descriptor and the
+downloaded pathname** before/after capture. A previous descriptor-only guard
+could accept unchanged bytes after an atomic same-content replacement of the
+pathname; the returned bytes would describe an inode no longer accessible
+through the named downloaded evidence file. The reader also rejects files
+with multiple hardlinks, which permit an external alias to mutate the same
+inode without accessing the retained pathname. Synthetic regressions cover
+hardlinked evidence, byte-identical replacement, and unlink during capture.
+Existing byte ceilings, symlink/nonregular-file refusal, and post-read
+generation checks remain in force; downstream eight-shard replay inherits
+the check without altering receipt format or test selection.
+
+This is a **local snapshot/path-consistency safeguard**, not a filesystem
+transaction, immunity to transient changes reverted between checks,
+independent authentication of GitHub's artifact upload, or evidence of
+historical study report/trace custody. It changes no pilot, qualified frozen
+automated primary, exploratory sensitivity, or pending human-validation
+result; no treatments, evaluators, or ratings are run by the reader.

@@ -334,3 +334,96 @@ def test_mixed_singular_plural_warning_counts_remain_ambiguous():
             _log("1 passed, 1 warning, 2 warnings in 0.1s"),
             context=CONTEXT, checkout_sha=SHA, dependency_bytes=DEPS,
         )
+
+
+def test_bounded_evidence_capture_rejects_external_hardlink_alias(tmp_path):
+    import os
+
+    source = tmp_path / "downloaded-log.txt"
+    source.write_bytes(b"unaltered bytes")
+    outside = tmp_path / "external-alias.txt"
+    os.link(source, outside)
+    # Same bytes and inode are not enough: the second pathname can mutate the
+    # supposedly retained log without touching its downloaded filename.
+    with pytest.raises(ValueError, match="exactly one filesystem link"):
+        evidence.read_bounded_evidence(
+            source, maximum=64, label="synthetic CI log"
+        )
+
+
+def test_bounded_evidence_capture_rejects_same_byte_atomic_path_swap(
+    tmp_path, monkeypatch,
+):
+    import os
+
+    source = tmp_path / "downloaded-log.txt"
+    source.write_bytes(b"same exact bytes")
+    original_fdopen = os.fdopen
+
+    class SwappingReader:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            self.stream.__enter__()
+            return self
+
+        def read(self, count):
+            captured = self.stream.read(count)
+            replacement = tmp_path / "replacement.txt"
+            replacement.write_bytes(captured)
+            os.replace(replacement, source)
+            return captured
+
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+
+    monkeypatch.setattr(
+        evidence.os, "fdopen",
+        lambda fd, mode, closefd=False: SwappingReader(
+            original_fdopen(fd, mode, closefd=closefd)
+        ),
+    )
+    # The original opened descriptor retains the same bytes/metadata, but the
+    # downloaded pathname now resolves to another inode with identical bytes.
+    with pytest.raises(ValueError, match="changed during capture"):
+        evidence.read_bounded_evidence(
+            source, maximum=64, label="synthetic CI log"
+        )
+
+
+def test_bounded_evidence_capture_rejects_unlinked_path_during_read(
+    tmp_path, monkeypatch,
+):
+    import os
+
+    source = tmp_path / "downloaded-receipt.json"
+    source.write_bytes(b"retained bytes")
+    original_fdopen = os.fdopen
+
+    class UnlinkingReader:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            self.stream.__enter__()
+            return self
+
+        def read(self, count):
+            captured = self.stream.read(count)
+            source.unlink()
+            return captured
+
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+
+    monkeypatch.setattr(
+        evidence.os, "fdopen",
+        lambda fd, mode, closefd=False: UnlinkingReader(
+            original_fdopen(fd, mode, closefd=closefd)
+        ),
+    )
+    with pytest.raises(ValueError, match="changed during capture"):
+        evidence.read_bounded_evidence(
+            source, maximum=64, label="synthetic CI receipt"
+        )

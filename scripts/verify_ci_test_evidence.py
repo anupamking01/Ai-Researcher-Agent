@@ -38,18 +38,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def read_bounded_evidence(path: Path, *, maximum: int, label: str) -> bytes:
-    """Capture one regular evidence file with an open-descriptor byte limit.
+    """Capture bounded evidence from one pathname-bound, single-link file.
 
-    A pre-read stat() followed by Path.read_bytes() is insufficient: a
-    replacement/growing file can exceed the published limit after stat().
-    This check protects local replay memory and rejects in-place write drift;
-    it is not attestation of the uploader or file's earlier history.
+    Check the pathname both before and after opening/reading the descriptor:
+    stable descriptor bytes alone do not detect an atomic replacement of the
+    downloaded filename. Reject hardlinks that allow out-of-tree mutation.
+    This remains a local consistency guard, not uploader attestation.
     """
     if type(maximum) is not int or maximum < 1:
         raise ValueError("invalid evidence capture limit")
     flags = (os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
              | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     try:
+        path_before = os.stat(path, follow_symlinks=False)
         fd = os.open(path, flags)
     except OSError as exc:
         raise ValueError(f"{label} cannot be opened as a regular file") from exc
@@ -57,15 +58,25 @@ def read_bounded_evidence(path: Path, *, maximum: int, label: str) -> bytes:
         before = os.fstat(fd)
         if not stat.S_ISREG(before.st_mode):
             raise ValueError(f"{label} must be a regular file")
+        if before.st_nlink != 1:
+            raise ValueError(f"{label} must have exactly one filesystem link")
+        identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_nlink,
+                              s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+        if identity(path_before) != identity(before):
+            raise ValueError(f"{label} pathname changed during capture")
         if before.st_size > maximum:
             raise ValueError(f"{label} exceeds size limit")
         # Read at most limit+1 bytes, regardless of stat size or concurrent growth.
         with os.fdopen(fd, "rb", closefd=False) as stream:
             captured = stream.read(maximum + 1)
         after = os.fstat(fd)
-        identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_size,
-                              s.st_mtime_ns, s.st_ctime_ns)
-        if identity(before) != identity(after) or len(captured) != before.st_size:
+        try:
+            path_after = os.stat(path, follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError(f"{label} pathname changed during capture") from exc
+        if (identity(before) != identity(after)
+                or identity(after) != identity(path_after)
+                or len(captured) != before.st_size):
             raise ValueError(f"{label} changed during capture")
         if len(captured) > maximum:
             raise ValueError(f"{label} exceeds size limit")
