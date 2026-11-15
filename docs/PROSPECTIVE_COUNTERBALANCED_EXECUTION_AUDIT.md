@@ -234,3 +234,23 @@ verify only equality to coordinator-supplied values; the checker cannot prove
 when, by whom or where those values were first preserved, nor that any
 execution event occurred. This does not affect historical experiments or
 authorize human-rating distribution.
+
+## Joint category × chronological-half paired attrition (prospective only)
+
+The read-only chronology audit now retains
+`recorded_completed_primary_pair_coverage_by_category_and_half`, crossing
+each **frozen category** with planned task indices **1–5** and **6–10**.
+Each intersection reports its planned-task denominator and the number of
+jointly completed same-task observations for all three primary contrasts,
+split by recorded treatment-order direction. Categories absent from a half
+remain present with zero exposure. The intersections reconcile with the
+existing category-only denominator and directional counts.
+
+This matters because two interrupted future studies can have identical
+aggregate completed-arm and paired-task totals but lose pairs in different
+category/time strata. The new synthetic tests independently recount all
+pairs from the candidate event ledger and demonstrate this difference.
+These are **self-reported, outcome-blind descriptive diagnostics**, not
+independently authenticated execution, measured carryover, subgroup
+inference, proof of preregistration, or human validation. Do not adjust or
+select results based on these strata. Historical frozen outcomes do not change.

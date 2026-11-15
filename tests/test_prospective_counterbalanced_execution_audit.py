@@ -1480,3 +1480,116 @@ def test_category_pair_coverage_excludes_failed_and_unattempted_arms():
         ) == expected
     assert result["all_recorded_cells_completed"] is False
     assert result["human_validation_performed"] is False
+
+
+def _manifest_with_frozen_categories(labels):
+    payload = json.loads(_manifest())
+    assert len(labels) == len(payload["tasks"]) == 10
+    for row, label in zip(payload["tasks"], labels, strict=True):
+        row["category"] = label
+    return _bytes(payload)
+
+
+@pytest.mark.parametrize("failed_positions", [(), (0,), (0, 7)])
+def test_joint_category_half_paired_coverage_has_independent_event_oracle(
+    failed_positions,
+):
+    source = _manifest_with_frozen_categories(["science", "policy"] * 5)
+    receipt = _plan(source)
+    log = _log(source, receipt)
+    schedule = design.build_plan(source)["schedule"]
+    for index in failed_positions:
+        next(
+            event for event in log["events"]
+            if event["task_id"] == schedule[index]["task_id"]
+            and event["variant"] == "P6V"
+        )["status"] = "timeout"
+    summary = audit.audit_execution_log(source, receipt, _bytes(log))
+    joint = summary["recorded_completed_primary_pair_coverage_by_category_and_half"]
+    by_category = summary[
+        "recorded_completed_primary_pair_coverage_by_frozen_task_category"
+    ]
+    pairs = {
+        "D6_minus_D3": ("D6", "D3"),
+        "P6_minus_D6": ("P6", "D6"),
+        "P6V_minus_P6": ("P6V", "P6"),
+    }
+    for category in ("science", "policy"):
+        assert set(joint[category]) == {"first_half", "second_half"}
+        for half, positions in (("first_half", range(5)), ("second_half", range(5, 10))):
+            indices = [i for i in positions if ["science", "policy"][i % 2] == category]
+            cell = joint[category][half]
+            assert cell["task_count"] == len(indices)
+            for contrast, (left, right) in pairs.items():
+                independent = {
+                    "jointly_completed_tasks": 0,
+                    "left_before_right": 0,
+                    "right_before_left": 0,
+                }
+                for index in indices:
+                    row = schedule[index]
+                    statuses = {
+                        event["variant"]: event["status"]
+                        for event in log["events"][index * 4:index * 4 + 4]
+                    }
+                    if statuses[left] != "completed" or statuses[right] != "completed":
+                        continue
+                    direction = (
+                        "left_before_right"
+                        if row["arm_order"].index(left) < row["arm_order"].index(right)
+                        else "right_before_left"
+                    )
+                    independent["jointly_completed_tasks"] += 1
+                    independent[direction] += 1
+                assert cell["contrasts"][contrast] == independent
+        for contrast in pairs:
+            for field in ("jointly_completed_tasks", "left_before_right", "right_before_left"):
+                assert sum(
+                    joint[category][half]["contrasts"][contrast][field]
+                    for half in ("first_half", "second_half")
+                ) == by_category[category]["contrasts"][contrast][field]
+    assert summary["actual_execution_independently_authenticated"] is False
+    assert summary["scientific_outcomes_validated"] is False
+
+
+def test_equal_global_attrition_can_differ_in_category_time_pair_location():
+    source = _manifest_with_frozen_categories(["science", "policy"] * 5)
+    receipt = _plan(source)
+    schedule = design.build_plan(source)["schedule"]
+    reports = []
+    for lost_index in (0, 7):
+        log = _log(source, receipt)
+        next(
+            event for event in log["events"]
+            if event["task_id"] == schedule[lost_index]["task_id"]
+            and event["variant"] == "P6V"
+        )["status"] = "failed"
+        reports.append(audit.audit_execution_log(source, receipt, _bytes(log)))
+    first, second = reports
+    assert first["recorded_status_counts"] == second["recorded_status_counts"]
+    assert first["recorded_completed_primary_pair_task_counts"] == (
+        second["recorded_completed_primary_pair_task_counts"]
+    )
+    key = "recorded_completed_primary_pair_coverage_by_category_and_half"
+    assert first[key] != second[key]
+    assert first[key]["science"]["first_half"]["contrasts"][
+        "P6V_minus_P6"
+    ]["jointly_completed_tasks"] == 2
+    assert second[key]["policy"]["second_half"]["contrasts"][
+        "P6V_minus_P6"
+    ]["jointly_completed_tasks"] == 2
+
+
+def test_category_absent_in_one_half_preserves_explicit_zero_joint_cell():
+    source = _manifest_with_frozen_categories(["science"] * 5 + ["policy"] * 5)
+    receipt = _plan(source)
+    result = audit.audit_execution_log(source, receipt, _bytes(_log(source, receipt)))
+    joint = result["recorded_completed_primary_pair_coverage_by_category_and_half"]
+    for category, absent in (("science", "second_half"), ("policy", "first_half")):
+        assert joint[category][absent]["task_count"] == 0
+        for contrast in ("D6_minus_D3", "P6_minus_D6", "P6V_minus_P6"):
+            assert joint[category][absent]["contrasts"][contrast] == {
+                "jointly_completed_tasks": 0,
+                "left_before_right": 0,
+                "right_before_left": 0,
+            }

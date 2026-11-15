@@ -326,6 +326,33 @@ def audit_execution_log(
         }
         for category, exposure in category_position_exposure.items()
     }
+    # A globally complete pair count can hide category-by-time attrition.
+    # Retain even the zero-exposure category × half cells from the frozen plan.
+    halfway = len(plan["schedule"]) // 2
+    chronological_halves = ("first_half", "second_half")
+    category_half_pair_coverage = {
+        category: {
+            half: {
+                "task_count": sum(
+                    frozen_category_by_task[row["task_id"]] == category
+                    for row in (
+                        plan["schedule"][:halfway]
+                        if half == "first_half" else plan["schedule"][halfway:]
+                    )
+                ),
+                "contrasts": {
+                    name: {
+                        "jointly_completed_tasks": 0,
+                        "left_before_right": 0,
+                        "right_before_left": 0,
+                    }
+                    for name in primary_pairs
+                },
+            }
+            for half in chronological_halves
+        }
+        for category in category_pair_coverage
+    }
     completed_pair_order_counts = {
         name: {"left_before_right": 0, "right_before_left": 0}
         for name in primary_pairs
@@ -334,8 +361,9 @@ def audit_execution_log(
         name: {"left_before_right": [], "right_before_left": []}
         for name in primary_pairs
     }
-    for row in plan["schedule"]:
+    for task_index, row in enumerate(plan["schedule"]):
         completed = completed_variants_by_task[row["task_id"]]
+        half = "first_half" if task_index < halfway else "second_half"
         for name, (left, right) in primary_pairs.items():
             if left not in completed or right not in completed:
                 continue
@@ -350,6 +378,11 @@ def audit_execution_log(
             ]["contrasts"][name]
             category_contrast["jointly_completed_tasks"] += 1
             category_contrast[direction] += 1
+            joint_contrast = category_half_pair_coverage[
+                frozen_category_by_task[row["task_id"]]
+            ][half]["contrasts"][name]
+            joint_contrast["jointly_completed_tasks"] += 1
+            joint_contrast[direction] += 1
             starts = completed_starts_by_task[row["task_id"]]
             # Use integer microseconds rather than floating-point total_seconds()
             # so fractional UTC timestamps retain exact subsecond custody.
@@ -359,6 +392,25 @@ def audit_execution_log(
                 + delta.microseconds
             )
             pair_start_separations_us[name][direction].append(elapsed_us)
+    # Reconcile each intersection against the existing category-only counts.
+    for category, category_counts in category_pair_coverage.items():
+        windows = category_half_pair_coverage[category]
+        if sum(windows[h]["task_count"] for h in chronological_halves) != (
+            category_counts["task_count"]
+        ):
+            raise design.DesignError("category-by-time task count reconciliation failed")
+        for name, totals in category_counts["contrasts"].items():
+            for field in (
+                "jointly_completed_tasks", "left_before_right", "right_before_left"
+            ):
+                if sum(
+                    windows[h]["contrasts"][name][field]
+                    for h in chronological_halves
+                ) != totals[field]:
+                    raise design.DesignError(
+                        "category-by-time paired coverage reconciliation failed"
+                    )
+
     completed_pair_start_separation_us = {
         name: {
             direction: {
@@ -593,6 +645,9 @@ def audit_execution_log(
         "recorded_completed_primary_pair_order_counts": completed_pair_order_counts,
         "recorded_completed_primary_pair_coverage_by_frozen_task_category": (
             category_pair_coverage
+        ),
+        "recorded_completed_primary_pair_coverage_by_category_and_half": (
+            category_half_pair_coverage
         ),
         "recorded_completed_primary_pair_start_separation_us": (
             completed_pair_start_separation_us
