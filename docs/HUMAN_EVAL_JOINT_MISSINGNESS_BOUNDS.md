@@ -203,3 +203,30 @@ a 2/2 histogram contradiction that passes the prior per-arm check, an
 unequal singleton/partial-rater contradiction, a feasible mixed 1/2
 rating allocation, and entirely missing reports. No human scores,
 treatment outcomes, or frozen inferences are generated or revised.
+
+## Published report-mean feasibility against raw ratings
+
+An additional outcome-blind audit checks the independently published
+`variant_summary[*][*].mean_report_score` against the original-rater
+coverage and five-bin raw-score histogram. This guards a distinct
+denominator/numerator mismatch: a perfectly count-consistent raw histogram
+can accompany an impossible published mean.
+
+Let `S` be the histogram's total score sum and `T` the sum of the raw
+ratings belonging to reports with only one observed original rater.
+Double-rated report means contribute their raw sum to twice the total;
+single-rated report means contribute their rating twice. Therefore, for
+`N` scored reports, `2*N*mean_report_score = S + T`. Rather than
+assigning scores to individual tasks or annotators, the auditor enumerates
+only possible `T` totals by selecting exactly one histogram rating for
+each singleton report. The reported mean must agree with at least one
+such integer total (within numeric serialization tolerance). A variant
+with zero scored reports must publish a null mean.
+
+This is a **necessary** source-summary consistency gate, not a sufficient
+test for all task-specific paired differences or a reconstruction of
+individual ratings. The independently recomputed input-verification gate
+remains mandatory for real use. Synthetic tests cover fully double-rated
+means, impossible singleton-score lattices, malformed/nonfinite means,
+unrated arms, and valid partial-coverage cases. The frozen analysis,
+rubric, measured outcomes and all exploratory envelopes are unchanged.

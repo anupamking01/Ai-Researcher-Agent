@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from itertools import product
 from pathlib import Path
 
@@ -260,6 +261,72 @@ def _arm_total_doubled_mean_bounds(
     )
 
 
+def _possible_singleton_rating_totals(
+    histogram: dict[str, int], singleton_reports: int,
+) -> set[int]:
+    """Conservatively select the original scores from one-rated reports.
+
+    Exactly one raw rating belongs to each singleton report, while the
+    remaining ratings are from double-rated reports. The published histogram
+    omits report identity, so enumerate every possible singleton subset sum
+    without reconstructing or assigning scores to any individual report.
+    """
+    reachable = {(0, 0)}
+    for score in range(1, 6):
+        next_reachable = set()
+        for used, total in reachable:
+            for taken in range(min(histogram[str(score)], singleton_reports - used) + 1):
+                next_reachable.add((used + taken, total + score * taken))
+        reachable = next_reachable
+    return {total for used, total in reachable if used == singleton_reports}
+
+
+def _validate_published_report_means(
+    analysis: dict, arms: list[str], dimension: str,
+    report_counts: dict[str, list[int]],
+) -> None:
+    """Check descriptive report means against independent original-score bins.
+
+    If S is the sum of all raw scores and T is the sum of the ratings
+    belonging to singly scored reports, twice the sum of scored report
+    means is S + T. Double-rated reports contribute their original raw
+    sum; singly rated reports contribute twice their one score. Missing
+    reports are excluded from the published mean, not imputed as zero.
+    This subset-sum test is necessary, not sufficient for a per-task joint
+    score assignment respecting the observed paired differences.
+    """
+    for arm in arms:
+        record = analysis["variant_summary"][arm][dimension]
+        observed_counts = report_counts[arm]
+        n_scored = sum(count > 0 for count in observed_counts)
+        reported = record.get("mean_report_score")
+        if not n_scored:
+            if reported is not None:
+                raise ValueError(
+                    f"{arm}/{dimension}: published report mean requires scored reports"
+                )
+            continue
+        if (
+            type(reported) not in (int, float)
+            or not math.isfinite(reported)
+            or not 1 <= reported <= 5
+        ):
+            raise ValueError(f"{arm}/{dimension}: invalid published report mean")
+        histogram = record["raw_score_distribution"]
+        raw_total = sum(score * histogram[str(score)] for score in range(1, 6))
+        n_single = sum(count == 1 for count in observed_counts)
+        possible = _possible_singleton_rating_totals(histogram, n_single)
+        if not any(
+            math.isclose(reported * (2 * n_scored), raw_total + subtotal,
+                         rel_tol=0, abs_tol=1e-10)
+            for subtotal in possible
+        ):
+            raise ValueError(
+                f"{arm}/{dimension}: published report mean cannot arise from "
+                "the raw-score histogram and original-rater coverage"
+            )
+
+
 def _validate_cross_arm_histogram_aggregates(
     analysis: dict, arms: list[str], dimension: str,
     report_counts: dict[str, list[int]],
@@ -390,6 +457,9 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
         _validate_cross_arm_histogram_aggregates(
             analysis, arms, dimension, report_counts, sums,
         )
+        _validate_published_report_means(
+            analysis, arms, dimension, report_counts,
+        )
 
         for _, _, name in core.CONTRASTS:
             bounds = [value / (2 * len(tasks)) for value in sums[name]]
@@ -423,6 +493,7 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
         "no_change_to_frozen_analysis": True,
         "raw_histogram_feasibility_is_necessary_not_sufficient": True,
         "cross_arm_histogram_aggregates_are_necessary_not_sufficient": True,
+        "published_report_mean_feasibility_is_necessary_not_sufficient": True,
         "task_ids": tasks,
         "bounds_by_contrast_and_dimension": output,
     }

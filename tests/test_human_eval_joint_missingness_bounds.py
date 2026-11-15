@@ -88,6 +88,13 @@ def _fixture(*, counts=None, differences=None, per_dimension_counts=None):
                 "n_reports_total": len(TASKS),
                 "n_reports_scored": sum(n > 0 for n in counts_for_arm),
                 "n_raw_scores": total,
+                "mean_report_score": (
+                    sum(
+                        synthetic_scores[(dimension, task, arm)]
+                        for task in TASKS if rater_count(task, arm, dimension)
+                    ) / sum(n > 0 for n in counts_for_arm)
+                    if any(counts_for_arm) else None
+                ),
                 "raw_score_distribution": {
                     str(score): sum(
                         rater_count(task, arm, dimension)
@@ -369,6 +376,7 @@ def test_histogram_handles_halfpoint_two_rater_report_mean():
         bins = payload["variant_summary"][arm][dim]["raw_score_distribution"]
         bins["3"] -= 1
         bins["4"] += 1
+        payload["variant_summary"][arm][dim]["mean_report_score"] += 0.05
     joint.audit_joint_shared_arm_bounds(payload)
 
 def test_cross_arm_histogram_totals_reject_mismatched_all_task_means():
@@ -426,3 +434,48 @@ def test_cross_arm_aggregate_missing_reports_keep_conservative_range():
     result = joint.audit_joint_shared_arm_bounds(payload)
     assert _cell(result)["shared_arm_conditioned_all_task_bounds"] == [-0.4, 0.4]
 
+
+
+def test_published_report_mean_rejects_double_rated_histogram_disagreement():
+    # With 2/2 ratings everywhere, the report-score mean is fixed by the
+    # histogram's weighted total, independent of raw rating pair allocation.
+    payload = _fixture()
+    payload["variant_summary"]["D6"][core.DIMS[0]]["mean_report_score"] = 3.05
+    with pytest.raises(ValueError, match="published report mean cannot arise"):
+        joint.audit_joint_shared_arm_bounds(payload)
+
+
+@pytest.mark.parametrize("invalid", [None, True, float("nan"), float("inf")])
+def test_published_report_mean_rejects_invalid_observed_summary(invalid):
+    payload = _fixture()
+    payload["variant_summary"]["P6"][core.DIMS[0]]["mean_report_score"] = invalid
+    with pytest.raises(ValueError, match="invalid published report mean"):
+        joint.audit_joint_shared_arm_bounds(payload)
+
+
+def test_published_report_mean_rejects_impossible_singleton_lattice():
+    # With one single-rated report and 19 raw ratings all equal to 3,
+    # there is only one possible singleton subtotal: 3. An intermediate
+    # reported mean of 3.05 is impossible despite lying within [1,5].
+    payload = _fixture(counts={"main-01": {"D3": 1}})
+    payload["variant_summary"]["D3"][core.DIMS[0]]["mean_report_score"] = 3.05
+    with pytest.raises(ValueError, match="published report mean cannot arise"):
+        joint.audit_joint_shared_arm_bounds(payload)
+
+
+def test_published_report_mean_requires_null_for_unscored_arm():
+    payload = _fixture(counts={
+        task: {"D3": 0} for task in TASKS
+    })
+    assert joint.audit_joint_shared_arm_bounds(payload)[
+        "published_report_mean_feasibility_is_necessary_not_sufficient"
+    ] is True
+    payload["variant_summary"]["D3"][core.DIMS[0]]["mean_report_score"] = 3
+    with pytest.raises(ValueError, match="requires scored reports"):
+        joint.audit_joint_shared_arm_bounds(payload)
+
+
+def test_published_report_mean_accepts_valid_partial_rater_summary():
+    payload = _fixture(counts={"main-01": {"D3": 1, "D6": 1}})
+    result = joint.audit_joint_shared_arm_bounds(payload)
+    assert result["published_report_mean_feasibility_is_necessary_not_sufficient"]
