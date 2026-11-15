@@ -10,6 +10,29 @@ from scripts import audit_human_eval_missing_pair_bounds as audit
 from scripts import human_eval_analysis_core as core
 
 
+def _coverage(tasks, retained):
+    by_cell = {cell: [] for cell in core.RATER_COVERAGE_CELLS}
+    by_cell["2/2"] = list(retained)
+    by_cell["0/2"] = [task for task in tasks if task not in retained]
+    return {
+        "count_by_rater_pair": {cell: len(ids) for cell, ids in by_cell.items()},
+        "task_ids_by_rater_pair": by_cell,
+    }
+
+
+def _assign_cell(payload, task_id, new_cell, *, dimension=None):
+    """Synthetic fixture: move exactly one task between coverage cells."""
+    block = payload["paired_contrasts"]["D6_minus_D3_retrieval_depth"][dimension or core.DIMS[0]]
+    coverage = block["rater_coverage"]
+    for ids in coverage["task_ids_by_rater_pair"].values():
+        if task_id in ids:
+            ids.remove(task_id)
+    coverage["task_ids_by_rater_pair"][new_cell].append(task_id)
+    for cell, ids in coverage["task_ids_by_rater_pair"].items():
+        ids.sort()
+        coverage["count_by_rater_pair"][cell] = len(ids)
+
+
 def _analysis(*, included=10, observed_difference=0.5):
     tasks = [f"main-{i:02d}" for i in range(1, 11)]
     retained, absent = tasks[:included], tasks[included:]
@@ -28,6 +51,7 @@ def _analysis(*, included=10, observed_difference=0.5):
                     "task_differences": {task: observed_difference for task in retained},
                     "n_pairs": included,
                     "mean_difference": observed_difference if included else None,
+                    "rater_coverage": _coverage(tasks, retained),
                 }
                 for dim in core.DIMS
             }
@@ -102,6 +126,49 @@ def test_unchanged_observed_difference_can_have_different_missingness_bounds():
     partial = _cell(audit.audit_missing_pair_bounds(_analysis(included=8)))
     assert complete["worst_case_all_task_mean_difference"] == [0.5, 0.5]
     assert partial["worst_case_all_task_mean_difference"] != [0.5, 0.5]
+
+
+
+def test_partial_original_rater_coverage_expands_only_completion_envelope():
+    payload = _analysis()
+    _assign_cell(payload, "main-01", "1/2")
+    cell = _cell(audit.audit_missing_pair_bounds(payload))
+    assert cell["missing_pair_count"] == 0
+    assert cell["worst_case_all_task_mean_difference"] == [0.5, 0.5]
+    assert cell["unobserved_second_rater_slots_on_included_pairs"] == 1
+    assert cell["hypothetical_two_rater_completion_bounds"] == [0.3, 0.7]
+    assert cell["completion_bounds_collapse_to_observed_mean"] is False
+
+
+def test_double_rated_and_missing_pair_envelopes_agree_when_no_partial_raters():
+    result = audit.audit_missing_pair_bounds(_analysis(included=8))
+    cell = _cell(result)
+    assert cell["unobserved_second_rater_slots_on_included_pairs"] == 0
+    assert cell["hypothetical_two_rater_completion_bounds"] == [-0.4, 1.2]
+    assert result["hypothetical_two_rater_completion_is_exploratory_only"] is True
+
+
+def test_partially_rated_pair_still_respects_global_rubric_difference_range():
+    payload = _analysis(included=10, observed_difference=4.0)
+    _assign_cell(payload, "main-01", "1/1")
+    cell = _cell(audit.audit_missing_pair_bounds(payload))
+    assert cell["unobserved_second_rater_slots_on_included_pairs"] == 2
+    assert cell["hypothetical_two_rater_completion_bounds"] == [3.6, 4.0]
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda p: p["paired_contrasts"]["D6_minus_D3_retrieval_depth"][core.DIMS[0]].pop("rater_coverage"),
+    lambda p: p["paired_contrasts"]["D6_minus_D3_retrieval_depth"][core.DIMS[0]]["rater_coverage"]["count_by_rater_pair"].update({"2/2": 8}),
+    lambda p: _assign_cell(p, "main-01", "0/2"),
+    lambda p: _assign_cell(p, "main-10", "2/2"),
+    lambda p: p["paired_contrasts"]["D6_minus_D3_retrieval_depth"][core.DIMS[0]]["rater_coverage"]["task_ids_by_rater_pair"]["2/2"].append("main-01"),
+    lambda p: p["paired_contrasts"]["D6_minus_D3_retrieval_depth"][core.DIMS[0]]["rater_coverage"]["count_by_rater_pair"].update({"2/2": True}),
+])
+def test_fail_closed_on_invalid_original_rater_partition(mutation):
+    payload = _analysis(included=9)
+    mutation(payload)
+    with pytest.raises(ValueError, match="rater|coverage|inclusion"):
+        audit.audit_missing_pair_bounds(payload)
 
 
 def test_cli_gate_requires_independent_recomputation_before_read(monkeypatch, tmp_path):

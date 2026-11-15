@@ -35,6 +35,38 @@ closed on an altered ten-task inventory, incomplete contrast/dimension
 coverage, missing/duplicate task IDs, an inconsistent paired denominator,
 a non-rubric score difference, or disagreement with the reported observed mean.
 
+## Additional exploratory sensitivity: missing original second-rater scores
+
+The same verified human-analysis record supplies a **nine-cell original-rater
+coverage partition** for every contrast and dimension. The auditor now checks
+that the counts and task IDs partition all ten tasks without duplicates and
+that the presence or absence of report scores agrees with paired inclusion.
+Missing coverage is rejected rather than treated as complete.
+
+Besides the original fixed-observed-pair envelope above, the independent
+`hypothetical_two_rater_completion_bounds` asks a **different counterfactual
+question**: how much could the all-ten-task mean contrast change if every
+report on an *already included* task had both planned human ratings, rather
+than only its observed rating(s)? For an observed task difference `d` with
+`q` unobserved second-rater slots across the two reports (0, 1, or 2),
+each missing second rating could change its report's two-rater mean by at
+most 2 points. Thus the hypothetical paired difference is conservatively
+bounded by **[max(-4, d - 2q), min(4, d + 2q)]**. Every excluded task pair
+still contributes [-4, +4]. The ten task-level lower/upper endpoints are
+summed and divided by ten with exact half-point-unit arithmetic. Original
+paired differences, missing-pair counts and the frozen paired bootstrap are
+never changed.
+
+This is a deliberately **conservative** envelope because the verified paired
+summary exposes differences and original-rater counts, not the individual
+observed report means needed for tighter endpoints. It requires no assumption
+that absent scores are missing at random. It is **not a confidence interval,
+a new planned estimand, evidence that another annotator would have provided a
+score, a human finding, or a reason to discard partial observations**. The
+completion envelope equals the original missing-pair envelope when all
+included tasks are already 2/2 rated; with all ten tasks included and 2/2
+rated, both collapse to the observed mean.
+
 ## Source-bound use, only after genuine ratings exist
 
 Run the existing blinded-rating freeze, human analysis and independent analysis
@@ -63,12 +95,15 @@ or certify any real human observations.
 
 ## Scope limits
 
-These bounds vary **missing paired tasks only**. A pair with one observed
-rater score per side stays included with its frozen observed-rater report means;
-the unobserved second rater is **not** varied. Consequently the envelope is
-not a full missing-rater sensitivity interval. When one of two reports on an
-omitted pair was observed, using [-4,+4] is intentionally conservative rather
-than the tightest possible interval.
+The original `worst_case_all_task_mean_difference` bound varies **missing
+paired tasks only**; it holds all observed pairs fixed, even if a report has
+only one original human rating. The separate *hypothetical* two-rater
+completion bound additionally varies the unobserved second rating on
+included pairs without changing any actually observed data. It remains
+conservative rather than sharp. When one of the two reports on an excluded
+pair was observed, both envelopes retain [-4,+4] rather than inferring an
+unrecorded score. Neither envelope can replace independent human ratings,
+pre-unblinding agreement, or validated report custody.
 
 The five-task historical pilot is diagnostic. The frozen automated September
 2026 designated-primary analysis remains post-collection rather than

@@ -35,6 +35,50 @@ def _halfpoint_twice(value: object, *, label: str) -> int:
     return int(scaled)
 
 
+
+def _validate_rater_coverage(coverage: object, *, tasks: list, included: list, label: str) -> dict:
+    """Independently bind original-rater counts to every frozen task.
+
+    Two observed report scores are required for a paired difference, but each
+    report may have only one of the two planned independent ratings. Reject a
+    fabricated or incomplete nine-cell coverage partition instead of silently
+    treating omitted metadata as fully double-rated.
+    """
+    fields = {"count_by_rater_pair", "task_ids_by_rater_pair"}
+    cells = set(core.RATER_COVERAGE_CELLS)
+    if type(coverage) is not dict or set(coverage) != fields:
+        raise ValueError(f"{label} requires the frozen original-rater coverage")
+    counts = coverage["count_by_rater_pair"]
+    per_cell = coverage["task_ids_by_rater_pair"]
+    if (
+        type(counts) is not dict or set(counts) != cells
+        or type(per_cell) is not dict or set(per_cell) != cells
+    ):
+        raise ValueError(f"{label} has incomplete original-rater coverage cells")
+    by_task = {}
+    included_set = set(included)
+    for cell in core.RATER_COVERAGE_CELLS:
+        ids = per_cell[cell]
+        count = counts[cell]
+        if (
+            type(ids) is not list
+            or any(type(task_id) is not str for task_id in ids)
+            or ids != [task_id for task_id in tasks if task_id in ids]
+            or type(count) is not int
+            or count != len(ids)
+        ):
+            raise ValueError(f"{label} has inconsistent original-rater coverage: {cell}")
+        left_count, right_count = map(int, cell.split("/"))
+        for task_id in ids:
+            if task_id in by_task:
+                raise ValueError(f"{label} repeats task in original-rater coverage: {task_id}")
+            if (task_id in included_set) != (left_count > 0 and right_count > 0):
+                raise ValueError(f"{label} conflicts with paired inclusion: {task_id}")
+            by_task[task_id] = (left_count, right_count)
+    if set(by_task) != set(tasks):
+        raise ValueError(f"{label} original-rater coverage omits frozen tasks")
+    return by_task
+
 def audit_missing_pair_bounds(analysis: dict) -> dict:
     """Bound the all-task mean by assigning each unobserved *pair* [-4, +4].
 
@@ -111,11 +155,42 @@ def audit_missing_pair_bounds(analysis: dict) -> dict:
             elif reported is not None:
                 raise ValueError(f"{name}/{dimension} has a mean without paired observations")
 
-            # Multiplying all differences by 2 gives exact integer arithmetic
-            # on the frozen half-point lattice, including for n_pairs == 0.
+            # Bind original-rater completeness independently of pair coverage.
+            # A missing second rater can hypothetically shift its report mean
+            # by at most 2 (one half of the 1–5 scale width). This is NOT a
+            # revision of the frozen observed-score estimand.
+            by_task = _validate_rater_coverage(
+                block.get("rater_coverage"),
+                tasks=tasks, included=included, label=f"{name}/{dimension}",
+            )
+            # Multiplying differences by 2 preserves exact half-point units.
             unknown = len(missing)
             lower = (observed_twice - 2 * MAX_PAIR_DIFFERENCE * unknown) / (2 * len(tasks))
             upper = (observed_twice + 2 * MAX_PAIR_DIFFERENCE * unknown) / (2 * len(tasks))
+            completion_lower_twice = -2 * MAX_PAIR_DIFFERENCE * unknown
+            completion_upper_twice = 2 * MAX_PAIR_DIFFERENCE * unknown
+            missing_second_rater_slots = 0
+            for task_id in included:
+                left_count, right_count = by_task[task_id]
+                gaps = (2 - left_count) + (2 - right_count)
+                missing_second_rater_slots += gaps
+                difference_twice = _halfpoint_twice(
+                    diffs[task_id], label=f"{name}/{dimension}/{task_id}",
+                )
+                # Each unobserved second rating can move the pair difference
+                # by at most two points. Clip to the physical [-4,+4] rubric
+                # range; this conservative envelope need not be sharp without
+                # the separately observed report scores.
+                completion_lower_twice += max(
+                    -2 * MAX_PAIR_DIFFERENCE, difference_twice - 4 * gaps,
+                )
+                completion_upper_twice += min(
+                    2 * MAX_PAIR_DIFFERENCE, difference_twice + 4 * gaps,
+                )
+            completion_bounds = [
+                completion_lower_twice / (2 * len(tasks)),
+                completion_upper_twice / (2 * len(tasks)),
+            ]
             output[name][dimension] = {
                 "observed_paired_tasks": len(included),
                 "missing_pair_tasks": missing,
@@ -124,6 +199,11 @@ def audit_missing_pair_bounds(analysis: dict) -> dict:
                 "observed_difference_sum": observed_twice / 2,
                 "worst_case_all_task_mean_difference": [lower, upper],
                 "bound_collapses_to_observed_mean": unknown == 0,
+                "unobserved_second_rater_slots_on_included_pairs": missing_second_rater_slots,
+                "hypothetical_two_rater_completion_bounds": completion_bounds,
+                "completion_bounds_collapse_to_observed_mean": (
+                    unknown == 0 and missing_second_rater_slots == 0
+                ),
             }
     return {
         "schema_version": 1,
@@ -132,6 +212,8 @@ def audit_missing_pair_bounds(analysis: dict) -> dict:
         "not_a_confidence_interval": True,
         "no_imputation_or_edited_frozen_analysis": True,
         "partially_observed_raters_on_included_pairs_are_held_fixed": True,
+        "hypothetical_two_rater_completion_is_exploratory_only": True,
+        "hypothetical_completion_changes_no_frozen_scores": True,
         "ratings_generated": False,
         "hypothesis_tests_performed": False,
         "task_ids": tasks,
