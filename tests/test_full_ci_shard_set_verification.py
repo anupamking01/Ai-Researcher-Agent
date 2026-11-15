@@ -103,6 +103,44 @@ def test_untrusted_directory_inventory_stops_after_first_surplus_entry(
     assert len(observed) == expected_size + 1
 
 
+def test_indirect_parent_symlink_to_same_evidence_is_rejected(evidence):
+    """Alias ancestors must fail, even if the receipts are unchanged."""
+    alias = evidence.parent / "parent-alias"
+    alias.symlink_to(evidence.parent, target_is_directory=True)
+    with pytest.raises(ValueError, match="aliased"):
+        whole.verify_shard_set(alias / evidence.name, **KWARGS)
+
+
+def test_parent_traversal_to_same_evidence_is_rejected(evidence):
+    intermediate = evidence.parent / "intermediate"
+    intermediate.mkdir()
+    with pytest.raises(ValueError, match="parent components"):
+        whole.verify_shard_set(intermediate / ".." / evidence.name, **KWARGS)
+
+
+def test_redirecting_evidence_parent_to_same_bytes_mid_replay_is_rejected(
+    evidence, monkeypatch,
+):
+    """An observed pathname swap after capture must veto the final PASS."""
+    moved = evidence.parent / "saved-evidence"
+    original_reader = producer.read_bounded_evidence
+    changed = False
+
+    def swap_after_first_read(path, *, maximum, label):
+        nonlocal changed
+        data = original_reader(path, maximum=maximum, label=label)
+        if not changed and label == "shard 0 log":
+            changed = True
+            evidence.rename(moved)
+            evidence.symlink_to(moved, target_is_directory=True)
+        return data
+
+    monkeypatch.setattr(whole.producer, "read_bounded_evidence", swap_after_first_read)
+    with pytest.raises(ValueError, match="changed during replay"):
+        whole.verify_shard_set(evidence, **KWARGS)
+    assert changed
+
+
 def test_all_shards_replay_as_one_exact_run(evidence):
     result = whole.verify_shard_set(evidence, **KWARGS)
     assert result["shards_verified"] == 8

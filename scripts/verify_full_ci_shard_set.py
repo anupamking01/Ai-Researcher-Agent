@@ -7,9 +7,11 @@ runner, actual test execution, network isolation, or research artifacts.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack, contextmanager
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 
 from scripts import select_full_ci_shard as selector
@@ -23,6 +25,47 @@ EVIDENCE_FILES = frozenset({
     "vera-offline-test-modules.txt",
 })
 
+
+
+@contextmanager
+def _pinned_directory_chain(path: Path):
+    """Reject indirect aliases and observed directory replacement during replay.
+
+    No-follow descriptor-relative walks pin each directory component while
+    downloaded evidence is inspected. This is present-day path consistency,
+    not GitHub attestation or an absolute defense against concurrent races.
+    """
+    path = Path(path)
+    if ".." in path.parts:
+        raise ValueError("CI evidence path must not traverse parent components")
+    if not hasattr(os, "O_DIRECTORY") or not hasattr(os, "O_NOFOLLOW"):
+        raise ValueError("CI evidence directory custody requires no-follow opens")
+    absolute = Path(os.path.abspath(path))
+    flags = (os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+             | getattr(os, "O_CLOEXEC", 0))
+    opened: list[tuple[int | None, str | None, int]] = []
+    try:
+        anchor_fd = os.open(absolute.anchor, flags)
+        opened.append((None, None, anchor_fd))
+        for component in absolute.parts[1:]:
+            parent_fd = opened[-1][2]
+            fd = os.open(component, flags, dir_fd=parent_fd)
+            opened.append((parent_fd, component, fd))
+        yield
+        for parent_fd, component, fd in opened[1:]:
+            pinned = os.fstat(fd)
+            visible = os.stat(component, dir_fd=parent_fd, follow_symlinks=False)
+            if (
+                not stat.S_ISDIR(visible.st_mode)
+                or (pinned.st_dev, pinned.st_ino, pinned.st_mode)
+                != (visible.st_dev, visible.st_ino, visible.st_mode)
+            ):
+                raise ValueError("CI evidence directory changed during replay")
+    except OSError as exc:
+        raise ValueError("CI evidence directory is missing, aliased, or changed") from exc
+    finally:
+        for _, _, fd in reversed(opened):
+            os.close(fd)
 
 
 def _require_exact_entries(directory: Path, expected: set[str] | frozenset[str], *, message: str) -> None:
@@ -47,6 +90,21 @@ def verify_shard_set(
     evidence_root: Path, *, checkout_sha: str, run_id: str,
     run_attempt: str, event: str, dependency_bytes: dict[str, bytes],
 ) -> dict:
+    """Replay only while the complete evidence-directory namespace stays pinned."""
+    with ExitStack() as pins:
+        pins.enter_context(_pinned_directory_chain(evidence_root))
+        return _verify_pinned_shard_set(
+            evidence_root, checkout_sha=checkout_sha, run_id=run_id,
+            run_attempt=run_attempt, event=event,
+            dependency_bytes=dependency_bytes, pins=pins,
+        )
+
+
+def _verify_pinned_shard_set(
+    evidence_root: Path, *, checkout_sha: str, run_id: str,
+    run_attempt: str, event: str, dependency_bytes: dict[str, bytes],
+    pins: ExitStack,
+) -> dict:
     """Verify every shard with independent identity, then its global coverage."""
     evidence_root = Path(evidence_root)
     if evidence_root.is_symlink() or not evidence_root.is_dir():
@@ -64,6 +122,7 @@ def verify_shard_set(
         folder = evidence_root / f"shard-{index}"
         if folder.is_symlink() or not folder.is_dir():
             raise ValueError(f"shard {index} evidence directory is not real")
+        pins.enter_context(_pinned_directory_chain(folder))
         _require_exact_entries(
             folder, EVIDENCE_FILES,
             message=f"shard {index} evidence files are incomplete or unexpected",
