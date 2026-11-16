@@ -187,6 +187,11 @@ def _pair(
                 "query": query,
                 "candidate_urls": list(selected),
                 "scheduled_urls": list(selected),
+                # In the historical metasearch, a positive-budget search
+                # cannot return an unmarked empty result. Represent these
+                # synthetic absent candidates as a recorded backend outage.
+                **({"search_error": "synthetic metasearch outage"}
+                   if not selected else {}),
             })
             offset += len(selected)
         assert offset == len(scheduled_urls)
