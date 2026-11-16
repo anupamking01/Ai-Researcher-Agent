@@ -94,7 +94,7 @@ def _synthetic_full_shard(tmp_path, monkeypatch):
         )
     monkeypatch.setattr(evidence, "ROOT", tmp_path)
     manifest = b"tests/test_00.py\n"
-    header = f"VERA full-suite shard 0/8; selected 1 modules; checkout {SHA}"
+    header = f"VERA full-suite shard 0/16; selected 1 modules; checkout {SHA}"
     log = (header + "\ntests/test_00.py\n" + evidence.FIREWALL_MARKER
            + "\n1 passed in 0.2s\n").encode()
     return log, manifest
@@ -109,7 +109,7 @@ def test_full_ci_receipt_binds_actual_source_shard_and_log(tmp_path, monkeypatch
     )
     assert receipt["full_ci_shard"] == 0
     assert receipt["full_ci_selected_module_count"] == 1
-    assert receipt["full_ci_total_modules"] == 8
+    assert receipt["full_ci_total_modules"] == 16
     assert receipt["full_ci_selected_modules_sha256"] == hashlib.sha256(manifest).hexdigest()
 
 
@@ -196,8 +196,8 @@ def test_workflow_keeps_piped_wrapper_and_publishes_both_evidence_files():
     test_step = next(s for s in steps if s.get("name") == "Run offline unit tests")
     commands = test_step["run"]
     assert commands.strip().splitlines()[0] == "set -euo pipefail"
-    assert "python -m scripts.select_full_ci_shard --verify-partition --shards 8" in commands
-    assert '--shard "$VERA_SHARD" --shards 8' in commands
+    assert "python -m scripts.select_full_ci_shard --verify-partition --shards 16" in commands
+    assert '--shard "$VERA_SHARD" --shards 16' in commands
     assert 'bash scripts/run_offline_pytest_firewalled.sh "${test_modules[@]}" 2>&1 | tee -a "$RUNNER_TEMP/vera-offline-tests.log"' in commands
     assert '"$RUNNER_TEMP/vera-offline-test-modules.txt"' in commands
     verify_step = next(s for s in steps if s.get("name") == "Bind exact-commit offline test evidence")

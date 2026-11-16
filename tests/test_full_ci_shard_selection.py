@@ -24,7 +24,7 @@ def test_discovery_includes_nested_both_pytest_patterns_and_excludes_other_files
     )
 
 
-@pytest.mark.parametrize("shards", [1, 2, 3, 8])
+@pytest.mark.parametrize("shards", [1, 2, 3, 8, 16])
 def test_every_module_in_exactly_one_shard_independent_of_input_order(shards):
     modules = tuple(f"tests/test_{i:03d}.py" for i in range(31))
     partition.verify_partition(modules, shards=shards)
@@ -109,8 +109,8 @@ def test_ci_matrix_requires_all_shards_and_retained_exact_selection():
     steps = job["steps"]
     run = next(s for s in steps if s.get("name") == "Run offline unit tests")
     assert run["env"]["VERA_SHARD"] == "${{ matrix.shard }}"
-    assert "--verify-partition --shards 8" in run["run"]
-    assert '--shard "$VERA_SHARD" --shards 8' in run["run"]
+    assert "--verify-partition --shards 16" in run["run"]
+    assert '--shard "$VERA_SHARD" --shards 16' in run["run"]
     assert '"${test_modules[@]}"' in run["run"]
     assert "tee -a" in run["run"]
     artifact = next(s for s in steps if s.get("name", "").startswith("Retain source-bound offline test"))

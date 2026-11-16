@@ -1,4 +1,4 @@
-"""Offline synthetic contract for the downstream eight-shard CI replay gate."""
+"""Offline synthetic contract for the downstream sixteen-shard CI replay gate."""
 from __future__ import annotations
 
 import os
@@ -20,7 +20,7 @@ def _steps():
     return workflow, job, {item["name"]: item for item in job["steps"]}
 
 
-def test_complete_set_replay_is_gated_on_successful_eight_way_matrix():
+def test_complete_set_replay_is_gated_on_successful_sixteen_way_matrix():
     workflow, job, steps = _steps()
     assert workflow["permissions"] == {"contents": "read"}
     assert job["needs"] == "unit-tests"
@@ -46,14 +46,14 @@ def test_aggregate_verifier_uses_external_identity_and_runs_before_retention():
     _, job, steps = _steps()
     names = [step["name"] for step in job["steps"]]
     stage = steps["Stage exact-attempt shard directories"]["run"]
-    replay = steps["Independently replay all eight downloaded shard receipts"]["run"]
+    replay = steps["Independently replay all sixteen downloaded shard receipts"]["run"]
     assert names.index("Download current-attempt shard evidence") < names.index(
         "Stage exact-attempt shard directories"
-    ) < names.index("Independently replay all eight downloaded shard receipts")
+    ) < names.index("Independently replay all sixteen downloaded shard receipts")
     assert names.index("Verify exact checkout after full-set replay") < names.index(
-        "Retain verified eight-shard replay (90 days)"
+        "Retain verified sixteen-shard replay (90 days)"
     )
-    assert 'for shard in {0..7}; do' in stage
+    assert 'for shard in {0..15}; do' in stage
     assert '${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}' in stage
     assert 'test -z "$(find "$base" -mindepth 1 -print -quit)"' in stage
     for expected in (
@@ -62,7 +62,7 @@ def test_aggregate_verifier_uses_external_identity_and_runs_before_retention():
         '--run-id "$GITHUB_RUN_ID"',
         '--run-attempt "$GITHUB_RUN_ATTEMPT"',
         '--event "$GITHUB_EVENT_NAME"',
-        '--evidence-root "$RUNNER_TEMP/vera-eight-shard-evidence"',
+        '--evidence-root "$RUNNER_TEMP/vera-sixteen-shard-evidence"',
     ):
         assert expected in replay
     assert "pip install" not in replay
@@ -72,7 +72,7 @@ def test_aggregate_verifier_uses_external_identity_and_runs_before_retention():
     after = steps["Verify exact checkout after full-set replay"]["run"]
     assert "verify_ci_source_checkout" in before
     assert "verify_ci_source_checkout" in after
-    retained = steps["Retain verified eight-shard replay (90 days)"]["with"]
+    retained = steps["Retain verified sixteen-shard replay (90 days)"]["with"]
     assert retained["name"] == "vera-full-shard-replay-${{ github.run_id }}-${{ github.run_attempt }}"
     assert retained["if-no-files-found"] == "error"
     assert "vera-full-shard-replay.json" in retained["path"]
@@ -84,7 +84,7 @@ def test_shell_staging_fails_closed_on_missing_or_mixed_downloads(tmp_path, case
     stage = steps["Stage exact-attempt shard directories"]["run"]
     downloaded = tmp_path / "vera-downloaded-shard-artifacts"
     downloaded.mkdir()
-    for shard in range(8):
+    for shard in range(16):
         if case == "missing" and shard == 6:
             continue
         attempt = "1" if case == "wrong_attempt" and shard == 6 else "2"
@@ -101,9 +101,9 @@ def test_shell_staging_fails_closed_on_missing_or_mixed_downloads(tmp_path, case
     )
     if case == "complete":
         assert result.returncode == 0, result.stderr
-        assert sorted(
-            entry.name for entry in (tmp_path / "vera-eight-shard-evidence").iterdir()
-        ) == [f"shard-{i}" for i in range(8)]
+        assert set(
+            entry.name for entry in (tmp_path / "vera-sixteen-shard-evidence").iterdir()
+        ) == {f"shard-{i}" for i in range(16)}
         assert not list(downloaded.iterdir())
     else:
         assert result.returncode != 0

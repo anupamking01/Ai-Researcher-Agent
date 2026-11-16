@@ -32,7 +32,7 @@ KWARGS = {
 def evidence(tmp_path, monkeypatch):
     tests = tmp_path / "tests"
     tests.mkdir()
-    for index in range(16):
+    for index in range(32):
         (tests / f"test_{index:02d}.py").write_text(
             "def test_synthetic_only(): assert True\n", encoding="utf-8"
         )
@@ -46,7 +46,7 @@ def evidence(tmp_path, monkeypatch):
         folder.mkdir()
         inventory = "".join(f"{name}\n" for name in selected).encode()
         header = (
-            f"VERA full-suite shard {shard}/8; selected {len(selected)} "
+            f"VERA full-suite shard {shard}/16; selected {len(selected)} "
             f"modules; checkout {SHA}"
         )
         log = (
@@ -169,17 +169,17 @@ def test_pinned_evidence_directory_detects_removal_during_failed_replay(evidence
 
 def test_all_shards_replay_as_one_exact_run(evidence):
     result = whole.verify_shard_set(evidence, **KWARGS)
-    assert result["shards_verified"] == 8
-    assert result["source_test_modules_covered"] == 16
-    assert result["aggregate_test_counts"] == {"passed": 16}
-    assert [row["n_modules"] for row in result["per_shard"]] == [2] * 8
+    assert result["shards_verified"] == 16
+    assert result["source_test_modules_covered"] == 32
+    assert result["aggregate_test_counts"] == {"passed": 32}
+    assert [row["n_modules"] for row in result["per_shard"]] == [2] * 16
     assert result["experimental_treatments_or_evaluators_run"] is False
     assert result["human_validation_performed"] is False
     assert result["status"].endswith("not_independently_attested")
 
 
 
-def test_full_eight_shard_replay_accepts_crlf_logs_without_rewriting_bytes(
+def test_full_sixteen_shard_replay_accepts_crlf_logs_without_rewriting_bytes(
     evidence,
 ):
     """All retained receipts bind original CRLF bytes and unchanged LF module lists."""
@@ -200,8 +200,8 @@ def test_full_eight_shard_replay_accepts_crlf_logs_without_rewriting_bytes(
 
     result = whole.verify_shard_set(evidence, **KWARGS)
     assert result["shards_verified"] == selector.SHARDS
-    assert result["source_test_modules_covered"] == 16
-    assert result["aggregate_test_counts"] == {"passed": 16}
+    assert result["source_test_modules_covered"] == 32
+    assert result["aggregate_test_counts"] == {"passed": 32}
 
 
 @pytest.mark.parametrize("case", [
@@ -215,7 +215,7 @@ def test_incomplete_mixed_or_modified_shard_set_fails_closed(evidence, case):
     if case == "missing_shard":
         shutil.rmtree(folder)
     elif case == "extra_shard":
-        (evidence / "shard-8").mkdir()
+        (evidence / "shard-16").mkdir()
     elif case == "duplicated_shard":
         shutil.rmtree(folder)
         shutil.copytree(evidence / "shard-3", folder)

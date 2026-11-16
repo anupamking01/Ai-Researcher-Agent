@@ -4,22 +4,31 @@ At the 14 November 2026 predecessor, the ordinary `tests` workflow's
 20-minute `unit-tests` job was cancelled while the complete firewalled
 pytest step ran; passing selected fast lanes did not verify the full suite.
 
-The ordinary suite now runs in **eight independent matrix jobs**. The
+On 16 November 2026, the eight-way predecessor at commit
+`5c36e62bdd725a6fc47a4e9256ad3ce301167b93` had seven successful
+unit-test shards but an unfinished/cancelled shard 5 in both independently
+triggered full suites (push run `43799707883`, pull-request run
+`43799712961`). All specialist PR checks completed, but **neither full-suite
+replay qualified as successful**. The per-job 20-minute limit and concentrated
+test workloads motivated a deterministic split into smaller complete modules;
+the cancellations alone do not prove which individual test consumed the time.
+
+The ordinary suite now runs in **sixteen independent matrix jobs**. The
 dependency-free selector `scripts/select_full_ci_shard.py` recursively
 discovers both default Python pytest filename conventions in `tests/`,
 sorts modules, and partitions them round-robin by index. Before testing,
-each job verifies that all eight partitions cover every discovered module
+each job verifies that all sixteen partitions cover every discovered module
 once. Duplicate inputs, invalid indices and empty shards fail closed. Directory
 traversal now fails on symlinked test subtrees, dangling directory aliases,
 symlinked support files or test modules, and unreadable nested directories;
-none can silently disappear from the eight-shard source inventory. These
+none can silently disappear from the sixteen-shard source inventory. These
 failures reject the checkout instead of following links outside the test tree. The full job preserves pinned Python/dependencies, source
 and runtime checks, strict pytest modes, blocked outbound IPv4/IPv6, and
 independent replay of a per-shard exact-commit test receipt. Each passing
 shard retains its uniquely named module list, log and pre-install gate receipt; the module list is also prepended
 to the receipt-hashed transcript.
 
-**Only eight passing jobs at the same commit constitute a full-suite pass.**
+**Only sixteen passing jobs at the same commit constitute a full-suite pass.**
 Passing one shard, one fast lane or the pre-install diagnostic gate does
 not. The full-suite receipt now additionally hashes the retained newline-delimited
 selected-module file, checks that its exact bytes equal the deterministic

@@ -1,4 +1,4 @@
-"""Independently replay all eight retained offline CI shard evidence bundles.
+"""Independently replay all sixteen retained offline CI shard evidence bundles.
 
 This verifies complete *local* coverage of the source-tree module inventory at
 one externally specified GitHub run identity. It does not attest GitHub's
@@ -78,7 +78,7 @@ def _require_exact_entries(directory: Path, expected: set[str] | frozenset[str],
 
     Retained artifact directories are untrusted local input. Materializing a
     set from every name before comparing it to the expected fixed inventory
-    permits a huge directory to consume unbounded memory. The ninth shard or
+    permits a huge directory to consume unbounded memory. The seventeenth shard or
     fourth file is already proof of invalid evidence.
     """
     observed: set[str] = set()
@@ -169,9 +169,9 @@ def _verify_pinned_shard_set(
     discovered = selector.discover_modules(producer.ROOT)
     selector.verify_partition(discovered)
     if len(all_modules) != len(set(all_modules)) or sorted(all_modules) != list(discovered):
-        raise ValueError("eight retained shards do not cover each source test module exactly once")
+        raise ValueError("sixteen retained shards do not cover each source test module exactly once")
     return {
-        "status": "complete_eight_shard_local_replay_consistent_not_independently_attested",
+        "status": "complete_sixteen_shard_local_replay_consistent_not_independently_attested",
         "checkout_sha": checkout_sha,
         "workflow_event": event,
         "workflow_run_id": run_id,

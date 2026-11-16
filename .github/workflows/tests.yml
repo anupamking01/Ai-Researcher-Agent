@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -106,8 +106,8 @@ jobs:
           VERA_SHARD: "${{ matrix.shard }}"
         run: |
           set -euo pipefail
-          python -m scripts.select_full_ci_shard --verify-partition --shards 8
-          python -m scripts.select_full_ci_shard --shard "$VERA_SHARD" --shards 8 > "$RUNNER_TEMP/vera-offline-test-modules.txt"
+          python -m scripts.select_full_ci_shard --verify-partition --shards 16
+          python -m scripts.select_full_ci_shard --shard "$VERA_SHARD" --shards 16 > "$RUNNER_TEMP/vera-offline-test-modules.txt"
           mapfile -t test_modules < "$RUNNER_TEMP/vera-offline-test-modules.txt"
           (( ${#test_modules[@]} > 0 ))
           printf 'VERA full-suite shard %s/8; selected %s modules; checkout %s\n' "$VERA_SHARD" "${#test_modules[@]}" "$GITHUB_SHA" | tee "$RUNNER_TEMP/vera-offline-tests.log"
@@ -158,7 +158,7 @@ jobs:
 
       # A failed pytest/source/receipt gate should not erase its raw diagnostic
       # transcript. These files are NOT validated success receipts and must
-      # never be part of the downstream eight-shard success-only replay.
+      # never be part of the downstream sixteen-shard success-only replay.
       - name: Retain unverified diagnostics on CI failure (90 days)
         if: ${{ failure() && !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -170,7 +170,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-  # This gate only runs after all eight test jobs finish successfully.
+  # This gate only runs after all sixteen test jobs finish successfully.
   # It verifies their *downloaded* evidence as one complete exact-run set.
   replay-complete-shard-set:
     needs: unit-tests
@@ -214,9 +214,9 @@ jobs:
         run: |
           set -euo pipefail
           base="$RUNNER_TEMP/vera-downloaded-shard-artifacts"
-          target="$RUNNER_TEMP/vera-eight-shard-evidence"
+          target="$RUNNER_TEMP/vera-sixteen-shard-evidence"
           mkdir "$target"
-          for shard in {0..7}; do
+          for shard in {0..15}; do
             source="$base/vera-offline-tests-shard-${shard}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             test -d "$source"
             test ! -L "$source"
@@ -224,12 +224,12 @@ jobs:
           done
           test -z "$(find "$base" -mindepth 1 -print -quit)"
 
-      - name: Independently replay all eight downloaded shard receipts
+      - name: Independently replay all sixteen downloaded shard receipts
         shell: bash
         run: |
           set -euo pipefail
           python -m scripts.verify_full_ci_shard_set \
-            --evidence-root "$RUNNER_TEMP/vera-eight-shard-evidence" \
+            --evidence-root "$RUNNER_TEMP/vera-sixteen-shard-evidence" \
             --checkout-sha "$GITHUB_SHA" \
             --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
@@ -240,7 +240,7 @@ jobs:
       - name: Verify exact checkout after full-set replay
         run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests
 
-      - name: Retain verified eight-shard replay (90 days)
+      - name: Retain verified sixteen-shard replay (90 days)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: vera-full-shard-replay-${{ github.run_id }}-${{ github.run_attempt }}
