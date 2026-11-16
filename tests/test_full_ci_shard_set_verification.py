@@ -264,3 +264,74 @@ def test_direct_symlinked_retained_file_is_rejected(evidence):
     path.symlink_to(target)
     with pytest.raises(ValueError, match="incomplete or unexpected"):
         whole.verify_shard_set(evidence, **KWARGS)
+
+
+def test_complete_early_diagnostic_replay_rejects_altered_missing_and_mixed_receipts(
+    tmp_path, monkeypatch,
+):
+    """Synthetic early logs: enforce all sixteen original-run receipt identities."""
+    import hashlib
+    from scripts import verify_ci_early_gate_evidence as early
+
+    root = tmp_path / "early"
+    root.mkdir()
+
+    def fake_receipt(log, **kwargs):
+        return {
+            "passed_tests": 7,
+            "log_sha256": hashlib.sha256(log).hexdigest(),
+            "checkout_sha": kwargs["sha"],
+            "workflow_run_id": kwargs["run_id"],
+            "workflow_run_attempt": kwargs["attempt"],
+            "workflow_event": kwargs["event"],
+        }
+
+    monkeypatch.setattr(early, "build_receipt", fake_receipt)
+    for i in range(selector.SHARDS):
+        folder = root / f"shard-{i}"
+        folder.mkdir()
+        log = f"synthetic-only shard {i}\\n".encode()
+        (folder / "vera-stdlib-evaluation.log").write_bytes(log)
+        (folder / "vera-stdlib-evaluation-receipt.json").write_bytes(
+            early._canonical(fake_receipt(
+                log, sha=SHA, run_id="54321", attempt="2", event="push",
+            ))
+        )
+
+    kwargs = {
+        "checkout_sha": SHA, "run_id": "54321",
+        "run_attempt": "2", "event": "push",
+    }
+    verified = whole.verify_early_diagnostic_set(root, **kwargs)
+    assert verified["shards_verified"] == selector.SHARDS
+    assert verified["runner_or_original_research_source_attested"] is False
+
+    receipt = root / "shard-5/vera-stdlib-evaluation-receipt.json"
+    original = receipt.read_bytes()
+    receipt.write_bytes(original.replace(b"54321", b"54322"))
+    with pytest.raises(ValueError, match="disagrees"):
+        whole.verify_early_diagnostic_set(root, **kwargs)
+    receipt.write_bytes(original)
+
+    log = root / "shard-5/vera-stdlib-evaluation.log"
+    log.write_bytes(b"edited synthetic transcript\\n")
+    with pytest.raises(ValueError, match="disagrees"):
+        whole.verify_early_diagnostic_set(root, **kwargs)
+    log.write_bytes(b"synthetic-only shard 5\\n")
+
+    missing = root / "shard-5/vera-stdlib-evaluation-receipt.json"
+    missing.unlink()
+    with pytest.raises(ValueError, match="missing or unexpected"):
+        whole.verify_early_diagnostic_set(root, **kwargs)
+
+
+def test_early_diagnostic_replay_rejects_symlinked_evidence_root(tmp_path):
+    actual = tmp_path / "real"
+    actual.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(actual, target_is_directory=True)
+    with pytest.raises(ValueError, match="missing, aliased, or changed"):
+        whole.verify_early_diagnostic_set(
+            alias, checkout_sha=SHA, run_id="54321",
+            run_attempt="2", event="push",
+        )

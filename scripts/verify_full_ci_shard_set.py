@@ -15,6 +15,7 @@ import stat
 from pathlib import Path
 
 from scripts import select_full_ci_shard as selector
+from scripts import verify_ci_early_gate_evidence as early
 from scripts import verify_ci_source_checkout as source_checker
 from scripts import verify_ci_test_evidence as producer
 from scripts import verify_retained_ci_test_evidence as replay
@@ -91,18 +92,100 @@ def _require_exact_entries(directory: Path, expected: set[str] | frozenset[str],
         raise ValueError(message)
 
 
+def verify_early_diagnostic_set(
+    evidence_root: Path, *, checkout_sha: str, run_id: str,
+    run_attempt: str, event: str,
+) -> dict:
+    """Replay *all* retained pre-install diagnostics at the same run identity.
+
+    Independent per-job early replay is not enough to establish that the
+    archived diagnostic set is complete. This operates only on retained bytes,
+    never invokes unittest, pytest, treatments, evaluators or model providers.
+    """
+    evidence_root = Path(evidence_root)
+    expected_dirs = {f"shard-{index}" for index in range(selector.SHARDS)}
+    expected_files = frozenset({
+        "vera-stdlib-evaluation.log", "vera-stdlib-evaluation-receipt.json",
+    })
+    sources = {
+        name: producer.read_bounded_evidence(
+            producer.ROOT / name, maximum=early.MAX_SOURCE_BYTES,
+            label=f"early diagnostic source {name}",
+        )
+        for name in early.SOURCES
+    }
+    per_shard = []
+    with ExitStack() as pins:
+        pins.enter_context(_pinned_directory_chain(evidence_root))
+        _require_exact_entries(
+            evidence_root, expected_dirs,
+            message="missing or unexpected early diagnostic shard directory",
+        )
+        for index in range(selector.SHARDS):
+            folder = evidence_root / f"shard-{index}"
+            pins.enter_context(_pinned_directory_chain(folder))
+            _require_exact_entries(
+                folder, expected_files,
+                message=f"shard {index} early diagnostic files missing or unexpected",
+            )
+            log = producer.read_bounded_evidence(
+                folder / "vera-stdlib-evaluation.log",
+                maximum=early.MAX_LOG_BYTES,
+                label=f"shard {index} early diagnostic log",
+            )
+            receipt = producer.read_bounded_evidence(
+                folder / "vera-stdlib-evaluation-receipt.json",
+                maximum=early.MAX_RECEIPT_BYTES,
+                label=f"shard {index} early diagnostic receipt",
+            )
+            expected = early.build_receipt(
+                log, sha=checkout_sha, run_id=run_id,
+                attempt=run_attempt, event=event,
+                repository="anupamking01/Ai-Researcher-Agent",
+                sources=sources,
+            )
+            # Require the exact canonical producer bytes, not an independently
+            # edited equivalent JSON object or a spoofed success declaration.
+            if receipt != early._canonical(expected):
+                raise ValueError(
+                    f"shard {index} early diagnostic receipt disagrees with "
+                    "the retained log, source, or run identity"
+                )
+            per_shard.append({
+                "shard": index,
+                "passed_tests": expected["passed_tests"],
+                "log_sha256": hashlib.sha256(log).hexdigest(),
+                "receipt_sha256": hashlib.sha256(receipt).hexdigest(),
+            })
+    return {
+        "status": "complete_sixteen_early_diagnostics_locally_consistent_not_attested",
+        "shards_verified": len(per_shard),
+        "per_shard": per_shard,
+        "runner_or_original_research_source_attested": False,
+    }
+
+
 def verify_shard_set(
     evidence_root: Path, *, checkout_sha: str, run_id: str,
     run_attempt: str, event: str, dependency_bytes: dict[str, bytes],
+    early_evidence_root: Path | None = None,
 ) -> dict:
     """Replay only while the complete evidence-directory namespace stays pinned."""
     with ExitStack() as pins:
         pins.enter_context(_pinned_directory_chain(evidence_root))
-        return _verify_pinned_shard_set(
+        result = _verify_pinned_shard_set(
             evidence_root, checkout_sha=checkout_sha, run_id=run_id,
             run_attempt=run_attempt, event=event,
             dependency_bytes=dependency_bytes, pins=pins,
         )
+        if early_evidence_root is None:
+            result["preinstall_diagnostics"] = "not_replayed"
+        else:
+            result["preinstall_diagnostics"] = verify_early_diagnostic_set(
+                early_evidence_root, checkout_sha=checkout_sha,
+                run_id=run_id, run_attempt=run_attempt, event=event,
+            )
+        return result
 
 
 def _verify_pinned_shard_set(
@@ -188,6 +271,7 @@ def _verify_pinned_shard_set(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence-root", required=True, type=Path)
+    parser.add_argument("--early-evidence-root", type=Path)
     parser.add_argument("--checkout-sha", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--run-attempt", required=True)
@@ -208,6 +292,7 @@ def main() -> int:
                 name: (producer.ROOT / name).read_bytes()
                 for name in ("requirements.txt", "requirements-ci.lock")
             },
+            early_evidence_root=args.early_evidence_root,
         )
     except (OSError, ValueError, UnicodeError) as exc:
         parser.exit(1, f"VERA FULL CI SHARD SET: FAIL: {exc}\n")

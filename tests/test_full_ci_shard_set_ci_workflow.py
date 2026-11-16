@@ -165,3 +165,31 @@ def test_synthetic_failed_pipeline_keeps_output_without_turning_green(tmp_path):
         tmp_path / "vera-offline-tests.log"
     ).read_text(encoding="utf-8")
     assert not (tmp_path / "vera-offline-test-receipt.json").exists()
+
+
+
+def test_full_replay_rejects_incomplete_preinstall_diagnostic_set():
+    """The full-run proof must also replay all sixteen pre-install receipts."""
+    _, job, steps = _steps()
+    names = [step["name"] for step in job["steps"]]
+    download = steps["Download exact-attempt pre-install diagnostic evidence"]
+    assert download["uses"] == (
+        "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+    )
+    assert download["with"] == {
+        "pattern": "vera-stdlib-evaluation-shard-*-${{ github.run_id }}-${{ github.run_attempt }}",
+        "merge-multiple": "false",
+        "path": "${{ runner.temp }}/vera-downloaded-early-artifacts",
+    }
+    stage = steps["Stage complete early diagnostic evidence set"]["run"]
+    assert "for shard in {0..15}; do" in stage
+    assert "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" in stage
+    assert 'test -z "$(find "$base" -mindepth 1 -print -quit)"' in stage
+    replay = steps["Independently replay all sixteen downloaded shard receipts"]["run"]
+    assert '--early-evidence-root "$RUNNER_TEMP/vera-sixteen-early-diagnostics"' in replay
+    assert names.index("Download exact-attempt pre-install diagnostic evidence") < names.index(
+        "Stage complete early diagnostic evidence set"
+    ) < names.index("Independently replay all sixteen downloaded shard receipts")
+    assert names.index("Independently replay all sixteen downloaded shard receipts") < names.index(
+        "Retain verified sixteen-shard replay (90 days)"
+    )

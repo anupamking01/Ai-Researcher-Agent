@@ -224,12 +224,38 @@ jobs:
           done
           test -z "$(find "$base" -mindepth 1 -print -quit)"
 
+      - name: Download exact-attempt pre-install diagnostic evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: vera-stdlib-evaluation-shard-*-${{ github.run_id }}-${{ github.run_attempt }}
+          merge-multiple: false
+          path: ${{ runner.temp }}/vera-downloaded-early-artifacts
+
+      - name: Stage complete early diagnostic evidence set
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/vera-downloaded-early-artifacts"
+          target="$RUNNER_TEMP/vera-sixteen-early-diagnostics"
+          mkdir "$target"
+          for shard in {0..15}; do
+            source="$base/vera-stdlib-evaluation-shard-${shard}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            test -d "$source"
+            test ! -L "$source"
+            mkdir "$target/shard-$shard"
+            mv -- "$source/vera-stdlib-evaluation.log" "$target/shard-$shard/"
+            mv -- "$source/vera-stdlib-evaluation-receipt.json" "$target/shard-$shard/"
+            rmdir "$source"
+          done
+          test -z "$(find "$base" -mindepth 1 -print -quit)"
+
       - name: Independently replay all sixteen downloaded shard receipts
         shell: bash
         run: |
           set -euo pipefail
           python -m scripts.verify_full_ci_shard_set \
             --evidence-root "$RUNNER_TEMP/vera-sixteen-shard-evidence" \
+            --early-evidence-root "$RUNNER_TEMP/vera-sixteen-early-diagnostics" \
             --checkout-sha "$GITHUB_SHA" \
             --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
