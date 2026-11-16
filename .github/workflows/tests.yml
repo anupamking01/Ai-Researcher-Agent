@@ -110,7 +110,7 @@ jobs:
           python -m scripts.select_full_ci_shard --shard "$VERA_SHARD" --shards 16 > "$RUNNER_TEMP/vera-offline-test-modules.txt"
           mapfile -t test_modules < "$RUNNER_TEMP/vera-offline-test-modules.txt"
           (( ${#test_modules[@]} > 0 ))
-          printf 'VERA full-suite shard %s/8; selected %s modules; checkout %s\n' "$VERA_SHARD" "${#test_modules[@]}" "$GITHUB_SHA" | tee "$RUNNER_TEMP/vera-offline-tests.log"
+          printf 'VERA full-suite shard %s/16; selected %s modules; checkout %s\n' "$VERA_SHARD" "${#test_modules[@]}" "$GITHUB_SHA" | tee "$RUNNER_TEMP/vera-offline-tests.log"
           cat "$RUNNER_TEMP/vera-offline-test-modules.txt" | tee -a "$RUNNER_TEMP/vera-offline-tests.log"
           bash scripts/run_offline_pytest_firewalled.sh "${test_modules[@]}" 2>&1 | tee -a "$RUNNER_TEMP/vera-offline-tests.log"
 
