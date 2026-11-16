@@ -515,6 +515,56 @@ def _validate_recovered_source_ledgers(trace: dict, *, variant: str) -> None:
 
 
 
+def _validate_recovered_derived_telemetry(trace: dict) -> None:
+    """Recompute redundant measurements emitted by original RunTrace.to_dict().
+
+    The pinned September 2026 treatment implementation calculated these
+    four fields from its source and treatment-verifier counters before saving
+    each trace. Matching published aggregate CSV rows is insufficient if a
+    recovered trace contradicts its own derived outcomes. These are NOT the
+    separate post-hoc common-evaluator support measurements, nor proof of
+    authentic original custody.
+    """
+    categories = (
+        "supported_claim_count", "partially_supported_claim_count",
+        "unsupported_claim_count", "contradicted_claim_count",
+    )
+    category_total = sum(trace[field] for field in categories)
+    verified_claims = category_total if category_total > 0 else trace["citation_count"]
+    observed_claims = trace.get("verified_claim_count")
+    if type(observed_claims) is not int or observed_claims != verified_claims:
+        raise ValueError(
+            "recovered trace verified_claim_count contradicts original derived telemetry"
+        )
+
+    expected_rates = {
+        "source_success_rate": (
+            trace["successful_source_count"] / trace["source_count"]
+            if trace["source_count"] else 0.0
+        ),
+        "claim_support_rate": (
+            trace["supported_claim_count"] / verified_claims
+            if verified_claims else 0.0
+        ),
+        "citation_precision_proxy": (
+            max(trace["citation_count"] - trace["unsupported_claim_count"], 0)
+            / trace["citation_count"]
+            if trace["citation_count"] else 0.0
+        ),
+    }
+    for field, expected in expected_rates.items():
+        observed = trace.get(field)
+        if (
+            type(observed) not in (int, float)
+            or not (0 <= observed <= 1)
+            or not math.isfinite(observed)
+            or not math.isclose(observed, expected, rel_tol=0.0, abs_tol=1e-12)
+        ):
+            raise ValueError(
+                f"recovered trace {field} contradicts original derived telemetry"
+            )
+
+
 def _validate_recovered_search_provenance(trace: dict) -> None:
     """Reconcile the original runner's query/result ledger with scheduled URLs.
 
@@ -1026,6 +1076,7 @@ def _trace_report_content_status(
             )
             _validate_recovered_treatment_verification(trace, variant=variant)
             _validate_recovered_source_ledgers(trace, variant=variant)
+            _validate_recovered_derived_telemetry(trace)
             _validate_recovered_search_provenance(trace)
             _validate_recovered_query_budget_allocation(trace, variant=variant)
             _validate_recovered_provider_usage(trace)

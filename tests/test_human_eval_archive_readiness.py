@@ -556,6 +556,12 @@ def _write_semantically_aligned_fixture(
                     "temperature": 0.0,
                     "prompt_tokens": 100, "completion_tokens": 150,
                     "unavailable_usage_call_count": 0,
+                    # These are emitted by the original RunTrace.to_dict(),
+                    # not synthetic human or common-evaluator outcomes.
+                    "source_success_rate": 2 / 3,
+                    "verified_claim_count": (4 if variant == "P6V" else 0),
+                    "claim_support_rate": (0.5 if variant == "P6V" else 0.0),
+                    "citation_precision_proxy": (0.75 if variant == "P6V" else 0.0),
                     "provider_usage_by_model": {
                         runtime_models[0]: {
                             "model_calls": 4, "unavailable_calls": 0,
@@ -969,6 +975,74 @@ def test_missing_or_boolean_trace_counter_is_not_canonical_measurement(
     )
     assert "original_trace_report_content_alignment" in result["blockers"]
 
+
+
+@pytest.mark.parametrize("variant,field,wrong_value,remove", [
+    ("D3", "source_success_rate", 1.0, False),
+    ("P6V", "source_success_rate", True, False),
+    ("D3", "source_success_rate", None, True),
+    ("D3", "verified_claim_count", 1, False),
+    ("P6V", "verified_claim_count", 3, False),
+    ("P6V", "verified_claim_count", None, True),
+    ("P6V", "claim_support_rate", 0.75, False),
+    ("P6V", "claim_support_rate", -0.1, False),
+    ("P6V", "claim_support_rate", None, True),
+    ("P6V", "citation_precision_proxy", 1.0, False),
+    ("D3", "citation_precision_proxy", 0.2, False),
+    ("D3", "citation_precision_proxy", "0", False),
+])
+def test_recovered_derived_telemetry_cannot_contradict_original_counters(
+    tmp_path, monkeypatch, variant, field, wrong_value, remove
+):
+    """Archived redundant rates/claim totals cannot be invented or suppressed."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    run_id = f"{variant.lower()}-run-00"
+    path = outputs / "experiment_traces" / variant / f"{run_id}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if remove:
+        del payload["trace"][field]
+    else:
+        payload["trace"][field] = wrong_value
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_to_published_evaluator"]["matched"] == 40
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert field in result["trace_report_content"]["first_failure"]
+    assert "original_trace_report_content_alignment" in result["blockers"]
+    assert result["handoff_verified"] is False
+
+
+def _zero_source_and_claim_derived_trace():
+    return {
+        "source_count": 0, "successful_source_count": 0,
+        "citation_count": 0, "supported_claim_count": 0,
+        "partially_supported_claim_count": 0, "unsupported_claim_count": 0,
+        "contradicted_claim_count": 0, "source_success_rate": 0.0,
+        "verified_claim_count": 0, "claim_support_rate": 0.0,
+        "citation_precision_proxy": 0.0,
+    }
+
+
+def test_original_derived_telemetry_zero_denominators_are_valid():
+    """Zero-source and zero-claim traces have defined historical rates of zero."""
+    audit._validate_recovered_derived_telemetry(
+        _zero_source_and_claim_derived_trace()
+    )
+
+
+@pytest.mark.parametrize("field", [
+    "source_success_rate", "claim_support_rate", "citation_precision_proxy",
+])
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -float("inf")])
+def test_original_derived_telemetry_rejects_nonfinite_in_memory(field, invalid):
+    """Production JSON parsing already rejects nonfinite tokens before this."""
+    trace = _zero_source_and_claim_derived_trace()
+    trace[field] = invalid
+    with pytest.raises(ValueError, match=field):
+        audit._validate_recovered_derived_telemetry(trace)
 
 
 @pytest.mark.parametrize("field,bad_value,error_fragment", [

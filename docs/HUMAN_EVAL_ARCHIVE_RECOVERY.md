@@ -735,7 +735,16 @@ the frozen arm budget, completed source outcomes accounting for all scheduled
 URLs, unique/nonblank URLs in the scheduled/success/failed lists, disjoint
 success/failure partitions, search calls within the query count, and completed
 provider-usage accounting. Thus matching aggregate CSV counters cannot mask
-an internally contradictory URL/source ledger. The diagnostic additionally
+an internally contradictory URL/source ledger. The content preflight also
+recomputes the original `RunTrace.to_dict()`'s four **redundant derived
+measurements**: `source_success_rate`, `verified_claim_count`,
+`claim_support_rate`, and `citation_precision_proxy`, from the archived
+source and treatment-time verification counters. Missing, nonnumeric,
+nonfinite or contradictory rates and claim totals block readiness, including
+when all frozen CSV aggregates still match; legitimate zero-source and
+zero-claim denominators yield zero. These are treatment-trace diagnostics,
+**not** the common post-hoc support-evaluator scores, independent custody
+authentication, new confirmatory findings, or human ratings. The diagnostic additionally
 reconciles each trace's actual `search_queries` and `search_records` with its
 query/search-call counters and globally scheduled URLs: recorded queries must
 follow the planned order (allowing budget-skipped queries), search-result
