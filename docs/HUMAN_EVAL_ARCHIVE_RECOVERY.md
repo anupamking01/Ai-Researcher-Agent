@@ -928,3 +928,24 @@ This is **local receipt integrity**, not proof of independently retained
 historical report/trace custody. Neither a clean receipt nor its successful
 replay permits blinded distribution, establishes human ratings, or changes the
 diagnostic pilot, qualified frozen automated results, or exploratory analyses.
+
+
+## Historical metasearch candidate-ledger preflight (2026-11-16)
+
+The read-only archive readiness diagnostic now validates search-result
+*candidates*, not only successfully scheduled URLs. The original treatment
+checkout `c3c15e46` (`scrape/web_search.py` and
+`logic/research_agent.py`) requested three candidates per available
+browse slot (maximum 20) and normalized provider output to unique,
+nonempty, trimmed hrefs. Using each arm's fixed source budget and planned
+query allocation, the auditor rejects oversized, duplicate, and untrimmed
+candidate lists even when frozen scheduled-source counts still match.
+Valid repeated URLs **across different queries** remain allowed.
+
+Synthetic unit and full 40-cell integration regressions verify this
+historical-source contract. They do not authenticate missing original
+reports/traces, prove that a search request occurred, establish historical
+custody or authorize blinded human distribution. The five-task pilot stays
+diagnostic, historical automated inference retains its post-collection
+planning/order/evaluator qualifications, and no human-validation result or
+new confirmatory evidence is created.

@@ -1344,7 +1344,7 @@ def test_query_allocation_accepts_skipped_and_duplicate_planner_queries():
         "source_budget": 6,
         "search_queries": ["same", "same", "other", "last"],
         "search_records": [
-            {"query": "same", "candidate_urls": ["a", "a", "b"],
+            {"query": "same", "candidate_urls": ["a", "b"],
              "scheduled_urls": ["a", "b"]},
             {"query": "same", "candidate_urls": ["a", "c", "d"],
              "scheduled_urls": ["c", "d"]},
@@ -1386,12 +1386,12 @@ def test_query_allocation_rejects_skipping_earlier_eligible_candidate():
 
 
 def test_query_allocation_accepts_greedy_deduplication_and_search_failure():
-    """Repeated and previously visited candidates are skipped by the runner."""
+    """Candidates are unique within a search; cross-query repeats are skipped."""
     trace = {
         "source_budget": 6,
         "search_queries": ["first", "second", "third", "fourth"],
         "search_records": [
-            {"query": "first", "candidate_urls": ["a", "a", "b", "c"],
+            {"query": "first", "candidate_urls": ["a", "b", "c"],
              "scheduled_urls": ["a", "b"]},
             {"query": "second", "candidate_urls": ["b", "a", "c", "d"],
              "scheduled_urls": ["c", "d"]},
@@ -1462,5 +1462,68 @@ def test_late_report_rewrite_blocks_complete_matrix_content_alignment(
         "recovered_candidates_changed_during_audit"
     )
     assert result["trace_report_content"]["checked"] == 40
+    assert "original_trace_report_content_alignment" in result["blockers"]
+    assert result["handoff_verified"] is False
+
+
+def _historical_candidate_limit_trace(*, candidates):
+    scheduled = [f"https://example.test/{index}" for index in range(6)]
+    return {
+        "source_budget": 6,
+        "question": "frozen question",
+        "query_count": 1,
+        "search_call_count": 1,
+        "search_queries": ["frozen question"],
+        "search_records": [{
+            "query": "frozen question",
+            "candidate_urls": candidates,
+            "scheduled_urls": scheduled,
+        }],
+        "scheduled_urls": scheduled,
+    }
+
+
+def test_recovered_search_accepts_maximum_historical_unique_candidate_pool():
+    """D6 requested up to 18 normalized candidates and browsed at most six."""
+    candidates = [f"https://example.test/{index}" for index in range(18)]
+    trace = _historical_candidate_limit_trace(candidates=candidates)
+    audit._validate_recovered_search_provenance(trace)
+    audit._validate_recovered_query_budget_allocation(trace, variant="D6")
+
+
+@pytest.mark.parametrize("mutation", ["over_limit", "duplicate", "untrimmed"])
+def test_recovered_search_rejects_impossible_historical_candidate_list(mutation):
+    """Frozen scheduled-source totals can agree with an impossible search list."""
+    candidates = [f"https://example.test/{index}" for index in range(18)]
+    if mutation == "over_limit":
+        candidates.append("https://example.test/18")
+    elif mutation == "duplicate":
+        candidates[-1] = candidates[0]
+    else:
+        candidates[-1] += " "
+    trace = _historical_candidate_limit_trace(candidates=candidates)
+    audit._validate_recovered_search_provenance(trace)
+    with pytest.raises(ValueError, match="search candidate list"):
+        audit._validate_recovered_query_budget_allocation(trace, variant="D6")
+
+
+def test_archive_readiness_blocks_oversized_candidate_pool_despite_frozen_counts(
+    tmp_path, monkeypatch
+):
+    """The 40-cell recovery diagnostic must enforce original candidate limits."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces/D6/d6-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    record = payload["trace"]["search_records"][0]
+    record["candidate_urls"].extend(
+        f"https://example.test/extra-{index}" for index in range(16)
+    )
+    # Do not alter frozen CSVs, scheduled URLs, search counts or report bytes.
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "search candidate list" in result["trace_report_content"]["first_failure"]
     assert "original_trace_report_content_alignment" in result["blockers"]
     assert result["handoff_verified"] is False

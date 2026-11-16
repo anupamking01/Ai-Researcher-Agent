@@ -44,6 +44,11 @@ TRACE_TO_MAIN_MEASUREMENTS = (
 FROZEN_PRICING_REL = "experiments/openai_pricing_2026-09-08.json"
 ORIGINAL_PRICING_SHA256 = "35eb6aea8a4e494ea6b94a0905e893849958d37ac386915aac7958b00c4eeace"
 
+# Historical c3c15e46 search: 3 candidate results per available browse slot,
+# hard cap 20; web_search normalizes to unique, stripped, nonempty hrefs.
+ORIGINAL_SEARCH_CANDIDATE_MULTIPLIER = 3
+ORIGINAL_SEARCH_CANDIDATE_CAP = 20
+
 FROZEN_EXECUTION_MODES = {
     "D3": ("direct", "none"),
     "D6": ("direct", "none"),
@@ -475,7 +480,8 @@ def _validate_recovered_query_budget_allocation(trace: dict, *, variant: str) ->
     remaining global budget. The runner also greedily schedules the earliest
     previously unseen candidate URLs, retaining visited URLs across queries;
     merely selecting any candidate subsequence is insufficient. These are
-    execution-contract checks, not evidence of genuine retrieval.
+    execution-contract checks, not evidence of genuine retrieval. Historical
+    metasearch also bounds, strips, and deduplicates each query candidate list.
     """
     queries = trace["search_queries"]
     if variant in ("D3", "D6"):
@@ -512,6 +518,25 @@ def _validate_recovered_query_budget_allocation(trace: dict, *, variant: str) ->
         if allowed <= 0:
             raise ValueError(
                 f"recovered search_records[{index}] ran without a query browse budget"
+            )
+        candidates = record.get("candidate_urls")
+        # The original metasearch normalizer retained at most the requested
+        # nonempty, stripped, distinct hrefs. Scheduled URL counts alone can
+        # match frozen measurements even when candidate provenance is impossible.
+        if (type(candidates) is not list
+                or any(type(url) is not str or not url or url != url.strip()
+                       for url in candidates)):
+            raise ValueError(
+                f"recovered search_records[{index}] search candidate list is invalid"
+            )
+        candidate_limit = min(
+            max(allowed * ORIGINAL_SEARCH_CANDIDATE_MULTIPLIER, allowed),
+            ORIGINAL_SEARCH_CANDIDATE_CAP,
+        )
+        if len(candidates) > candidate_limit or len(set(candidates)) != len(candidates):
+            raise ValueError(
+                f"recovered search_records[{index}] search candidate list differs "
+                "from the original bounded, deduplicated metasearch output"
             )
         scheduled = len(record["scheduled_urls"])
         if scheduled > allowed:
