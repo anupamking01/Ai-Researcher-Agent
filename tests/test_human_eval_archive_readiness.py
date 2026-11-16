@@ -517,6 +517,8 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
                     "source_budget": audit.main_input_contract.FROZEN_SOURCE_BUDGETS[variant],
                     "planning_mode": audit.FROZEN_EXECUTION_MODES[variant][0],
                     "verification_mode": audit.FROZEN_EXECUTION_MODES[variant][1],
+                    "browse_timeout_seconds": 60.0,
+                    "run_timeout_seconds": 480.0,
                 },
                 "trace": {
                     "variant_id": variant, "task_id": task_id,
@@ -525,6 +527,10 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
                     "question": tasks["tasks"][n]["question"],
                     "report_path": f"./outputs/{run_id}/research_report.pdf",
                     "source_budget": audit.main_input_contract.FROZEN_SOURCE_BUDGETS[variant],
+                    "planning_mode": audit.FROZEN_EXECUTION_MODES[variant][0],
+                    "verification_mode": audit.FROZEN_EXECUTION_MODES[variant][1],
+                    "browse_timeout_seconds": 60.0,
+                    "run_timeout_seconds": 480.0,
                     "successful_source_count": 2, "failed_source_count": 1,
                     "search_call_count": len(records), "model_call_count": 4,
                     "total_tokens": 250, "report_words": 50,
@@ -728,6 +734,42 @@ def test_recovered_experiment_config_must_match_frozen_treatment_arm(
         "invalid_or_mismatched_trace_report_content"
     )
     assert "original_trace_report_content_alignment" in result["blockers"]
+
+
+@pytest.mark.parametrize("variant,section,field,invalid", [
+    ("D3", "trace", "planning_mode", "planner"),
+    ("P6", "trace", "planning_mode", "direct"),
+    ("P6V", "trace", "verification_mode", "none"),
+    ("D3", "trace", "verification_mode", "verify"),
+    ("D6", "trace", "planning_mode", None),
+    ("D3", "trace", "browse_timeout_seconds", 120.0),
+    ("P6V", "experiment", "browse_timeout_seconds", 15.0),
+    ("P6", "trace", "run_timeout_seconds", True),
+    ("D6", "experiment", "run_timeout_seconds", -1.0),
+])
+def test_recovered_trace_execution_metadata_must_match_original_config(
+    tmp_path, monkeypatch, variant, section, field, invalid
+):
+    """Original treatment metadata is duplicated in config and trace.
+
+    A single altered value must not pass the 40-cell archive diagnostic
+    merely because the frozen published metrics and report bytes still match.
+    """
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    run_id = f"{variant.lower()}-run-00"
+    path = outputs / "experiment_traces" / variant / f"{run_id}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload[section][field] = invalid
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_to_published_evaluator"]["matched"] == 40
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert field in result["trace_report_content"]["first_failure"]
+    assert "original_trace_report_content_alignment" in result["blockers"]
+    assert result["handoff_verified"] is False
 
 
 def test_missing_or_boolean_trace_counter_is_not_canonical_measurement(

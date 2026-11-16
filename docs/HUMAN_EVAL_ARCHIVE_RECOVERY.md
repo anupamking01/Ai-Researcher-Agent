@@ -996,3 +996,25 @@ custody or authorize blinded human distribution. The five-task pilot stays
 diagnostic, historical automated inference retains its post-collection
 planning/order/evaluator qualifications, and no human-validation result or
 new confirmatory evidence is created.
+
+## Cross-checking recovered execution metadata (16 November 2026)
+
+The pinned historical treatment implementation (`logic/run.py` and
+`logic/experiment.py` at `c3c15e46a8eec3a8bbc24c968eedc0548172a897`)
+saved planning mode, verification mode, and source budget both in the
+`ExperimentConfig` envelope and in the per-run trace. It also copied
+`browse_timeout_seconds` and `run_timeout_seconds` from the config into
+the trace. A recovered archive with contradictory duplicate metadata is
+inconsistent with that source, even when its 40 frozen treatment CSV rows,
+source budgets, result counts, costs, latency and report words still agree.
+
+The read-only archive-readiness audit now checks the trace's planning and
+verification modes against its frozen D3/D6/P6/P6V treatment arm and
+requires finite positive, exactly concordant config/trace timeout values.
+Synthetic 40-cell regressions cover both direct/planner arm substitutions,
+missing or mistyped trace mode, and changed timeout values on either side.
+This does **not** authenticate original custody, prove the guardrails were
+honored during execution, recover missing artifacts, or establish a new
+confirmatory or human-evaluation result. The five-task pilot remains
+diagnostic; the frozen automated analysis retains its post-collection
+planning, fixed-order and evaluator-comparability limitations.

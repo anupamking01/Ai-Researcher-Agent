@@ -839,6 +839,36 @@ def _trace_report_content_status(
             if (experiment.get("planning_mode") != expected_planning
                     or experiment.get("verification_mode") != expected_verification):
                 raise ValueError("recovered treatment execution mode differs from frozen arm")
+            # The pinned September 2026 logic/run.py persisted these treatment
+            # modes in RunTrace *as well as* the ExperimentConfig envelope.
+            # A contradictory trace could otherwise impersonate a frozen arm
+            # while its source counts and published CSV values still agree.
+            for field, expected in (
+                ("planning_mode", expected_planning),
+                ("verification_mode", expected_verification),
+            ):
+                if type(trace.get(field)) is not str or trace[field] != expected:
+                    raise ValueError(
+                        f"recovered trace {field} differs from frozen treatment arm"
+                    )
+            # The historical runner also copied both execution timeouts from
+            # that same config into its trace. They describe censoring and
+            # infrastructure guardrails, so inconsistencies affect how a
+            # recovered run may be interpreted even if latency is unchanged.
+            for field in ("browse_timeout_seconds", "run_timeout_seconds"):
+                configured = experiment.get(field)
+                recorded = trace.get(field)
+                if (
+                    type(configured) not in (int, float)
+                    or type(recorded) not in (int, float)
+                    or not math.isfinite(configured)
+                    or not math.isfinite(recorded)
+                    or configured <= 0
+                    or recorded != configured
+                ):
+                    raise ValueError(
+                        f"recovered trace {field} differs from original experiment config"
+                    )
             frozen_budget = main_input_contract.FROZEN_SOURCE_BUDGETS[variant]
             if (type(experiment.get("source_budget")) is not int
                     or experiment["source_budget"] != frozen_budget):
