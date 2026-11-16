@@ -1,5 +1,32 @@
 # Recover the original automated-to-human VERA evidence (no outcome reruns)
 
+## Historical metasearch outcome/exception ledger (16 November 2026)
+
+The September 2026 original treatment checkout
+`c3c15e46a8eec3a8bbc24c968eedc0548172a897` calls
+`web_search(query, num_results=candidate_limit)` only for positive query
+allocations. That search implementation returns a **nonempty** normalized
+candidate list when a backend responds, or raises `RuntimeError` after
+all fixed backend-pool attempts fail. The treatment's `async_search`
+persists the exception as a `search_error` field truncated to 1,000
+characters, with empty candidate and scheduled lists.
+
+The read-only recovery auditor now rejects a claimed successful search with
+**zero candidates and no error marker**, as well as empty or overlong
+error markers. A legitimate bounded error and later planned queries remain
+valid. Previously the same URL, budget, source-count and search-call ledgers
+could conceal a fabricated no-results outcome. Synthetic direct checks and
+a forty-cell diagnostic integration regression cover this distinction;
+the common synthetic fixture now records its intentional search outages.
+
+This tests **internal plausibility against historical source**, not actual
+provider calls, archival byte custody, the cause of any outage, or independent
+authentication of the original reports and traces. Blinded human distribution
+and actual ratings remain blocked, the pilot stays diagnostic, frozen
+automated comparisons retain their timing/order/evaluator qualifications,
+and the new test is exploratory provenance checking rather than confirmatory
+or human-validation evidence.
+
 ## Historical planned-search execution completeness (16 November 2026)
 
 The read-only recovered-trace consistency diagnostic now checks **query

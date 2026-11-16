@@ -504,7 +504,9 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
                          else [urls[:2], urls[2:], [], []])
             records = [
                 {"query": query, "candidate_urls": list(scheduled),
-                 "scheduled_urls": list(scheduled)}
+                 "scheduled_urls": list(scheduled),
+                 **({"search_error": "synthetic metasearch outage"}
+                    if not scheduled else {})}
                 for query, scheduled in zip(plan, schedules)
             ]
             payload = {
@@ -1262,8 +1264,10 @@ def test_search_provenance_rejects_out_of_order_executed_queries():
         "search_call_count": 2,
         "search_queries": ["first", "second"],
         "search_records": [
-            {"query": "second", "candidate_urls": [], "scheduled_urls": []},
-            {"query": "first", "candidate_urls": [], "scheduled_urls": []},
+            {"query": "second", "candidate_urls": [], "scheduled_urls": [],
+             "search_error": "synthetic outage"},
+            {"query": "first", "candidate_urls": [], "scheduled_urls": [],
+             "search_error": "synthetic outage"},
         ],
         "scheduled_urls": [],
     }
@@ -1607,3 +1611,68 @@ def test_query_allocation_allows_omitting_only_zero_allocation_plan_slots():
     trace = _planner_query_trace(queries=queries, records=records, budget=1)
     audit._validate_recovered_search_provenance(trace)
     audit._validate_recovered_query_budget_allocation(trace, variant="P6")
+
+
+def _search_outcome_trace():
+    """Synthetic coherent search ledger with a legitimate metasearch failure."""
+    records = [
+        {"query": "first", "candidate_urls": ["a"], "scheduled_urls": ["a"]},
+        {"query": "second", "candidate_urls": [], "scheduled_urls": [],
+         "search_error": "synthetic backend outage"},
+        {"query": "third", "candidate_urls": ["b"], "scheduled_urls": ["b"]},
+        {"query": "fourth", "candidate_urls": ["c"], "scheduled_urls": ["c"]},
+    ]
+    return _planner_query_trace(
+        queries=["first", "second", "third", "fourth"], records=records
+    )
+
+
+def test_search_outcome_accepts_bounded_recorded_failure():
+    """The original async_search can continue after a recorded RuntimeError."""
+    trace = _search_outcome_trace()
+    audit._validate_recovered_search_provenance(trace)
+    audit._validate_recovered_query_budget_allocation(trace, variant="P6")
+    trace["search_records"][1]["search_error"] = "x" * 1000
+    audit._validate_recovered_search_provenance(trace)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "empty", "overlong"])
+def test_search_outcome_rejects_impossible_unmarked_or_malformed_failure(mutation):
+    """Budget/URL totals alone cannot distinguish an invented no-hit outcome."""
+    trace = _search_outcome_trace()
+    record = trace["search_records"][1]
+    if mutation == "missing":
+        del record["search_error"]
+    elif mutation == "empty":
+        record["search_error"] = ""
+    else:
+        record["search_error"] = "x" * 1001
+    # Existing budget/allocation checks independently accept these same
+    # frozen-counter-compatible records; only the search-outcome gate rejects.
+    audit._validate_recovered_query_budget_allocation(trace, variant="P6")
+    message = ("without search_error" if mutation == "missing"
+               else "search_error record")
+    with pytest.raises(ValueError, match=message):
+        audit._validate_recovered_search_provenance(trace)
+
+
+def test_archive_readiness_rejects_unmarked_search_failure_in_40_cell_matrix(
+    tmp_path, monkeypatch
+):
+    """A plausible frozen aggregate must not excuse an impossible search event."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces/P6/p6-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["trace"]["search_records"][2]["search_error"]
+    del payload["trace"]["search_records"][2]["search_error"]
+    # No changes to published measurements, counts, scheduled URLs or report.
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "empty candidates without search_error" in (
+        receipt["trace_report_content"]["first_failure"]
+    )
+    assert "original_trace_report_content_alignment" in receipt["blockers"]
+    assert receipt["handoff_verified"] is False

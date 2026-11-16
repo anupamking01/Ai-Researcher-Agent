@@ -444,10 +444,21 @@ def _validate_recovered_search_provenance(trace: dict) -> None:
         if (type(scheduled) is not list
                 or any(type(url) is not str or not url for url in scheduled)):
             raise ValueError(f"recovered search_records[{index}] scheduled_urls invalid")
-        if "search_error" in record and (
-            type(record["search_error"]) is not str or candidates or scheduled
-        ):
-            raise ValueError("recovered search_error record has candidate/scheduled URLs")
+        # Historical web_search returned a *nonempty* normalized result list
+        # for positive num_results, or raised RuntimeError when all pools
+        # failed. async_search recorded that failure as a bounded search_error.
+        # A purported successful zero-result search is therefore impossible.
+        if "search_error" in record:
+            error = record["search_error"]
+            if (type(error) is not str or not error or len(error) > 1000
+                    or candidates or scheduled):
+                raise ValueError(
+                    "recovered search_error record has invalid error or URLs"
+                )
+        elif not candidates:
+            raise ValueError(
+                "recovered search_records empty candidates without search_error"
+            )
 
         # The original get_new_urls retains candidate-result order while
         # removing previously visited URLs; repetitions in search results are
