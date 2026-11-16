@@ -526,6 +526,14 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
                     "task_set_id": tasks["task_set_id"],
                     "run_id": run_id, "completed": True,
                     "question": tasks["tasks"][n]["question"],
+                    "verification_status": (
+                        "ok" if variant == "P6V" else "not_requested"
+                    ),
+                    "citation_count": (4 if variant == "P6V" else 0),
+                    "supported_claim_count": (2 if variant == "P6V" else 0),
+                    "partially_supported_claim_count": (1 if variant == "P6V" else 0),
+                    "unsupported_claim_count": (1 if variant == "P6V" else 0),
+                    "contradicted_claim_count": 0,
                     "report_path": f"./outputs/{run_id}/research_report.pdf",
                     "source_budget": audit.main_input_contract.FROZEN_SOURCE_BUDGETS[variant],
                     "planning_mode": audit.FROZEN_EXECUTION_MODES[variant][0],
@@ -568,6 +576,74 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
                 "synthetic " * 49 + "archive-ending", encoding="utf-8"
             )
     return outputs
+
+
+
+@pytest.mark.parametrize("variant", ["D3", "D6", "P6", "P6V"])
+def test_historical_treatment_verification_valid_state(variant):
+    """The original runner's two outcome paths are distinct from post-hoc evaluation."""
+    zero = dict.fromkeys((
+        "citation_count", "supported_claim_count", "partially_supported_claim_count",
+        "unsupported_claim_count", "contradicted_claim_count",
+    ), 0)
+    if variant != "P6V":
+        audit._validate_recovered_treatment_verification(
+            {**zero, "verification_status": "not_requested"}, variant=variant
+        )
+    else:
+        audit._validate_recovered_treatment_verification(
+            {**zero, "verification_status": "parse_error"}, variant=variant
+        )
+        audit._validate_recovered_treatment_verification(
+            {**zero, "verification_status": "ok"}, variant=variant
+        )
+        audit._validate_recovered_treatment_verification(
+            {**zero, "verification_status": "ok", "citation_count": 3,
+             "supported_claim_count": 1, "partially_supported_claim_count": 1,
+             "unsupported_claim_count": 1}, variant=variant
+        )
+
+
+@pytest.mark.parametrize("variant,field,bad_value,remove", [
+    ("D3", "verification_status", "ok", False),
+    ("D6", "verification_status", None, True),
+    ("P6", "citation_count", 1, False),
+    ("D3", "supported_claim_count", 2, False),
+    ("P6V", "verification_status", "not_requested", False),
+    ("P6V", "verification_status", "parse_error", False),
+    ("P6V", "verification_status", False, False),
+    ("P6V", "verification_status", None, True),
+    ("P6V", "citation_count", 3, False),
+    ("P6V", "partially_supported_claim_count", 2, False),
+    ("P6V", "contradicted_claim_count", -1, False),
+    ("P6V", "unsupported_claim_count", True, False),
+    ("P6V", "supported_claim_count", None, True),
+])
+def test_recovered_treatment_verification_must_match_original_execution(
+    tmp_path, monkeypatch, variant, field, bad_value, remove
+):
+    """Disallow false verifier execution or invented claim counts with frozen CSVs unchanged."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    run_id = f"{variant.lower()}-run-00"
+    path = outputs / "experiment_traces" / variant / f"{run_id}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if remove:
+        del payload["trace"][field]
+    else:
+        payload["trace"][field] = bad_value
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_to_published_evaluator"]["matched"] == 40
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "verification" in result["trace_report_content"]["first_failure"] or (
+        "claim" in result["trace_report_content"]["first_failure"]
+    )
+    assert "original_trace_report_content_alignment" in result["blockers"]
+    assert result["handoff_verified"] is False
+
 
 
 def test_recovered_trace_and_report_contents_align_only_diagnostically(

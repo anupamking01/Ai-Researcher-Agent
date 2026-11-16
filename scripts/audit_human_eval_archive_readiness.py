@@ -411,6 +411,61 @@ def _validate_recovered_llm_controls(
     return observed
 
 
+
+def _validate_recovered_treatment_verification(trace: dict, *, variant: str) -> None:
+    """Reconcile treatment-time verification with the actual frozen arm.
+
+    The original ResearchAgent.write_report invokes verify_report only in
+    P6V. A completed P6V run records "ok" (normalized claim counts) or
+    "parse_error" (all zero counts), whereas D3/D6/P6 record
+    "not_requested" and zero counts. This checks trace self-consistency;
+    it is not the separate common post-hoc support-evaluator outcome.
+    """
+    fields = (
+        "citation_count", "supported_claim_count",
+        "partially_supported_claim_count", "unsupported_claim_count",
+        "contradicted_claim_count",
+    )
+    counts = {}
+    for field in fields:
+        value = trace.get(field)
+        if type(value) is not int or value < 0:
+            raise ValueError(
+                f"recovered treatment verification {field} must be a nonnegative integer"
+            )
+        counts[field] = value
+    status = trace.get("verification_status")
+    if type(status) is not str:
+        raise ValueError("recovered treatment verification_status is missing or invalid")
+    if variant == "P6V":
+        if status not in ("ok", "parse_error"):
+            raise ValueError(
+                "recovered P6V verification_status contradicts completed verification"
+            )
+        if status == "parse_error":
+            if any(counts.values()):
+                raise ValueError(
+                    "recovered P6V parse_error must have zero treatment claim counts"
+                )
+        elif counts["citation_count"] != sum(
+            counts[name] for name in fields[1:]
+        ):
+            raise ValueError(
+                "recovered P6V treatment citation_count disagrees with claim categories"
+            )
+    elif variant in ("D3", "D6", "P6"):
+        if status != "not_requested":
+            raise ValueError(
+                "recovered nonverification arm verification_status is not_requested"
+            )
+        if any(counts.values()):
+            raise ValueError(
+                "recovered nonverification arm has unexpected treatment claim counts"
+            )
+    else:
+        raise ValueError("unknown recovered treatment arm for verification")
+
+
 def _validate_recovered_source_ledgers(trace: dict, *, variant: str) -> None:
     """Check completed-run source provenance, not merely frozen CSV counters.
 
@@ -948,6 +1003,7 @@ def _trace_report_content_status(
             llm_controls_baseline = _validate_recovered_llm_controls(
                 trace, baseline=llm_controls_baseline
             )
+            _validate_recovered_treatment_verification(trace, variant=variant)
             _validate_recovered_source_ledgers(trace, variant=variant)
             _validate_recovered_search_provenance(trace)
             _validate_recovered_query_budget_allocation(trace, variant=variant)

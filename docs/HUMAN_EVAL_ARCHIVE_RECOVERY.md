@@ -1,5 +1,33 @@
 # Recover the original automated-to-human VERA evidence (no outcome reruns)
 
+## Historical treatment-time verification consistency (16 November 2026)
+
+The pinned September 2026 ResearchAgent.write_report invoked the
+**treatment-time claim verifier** only for the P6V arm, after writing its
+report. A completed P6V trace therefore records either
+verification_status="ok" with citation_count equal to the sum of
+supported, partially supported, unsupported, and contradicted claims, or
+verification_status="parse_error" with all five claim counters zero.
+Completed D3/D6/P6 traces instead record verification_status="not_requested"
+and zero treatment-time claim counters.
+
+The read-only 40-cell archival readiness auditor now checks this distinction
+and rejects absent, type-confused, negative or inconsistent counts and arm
+status. Synthetic full-matrix cases include a false P6V "not_requested",
+falsely verified D3, parse failure with fabricated claims, and count mismatches
+despite unchanged frozen CSV source/cost/token outcomes. This addresses
+**treatment exposure fidelity**, not the separate *common post-hoc support
+evaluator*: "parse_error" is a legitimate completed P6V treatment verifier
+response, not an excuse to replace or rerun the cell.
+
+These checks establish only internal plausibility relative to the historical
+runner. They cannot authenticate expired original reports or traces, prove
+what an external model actually returned, or authorize blinded distribution.
+The pilot remains diagnostic, frozen automated findings retain their
+post-collection planning, order and evaluator-comparability qualifications,
+and human ratings and prospective confirmatory evidence remain absent.
+No outcomes, original treatments or evaluator calls have been changed.
+
 ## Historical metasearch outcome/exception ledger (16 November 2026)
 
 The September 2026 original treatment checkout
