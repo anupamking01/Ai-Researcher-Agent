@@ -572,3 +572,72 @@ def test_joint_histogram_mean_leaves_full_two_rater_evidence_unchanged():
     result = joint.audit_joint_shared_arm_bounds(_fixture())
     assert result["joint_arm_histogram_mean_feasibility_is_necessary_not_sufficient"]
     assert _cell(result)["shared_arm_conditioned_all_task_bounds"] == [0, 0]
+
+def test_single_rater_histogram_transport_rejects_equal_mean_incompatible_bins():
+    # Every observed task difference is zero. D3 and D6 have the same mean
+    # and raw-score total, but their score bins cannot describe the same
+    # report scores when both have exactly one rating on every task.
+    arms = ("D3", "D6", "P6", "P6V")
+    payload = _fixture(counts={
+        task: {arm: 1 for arm in arms} for task in TASKS
+    })
+    dim = core.DIMS[0]
+    record = payload["variant_summary"]["D3"][dim]
+    record["raw_score_distribution"] = {
+        "1": 5, "2": 0, "3": 0, "4": 0, "5": 5,
+    }
+    record["mean_report_score"] = 3.0
+
+    # Earlier independent checks all accept the inconsistent summaries.
+    counts = {arm: [1] * len(TASKS) for arm in arms}
+    domains = {arm: [{1, 2, 3, 4, 5} for _ in TASKS] for arm in arms}
+    joint._validate_published_score_histograms(
+        payload, list(arms), dim, counts, domains,
+    )
+    joint._validate_published_report_means(
+        payload, list(arms), dim, counts,
+    )
+    joint._validate_joint_histogram_report_means(
+        payload, list(arms), dim, counts, domains,
+    )
+    bounds = {name: [0, 0] for _, _, name in core.CONTRASTS}
+    joint._validate_cross_arm_histogram_aggregates(
+        payload, list(arms), dim, counts, bounds,
+    )
+    joint._validate_cross_arm_published_report_means(
+        payload, list(arms), dim, counts, bounds,
+    )
+    with pytest.raises(ValueError, match="cross-arm single-rater raw histograms"):
+        joint.audit_joint_shared_arm_bounds(payload)
+
+
+def test_single_rater_histogram_transport_accepts_genuine_shift_pattern():
+    # Fully synthetic scores with one +1 and one -1 paired retrieval delta;
+    # the two aggregate histograms differ but admit one taskwise assignment.
+    arms = ("D3", "D6", "P6", "P6V")
+    payload = _fixture(
+        counts={task: {arm: 1 for arm in arms} for task in TASKS},
+        differences={
+            ("main-01", "D6_minus_D3_retrieval_depth"): 1,
+            ("main-02", "D6_minus_D3_retrieval_depth"): -1,
+        },
+    )
+    result = joint.audit_joint_shared_arm_bounds(payload)
+    assert _cell(result)["shared_arm_conditioned_all_task_bounds"] == [0.0, 0.0]
+
+
+def test_single_rater_histogram_transport_preserves_valid_mixed_coverage():
+    # A double-rated D3 report can have ratings (1,5), mean 3, while the
+    # matched singly rated D6 report is 3. Their bins need not be equal.
+    arms = ("D3", "D6", "P6", "P6V")
+    counts = {task: {arm: 1 for arm in arms} for task in TASKS}
+    counts["main-01"]["D3"] = 2
+    payload = _fixture(counts=counts)
+    dim = core.DIMS[0]
+    record = payload["variant_summary"]["D3"][dim]
+    record["raw_score_distribution"]["3"] -= 2
+    record["raw_score_distribution"]["1"] += 1
+    record["raw_score_distribution"]["5"] += 1
+    result = joint.audit_joint_shared_arm_bounds(payload)
+    assert _cell(result)["shared_arm_conditioned_all_task_bounds"] == [0.0, 0.0]
+

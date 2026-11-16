@@ -465,6 +465,72 @@ def _validate_cross_arm_histogram_aggregates(
             )
 
 
+def _validate_single_rater_cross_arm_histograms(
+    analysis: dict, dimension: str,
+    report_counts: dict[str, list[int]],
+    observed_edges: dict[str, list[int | None]],
+) -> None:
+    """Exactly couple adjacent raw histograms when every report has one rating.
+
+    Independently feasible arm histograms and equal paired-score totals do not
+    imply that the *same ten tasks* can realize both histograms. With exactly
+    one original integer 1–5 score per report on both sides, each observed
+    paired difference fixes the permissible right score given the left one.
+    A memoized bounded transport search tests whether one assignment matches
+    both published histograms. Mixed or double-rating coverage is deliberately
+    left to the existing necessary guards; no individual score is inferred.
+    """
+    for left, right, name in core.CONTRASTS:
+        left_counts, right_counts = report_counts[left], report_counts[right]
+        if not all(
+            n_left == n_right == 1
+            for n_left, n_right in zip(left_counts, right_counts, strict=True)
+        ):
+            continue
+        differences = observed_edges[name]
+        if len(differences) != len(left_counts) or any(
+            type(edge) is not int or edge % 2 for edge in differences
+        ):
+            raise ValueError(
+                f"{name}/{dimension}: invalid fully single-rated paired differences"
+            )
+        left_bins = analysis["variant_summary"][left][dimension][
+            "raw_score_distribution"
+        ]
+        right_bins = analysis["variant_summary"][right][dimension][
+            "raw_score_distribution"
+        ]
+        left_target = tuple(left_bins[str(score)] for score in range(1, 6))
+        right_target = tuple(right_bins[str(score)] for score in range(1, 6))
+        shifts = [edge // 2 for edge in differences]
+
+        @lru_cache(maxsize=100_000)
+        def feasible(
+            index: int, remaining_left: tuple[int, ...],
+            remaining_right: tuple[int, ...],
+        ) -> bool:
+            if index == len(shifts):
+                return not any(remaining_left) and not any(remaining_right)
+            shift = shifts[index]
+            for score in range(max(1, 1 - shift), min(5, 5 - shift) + 1):
+                right_score = score + shift
+                if not (remaining_left[score - 1] and remaining_right[right_score - 1]):
+                    continue
+                next_left = list(remaining_left)
+                next_right = list(remaining_right)
+                next_left[score - 1] -= 1
+                next_right[right_score - 1] -= 1
+                if feasible(index + 1, tuple(next_left), tuple(next_right)):
+                    return True
+            return False
+
+        if not feasible(0, left_target, right_target):
+            raise ValueError(
+                f"{name}/{dimension}: cross-arm single-rater raw histograms "
+                "contradict task-specific observed paired differences"
+            )
+
+
 def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
     """Tighten missing-*pair* envelopes jointly within each task and dimension.
 
@@ -498,6 +564,7 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
         sums = {name: [0, 0] for _, _, name in core.CONTRASTS}
         completed_sums = {name: [0, 0] for _, _, name in core.CONTRASTS}
         report_counts = {arm: [] for arm in arms}
+        observed_edges = {name: [] for _, _, name in core.CONTRASTS}
         score_domains = {arm: [] for arm in arms}
         missing_tasks = {name: {} for _, _, name in core.CONTRASTS}
         incomplete_rater_tasks = {name: {} for _, _, name in core.CONTRASTS}
@@ -544,6 +611,7 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
                 score_domains[arm].append(possible_sums)
 
             for i, (left, right, name) in enumerate(core.CONTRASTS):
+                observed_edges[name].append(fixed_edges[i])
                 sums[name][0] += lows[i]
                 sums[name][1] += highs[i]
                 completed_sums[name][0] += completed_lows[i]
@@ -572,6 +640,9 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
         )
         _validate_cross_arm_published_report_means(
             analysis, arms, dimension, report_counts, sums,
+        )
+        _validate_single_rater_cross_arm_histograms(
+            analysis, dimension, report_counts, observed_edges,
         )
 
         for _, _, name in core.CONTRASTS:

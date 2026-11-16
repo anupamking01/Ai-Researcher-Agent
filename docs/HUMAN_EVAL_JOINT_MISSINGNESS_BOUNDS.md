@@ -288,3 +288,33 @@ tested separately. It is neither a reconstructed rating file nor a new human
 result. The original source-verified freeze gate, human validation and
 historical original-artifact custody remain mandatory; no frozen estimate,
 primary inference, missingness envelope or rater submission is changed.
+
+## Exact cross-arm histogram coupling for complete single-rater coverage
+
+An additional fail-closed check addresses a remaining source-summary ambiguity:
+each arm's pooled score histogram can individually match task coverage and
+its published mean, while both arms' histograms cannot represent the **same
+observed task-level paired differences**. Matching aggregate raw-score totals
+is not enough to detect such disagreements.
+
+For an adjacent contrast in which **every one of the ten reports on both
+sides has exactly one original 1–5 rating**, the paired difference on a task
+fixes the integer shift between the two raw scores. A bounded memoized
+transport search consumes one score from each published five-bin histogram
+per task and requires every observed task shift to hold. In particular, ten
+zero-difference single-rater pairs require identical adjacent-arm histograms,
+not just equal average scores. A constructed regression with D3 scores
+five 1s and five 5s and D6 scores ten 3s has equal means of 3 but cannot
+realize ten zero differences; the new check rejects it. A separate synthetic
+test accepts attainable nonzero shifts.
+
+The exact check applies **only** to contrasts with complete one-rater
+coverage on both sides. Mixed, missing, and two-rater cases retain their
+earlier conservative necessary checks; this guard must not incorrectly
+equate different raw-score bins for two-rated reports with the same mean.
+Even passing all three adjacent contrast checks does not prove one global
+four-arm rating allocation. The analysis is post-freeze **exploratory
+integrity auditing**, not prospectively confirmatory inference or observed
+human validation. It does not create annotator scores, change human-evaluation
+denominators, rerun treatment/evaluator work, or alter frozen findings.
+
