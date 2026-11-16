@@ -380,6 +380,37 @@ def _validate_recovered_shared_execution_config(experiment: dict) -> None:
             )
 
 
+
+def _validate_recovered_llm_controls(
+    trace: dict, *, baseline: tuple[str, str, float] | None
+) -> tuple[str, str, float]:
+    """Require constant runtime model controls across the original main study.
+
+    The pinned September 2026 runner imports logic.run once and executes the
+    40 cells in the same process. logic.run records smart_model, fast_model,
+    and temperature from its module-level CFG in *every* RunTrace. Those are
+    shared evaluation conditions, not D3/D6/P6/P6V interventions. Per-run
+    published source/token/cost counts cannot detect a substituted control.
+    This checks only recovered-trace consistency, never original custody or
+    independently observed provider model identity.
+    """
+    controls = []
+    for field in ("smart_model", "fast_model"):
+        value = trace.get(field)
+        if type(value) is not str or not value.strip():
+            raise ValueError(f"recovered trace {field} must be a nonempty model name")
+        controls.append(value)
+    temperature = trace.get("temperature")
+    if type(temperature) not in (int, float) or not math.isfinite(temperature):
+        raise ValueError("recovered trace temperature must be a finite number")
+    observed = (controls[0], controls[1], float(temperature))
+    if baseline is not None and observed != baseline:
+        raise ValueError(
+            "recovered trace LLM controls differ across original treatment runs"
+        )
+    return observed
+
+
 def _validate_recovered_source_ledgers(trace: dict, *, variant: str) -> None:
     """Check completed-run source provenance, not merely frozen CSV counters.
 
@@ -823,6 +854,7 @@ def _trace_report_content_status(
     total_bytes = 0
     checked = 0
     candidate_pins: list[tuple] = []
+    llm_controls_baseline: tuple[str, str, float] | None = None
     from urllib.parse import unquote
     for variant, run_id in located_ids:
         trace_file = trace_root / variant / f"{run_id}.json"
@@ -913,6 +945,9 @@ def _trace_report_content_status(
                         f"recovered trace {trace_field} differs from frozen "
                         f"treatment CSV {csv_field}"
                     )
+            llm_controls_baseline = _validate_recovered_llm_controls(
+                trace, baseline=llm_controls_baseline
+            )
             _validate_recovered_source_ledgers(trace, variant=variant)
             _validate_recovered_search_provenance(trace)
             _validate_recovered_query_budget_allocation(trace, variant=variant)

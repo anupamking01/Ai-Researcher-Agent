@@ -1050,3 +1050,35 @@ custody, restore expired Actions artifacts, or authorize human distribution.
 The pilot remains diagnostic; historical automated analysis retains its
 post-collection planning, treatment-order and evaluator-comparability
 qualifications. No new confirmatory or human-validation result is produced.
+
+
+## Runtime model-control comparability across original treatment cells (16 November 2026)
+
+The pinned original checkout `c3c15e46a8eec3a8bbc24c968eedc0548172a897`
+runs all 40 main-study treatment cells sequentially within one
+`scripts/run_budget_main_study.py` Python process. `logic.run` instantiates
+module-level `CFG = Config()` once and persists its `smart_llm_model`,
+`fast_llm_model` and `temperature` as `smart_model`, `fast_model`,
+`temperature` in **every** saved `RunTrace`. These settings are not the
+planned treatment interventions: drifting settings could confound arm
+comparisons without changing published browse counts, model-call counts,
+token totals, estimated cost, or report lengths.
+
+The read-only recovery preflight now requires nonblank model identifiers,
+a finite numeric (not boolean) temperature, and **one identical three-field
+runtime-control tuple across all 40 recovered trace candidates**. Synthetic
+whole-matrix tests alter each field in a later treatment cell or make an
+initial field missing/malformed while leaving frozen counts and reports
+unchanged; the candidate-alignment diagnostic must then block. No observed
+experimental outcomes or historical traces have been changed.
+
+This is an **internal cross-trace comparability check, not model attestation**.
+It cannot determine which particular models the original provider served,
+authenticate a recovered archive, or catch an identical fabricated control
+repeated consistently across all 40 traces. The original main-study manifest
+or independent original source custody is still needed for stronger identity
+claims. Human handoff remains blocked until independent original evidence
+and eligible real blinded annotators are available. The five-task pilot is
+diagnostic, frozen automated results retain post-collection/ordering and
+historical evaluator limitations, and this gate adds neither confirmatory
+nor human-evaluation evidence.

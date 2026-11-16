@@ -540,6 +540,9 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
                     "search_queries": plan,
                     "search_records": records,
                     "usage_accounting_status": "provider_usage_complete",
+                    "smart_model": "synthetic-model",
+                    "fast_model": "synthetic-model",
+                    "temperature": 0.0,
                     "prompt_tokens": 100, "completion_tokens": 150,
                     "unavailable_usage_call_count": 0,
                     "provider_usage_by_model": {
@@ -805,6 +808,60 @@ def test_recovered_shared_execution_factors_match_original_runner(
     )
     assert field in result["trace_report_content"]["first_failure"]
     assert "original_trace_report_content_alignment" in result["blockers"]
+    assert result["handoff_verified"] is False
+
+
+
+@pytest.mark.parametrize("field,replacement", [
+    ("smart_model", "another-valid-model"),
+    ("fast_model", "other-fast-model"),
+    ("temperature", 0.7),
+])
+def test_original_runtime_llm_controls_cannot_drift_between_treatments(
+    tmp_path, monkeypatch, field, replacement
+):
+    """One altered later-run control cannot silently confound arm comparisons."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces/D6/d6-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["trace"][field] = replacement
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_to_published_evaluator"]["matched"] == 40
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "LLM controls differ" in result["trace_report_content"]["first_failure"]
+    assert "original_trace_report_content_alignment" in result["blockers"]
+    assert result["handoff_verified"] is False
+
+
+@pytest.mark.parametrize("field,replacement,remove", [
+    ("smart_model", "", False),
+    ("fast_model", "  ", False),
+    ("temperature", True, False),
+    ("temperature", float("nan"), False),
+    ("temperature", float("inf"), False),
+    ("fast_model", None, True),
+    ("temperature", None, True),
+])
+def test_original_runtime_llm_controls_require_valid_trace_values(
+    tmp_path, monkeypatch, field, replacement, remove
+):
+    """Invalid original runtime metadata is not a source-consistent trace."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces/D3/d3-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if remove:
+        del payload["trace"][field]
+    else:
+        payload["trace"][field] = replacement
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert field in result["trace_report_content"]["first_failure"]
     assert result["handoff_verified"] is False
 
 
