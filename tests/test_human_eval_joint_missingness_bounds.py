@@ -521,3 +521,54 @@ def test_cross_arm_published_means_allow_no_scored_reports():
     result = joint.audit_joint_shared_arm_bounds(_fixture(counts=counts))
     assert result["cross_arm_report_mean_consistency_is_necessary_not_sufficient"]
     assert _cell(result)["shared_arm_conditioned_all_task_bounds"] == [-4, 4]
+
+
+def test_joint_histogram_mean_detects_conflicting_singleton_identity():
+    # Fully synthetic two-task arm: the first (single-rated) report is
+    # constrained to score 1, the double-rated report to sum 6.
+    # Raw bins 1,3,3 are attainable and the separate published mean 2.5
+    # passes a histogram-only singleton subset-sum check by selecting 3.
+    # Those two witnesses cannot both be true for the same report identities.
+    dim = core.DIMS[0]
+    bins = {"1": 1, "2": 0, "3": 2, "4": 0, "5": 0}
+    payload = {"variant_summary": {"D6": {dim: {
+        "raw_score_distribution": bins,
+        "mean_report_score": 2.5,
+    }}}}
+    counts = {"D6": [1, 2]}
+    domains = {"D6": [{1}, {6}]}
+    joint._validate_published_score_histograms(
+        payload, ["D6"], dim, counts, domains,
+    )
+    joint._validate_published_report_means(payload, ["D6"], dim, counts)
+    with pytest.raises(ValueError, match="joint task-specific score assignment"):
+        joint._validate_joint_histogram_report_means(
+            payload, ["D6"], dim, counts, domains,
+        )
+
+
+def test_joint_histogram_mean_accepts_attainable_singleton_and_double_scores():
+    dim = core.DIMS[0]
+    payload = {"variant_summary": {"D6": {dim: {
+        "raw_score_distribution": {"1": 1, "2": 0, "3": 2, "4": 0, "5": 0},
+        "mean_report_score": 2.0,  # mean(1, (3+3)/2)
+    }}}}
+    counts = {"D6": [1, 2]}
+    domains = {"D6": [{1}, {6}]}
+    joint._validate_joint_histogram_report_means(
+        payload, ["D6"], dim, counts, domains,
+    )
+    # Two different ratings can sum to six; neither the algorithm nor the
+    # evidence contract assumes that a two-rated report has equal ratings.
+    payload["variant_summary"]["D6"][dim]["raw_score_distribution"] = {
+        "1": 2, "2": 0, "3": 0, "4": 0, "5": 1,
+    }
+    joint._validate_joint_histogram_report_means(
+        payload, ["D6"], dim, counts, domains,
+    )
+
+
+def test_joint_histogram_mean_leaves_full_two_rater_evidence_unchanged():
+    result = joint.audit_joint_shared_arm_bounds(_fixture())
+    assert result["joint_arm_histogram_mean_feasibility_is_necessary_not_sufficient"]
+    assert _cell(result)["shared_arm_conditioned_all_task_bounds"] == [0, 0]

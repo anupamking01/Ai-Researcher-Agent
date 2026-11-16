@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 from itertools import product
+from functools import lru_cache
 from pathlib import Path
 
 from scripts import analyze_human_eval
@@ -232,6 +233,74 @@ def _validate_published_score_histograms(
             raise ValueError(
                 f"{arm}/{dimension}: published score histogram cannot match "
                 "task differences and rater coverage"
+            )
+
+
+
+def _validate_joint_histogram_report_means(
+    analysis: dict, arms: list[str], dimension: str,
+    report_counts: dict[str, list[int]], score_domains: dict[str, list[set[int]]],
+) -> None:
+    """Require one task-specific allocation to satisfy histogram AND report mean.
+
+    The separate histogram reachability and singleton-subset mean checks are
+    necessary but not jointly sufficient: they may rely on *different*
+    assignments of the singleton scores. This bounded, exact per-arm search
+    retains task-level constraints inherited from the four-arm contrast chain.
+    It does not claim the four arms can be assigned jointly.
+    """
+    for arm in arms:
+        counts = report_counts[arm]
+        if not any(count == 1 for count in counts):
+            # For zero/two-score coverage, the earlier histogram feasibility
+            # check already fixes the published mean of every scored report.
+            continue
+        summary = analysis["variant_summary"][arm][dimension]
+        target = tuple(
+            summary["raw_score_distribution"][str(i)] for i in range(1, 6)
+        )
+        n_scored = sum(count > 0 for count in counts)
+        raw_total = sum((i + 1) * n for i, n in enumerate(target))
+        required = 2 * n_scored * summary["mean_report_score"] - raw_total
+        rounded = round(required)
+        if not math.isclose(required, rounded, rel_tol=0, abs_tol=1e-9):
+            raise ValueError(
+                f"{arm}/{dimension}: published histogram and report mean "
+                "lack a joint task-specific score assignment"
+            )
+        required = int(rounded)
+        options = [
+            _raw_score_histogram_options(count, allowed)
+            for count, allowed in zip(counts, score_domains[arm], strict=True)
+        ]
+        # The input is frozen at ten tasks and a maximum of 20 raw ratings.
+        # Memoizing the remaining histogram and singleton subtotal avoids
+        # enumerating annotator identities or storing hypothetical ratings.
+        @lru_cache(maxsize=200_000)
+        def feasible(index: int, remaining: tuple[int, ...], singleton: int) -> bool:
+            if index == len(counts):
+                return singleton == 0 and not any(remaining)
+            for option in options[index]:
+                if any(used > left for used, left in zip(option, remaining)):
+                    continue
+                value = (
+                    sum((i + 1) * n for i, n in enumerate(option))
+                    if counts[index] == 1 else 0
+                )
+                if value > singleton:
+                    continue
+                if feasible(
+                    index + 1,
+                    tuple(left - used for used, left in zip(option, remaining)),
+                    singleton - value,
+                ):
+                    return True
+            return False
+
+        if not feasible(0, target, required):
+            raise ValueError(
+                f"{arm}/{dimension}: published histogram and report mean "
+                "lack a joint task-specific score assignment"
             )
 
 
@@ -498,6 +567,9 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
         _validate_published_report_means(
             analysis, arms, dimension, report_counts,
         )
+        _validate_joint_histogram_report_means(
+            analysis, arms, dimension, report_counts, score_domains,
+        )
         _validate_cross_arm_published_report_means(
             analysis, arms, dimension, report_counts, sums,
         )
@@ -535,6 +607,7 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
         "raw_histogram_feasibility_is_necessary_not_sufficient": True,
         "cross_arm_histogram_aggregates_are_necessary_not_sufficient": True,
         "published_report_mean_feasibility_is_necessary_not_sufficient": True,
+        "joint_arm_histogram_mean_feasibility_is_necessary_not_sufficient": True,
         "cross_arm_report_mean_consistency_is_necessary_not_sufficient": True,
         "task_ids": tasks,
         "bounds_by_contrast_and_dimension": output,

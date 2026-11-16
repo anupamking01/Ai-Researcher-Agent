@@ -260,3 +260,31 @@ per-arm singleton-mean and histogram-aggregate guards, legitimate missing
 reports, and completely unrated arms. These arithmetic gates cannot establish
 real human scores, independently authenticated treatment evidence, or
 prospective confirmatory findings.
+
+
+## Joint histogram-and-mean feasibility for the same task assignment
+
+The per-arm raw-score histogram check and published report-mean check each
+accepted a possibly different assignment of raw scores to original singly
+rated reports. This gap matters when adjacent frozen contrasts constrain a
+specific report's original score: a histogram might be task-wise feasible,
+and a mean might be histogram-wise feasible, but **not simultaneously**.
+
+The post-freeze exploratory auditor now performs an exact, memoized per-arm
+feasibility search over the ten frozen task identities. It tracks the
+remaining five-bin raw-score histogram and required total of singleton
+ratings, and restricts each report to its original-rater count and the
+score-sum domain allowed by the shared four-arm paired contrasts. It rejects
+published arm summaries for which no *single* task assignment matches both
+the histogram and the reported mean. A synthetic regression demonstrates a
+forced singleton score of 1, a double-rated report sum of 6, and raw bins
+(1,3,3): the individual checks accept a mean of 2.5, but their supposed
+witnesses are incompatible; the joint check rejects it. It accepts the
+attainable mean of 2.0 and both 3+3 and 1+5 double-rating allocations.
+
+This remains a **necessary, not sufficient** consistency check for the
+complete four-treatment matrix, because each arm's histogram assignment is
+tested separately. It is neither a reconstructed rating file nor a new human
+result. The original source-verified freeze gate, human validation and
+historical original-artifact custody remain mandatory; no frozen estimate,
+primary inference, missingness envelope or rater submission is changed.
