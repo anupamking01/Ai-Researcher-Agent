@@ -98,6 +98,14 @@ def test_unverified_source_claim_fails_even_with_identical_saved_bytes():
         check.verify_saved_bytes(_raw(bad), bad)
 
 
+def test_spoofed_boolean_upstream_schema_is_not_accepted():
+    expected = _expected()
+    spoofed = copy.deepcopy(expected)
+    spoofed["schema_version"] = True
+    with pytest.raises(ValueError, match="classification/claim contract"):
+        check.verify_saved_bytes(_raw(spoofed), spoofed)
+
+
 def test_oversized_report_refused_before_json_decoding():
     expected = _expected()
     with pytest.raises(ValueError, match="bounded byte contract"):

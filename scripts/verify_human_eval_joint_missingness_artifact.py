@@ -42,7 +42,8 @@ def verify_saved_bytes(raw: bytes, replayed: dict) -> dict:
         raise ValueError("saved exploratory report exceeds bounded byte contract")
     if (
         type(replayed) is not dict
-        or replayed.get("schema_version") != 1
+        or type(replayed.get("schema_version")) is not int
+        or replayed["schema_version"] != 1
         or replayed.get("classification")
         != "exploratory_shared_arm_missing_pair_sensitivity_only"
         or replayed.get("not_a_confidence_interval") is not True
