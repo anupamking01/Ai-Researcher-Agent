@@ -60,6 +60,47 @@ PUBLISHED_CSV_FILE_SHA256 = {
 }
 
 
+def _candidate_generation(path: Path) -> tuple[int, ...]:
+    """Identify a local source revision, never historical origin."""
+    if _file_status(path) != "present_unverified":
+        raise ValueError("recovered candidate is missing, redirected, or unsafe")
+    st = path.lstat()
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+        raise ValueError("recovered candidate must be a single-link regular file")
+    return (
+        st.st_dev, st.st_ino, st.st_mode, st.st_nlink,
+        st.st_size, st.st_mtime_ns, st.st_ctime_ns,
+    )
+
+
+def _capture_recovery_candidate(path: Path, *, label: str) -> tuple[bytes, tuple]:
+    """Pin initial bytes and file generation for full-matrix rechecking."""
+    before = _candidate_generation(path)
+    raw = packet_builder._read_regular_file_captured(path, label=label)
+    if _candidate_generation(path) != before:
+        raise ValueError("recovered candidate changed during initial capture")
+    return raw, (path, label, before, hashlib.sha256(raw).digest())
+
+
+def _verify_recovery_candidate_window(pins: list[tuple]) -> None:
+    """Re-read every source after the matrix checks to reject torn revisions.
+
+    This only establishes two-observation local consistency; it is not an
+    atomic snapshot or independent historical archive authentication.
+    """
+    for path, label, generation, digest in pins:
+        if _candidate_generation(path) != generation:
+            raise ValueError("recovered candidate changed during matrix audit")
+        current = packet_builder._read_regular_file_captured(
+            path, label=f"{label} final matrix consistency recheck"
+        )
+        if (
+            hashlib.sha256(current).digest() != digest
+            or _candidate_generation(path) != generation
+        ):
+            raise ValueError("recovered candidate changed during matrix audit")
+
+
 def _capture_published_csv(repo_root: Path, relative: str, *, label: str) -> bytes:
     """Bind every downstream read to the original published CSV bytes."""
     expected_sha = PUBLISHED_CSV_FILE_SHA256.get(relative)
@@ -698,6 +739,7 @@ def _trace_report_content_status(
     # The output deliberately contains no report text or treatment results.
     total_bytes = 0
     checked = 0
+    candidate_pins: list[tuple] = []
     from urllib.parse import unquote
     for variant, run_id in located_ids:
         trace_file = trace_root / variant / f"{run_id}.json"
@@ -706,12 +748,13 @@ def _trace_report_content_status(
             if (_file_status(trace_file) != "present_unverified"
                     or _file_status(report_file) != "present_unverified"):
                 raise ValueError("trace or report is missing, redirected, or unsafe")
-            trace_bytes = packet_builder._read_regular_file_captured(
+            trace_bytes, trace_pin = _capture_recovery_candidate(
                 trace_file, label="recovered experimental trace"
             )
-            report_bytes = packet_builder._read_regular_file_captured(
+            report_bytes, report_pin = _capture_recovery_candidate(
                 report_file, label="recovered Markdown report"
             )
+            candidate_pins.extend((trace_pin, report_pin))
             total_bytes += len(trace_bytes) + len(report_bytes)
             packet_builder._require_packet_byte_limit(
                 total_bytes, label="aggregate recovered trace/report bytes"
@@ -798,6 +841,14 @@ def _trace_report_content_status(
                     "first_failure": f"{variant}/{run_id}: {exc}"}
         checked += 1
 
+    try:
+        _verify_recovery_candidate_window(candidate_pins)
+    except (OSError, ValueError) as exc:
+        return {
+            "status": "recovered_candidates_changed_during_audit",
+            "checked": checked, "expected": EXPECTED_TRACES,
+            "reason": str(exc),
+        }
     return {"status": "40_trace_report_contents_align_to_frozen_cells_not_authenticated",
             "checked": checked, "expected": EXPECTED_TRACES}
 
@@ -988,6 +1039,7 @@ def audit_archive_readiness(
         "invalid_frozen_task_or_evaluator",
         "invalid_or_mismatched_trace_report_content",
         "invalid_content_validator_contract",
+        "recovered_candidates_changed_during_audit",
     ):
         gaps.append("original_trace_report_content_alignment")
 

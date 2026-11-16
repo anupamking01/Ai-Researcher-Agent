@@ -1,5 +1,25 @@
 # Recover the original automated-to-human VERA evidence (no outcome reruns)
 
+## Whole-matrix candidate observation window (16 November 2026)
+
+The read-only original-archive readiness diagnostic now binds each of the 40
+candidate JSON traces and 40 Markdown reports to its captured SHA-256 and
+filesystem generation (device, inode, mode, hardlink count, size, mtime,
+ctime). After all per-cell frozen-input and report-content checks, it
+**re-reads every candidate** and rejects persistent replacement or rewrite,
+including a byte-identical atomic replacement or an in-place same-size edit
+with restored mtime. Previously individual captures could all be internally
+stable while earlier sources changed before the full-matrix status was
+returned. An observed change now blocks readiness instead of producing a
+misleading complete 40-cell consistency finding. Synthetic tests cover
+unchanged candidates, rewrites, replacements, and redirected parent paths.
+
+This is a two-observation local consistency check, not an atomic snapshot;
+transient replace-and-restore cannot be ruled out. Historical report/trace
+custody remains unauthenticated; independent source-pinned handoff and actual
+human raters are still required. No treatment or evaluator was rerun,
+frozen result changed, or human rating generated.
+
 ## Recovered ZIP ancestor-directory custody (14 November 2026)
 
 The read-only offline candidate-ZIP preflight now opens each directory
