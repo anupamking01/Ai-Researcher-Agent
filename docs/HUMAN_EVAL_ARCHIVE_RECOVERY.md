@@ -1018,3 +1018,35 @@ honored during execution, recover missing artifacts, or establish a new
 confirmatory or human-evaluation result. The five-task pilot remains
 diagnostic; the frozen automated analysis retains its post-collection
 planning, fixed-order and evaluator-comparability limitations.
+
+## Shared execution-factor fidelity in recovered configurations (16 November 2026)
+
+The pinned original treatment checkout
+`c3c15e46a8eec3a8bbc24c968eedc0548172a897` defines
+`ExperimentConfig.from_variant()` in `logic/experiment.py`.
+The historical `scripts/run_budget_main_study.py` constructs every D3,
+D6, P6 and P6V configuration from that method, replacing **only**
+`task_set_id` and `task_id` before calling `run_agent`.
+Consequently the non-treatment settings were shared across all 40
+treatments: `search_candidate_multiplier=3`,
+`max_concurrent_browses=2`, `stream_report=False` and
+`trace_root="outputs/experiment_traces"`.
+
+The read-only recovered-archive diagnostic now rejects missing, mistyped
+or altered values for those four original execution factors. Candidate
+multiplicity affects search exposure, browser concurrency affects latency
+and resource pressure, and report streaming affects generation behavior.
+These are distinct from the arm-defining planning, source-budget and
+verification settings, and from the duplicated timeout fields already
+checked. A semantically plausible 40-cell archive with mutated shared
+settings can no longer be described as aligned with the original runner
+merely because published outcomes and counters still agree.
+
+Nine synthetic full-matrix adversarial cases exercise changes, missing
+fields, and Python boolean/numeric equality confusion. This validation
+establishes **internal source-contract consistency only**: it cannot prove
+the settings were actually used, establish independent original-report
+custody, restore expired Actions artifacts, or authorize human distribution.
+The pilot remains diagnostic; historical automated analysis retains its
+post-collection planning, treatment-order and evaluator-comparability
+qualifications. No new confirmatory or human-validation result is produced.

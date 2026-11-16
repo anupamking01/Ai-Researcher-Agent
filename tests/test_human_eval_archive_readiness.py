@@ -519,6 +519,7 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
                     "verification_mode": audit.FROZEN_EXECUTION_MODES[variant][1],
                     "browse_timeout_seconds": 60.0,
                     "run_timeout_seconds": 480.0,
+                    **audit.ORIGINAL_SHARED_EXECUTION_CONFIG,
                 },
                 "trace": {
                     "variant_id": variant, "task_id": task_id,
@@ -760,6 +761,41 @@ def test_recovered_trace_execution_metadata_must_match_original_config(
     path = outputs / "experiment_traces" / variant / f"{run_id}.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload[section][field] = invalid
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_to_published_evaluator"]["matched"] == 40
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert field in result["trace_report_content"]["first_failure"]
+    assert "original_trace_report_content_alignment" in result["blockers"]
+    assert result["handoff_verified"] is False
+
+
+@pytest.mark.parametrize("variant,field,bad_value,remove", [
+    ("D3", "search_candidate_multiplier", 2, False),
+    ("P6V", "search_candidate_multiplier", True, False),
+    ("P6", "max_concurrent_browses", 4, False),
+    ("D6", "max_concurrent_browses", 2.0, False),
+    ("D3", "stream_report", True, False),
+    ("P6V", "stream_report", 0, False),
+    ("P6", "trace_root", "../unverified-traces", False),
+    ("D6", "search_candidate_multiplier", None, True),
+    ("D3", "trace_root", None, True),
+])
+def test_recovered_shared_execution_factors_match_original_runner(
+    tmp_path, monkeypatch, variant, field, bad_value, remove
+):
+    """Changing a shared runner factor must not pass as the frozen treatment."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    run_id = f"{variant.lower()}-run-00"
+    path = outputs / "experiment_traces" / variant / f"{run_id}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if remove:
+        del payload["experiment"][field]
+    else:
+        payload["experiment"][field] = bad_value
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     result = audit.audit_archive_readiness(repo_root=tmp_path)

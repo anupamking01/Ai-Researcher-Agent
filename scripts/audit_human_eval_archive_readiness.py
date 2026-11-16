@@ -56,6 +56,18 @@ FROZEN_EXECUTION_MODES = {
     "P6V": ("planner", "verify"),
 }
 
+# Original logic/experiment.py ExperimentConfig.from_variant defaults at
+# treatment checkout c3c15e46. run_budget_main_study.py used from_variant()
+# and replaced only task identifiers. These are shared execution factors:
+# changing them could confound retrieval or latency comparisons even if the
+# archived source counts, provider usage, and report words remain unchanged.
+ORIGINAL_SHARED_EXECUTION_CONFIG = {
+    "search_candidate_multiplier": ORIGINAL_SEARCH_CANDIDATE_MULTIPLIER,
+    "max_concurrent_browses": 2,
+    "stream_report": False,
+    "trace_root": "outputs/experiment_traces",
+}
+
 # Individual SHA-256s from the published, aggregate-anchored frozen-input
 # manifest. Recheck exact captured bytes at each later CSV read; the earlier
 # aggregate verification alone cannot protect mutable paths across calls.
@@ -348,6 +360,24 @@ def _trace_run_alignment(
         "expected": EXPECTED_TRACES,
     }
 
+
+
+def _validate_recovered_shared_execution_config(experiment: dict) -> None:
+    """Fail closed on altered original, cross-arm execution factors.
+
+    Unlike source_budget and planning/verification, these values were not
+    treatment interventions. The pinned main-study runner never overrode
+    their from_variant defaults; equality must include JSON scalar types so
+    e.g. true cannot masquerade as integer 1. This is a source-consistency
+    audit, not independent proof of archive custody or run execution.
+    """
+    for field, expected in ORIGINAL_SHARED_EXECUTION_CONFIG.items():
+        observed = experiment.get(field)
+        if type(observed) is not type(expected) or observed != expected:
+            raise ValueError(
+                f"recovered experiment {field} differs from original "
+                "main-study execution config"
+            )
 
 
 def _validate_recovered_source_ledgers(trace: dict, *, variant: str) -> None:
@@ -869,6 +899,7 @@ def _trace_report_content_status(
                     raise ValueError(
                         f"recovered trace {field} differs from original experiment config"
                     )
+            _validate_recovered_shared_execution_config(experiment)
             frozen_budget = main_input_contract.FROZEN_SOURCE_BUDGETS[variant]
             if (type(experiment.get("source_budget")) is not int
                     or experiment["source_budget"] != frozen_budget):
