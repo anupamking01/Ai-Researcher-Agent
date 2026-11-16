@@ -1,5 +1,37 @@
 # Recover the original automated-to-human VERA evidence (no outcome reruns)
 
+## Original treatment run-start chronology and interleaving (17 November 2026)
+
+At the pinned September 2026 treatment checkout (c3c15e46), the ten frozen
+tasks ran sequentially with **D3, D6, P6, P6V interleaved for each task**;
+the runner stops on failed treatments rather than selecting replacements.
+The original logic.run.run_agent persisted a timezone-aware UTC
+started_at_utc in every trace. GitHub's original treatment Actions run
+34620917346 records run_started_at=2026-09-11T16:15:15Z and
+updated_at=2026-09-11T17:22:43Z (whole-second provider metadata). These
+times belong to the original treatment run, not evaluator-only recovery.
+
+The read-only archival preflight now rejects missing, malformed, naive,
+non-UTC or out-of-window trace start times and an otherwise internally aligned
+40-cell matrix whose timestamps contradict the original task-interleaved
+execution order. The provider-reported last second is inclusive. Offline
+synthetic regression cases exercise within-task reversal, between-task
+reversal, malformed/out-of-window clocks and valid sequential timestamps.
+This checks **temporal treatment-exposure plausibility** even when frozen
+source counts, model-usage costs, latency and report metrics still agree.
+It does not reconstruct missing timing or remove the acknowledged fixed-order
+confounding limitation.
+
+Same-provider workflow times and self-reported trace starts are not
+independent clock attestation, authenticated ZIP/report custody or proof
+of genuine treatment execution. Original artifacts remain unavailable and
+blinded human distribution still needs independent source-pinned custody.
+The five-task pilot stays diagnostic; published automated analysis remains
+post-collection with fixed-order and evaluator-recovery qualifications;
+retrospective sensitivity work is exploratory, not prospective confirmatory
+evidence or completed human validation. No treatments, evaluators, frozen
+outcomes or human ratings were rerun, selected, fabricated or changed.
+
 ## Historical provider-accounting model identity (16 November 2026)
 
 The pinned September 2026 treatment runner (commit `c3c15e46`) creates one

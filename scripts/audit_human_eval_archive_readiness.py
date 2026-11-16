@@ -13,6 +13,7 @@ import json
 import math
 import re
 import stat
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from scripts import build_human_eval_packet as packet_builder
@@ -46,6 +47,15 @@ ORIGINAL_PRICING_SHA256 = "35eb6aea8a4e494ea6b94a0905e893849958d37ac386915aac795
 # Exact literal persisted by the pinned September 2026 logic/run.py.
 # Actual per-treatment estimates were computed later from the dated rate table.
 ORIGINAL_TRACE_COST_STATUS = "not_computed_without_frozen_pricing_table"
+
+# Original treatment workflow 34620917346 metadata, as recorded by GitHub.
+# The reported last-update second is inclusive; this is not clock attestation.
+ORIGINAL_TREATMENT_WORKFLOW_START_UTC = datetime(
+    2026, 9, 11, 16, 15, 15, tzinfo=timezone.utc
+)
+ORIGINAL_TREATMENT_WORKFLOW_LAST_UPDATE_UTC = datetime(
+    2026, 9, 11, 17, 22, 43, tzinfo=timezone.utc
+)
 
 # Historical c3c15e46 search: 3 candidate results per available browse slot,
 # hard cap 20; web_search normalizes to unique, stripped, nonempty hrefs.
@@ -382,6 +392,38 @@ def _validate_recovered_shared_execution_config(experiment: dict) -> None:
                 "main-study execution config"
             )
 
+
+
+def _validate_recovered_start_time(trace: dict) -> datetime:
+    """Check trace start timing against the pinned original treatment workflow.
+
+    The original September 2026 logic.run.run_agent records timezone-aware UTC
+    now().isoformat() at the start of each run. The workflow start/last-update
+    timestamps form a broad same-provider window, not historical custody
+    or independent proof of clock accuracy or actual treatment execution.
+    """
+    raw = trace.get("started_at_utc")
+    if (
+        type(raw) is not str
+        or re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{6})?\+00:00",
+            raw,
+        ) is None
+    ):
+        raise ValueError("recovered trace started_at_utc is not original UTC ISO format")
+    try:
+        started = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise ValueError("recovered trace started_at_utc is not a valid UTC instant") from exc
+    if not (
+        ORIGINAL_TREATMENT_WORKFLOW_START_UTC
+        <= started
+        < ORIGINAL_TREATMENT_WORKFLOW_LAST_UPDATE_UTC + timedelta(seconds=1)
+    ):
+        raise ValueError(
+            "recovered trace started_at_utc falls outside original treatment workflow"
+        )
+    return started
 
 
 def _validate_recovered_llm_controls(
@@ -1006,6 +1048,7 @@ def _trace_report_content_status(
     checked = 0
     candidate_pins: list[tuple] = []
     llm_controls_baseline: tuple[str, str, float] | None = None
+    run_starts: dict[tuple[str, str], datetime] = {}
     from urllib.parse import unquote
     for variant, run_id in located_ids:
         trace_file = trace_root / variant / f"{run_id}.json"
@@ -1096,6 +1139,7 @@ def _trace_report_content_status(
                         f"recovered trace {trace_field} differs from frozen "
                         f"treatment CSV {csv_field}"
                     )
+            run_starts[(variant, task_id)] = _validate_recovered_start_time(trace)
             llm_controls_baseline = _validate_recovered_llm_controls(
                 trace, baseline=llm_controls_baseline
             )
@@ -1144,6 +1188,26 @@ def _trace_report_content_status(
                     "checked": checked, "expected": EXPECTED_TRACES,
                     "first_failure": f"{variant}/{run_id}: {exc}"}
         checked += 1
+
+    # The pinned c3c15e46 runner executes D3, D6, P6, P6V sequentially for
+    # each task in manifest order; it does not run all cells variant-first.
+    # An internally coherent 40-cell archive with reversed starts must not
+    # be mistaken for the original time-ordered execution.
+    previous_start: datetime | None = None
+    for task_id in task_manifest["tasks"]:
+        for variant in VARIANTS:
+            current_start = run_starts[(variant, task_id)]
+            if previous_start is not None and current_start <= previous_start:
+                return {
+                    "status": "invalid_or_mismatched_trace_report_content",
+                    "checked": checked, "expected": EXPECTED_TRACES,
+                    "first_failure": (
+                        f"{variant}/{matrix[(variant, task_id)]['run_id']}: "
+                        "recovered trace started_at_utc violates original "
+                        "task-interleaved treatment execution order"
+                    ),
+                }
+            previous_start = current_start
 
     try:
         _verify_recovery_candidate_window(candidate_pins)

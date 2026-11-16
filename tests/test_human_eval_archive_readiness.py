@@ -2,6 +2,7 @@
 import csv
 import hashlib
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from pathlib import Path
@@ -493,6 +494,10 @@ def _write_semantically_aligned_fixture(
     for variant in audit.VARIANTS:
         for n, task_id in enumerate(audit.lineage.TASKS):
             run_id = f"{variant.lower()}-run-{n:02d}"
+            # The historical runner interleaves variants, unlike file order.
+            start = datetime(2026, 9, 11, 16, 20, tzinfo=timezone.utc)
+            position = n * len(audit.VARIANTS) + audit.VARIANTS.index(variant)
+            start += timedelta(seconds=2 * position)
             question = tasks["tasks"][n]["question"]
             plan = ([question] if variant in ("D3", "D6") else [
                 f"Synthetic planned query {i} for {task_id}" for i in range(4)
@@ -528,6 +533,7 @@ def _write_semantically_aligned_fixture(
                     "variant_id": variant, "task_id": task_id,
                     "task_set_id": tasks["task_set_id"],
                     "run_id": run_id, "completed": True,
+                    "started_at_utc": start.isoformat(),
                     "question": tasks["tasks"][n]["question"],
                     "verification_status": (
                         "ok" if variant == "P6V" else "not_requested"
@@ -588,6 +594,48 @@ def _write_semantically_aligned_fixture(
             )
     return outputs
 
+
+
+@pytest.mark.parametrize("bad_time", [
+    None, "", "2026-09-11T16:20:00", "2026-09-11T16:20:00+05:30",
+    "2026-09-11 16:20:00+00:00", "not-an-instant",
+    "2026-09-11T16:15:14+00:00",
+    "2026-09-11T17:22:44+00:00",
+])
+def test_original_treatment_run_clock_requires_utc_and_workflow_window(bad_time):
+    with pytest.raises(ValueError, match="started_at_utc"):
+        audit._validate_recovered_start_time({"started_at_utc": bad_time})
+
+
+def test_original_treatment_run_clock_includes_workflow_last_second():
+    assert audit._validate_recovered_start_time({
+        "started_at_utc": "2026-09-11T17:22:43.999999+00:00",
+    }) == datetime(2026, 9, 11, 17, 22, 43, 999999, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("variant,task_n,bad_time", [
+    ("D6", 0, "2026-09-11T16:19:59+00:00"),  # Before task 1's D3.
+    ("D3", 1, "2026-09-11T16:20:05+00:00"),  # Before task 1's P6V.
+])
+def test_original_treatment_task_interleaving_cannot_be_reordered(
+    tmp_path, monkeypatch, variant, task_n, bad_time
+):
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    run_id = f"{variant.lower()}-run-{task_n:02d}"
+    trace_file = outputs / "experiment_traces" / variant / f"{run_id}.json"
+    payload = json.loads(trace_file.read_text(encoding="utf-8"))
+    payload["trace"]["started_at_utc"] = bad_time
+    trace_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert receipt["trace_report_content"]["checked"] == 40
+    assert "task-interleaved treatment execution order" in (
+        receipt["trace_report_content"]["first_failure"]
+    )
+    assert "original_trace_report_content_alignment" in receipt["blockers"]
 
 
 @pytest.mark.parametrize("variant", ["D3", "D6", "P6", "P6V"])
