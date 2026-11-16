@@ -43,6 +43,9 @@ TRACE_TO_MAIN_MEASUREMENTS = (
 # commit c3c15e46...). Never use present-day prices for frozen outcomes.
 FROZEN_PRICING_REL = "experiments/openai_pricing_2026-09-08.json"
 ORIGINAL_PRICING_SHA256 = "35eb6aea8a4e494ea6b94a0905e893849958d37ac386915aac7958b00c4eeace"
+# Exact literal persisted by the pinned September 2026 logic/run.py.
+# Actual per-treatment estimates were computed later from the dated rate table.
+ORIGINAL_TRACE_COST_STATUS = "not_computed_without_frozen_pricing_table"
 
 # Historical c3c15e46 search: 3 candidate results per available browse slot,
 # hard cap 20; web_search normalizes to unique, stripped, nonempty hrefs.
@@ -834,6 +837,28 @@ def _validate_recovered_provider_model_identity(trace: dict) -> None:
         )
 
 
+def _validate_recovered_trace_cost_provenance(trace: dict) -> None:
+    """Keep historical raw trace cost placeholders separate from priced analysis.
+
+    At pinned source c3c15e46, logic.run initializes RunTrace with a zero
+    estimated_cost_usd and the explicit not-computed cost status. Offline
+    summarization later estimates treatment costs using dated uncached rates.
+    A recovered trace must not impersonate provider billing or claim it had
+    already estimated the cost at execution time. This verifies only original
+    source consistency, not billing, artifact custody, or economic accuracy.
+    """
+    if trace.get("cost_accounting_status") != ORIGINAL_TRACE_COST_STATUS:
+        raise ValueError(
+            "recovered trace cost_accounting_status differs from original "
+            "unpriced execution trace"
+        )
+    raw_cost = trace.get("estimated_cost_usd")
+    if type(raw_cost) is not float or not math.isfinite(raw_cost) or raw_cost != 0.0:
+        raise ValueError(
+            "recovered trace estimated_cost_usd is not original zero placeholder"
+        )
+
+
 def _load_original_run_pricing(repo_root: Path) -> dict:
     """Capture exactly the historical treatment checkout's dated price table.
 
@@ -1080,6 +1105,7 @@ def _trace_report_content_status(
             _validate_recovered_search_provenance(trace)
             _validate_recovered_query_budget_allocation(trace, variant=variant)
             _validate_recovered_provider_usage(trace)
+            _validate_recovered_trace_cost_provenance(trace)
             _validate_recovered_efficiency_measurements(
                 trace, frozen_row, pricing_models=pricing_models
             )

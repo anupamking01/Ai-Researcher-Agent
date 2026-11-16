@@ -792,7 +792,17 @@ An unknown priced model, mismatched cost or latency, or edited/missing pricing
 source blocks content readiness. Costs use the historical `math.fsum` method
 with a small floating-point tolerance; they are research estimates, **not**
 independently authenticated provider billing, real-world charged costs, or
-evidence about cached-token discounts. This does **not** prove any
+evidence about cached-token discounts. The recovered raw trace must also
+retain the original execution-time cost-accounting semantics: at the pinned
+September 2026 `logic/run.py`, every completed treatment recorded
+`cost_accounting_status="not_computed_without_frozen_pricing_table"` and a
+floating-point `estimated_cost_usd=0.0` **placeholder**, before subsequent
+offline frozen-rate cost estimation. Missing, forged, nonfinite or nonzero
+raw cost telemetry now blocks archival content alignment even if the published
+frozen CSV estimate remains identical. This prevents the archive from
+misrepresenting an offline research cost estimate as provider-observed billing;
+it does not authenticate original custody, establish actual charges, or change
+any frozen outcomes. This does **not** prove any
 URL was actually retrieved, link any individual source to a report claim, or
 authenticate historical archive bytes. It also reads each corresponding Markdown report, rejects empty or non-UTF-8
 content, and checks the whitespace-split word count against the frozen trace

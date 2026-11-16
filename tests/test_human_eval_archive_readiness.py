@@ -551,6 +551,8 @@ def _write_semantically_aligned_fixture(
                     "search_queries": plan,
                     "search_records": records,
                     "usage_accounting_status": "provider_usage_complete",
+                    "cost_accounting_status": audit.ORIGINAL_TRACE_COST_STATUS,
+                    "estimated_cost_usd": 0.0,
                     "smart_model": runtime_models[0],
                     "fast_model": runtime_models[1],
                     "temperature": 0.0,
@@ -1439,6 +1441,66 @@ def test_late_task_manifest_replacement_blocks_question_alignment(tmp_path, monk
         receipt["trace_report_content"]["reason"]
     )
     assert "original_trace_report_content_alignment" in receipt["blockers"]
+
+@pytest.mark.parametrize("field,bad_value,remove", [
+    ("cost_accounting_status", "provider_billed", False),
+    ("cost_accounting_status", "estimated_from_frozen_uncached_rates", False),
+    ("cost_accounting_status", "", False),
+    ("cost_accounting_status", None, False),
+    ("cost_accounting_status", None, True),
+    ("estimated_cost_usd", 0.0002, False),
+    ("estimated_cost_usd", -0.01, False),
+    ("estimated_cost_usd", True, False),
+    ("estimated_cost_usd", 0, False),
+    ("estimated_cost_usd", "0.0", False),
+    ("estimated_cost_usd", None, False),
+    ("estimated_cost_usd", None, True),
+])
+def test_recovered_trace_preserves_original_unpriced_cost_semantics(
+    tmp_path, monkeypatch, field, bad_value, remove
+):
+    """Frozen-priced costs cannot be laundered into raw execution telemetry."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces/D3/d3-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if remove:
+        del payload["trace"][field]
+    else:
+        payload["trace"][field] = bad_value
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["trace_to_published_evaluator"]["matched"] == 40
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert field in receipt["trace_report_content"]["first_failure"]
+    assert "original_trace_report_content_alignment" in receipt["blockers"]
+    assert receipt["handoff_verified"] is False
+
+
+@pytest.mark.parametrize("field,invalid", [
+    ("estimated_cost_usd", float("nan")),
+    ("estimated_cost_usd", float("inf")),
+    ("estimated_cost_usd", -float("inf")),
+])
+def test_recovered_unpriced_cost_rejects_nonfinite_in_memory(field, invalid):
+    """The validator remains safe even without the production strict JSON reader."""
+    trace = {
+        "cost_accounting_status": audit.ORIGINAL_TRACE_COST_STATUS,
+        "estimated_cost_usd": 0.0,
+    }
+    trace[field] = invalid
+    with pytest.raises(ValueError, match="estimated_cost_usd"):
+        audit._validate_recovered_trace_cost_provenance(trace)
+
+
+def test_original_unpriced_trace_cost_contract_accepts_valid_placeholder():
+    audit._validate_recovered_trace_cost_provenance({
+        "cost_accounting_status": audit.ORIGINAL_TRACE_COST_STATUS,
+        "estimated_cost_usd": 0.0,
+    })
+
 
 @pytest.mark.parametrize("latency", [-1.0, True, None, "1.25", 2.0])
 def test_archived_latency_must_match_frozen_efficiency_measurement(
