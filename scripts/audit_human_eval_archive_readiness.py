@@ -430,6 +430,47 @@ def _validate_recovered_start_time(trace: dict) -> datetime:
     return started
 
 
+def _validate_recovered_persistence_time(
+    payload: dict, *, started_at: datetime, latency_seconds: float,
+) -> datetime:
+    """Check the original trace-save UTC clock against run execution.
+
+    Original logic.experiment.save_run_trace stamped recorded_at_utc after
+    run_agent's awaited work and latency measurement. This is a wall-clock
+    plausibility check, not authenticated historical chronology or proof of
+    process execution; allow the established five-second cross-clock margin.
+    """
+    raw = payload.get("recorded_at_utc")
+    if (
+        type(raw) is not str
+        or re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{6})?\+00:00",
+            raw,
+        ) is None
+    ):
+        raise ValueError("recovered recorded_at_utc is not original UTC ISO format")
+    try:
+        recorded = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise ValueError("recovered recorded_at_utc is not a valid UTC instant") from exc
+    if not (
+        started_at - timedelta(seconds=ORIGINAL_RUN_CLOCK_DRIFT_ALLOWANCE_SECONDS)
+        <= recorded
+        < ORIGINAL_TREATMENT_WORKFLOW_LAST_UPDATE_UTC + timedelta(seconds=1)
+    ):
+        raise ValueError(
+            "recovered recorded_at_utc is outside plausible original save window"
+        )
+    if (
+        (recorded - started_at).total_seconds()
+        + ORIGINAL_RUN_CLOCK_DRIFT_ALLOWANCE_SECONDS < latency_seconds
+    ):
+        raise ValueError(
+            "recovered recorded_at_utc precedes the completed run duration"
+        )
+    return recorded
+
+
 def _validate_recovered_llm_controls(
     trace: dict, *, baseline: tuple[str, str, float] | None
 ) -> tuple[str, str, float]:
@@ -1054,6 +1095,7 @@ def _trace_report_content_status(
     llm_controls_baseline: tuple[str, str, float] | None = None
     run_starts: dict[tuple[str, str], datetime] = {}
     run_latencies: dict[tuple[str, str], float] = {}
+    run_recordings: dict[tuple[str, str], datetime] = {}
     from urllib.parse import unquote
     for variant, run_id in located_ids:
         trace_file = trace_root / variant / f"{run_id}.json"
@@ -1159,6 +1201,10 @@ def _trace_report_content_status(
                 trace, frozen_row, pricing_models=pricing_models
             )
             run_latencies[(variant, task_id)] = trace["latency_seconds"]
+            run_recordings[(variant, task_id)] = _validate_recovered_persistence_time(
+                payload, started_at=run_starts[(variant, task_id)],
+                latency_seconds=trace["latency_seconds"],
+            )
             _validate_recovered_provider_model_identity(trace)
             declared_report = trace.get("report_path")
             if not isinstance(declared_report, str):
@@ -1201,6 +1247,7 @@ def _trace_report_content_status(
     # be mistaken for the original time-ordered execution.
     previous_start: datetime | None = None
     previous_latency: float | None = None
+    previous_recording: datetime | None = None
     for task_id in task_manifest["tasks"]:
         for variant in VARIANTS:
             current_start = run_starts[(variant, task_id)]
@@ -1231,8 +1278,26 @@ def _trace_report_content_status(
                             "overlaps previous run duration"
                         ),
                     }
+            # Historical save_run_trace writes each completed trace before the
+            # next sequential run begins. A forged save timestamp can disagree
+            # with that order while starts, durations and frozen metrics agree.
+            if (
+                previous_recording is not None
+                and (previous_recording - current_start).total_seconds()
+                    > ORIGINAL_RUN_CLOCK_DRIFT_ALLOWANCE_SECONDS
+            ):
+                return {
+                    "status": "invalid_or_mismatched_trace_report_content",
+                    "checked": checked, "expected": EXPECTED_TRACES,
+                    "first_failure": (
+                        f"{variant}/{matrix[(variant, task_id)]['run_id']}: "
+                        "recovered recorded_at_utc implausibly follows "
+                        "the next sequential treatment start"
+                    ),
+                }
             previous_start = current_start
             previous_latency = run_latencies[(variant, task_id)]
+            previous_recording = run_recordings[(variant, task_id)]
 
     try:
         _verify_recovery_candidate_window(candidate_pins)

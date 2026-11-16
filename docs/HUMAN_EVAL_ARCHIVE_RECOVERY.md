@@ -1240,3 +1240,32 @@ and eligible real blinded annotators are available. The five-task pilot is
 diagnostic, frozen automated results retain post-collection/ordering and
 historical evaluator limitations, and this gate adds neither confirmatory
 nor human-evaluation evidence.
+
+
+## Saved-trace UTC persistence chronology (17 November 2026)
+
+The pinned treatment implementation at
+`c3c15e46a8eec3a8bbc24c968eedc0548172a897` calls
+`logic.experiment.save_run_trace` after `run_agent` finishes its timed
+run and writes a top-level `recorded_at_utc` timestamp. This is distinct
+from the trace's `started_at_utc` and its independently measured
+`latency_seconds`. The archived 40-cell preflight previously checked
+the start order and run durations but ignored the save timestamp.
+
+The read-only diagnostic now requires the original UTC timestamp form,
+a plausible save time relative to the run start and measured duration,
+the original treatment-workflow window, and a save that does not grossly
+extend past the next sequential treatment start. The existing five-second
+wall-clock/monotonic-clock discrepancy allowance is retained. Synthetic
+tests exercise missing, malformed, off-window, prematurely recorded, and
+cross-run contradictory saved timestamps without adjusting frozen results.
+
+These checks establish *internal chronology plausibility*, not proof that
+the file was actually saved at the recorded instant, independent GitHub
+runner attestation, original archive custody, or the absence of smaller
+clock shifts. Missing historical reports and traces still block source-
+authenticated blinded distribution. The pilot remains diagnostic;
+the historical automated analysis retains post-collection statistical
+planning, fixed-order, and common-evaluator comparability qualifications;
+exploratory audit findings are not prospective confirmatory or completed
+human-validation evidence.

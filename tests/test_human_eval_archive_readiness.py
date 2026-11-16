@@ -522,6 +522,7 @@ def _write_semantically_aligned_fixture(
             ]
             payload = {
                 "schema_version": 2,
+                "recorded_at_utc": (start + timedelta(seconds=latency)).isoformat(),
                 "experiment": {
                     "variant_id": variant, "task_id": task_id,
                     "task_set_id": tasks["task_set_id"],
@@ -2150,3 +2151,79 @@ def test_archive_readiness_rejects_unmarked_search_failure_in_40_cell_matrix(
     )
     assert "original_trace_report_content_alignment" in receipt["blockers"]
     assert receipt["handoff_verified"] is False
+
+
+@pytest.mark.parametrize("bad_time", [
+    None, "", 123, False, "2026-09-11T16:20:02",
+    "2026-09-11T16:20:02+05:30", "2026-09-11 16:20:02+00:00",
+    "not-a-time", "2026-09-11T16:19:54+00:00",
+    "2026-09-11T17:22:44+00:00",
+])
+def test_historical_trace_save_timestamp_requires_original_utc_window(bad_time):
+    started = datetime(2026, 9, 11, 16, 20, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="recorded_at_utc"):
+        audit._validate_recovered_persistence_time(
+            {"recorded_at_utc": bad_time},
+            started_at=started, latency_seconds=1.25,
+        )
+
+
+def test_historical_trace_save_timestamp_rejects_impossible_elapsed_duration():
+    started = datetime(2026, 9, 11, 16, 20, tzinfo=timezone.utc)
+    # Save time is within the historical workflow yet predates completion
+    # by more than the existing five-second wall/monotonic-clock allowance.
+    with pytest.raises(ValueError, match="completed run duration"):
+        audit._validate_recovered_persistence_time(
+            {"recorded_at_utc": started.isoformat()},
+            started_at=started, latency_seconds=6.9,
+        )
+
+
+def test_historical_trace_save_timestamp_accepts_small_clock_margin():
+    started = datetime(2026, 9, 11, 16, 20, tzinfo=timezone.utc)
+    recorded = started + timedelta(seconds=1.9)
+    assert audit._validate_recovered_persistence_time(
+        {"recorded_at_utc": recorded.isoformat()},
+        started_at=started, latency_seconds=6.9,
+    ) == recorded
+
+
+@pytest.mark.parametrize("value", [None, "2026-09-11T16:20:02+05:30"])
+def test_historical_trace_save_timestamp_is_required_in_whole_matrix(
+    tmp_path, monkeypatch, value,
+):
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    trace_path = outputs / "experiment_traces/D3/d3-run-00.json"
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    if value is None:
+        del payload["recorded_at_utc"]
+    else:
+        payload["recorded_at_utc"] = value
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "recorded_at_utc" in result["trace_report_content"]["first_failure"]
+    assert result["handoff_verified"] is False
+
+
+def test_original_trace_save_must_precede_next_treatment_start(
+    tmp_path, monkeypatch,
+):
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    trace_path = outputs / "experiment_traces/D3/d3-run-00.json"
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    # Treatment starts and frozen measurements stay valid. The prior
+    # persisted-trace timestamp alone is nine seconds after its own start,
+    # seven seconds after the next treatment start.
+    payload["recorded_at_utc"] = "2026-09-11T16:20:09+00:00"
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "next sequential treatment start" in (
+        result["trace_report_content"]["first_failure"]
+    )
+    assert result["handoff_verified"] is False
