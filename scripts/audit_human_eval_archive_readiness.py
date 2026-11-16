@@ -56,6 +56,10 @@ ORIGINAL_TREATMENT_WORKFLOW_START_UTC = datetime(
 ORIGINAL_TREATMENT_WORKFLOW_LAST_UPDATE_UTC = datetime(
     2026, 9, 11, 17, 22, 43, tzinfo=timezone.utc
 )
+# run_agent measures per-run duration with perf_counter, whereas starts use
+# wall-clock UTC. Reject gross impossible overlap, but allow small clock drift:
+# this is a plausibility bound, not cross-clock synchronization evidence.
+ORIGINAL_RUN_CLOCK_DRIFT_ALLOWANCE_SECONDS = 5.0
 
 # Historical c3c15e46 search: 3 candidate results per available browse slot,
 # hard cap 20; web_search normalizes to unique, stripped, nonempty hrefs.
@@ -1049,6 +1053,7 @@ def _trace_report_content_status(
     candidate_pins: list[tuple] = []
     llm_controls_baseline: tuple[str, str, float] | None = None
     run_starts: dict[tuple[str, str], datetime] = {}
+    run_latencies: dict[tuple[str, str], float] = {}
     from urllib.parse import unquote
     for variant, run_id in located_ids:
         trace_file = trace_root / variant / f"{run_id}.json"
@@ -1153,6 +1158,7 @@ def _trace_report_content_status(
             _validate_recovered_efficiency_measurements(
                 trace, frozen_row, pricing_models=pricing_models
             )
+            run_latencies[(variant, task_id)] = trace["latency_seconds"]
             _validate_recovered_provider_model_identity(trace)
             declared_report = trace.get("report_path")
             if not isinstance(declared_report, str):
@@ -1194,20 +1200,39 @@ def _trace_report_content_status(
     # An internally coherent 40-cell archive with reversed starts must not
     # be mistaken for the original time-ordered execution.
     previous_start: datetime | None = None
+    previous_latency: float | None = None
     for task_id in task_manifest["tasks"]:
         for variant in VARIANTS:
             current_start = run_starts[(variant, task_id)]
-            if previous_start is not None and current_start <= previous_start:
-                return {
-                    "status": "invalid_or_mismatched_trace_report_content",
-                    "checked": checked, "expected": EXPECTED_TRACES,
-                    "first_failure": (
-                        f"{variant}/{matrix[(variant, task_id)]['run_id']}: "
-                        "recovered trace started_at_utc violates original "
-                        "task-interleaved treatment execution order"
-                    ),
-                }
+            if previous_start is not None:
+                if current_start <= previous_start:
+                    return {
+                        "status": "invalid_or_mismatched_trace_report_content",
+                        "checked": checked, "expected": EXPECTED_TRACES,
+                        "first_failure": (
+                            f"{variant}/{matrix[(variant, task_id)]['run_id']}: "
+                            "recovered trace started_at_utc violates original "
+                            "task-interleaved treatment execution order"
+                        ),
+                    }
+                # The source runner awaited each completed run before starting
+                # the next. Its perf_counter duration cannot grossly exceed
+                # the wall-clock gap between consecutive UTC run starts. These
+                # clocks are not identical: allow five seconds of drift instead
+                # of requiring exact start+duration equality.
+                elapsed = (current_start - previous_start).total_seconds()
+                if elapsed + ORIGINAL_RUN_CLOCK_DRIFT_ALLOWANCE_SECONDS < previous_latency:
+                    return {
+                        "status": "invalid_or_mismatched_trace_report_content",
+                        "checked": checked, "expected": EXPECTED_TRACES,
+                        "first_failure": (
+                            f"{variant}/{matrix[(variant, task_id)]['run_id']}: "
+                            "recovered completed treatment run implausibly "
+                            "overlaps previous run duration"
+                        ),
+                    }
             previous_start = current_start
+            previous_latency = run_latencies[(variant, task_id)]
 
     try:
         _verify_recovery_candidate_window(candidate_pins)
