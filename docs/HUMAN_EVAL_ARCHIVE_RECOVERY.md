@@ -1,5 +1,34 @@
 # Recover the original automated-to-human VERA evidence (no outcome reruns)
 
+
+## Original treatment duration/UTC-start nonoverlap (17 November 2026)
+
+At pinned treatment source `c3c15e46`, `logic.run.run_agent` records
+`started_at_utc` from the UTC wall clock and `latency_seconds` from
+`time.perf_counter()` in the same completed run. The main-study runner awaits
+each `run_agent` before starting its next treatment cell; it does not execute
+D3/D6/P6/P6V cells concurrently. A recovered 40-cell matrix could previously
+pass all individual frozen-CSV duration checks and strictly ordered start
+timestamps while making **completed run intervals grossly overlap**.
+
+The read-only archive consistency diagnostic now compares each completed
+run's frozen-aligned monotonic duration with the wall-clock gap to the next
+task-interleaved run. It rejects gaps more than **five seconds shorter** than
+the preceding duration. The five-second allowance is an intentionally
+conservative local clock-domain tolerance, **not** a measured bound on historic
+clock drift or independent timestamp attestation. Synthetic full-matrix tests
+exercise within-task and between-task gross overlaps while preserving frozen
+CSV agreement, plus a small permitted cross-clock discrepancy.
+
+This is an **internal plausibility gate**, not a reconstructed schedule,
+proof of sequential historical execution, independent artifact custody, or
+source-authenticated permission to distribute blinded packets. The original
+trace/report archives remain missing; the pilot remains diagnostic, historical
+automated findings retain post-collection planning, fixed-order and evaluator
+comparability limitations, retrospective work is exploratory, and prospective
+confirmatory/human validation is not established. No treatment, evaluator,
+frozen outcome or genuine human rating was rerun or altered.
+
 ## Original treatment run-start chronology and interleaving (17 November 2026)
 
 At the pinned September 2026 treatment checkout (c3c15e46), the ten frozen
