@@ -641,3 +641,83 @@ def test_single_rater_histogram_transport_preserves_valid_mixed_coverage():
     result = joint.audit_joint_shared_arm_bounds(payload)
     assert _cell(result)["shared_arm_conditioned_all_task_bounds"] == [0.0, 0.0]
 
+
+def _four_arm_single_rater_matrix(*, compatible: bool):
+    """Synthetic matched margins: each edge is feasible but all four may not be."""
+    arms = ("D3", "D6", "P6", "P6V")
+    contrasts = [name for _, _, name in core.CONTRASTS]
+    counts = {task: {arm: 1 for arm in arms} for task in TASKS}
+    differences = {}
+    for index, task in enumerate(TASKS):
+        shifts = (
+            (-3, 0, 0) if index < 2
+            else (-2, 1, 0) if index == 2
+            else (4, -4, 4)
+        )
+        differences.update(
+            {(task, name): shift for name, shift in zip(contrasts, shifts)}
+        )
+    payload = _fixture(counts=counts, differences=differences)
+    targets = {
+        "D3": {1: 7, 4: 3},
+        "D6": {1: 2, 2: 1, 5: 7},
+        "P6": {1: 9, 3: 1} if compatible else {1: 8, 2: 2},
+        "P6V": {1: 2, 3: 1, 5: 7} if compatible else {1: 1, 2: 2, 5: 7},
+    }
+    for arm, scores in targets.items():
+        for dimension in core.DIMS:
+            record = payload["variant_summary"][arm][dimension]
+            record["raw_score_distribution"] = {
+                str(score): scores.get(score, 0) for score in range(1, 6)
+            }
+            record["mean_report_score"] = (
+                sum(score * n for score, n in scores.items()) / len(TASKS)
+            )
+    return payload
+
+
+def test_global_four_arm_histograms_reject_incompatible_shared_task_assignment():
+    # First three tasks have shifts (-3,0,0), (-3,0,0), (-2,+1,0);
+    # the seven others are each forced to (D3,D6,P6,P6V)=(1,5,1,5).
+    # Every adjacent pair *separately* admits the published histograms,
+    # and all four arm means match the task-difference sums. Yet the
+    # D3 distribution fixes the first three D3 scores at 4, making
+    # P6/P6V histograms 1,1,3—not the separately pair-feasible 1,2,2.
+    payload = _four_arm_single_rater_matrix(compatible=False)
+    arms = ["D3", "D6", "P6", "P6V"]
+    counts = {arm: [1] * len(TASKS) for arm in arms}
+    for dimension in core.DIMS:
+        edges = {
+            name: [
+                2 * payload["paired_contrasts"][name][dimension][
+                    "task_differences"
+                ][task] for task in TASKS
+            ]
+            for _, _, name in core.CONTRASTS
+        }
+        # The old pairwise exact checks pass the contradictory publication.
+        joint._validate_single_rater_cross_arm_histograms(
+            payload, dimension, counts, edges,
+        )
+    with pytest.raises(ValueError, match="four-arm single-rater raw histograms"):
+        joint.audit_joint_shared_arm_bounds(payload)
+
+
+def test_global_four_arm_histograms_accept_same_mean_feasible_histograms():
+    payload = _four_arm_single_rater_matrix(compatible=True)
+    result = joint.audit_joint_shared_arm_bounds(payload)
+    assert result["schema_version"] == 1
+    assert _cell(result)["observed_paired_tasks"] == len(TASKS)
+
+
+def test_four_arm_global_guard_does_not_restrict_mixed_rater_coverage():
+    # Exact integer-score transport is invalid when any report has two
+    # ratings, even if its mean is integer. Preserve the earlier guards.
+    payload = _four_arm_single_rater_matrix(compatible=False)
+    arms = ["D3", "D6", "P6", "P6V"]
+    counts = {arm: [1] * len(TASKS) for arm in arms}
+    counts["D3"][0] = 2
+    joint._validate_four_arm_single_rater_histograms(
+        payload, arms, core.DIMS[0], counts,
+        {name: [0] * len(TASKS) for _, _, name in core.CONTRASTS},
+    )

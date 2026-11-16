@@ -318,3 +318,35 @@ integrity auditing**, not prospectively confirmatory inference or observed
 human validation. It does not create annotator scores, change human-evaluation
 denominators, rerun treatment/evaluator work, or alter frozen findings.
 
+
+## Simultaneous four-arm histogram consistency with complete single-rater coverage
+
+Even when each adjacent pair passes the exact single-rater transport check,
+the checks may rely on **different** task-level D6 or P6 score assignments.
+The exploratory auditor therefore also requires **one shared assignment
+across all four arms** when every report in the ten-task, four-arm matrix
+has exactly one original integer 1–5 rating in a rubric dimension.
+
+Each task's three observed differences constrain all four possible scores
+from a single D3 starting score. A memoized, deterministic search consumes
+all four independently published 1–5 score histograms simultaneously,
+processing the most constrained tasks first. The search is bounded at
+200,000 visited states and fails closed with a resource diagnostic if that
+limit is exceeded. It constructs only **possible witnesses for an internal
+consistency test**, never inferred annotator identities or saved ratings.
+
+A synthetic counterexample has three variable tasks and seven forced tasks:
+each of the three adjacent arm pairs can match its histograms and all
+published means agree with the paired difference totals, but **no single
+four-arm assignment** matches all histograms together. The new guard rejects
+it. A compatible alternative with the same arm means is accepted.
+
+This exact condition applies **only to complete one-rater coverage in all
+four arms**. For any 0/2-rated or mixed-coverage dimension, earlier necessary
+but not sufficient checks remain in force; accepting such a case still
+does not prove global raw-score feasibility. No real human-evaluation
+inputs are available to execute this source-bound audit. This post-freeze
+integrity safeguard is exploratory, not human-validation evidence or
+prospective confirmatory inference. The diagnostic pilot, frozen historical
+automated findings, and their timing/order/evaluator comparability
+qualifications are unchanged.

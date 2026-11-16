@@ -531,6 +531,109 @@ def _validate_single_rater_cross_arm_histograms(
             )
 
 
+
+def _validate_four_arm_single_rater_histograms(
+    analysis: dict, arms: list[str], dimension: str,
+    report_counts: dict[str, list[int]],
+    observed_edges: dict[str, list[int | None]],
+) -> None:
+    """Test one *simultaneous* four-arm assignment when all reports have 1 rating.
+
+    Pairwise histogram transport can use different latent score assignments
+    for the same D6/P6 tasks in adjacent contrasts. Under complete single-
+    rater coverage, the three task differences define one four-score chain
+    for each possible D3 score. Consume all four published histograms at
+    once, without reconstructing or asserting any actual annotator rating.
+    Mixed/missing/two-rater coverage retains the earlier conservative guards.
+    """
+    task_count = len(analysis["task_ids"])
+    if len(arms) != 4 or any(
+        len(report_counts[arm]) != task_count for arm in arms
+    ):
+        raise ValueError(f"{dimension}: invalid four-arm task coverage")
+    if not all(
+        type(n) is int and n == 1
+        for arm in arms for n in report_counts[arm]
+    ):
+        return
+
+    targets = tuple(
+        tuple(
+            analysis["variant_summary"][arm][dimension][
+                "raw_score_distribution"
+            ][str(score)] for score in range(1, 6)
+        )
+        for arm in arms
+    )
+    per_task_options = []
+    for index, task_id in enumerate(analysis["task_ids"]):
+        shifts = []
+        for _, _, name in core.CONTRASTS:
+            edges = observed_edges[name]
+            if len(edges) != task_count:
+                raise ValueError(f"{name}/{dimension}: incomplete task differences")
+            doubled = edges[index]
+            if type(doubled) is not int or doubled % 2:
+                raise ValueError(
+                    f"{name}/{dimension}/{task_id}: invalid fully single-rated difference"
+                )
+            shifts.append(doubled // 2)
+        options = []
+        for score in range(1, 6):
+            scores = (
+                score,
+                score + shifts[0],
+                score + shifts[0] + shifts[1],
+                score + sum(shifts),
+            )
+            if all(1 <= value <= 5 for value in scores):
+                options.append(scores)
+        if not options:
+            raise ValueError(
+                f"{dimension}/{task_id}: no valid four-arm single-rater score chain"
+            )
+        per_task_options.append((index, options))
+    # Process constrained tasks first, retaining deterministic ordering.
+    per_task_options.sort(key=lambda entry: (len(entry[1]), entry[0]))
+
+    examined = 0
+
+    @lru_cache(maxsize=100_000)
+    def feasible(
+        index: int, remaining: tuple[tuple[int, ...], ...],
+    ) -> bool:
+        nonlocal examined
+        examined += 1
+        if examined > 200_000:
+            raise ValueError(
+                f"{dimension}: four-arm single-rater histogram feasibility "
+                "exceeded the bounded search budget"
+            )
+        if index == task_count:
+            return all(not any(histogram) for histogram in remaining)
+        for scores in per_task_options[index][1]:
+            if any(
+                remaining[arm_index][score - 1] == 0
+                for arm_index, score in enumerate(scores)
+            ):
+                continue
+            updated = [list(histogram) for histogram in remaining]
+            for arm_index, score in enumerate(scores):
+                updated[arm_index][score - 1] -= 1
+            if feasible(
+                index + 1,
+                tuple(tuple(histogram) for histogram in updated),
+            ):
+                return True
+        return False
+
+    if not feasible(0, targets):
+        raise ValueError(
+            f"{dimension}: four-arm single-rater raw histograms cannot "
+            "simultaneously satisfy the observed task differences"
+        )
+
+
 def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
     """Tighten missing-*pair* envelopes jointly within each task and dimension.
 
@@ -643,6 +746,9 @@ def audit_joint_shared_arm_bounds(analysis: dict) -> dict:
         )
         _validate_single_rater_cross_arm_histograms(
             analysis, dimension, report_counts, observed_edges,
+        )
+        _validate_four_arm_single_rater_histograms(
+            analysis, arms, dimension, report_counts, observed_edges,
         )
 
         for _, _, name in core.CONTRASTS:
