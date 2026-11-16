@@ -28,6 +28,19 @@ independent replay of a per-shard exact-commit test receipt. Each passing
 shard retains its uniquely named module list, log and pre-install gate receipt; the module list is also prepended
 to the receipt-hashed transcript.
 
+On 16 November 2026, the subsequent PR test run `43811549386` also
+cancelled shard 5 after its runner logged `621 passed in 56.53s`, before
+post-test checkout verification, receipt generation, and successful evidence
+retention. The cancellation was *not* a passing CI job; the log alone does
+not establish a completed full-suite proof or the cause of cancellation.
+The workflow now requests **best-effort unverified diagnostic retention on
+both failure and cancellation**, capturing the raw log and selected module
+list without any verified success receipt. GitHub may interrupt a cancelled
+job before this upload can execute; missing cancellation artifacts are
+therefore not proof that no tests ran. Such bundles are excluded from the
+success-only full-set replay and must never be promoted to scientific or CI
+attestation.
+
 **Only sixteen passing jobs at the same commit constitute a full-suite pass.**
 Passing one shard, one fast lane or the pre-install diagnostic gate does
 not. The full-suite receipt now additionally hashes the retained newline-delimited

@@ -109,17 +109,17 @@ def test_shell_staging_fails_closed_on_missing_or_mixed_downloads(tmp_path, case
         assert result.returncode != 0
 
 
-def test_failure_diagnostics_are_distinct_from_verified_success_receipts():
-    """Preserve negative CI evidence without certifying an incomplete shard."""
+def test_failed_or_cancelled_shard_diagnostics_remain_unverified():
+    """Best-effort cancelled-job evidence must never certify a complete shard."""
     workflow, replay_job, replay_steps = _steps()
     steps = workflow["jobs"]["unit-tests"]["steps"]
     failing = [
         step for step in steps
-        if step.get("name") == "Retain unverified diagnostics on CI failure (90 days)"
+        if step.get("name") == "Retain unverified diagnostics on CI failure or cancellation (90 days)"
     ]
     assert len(failing) == 1
     failed = failing[0]
-    assert failed["if"] == "${{ failure() && !cancelled() }}"
+    assert failed["if"] == "${{ failure() || cancelled() }}"
     assert failed["uses"] == (
         "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
     )
@@ -128,8 +128,8 @@ def test_failure_diagnostics_are_distinct_from_verified_success_receipts():
         "${{ github.run_id }}-${{ github.run_attempt }}"
     )
     assert failed["with"]["retention-days"] == "90"
-    # A failed test, source gate or replay might have no files, or only a
-    # partial transcript. Missing files must not mask the original failure.
+    # A failure or external cancellation may leave partial/absent files. The
+    # upload is best-effort and cannot turn cancelled pytest into a pass.
     assert failed["with"]["if-no-files-found"] == "warn"
     paths = failed["with"]["path"].splitlines()
     assert paths == [
