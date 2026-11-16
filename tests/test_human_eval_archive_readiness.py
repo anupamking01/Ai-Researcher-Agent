@@ -422,7 +422,10 @@ def test_malformed_evaluator_run_id_matrix_cannot_be_used_as_an_identity_gate(
     assert "original_trace_to_evaluator_run_identity" in result["blockers"]
 
 
-def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None):
+def _write_semantically_aligned_fixture(
+    root: Path, monkeypatch, *, archive=None,
+    runtime_models=("synthetic-model", "synthetic-model"),
+):
     """Synthetic run/task/report corpus; publication pin is stubbed in tests."""
     outputs = archive if archive is not None else root / "outputs"
     _write_candidate_matrix(outputs, dict.fromkeys(audit.VARIANTS, 10))
@@ -548,13 +551,13 @@ def _write_semantically_aligned_fixture(root: Path, monkeypatch, *, archive=None
                     "search_queries": plan,
                     "search_records": records,
                     "usage_accounting_status": "provider_usage_complete",
-                    "smart_model": "synthetic-model",
-                    "fast_model": "synthetic-model",
+                    "smart_model": runtime_models[0],
+                    "fast_model": runtime_models[1],
                     "temperature": 0.0,
                     "prompt_tokens": 100, "completion_tokens": 150,
                     "unavailable_usage_call_count": 0,
                     "provider_usage_by_model": {
-                        "synthetic-model": {
+                        runtime_models[0]: {
                             "model_calls": 4, "unavailable_calls": 0,
                             "prompt_tokens": 100, "completion_tokens": 150,
                             "total_tokens": 250,
@@ -1062,10 +1065,38 @@ def test_recovered_provider_usage_rejects_inconsistent_per_model_counters(
     assert "original_trace_report_content_alignment" in receipt["blockers"]
 
 
+@pytest.mark.parametrize("replacement", ["model-a", "model-b"])
+def test_recovered_model_usage_cannot_impersonate_an_unconfigured_model(
+    tmp_path, monkeypatch, replacement
+):
+    """An identically priced unconfigured model must not pass frozen totals."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces/D3/d3-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    provider = payload["trace"]["provider_usage_by_model"]
+    provider[replacement] = provider.pop("synthetic-model")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["trace_to_published_evaluator"]["matched"] == 40
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "outside recorded smart_model/fast_model" in (
+        receipt["trace_report_content"]["first_failure"]
+    )
+    assert "original_trace_report_content_alignment" in receipt["blockers"]
+    assert receipt["handoff_verified"] is False
+
+
 def test_recovered_provider_usage_accepts_consistent_multi_model_accounting(
     tmp_path, monkeypatch
 ):
-    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    # Both model names are fixed across all 40 recovered treatment traces;
+    # a single run may legitimately consume tokens from each.
+    outputs = _write_semantically_aligned_fixture(
+        tmp_path, monkeypatch, runtime_models=("model-a", "model-b")
+    )
     path = outputs / "experiment_traces/D3/d3-run-00.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["trace"]["provider_usage_by_model"] = {

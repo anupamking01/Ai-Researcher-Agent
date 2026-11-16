@@ -763,6 +763,27 @@ def _validate_recovered_provider_usage(trace: dict) -> None:
 
 
 
+def _validate_recovered_provider_model_identity(trace: dict) -> None:
+    """Bind usage-bucket model names to the frozen run's recorded LLM controls.
+
+    Original ResearchAgent completions always pass CFG.smart_llm_model or
+    CFG.fast_llm_model into UsageTracker.record_response. UsageTracker uses
+    that *requested* model name as its ledger key, rather than a provider-
+    returned alias. An otherwise valid, identically priced third bucket can
+    conceal a different treatment model without changing frozen totals.
+    Some runs may legitimately use only one configured model (or configure
+    both controls to the same name), so do not require both keys.
+    This checks recovered internal consistency, not real provider identity.
+    """
+    configured = {trace["smart_model"], trace["fast_model"]}
+    unexpected = set(trace["provider_usage_by_model"]) - configured
+    if unexpected:
+        raise ValueError(
+            "recovered provider usage model identity is outside recorded "
+            "smart_model/fast_model runtime controls"
+        )
+
+
 def _load_original_run_pricing(repo_root: Path) -> dict:
     """Capture exactly the historical treatment checkout's dated price table.
 
@@ -1011,6 +1032,7 @@ def _trace_report_content_status(
             _validate_recovered_efficiency_measurements(
                 trace, frozen_row, pricing_models=pricing_models
             )
+            _validate_recovered_provider_model_identity(trace)
             declared_report = trace.get("report_path")
             if not isinstance(declared_report, str):
                 raise ValueError("trace has no valid original report path")

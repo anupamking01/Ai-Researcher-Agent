@@ -1,5 +1,30 @@
 # Recover the original automated-to-human VERA evidence (no outcome reruns)
 
+## Historical provider-accounting model identity (16 November 2026)
+
+The pinned September 2026 treatment runner (commit `c3c15e46`) creates one
+`UsageTracker` for each research run. Treatment-agent completions use the
+shared `CFG.smart_llm_model` or `CFG.fast_llm_model`; the tracker indexes
+`provider_usage_by_model` buckets by the requested model argument, not a
+provider-returned alias. The trace independently records both runtime
+model controls. After ledger and frozen-cost consistency checking, the
+recovered-archive auditor now rejects provider usage bucket names outside
+those two recorded controls. Both keys need not appear: one model may
+remain unused, and smart/fast controls may have the same name.
+
+Before this safeguard, a differently named model with identical frozen
+prices could replace a bucket without altering token, model-call, latency
+or cost measurements, obscuring treatment-model comparability. Synthetic
+40-cell regression tests cover both priced unauthorized substitution and
+legitimate two-model ledger accounting.
+
+This is an outcome-blind **internal plausibility diagnostic**, not proof
+of the actual model served by a provider or independent custody of any
+historical report/trace. It does not revise the five-task diagnostic pilot,
+the post-collection automated estimates or exploratory sensitivity bounds,
+establish prospective confirmatory findings, or complete real human
+validation. No treatments, evaluators or human ratings were regenerated.
+
 ## Historical treatment-time verification consistency (16 November 2026)
 
 The pinned September 2026 ResearchAgent.write_report invoked the
