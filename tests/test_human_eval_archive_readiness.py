@@ -426,6 +426,7 @@ def test_malformed_evaluator_run_id_matrix_cannot_be_used_as_an_identity_gate(
 def _write_semantically_aligned_fixture(
     root: Path, monkeypatch, *, archive=None,
     runtime_models=("synthetic-model", "synthetic-model"),
+    latency_overrides=None,
 ):
     """Synthetic run/task/report corpus; publication pin is stubbed in tests."""
     outputs = archive if archive is not None else root / "outputs"
@@ -447,6 +448,7 @@ def _write_semantically_aligned_fixture(
         writer.writeheader()
         for variant in audit.VARIANTS:
             for task_id in audit.lineage.TASKS:
+                latency = (latency_overrides or {}).get((variant, task_id), 1.25)
                 writer.writerow({
                     "variant_id": variant, "task_id": task_id,
                     "completed": "True",
@@ -457,7 +459,7 @@ def _write_semantically_aligned_fixture(
                     "total_tokens": 250, "report_words": 50,
                     "treatment_cost_usd": 0.0002,
                     "cost_status": "estimated_from_frozen_uncached_rates",
-                    "latency_seconds": 1.25,
+                    "latency_seconds": latency,
                 })
     tasks = {
         "task_set_id": "synthetic-frozen-task-set",
@@ -494,6 +496,7 @@ def _write_semantically_aligned_fixture(
     for variant in audit.VARIANTS:
         for n, task_id in enumerate(audit.lineage.TASKS):
             run_id = f"{variant.lower()}-run-{n:02d}"
+            latency = (latency_overrides or {}).get((variant, task_id), 1.25)
             # The historical runner interleaves variants, unlike file order.
             start = datetime(2026, 9, 11, 16, 20, tzinfo=timezone.utc)
             position = n * len(audit.VARIANTS) + audit.VARIANTS.index(variant)
@@ -552,7 +555,7 @@ def _write_semantically_aligned_fixture(
                     "successful_source_count": 2, "failed_source_count": 1,
                     "search_call_count": len(records), "model_call_count": 4,
                     "total_tokens": 250, "report_words": 50,
-                    "latency_seconds": 1.25,
+                    "latency_seconds": latency,
                     "source_count": 3, "query_count": len(plan),
                     "search_queries": plan,
                     "search_records": records,
@@ -594,6 +597,40 @@ def _write_semantically_aligned_fixture(
             )
     return outputs
 
+
+
+@pytest.mark.parametrize("cell", [("D3", "main-01"), ("P6V", "main-01")])
+def test_original_sequential_run_durations_cannot_grossly_overlap(
+    tmp_path, monkeypatch, cell,
+):
+    # The frozen treatment CSV and trace agree on duration, and all trace
+    # starts remain strictly ordered. A 16s run followed 2s later is still
+    # inconsistent with the original single-process awaited treatment loop.
+    _write_semantically_aligned_fixture(
+        tmp_path, monkeypatch, latency_overrides={cell: 16.0}
+    )
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "implausibly overlaps" in result["trace_report_content"]["first_failure"]
+    assert "original_trace_report_content_alignment" in result["blockers"]
+    assert result["handoff_verified"] is False
+
+
+def test_original_sequential_run_duration_allows_small_cross_clock_drift(
+    tmp_path, monkeypatch,
+):
+    # A 2s UTC start gap with 6.9s monotonic runtime stays within the
+    # five-second allowance, not proof of source custody or synchronized clocks.
+    _write_semantically_aligned_fixture(
+        tmp_path, monkeypatch, latency_overrides={("D3", "main-01"): 6.9}
+    )
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_report_content"]["status"] == (
+        "40_trace_report_contents_align_to_frozen_cells_not_authenticated"
+    )
+    assert result["handoff_verified"] is False
 
 
 @pytest.mark.parametrize("bad_time", [
