@@ -1365,7 +1365,7 @@ def test_query_allocation_rejects_search_without_allocated_budget():
             {"query": "second", "scheduled_urls": []},
         ],
     }
-    with pytest.raises(ValueError, match="without a query browse budget"):
+    with pytest.raises(ValueError, match="skipped an eligible planned query"):
         audit._validate_recovered_query_budget_allocation(trace, variant="P6")
 
 
@@ -1530,3 +1530,80 @@ def test_archive_readiness_blocks_oversized_candidate_pool_despite_frozen_counts
     assert "search candidate list" in result["trace_report_content"]["first_failure"]
     assert "original_trace_report_content_alignment" in result["blockers"]
     assert result["handoff_verified"] is False
+
+def _planner_query_trace(*, queries, records, budget=6):
+    """Produce internally coherent synthetic provenance without frozen outcomes."""
+    trace = {
+        "source_budget": budget,
+        "search_queries": queries,
+        "query_count": len(queries),
+        "search_records": records,
+        "search_call_count": len(records),
+        "scheduled_urls": [
+            url for record in records for url in record["scheduled_urls"]
+        ],
+    }
+    return trace
+
+
+def test_query_allocation_rejects_skipped_eligible_middle_query():
+    """A missing planned search cannot be hidden behind later valid records."""
+    queries = ["first", "second", "third", "fourth"]
+    records = [
+        {"query": "first", "candidate_urls": ["a", "b"],
+         "scheduled_urls": ["a", "b"]},
+        {"query": "third", "candidate_urls": ["c"],
+         "scheduled_urls": ["c"]},
+        {"query": "fourth", "candidate_urls": ["d"],
+         "scheduled_urls": ["d"]},
+    ]
+    trace = _planner_query_trace(queries=queries, records=records)
+    # Earlier subsequence and greedy checks accepted these ledgers. Yet the
+    # historical loop would have run "second" with two available browse slots.
+    audit._validate_recovered_search_provenance(trace)
+    with pytest.raises(ValueError, match="skipped an eligible planned query"):
+        audit._validate_recovered_query_budget_allocation(trace, variant="P6")
+
+
+def test_query_allocation_rejects_omitted_final_search_with_budget_remaining():
+    """No trailing eligible planner query can disappear from a completed trace."""
+    queries = ["first", "second", "third", "fourth"]
+    records = [
+        {"query": "first", "candidate_urls": ["a", "b"],
+         "scheduled_urls": ["a", "b"]},
+        {"query": "second", "candidate_urls": ["c", "d"],
+         "scheduled_urls": ["c", "d"]},
+        {"query": "third", "candidate_urls": ["e"], "scheduled_urls": ["e"]},
+    ]
+    trace = _planner_query_trace(queries=queries, records=records)
+    audit._validate_recovered_search_provenance(trace)
+    with pytest.raises(ValueError, match="omit an eligible planned query"):
+        audit._validate_recovered_query_budget_allocation(trace, variant="P6")
+
+
+def test_query_allocation_accepts_all_eligible_queries_even_after_search_failure():
+    """A failed metasearch call still occupies its sequential planned slot."""
+    queries = ["first", "second", "third", "fourth"]
+    records = [
+        {"query": "first", "candidate_urls": [], "scheduled_urls": [],
+         "search_error": "synthetic outage"},
+        {"query": "second", "candidate_urls": ["a", "b"],
+         "scheduled_urls": ["a", "b"]},
+        {"query": "third", "candidate_urls": ["c"], "scheduled_urls": ["c"]},
+        {"query": "fourth", "candidate_urls": ["d"], "scheduled_urls": ["d"]},
+    ]
+    trace = _planner_query_trace(queries=queries, records=records)
+    audit._validate_recovered_search_provenance(trace)
+    audit._validate_recovered_query_budget_allocation(trace, variant="P6V")
+
+
+def test_query_allocation_allows_omitting_only_zero_allocation_plan_slots():
+    """The runner can skip zero-budget queries but must attempt every eligible."""
+    queries = ["first", "second", "third", "fourth"]
+    records = [
+        {"query": "first", "candidate_urls": ["a"],
+         "scheduled_urls": ["a"]},
+    ]
+    trace = _planner_query_trace(queries=queries, records=records, budget=1)
+    audit._validate_recovered_search_provenance(trace)
+    audit._validate_recovered_query_budget_allocation(trace, variant="P6")

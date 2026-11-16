@@ -1,5 +1,25 @@
 # Recover the original automated-to-human VERA evidence (no outcome reruns)
 
+## Historical planned-search execution completeness (16 November 2026)
+
+The read-only recovered-trace consistency diagnostic now checks **query
+invocation completeness**, in addition to the prior URL/candidate-budget and
+search-order ledgers. In the original treatment checkout
+`c3c15e46a8eec3a8bbc24c968eedc0548172a897`,
+`ResearchAgent.conduct_research` attempts each planned query with a positive
+per-query allocation while the global browse budget remains. A search outage
+produces an error record; it does not silently skip that query. Previously
+the archive audit allowed an omitted *eligible* middle query or trailing
+query, accepting later records and coherent candidate/URL totals. It now
+rejects both cases while permitting zero-allocation slots and legitimate
+recorded search errors; synthetic regressions cover each boundary.
+
+This is only **internal consistency against original runner code**, not
+independent authentication of a historical archive. Source-custody pins,
+40 original reports and traces, blinded distribution and genuine human
+ratings remain outstanding. No pilot, frozen automated, exploratory or
+human-validation outcomes are changed or inferred.
+
 ## Whole-matrix candidate observation window (16 November 2026)
 
 The read-only original-archive readiness diagnostic now binds each of the 40

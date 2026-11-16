@@ -482,6 +482,9 @@ def _validate_recovered_query_budget_allocation(trace: dict, *, variant: str) ->
     merely selecting any candidate subsequence is insufficient. These are
     execution-contract checks, not evidence of genuine retrieval. Historical
     metasearch also bounds, strips, and deduplicates each query candidate list.
+    conduct_research attempts every planned query with a positive allocation
+    while global browse budget remains: missing or reordered eligible searches
+    are not legitimate skipped slots, even if aggregate counters still agree.
     """
     queries = trace["search_queries"]
     if variant in ("D3", "D6"):
@@ -508,17 +511,22 @@ def _validate_recovered_query_budget_allocation(trace: dict, *, variant: str) ->
     visited_urls: set[str] = set()
     for index, record in enumerate(trace["search_records"]):
         query = record["query"]
-        # Match the same earliest remaining planned-query occurrence as the
-        # preceding search-provenance check; duplicate query text is allowed.
-        while next_query < len(queries) and queries[next_query] != query:
+        # The original conduct_research loop never skips a positive-budget
+        # query while global browse budget remains, even after a search error
+        # or zero search results. Only zero-allocation slots may be omitted.
+        # Match by slot, not by searching ahead for query text: that would
+        # permit a fabricated missing search between two valid records.
+        while next_query < len(queries) and allocations[next_query] <= 0:
             next_query += 1
-        if next_query == len(queries):
-            raise ValueError("recovered search record has no matching planned query")
-        allowed = min(allocations[next_query], remaining)
-        if allowed <= 0:
+        if next_query == len(queries) or remaining <= 0:
             raise ValueError(
                 f"recovered search_records[{index}] ran without a query browse budget"
             )
+        if query != queries[next_query]:
+            raise ValueError(
+                f"recovered search_records[{index}] skipped an eligible planned query"
+            )
+        allowed = min(allocations[next_query], remaining)
         candidates = record.get("candidate_urls")
         # The original metasearch normalizer retained at most the requested
         # nonempty, stripped, distinct hrefs. Scheduled URL counts alone can
@@ -562,6 +570,15 @@ def _validate_recovered_query_budget_allocation(trace: dict, *, variant: str) ->
             )
         remaining -= scheduled
         next_query += 1
+
+    # End-of-record truncation is also impossible if an eligible planned
+    # query would still have been attempted by the original sequential loop.
+    if remaining > 0 and any(
+        allocation > 0 for allocation in allocations[next_query:]
+    ):
+        raise ValueError(
+            "recovered search_records omit an eligible planned query"
+        )
 
 
 def _validate_recovered_provider_usage(trace: dict) -> None:
