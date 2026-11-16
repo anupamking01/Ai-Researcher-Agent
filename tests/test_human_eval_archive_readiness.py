@@ -1512,11 +1512,14 @@ def test_archive_readiness_blocks_oversized_candidate_pool_despite_frozen_counts
 ):
     """The 40-cell recovery diagnostic must enforce original candidate limits."""
     outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
-    path = outputs / "experiment_traces/D6/d6-run-00.json"
+    path = outputs / "experiment_traces/D3/d3-run-00.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     record = payload["trace"]["search_records"][0]
+    # D3 has already scheduled its complete three-source budget; the prior
+    # greedy scheduler accepted arbitrarily many trailing search candidates.
+    # Ten exceeds the source-pinned three-times-budget limit of nine.
     record["candidate_urls"].extend(
-        f"https://example.test/extra-{index}" for index in range(16)
+        f"https://example.test/extra-{index}" for index in range(7)
     )
     # Do not alter frozen CSVs, scheduled URLs, search counts or report bytes.
     path.write_text(json.dumps(payload), encoding="utf-8")
