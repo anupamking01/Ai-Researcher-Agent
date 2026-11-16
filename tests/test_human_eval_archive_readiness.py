@@ -1429,3 +1429,38 @@ def test_archive_recovery_rejects_omitted_greedy_result_with_frozen_counts(
     )
     assert "original_trace_report_content_alignment" in receipt["blockers"]
     assert receipt["handoff_verified"] is False
+
+
+def test_late_report_rewrite_blocks_complete_matrix_content_alignment(
+    tmp_path, monkeypatch
+):
+    """One early source changing after its own check must fail the 40-cell gate."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    original_report = outputs / "d3-run-00" / "research_report.md"
+    original_validator = audit.packet_builder.validate_annotator_facing_content
+    checked = {"count": 0}
+
+    def change_after_last_content_check(*args, **kwargs):
+        result = original_validator(*args, **kwargs)
+        checked["count"] += 1
+        if checked["count"] == 40:
+            original_report.write_text(
+                original_report.read_text(encoding="utf-8").replace(
+                    "archive-ending", "archive-changed"
+                ),
+                encoding="utf-8",
+            )
+        return result
+
+    monkeypatch.setattr(
+        audit.packet_builder, "validate_annotator_facing_content",
+        change_after_last_content_check,
+    )
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert checked["count"] == 40
+    assert result["trace_report_content"]["status"] == (
+        "recovered_candidates_changed_during_audit"
+    )
+    assert result["trace_report_content"]["checked"] == 40
+    assert "original_trace_report_content_alignment" in result["blockers"]
+    assert result["handoff_verified"] is False
