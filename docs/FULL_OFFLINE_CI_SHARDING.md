@@ -13,6 +13,17 @@ replay qualified as successful**. The per-job 20-minute limit and concentrated
 test workloads motivated a deterministic split into smaller complete modules;
 the cancellations alone do not prove which individual test consumed the time.
 
+The ordinary suite now runs in **sixteen independent matrix jobs**, with at
+most **eight active shard jobs per workflow** (`strategy.max-parallel: 8`).
+The same research-branch update triggers both push and pull-request suites,
+which previously could fan out to 32 simultaneously eligible shard jobs.
+Bounding the per-workflow fan-out reduces simultaneous runner demand while
+preserving every shard, its pinned checkout, exact-run evidence retention,
+and the mandatory sixteen-shard aggregate replay. This is a prospective CI
+resource safeguard, **not** evidence that runner pressure caused any past
+cancelled job, a guarantee that future cancellation cannot occur, or a
+substitute for all sixteen successful jobs and replay.
+
 The ordinary suite now runs in **sixteen independent matrix jobs**. The
 dependency-free selector `scripts/select_full_ci_shard.py` recursively
 discovers both default Python pytest filename conventions in `tests/`,

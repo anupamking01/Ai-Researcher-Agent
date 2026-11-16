@@ -16,6 +16,9 @@ jobs:
     # Preserve independent shard results even if one fails.
     strategy:
       fail-fast: false
+      # Limit concurrent runners across the simultaneously triggered push/PR
+      # suites; each exact-run sixteen-shard replay still requires all shards.
+      max-parallel: 8
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     runs-on: ubuntu-24.04

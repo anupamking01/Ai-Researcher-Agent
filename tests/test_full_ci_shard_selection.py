@@ -104,6 +104,8 @@ def test_ci_matrix_requires_all_shards_and_retained_exact_selection():
     )
     job = workflow["jobs"]["unit-tests"]
     assert job["strategy"]["fail-fast"] == "false"
+    # Constrain runner fan-out without dropping any of the sixteen shards.
+    assert job["strategy"]["max-parallel"] == "8"
     assert [int(x) for x in job["strategy"]["matrix"]["shard"]] == list(range(partition.SHARDS))
     assert job["timeout-minutes"] == "20"
     steps = job["steps"]
