@@ -7,6 +7,8 @@ import sys
 import pytest
 import yaml
 
+from scripts import select_full_ci_shard as shard_selector
+
 ROOT = Path(__file__).resolve().parents[1]
 WRAPPER = ROOT / "scripts" / "run_offline_pytest_firewalled.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
@@ -22,8 +24,19 @@ def test_offline_ci_uses_only_firewalled_pytest_entrypoint():
     run = invocations[0]["run"].strip().splitlines()
     assert run[0] == "set -euo pipefail"
     # The explicit shard inventory is generated before the sole pytest call.
-    assert "python -m scripts.select_full_ci_shard --verify-partition --shards 8" in run
-    assert any('--shard "$VERA_SHARD" --shards 8' in line for line in run)
+    assert (
+        f"python -m scripts.select_full_ci_shard --verify-partition "
+        f"--shards {shard_selector.SHARDS}"
+    ) in run
+    assert any(
+        f'--shard "$VERA_SHARD" --shards {shard_selector.SHARDS}' in line
+        for line in run
+    )
+    # The source-bound receipt verifies this exact emitted shard-count header.
+    assert any(
+        f"VERA full-suite shard %s/{shard_selector.SHARDS}; selected %s modules"
+        in line for line in run
+    )
     assert any('mapfile -t test_modules' in line for line in run)
     assert run[-1] == (
         'bash scripts/run_offline_pytest_firewalled.sh "${test_modules[@]}" '
