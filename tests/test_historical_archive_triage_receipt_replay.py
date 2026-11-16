@@ -41,6 +41,72 @@ def test_full_exact_replay_is_read_only_and_never_authenticates(tmp_path):
     assert before == {p.name: p.read_bytes() for p in (first, second, receipt)}
 
 
+@pytest.mark.skipif(
+    not (hasattr(__import__("os"), "O_DIRECTORY") and hasattr(__import__("os"), "O_NOFOLLOW")),
+    reason="requires descriptor-relative no-follow directory opens",
+)
+def test_nested_receipt_directory_is_accepted_with_stable_custody(tmp_path):
+    nested = tmp_path / "backups" / "receipts"
+    nested.mkdir(parents=True)
+    candidate = _zip(tmp_path / "synthetic.zip", b"fictional")
+    assignments = [("original_treatment", candidate)]
+    receipt = _receipt(nested / "receipt.json", assignments)
+    assert verify.verify_receipt(receipt, assignments)["full_recorded_inventory_replayed"] is True
+
+
+@pytest.mark.skipif(
+    not (hasattr(__import__("os"), "O_DIRECTORY") and hasattr(__import__("os"), "O_NOFOLLOW")),
+    reason="requires descriptor-relative no-follow directory opens",
+)
+def test_receipt_symlinked_parent_is_rejected_even_for_regular_leaf(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "receipt.json").write_text("{}", encoding="utf-8")
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+    with pytest.raises(verify.ReceiptVerificationError, match="cannot read receipt"):
+        verify._read_receipt(alias / "receipt.json")
+
+
+def test_receipt_parent_traversal_is_rejected(tmp_path):
+    (tmp_path / "dir").mkdir()
+    (tmp_path / "receipt.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(verify.ReceiptVerificationError, match="parent components"):
+        verify._read_receipt(tmp_path / "dir" / ".." / "receipt.json")
+
+
+@pytest.mark.skipif(
+    not (hasattr(__import__("os"), "O_DIRECTORY") and hasattr(__import__("os"), "O_NOFOLLOW")),
+    reason="requires descriptor-relative no-follow directory opens",
+)
+def test_receipt_parent_swap_to_same_inode_alias_is_rejected(tmp_path, monkeypatch):
+    """The old leaf-only stat checks passed this redirected path."""
+    active = tmp_path / "active"
+    relocated = tmp_path / "relocated"
+    active.mkdir()
+    receipt = active / "receipt.json"
+    receipt.write_text('{"synthetic":true}', encoding="utf-8")
+    unchanged_identity = verify._identity
+    calls = 0
+
+    def swap_after_initial_leaf_checks(info):
+        nonlocal calls
+        calls += 1
+        identity = unchanged_identity(info)
+        if calls == 2:
+            active.rename(relocated)
+            active.symlink_to(relocated, target_is_directory=True)
+        return identity
+
+    monkeypatch.setattr(verify, "_identity", swap_after_initial_leaf_checks)
+    with pytest.raises(
+        verify.ReceiptVerificationError, match="receipt parent directory changed"
+    ):
+        verify._read_receipt(receipt)
+    assert (relocated / "receipt.json").read_text(encoding="utf-8") == '{"synthetic":true}'
+
+
+
 def test_replay_rejects_changed_candidate_bytes(tmp_path):
     candidate = _zip(tmp_path / "candidate.zip", b"before")
     assignments = [("original_treatment", candidate)]

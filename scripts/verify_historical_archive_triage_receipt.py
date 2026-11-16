@@ -6,6 +6,7 @@ A replay checks present-day inventory consistency, NOT original source custody.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import errno
 import hashlib
 import json
@@ -32,39 +33,88 @@ def _identity(info: os.stat_result) -> tuple:
     )
 
 
-def _read_receipt(path: Path) -> bytes:
-    """Bound receipt bytes and fail closed on symlink/hardlink or path replacement."""
-    path = Path(path)
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+@contextmanager
+def _open_receipt_with_pinned_parents(path: Path):
+    """Open a receipt through a stable, no-follow directory chain.
+
+    Checking the regular leaf alone does not prevent a parent symlink from
+    redirecting the read, including a swap to a relocated directory holding
+    the *same* file inode. Recheck the opened ancestry after the read.
+    """
+    if ".." in path.parts:
+        raise ReceiptVerificationError("receipt path must not traverse parent components")
+    if not hasattr(os, "O_DIRECTORY") or not hasattr(os, "O_NOFOLLOW"):
+        raise ReceiptVerificationError(
+            "receipt path custody requires no-follow directory opens"
+        )
+    absolute = Path(os.path.abspath(path))
+    directory_flags = (
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    receipt_flags = (
+        os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    directory_fds: list[int] = []
     try:
-        with os.fdopen(os.open(path, flags), "rb") as stream:
-            before = os.fstat(stream.fileno())
-            source = os.stat(path, follow_symlinks=False)
-            if (
-                not stat.S_ISREG(before.st_mode)
-                or before.st_nlink != 1
-                or not 0 < before.st_size <= MAX_RECEIPT_BYTES
-                or _identity(before) != _identity(source)
-            ):
-                raise ReceiptVerificationError(
-                    "receipt must be a stable bounded single-link regular file"
+        directory_fds.append(os.open(absolute.anchor, directory_flags))
+        for component in absolute.parent.parts[1:]:
+            directory_fds.append(
+                os.open(component, directory_flags, dir_fd=directory_fds[-1])
+            )
+        receipt_fd = os.open(
+            absolute.name, receipt_flags, dir_fd=directory_fds[-1]
+        )
+        with os.fdopen(receipt_fd, "rb") as stream:
+            yield stream
+            for index, component in enumerate(absolute.parent.parts[1:], 1):
+                opened = os.fstat(directory_fds[index])
+                visible = os.stat(
+                    component, dir_fd=directory_fds[index - 1],
+                    follow_symlinks=False,
                 )
-            raw = stream.read(MAX_RECEIPT_BYTES + 1)
-            if (
-                len(raw) != before.st_size
-                or _identity(before) != _identity(os.fstat(stream.fileno()))
-                or _identity(before)
-                != _identity(os.stat(path, follow_symlinks=False))
-            ):
-                raise ReceiptVerificationError("receipt changed during capture")
+                if (
+                    not stat.S_ISDIR(visible.st_mode)
+                    or (opened.st_dev, opened.st_ino, opened.st_mode)
+                    != (visible.st_dev, visible.st_ino, visible.st_mode)
+                ):
+                    raise ReceiptVerificationError(
+                        "receipt parent directory changed during capture"
+                    )
     except OSError as exc:
         raise ReceiptVerificationError(
             "cannot read receipt: filesystem error "
             f"({errno.errorcode.get(exc.errno, 'UNKNOWN')})"
         ) from exc
-    return raw
+    finally:
+        for fd in reversed(directory_fds):
+            os.close(fd)
 
+
+def _read_receipt(path: Path) -> bytes:
+    """Bound a single-link receipt and pin its complete visible path."""
+    with _open_receipt_with_pinned_parents(Path(path)) as stream:
+        before = os.fstat(stream.fileno())
+        source = os.stat(path, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or not 0 < before.st_size <= MAX_RECEIPT_BYTES
+            or _identity(before) != _identity(source)
+        ):
+            raise ReceiptVerificationError(
+                "receipt must be a stable bounded single-link regular file"
+            )
+        raw = stream.read(MAX_RECEIPT_BYTES + 1)
+        if (
+            len(raw) != before.st_size
+            or _identity(before) != _identity(os.fstat(stream.fileno()))
+            or _identity(before)
+            != _identity(os.stat(path, follow_symlinks=False))
+        ):
+            raise ReceiptVerificationError("receipt changed during capture")
+    return raw
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict:
     result = {}

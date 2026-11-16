@@ -1,6 +1,31 @@
 # Recover the original automated-to-human VERA evidence (no outcome reruns)
 
 
+## Candidate-triage receipt ancestor path custody (17 November 2026)
+
+The offline schema-v3 candidate-triage receipt replay previously checked the
+receipt leaf's regular-file identity, size and timestamps before and after the
+read, but opened it through the ambient pathname. A symlinked ancestor or a
+parent swapped to a symlink pointing at a **relocated copy of the same directory**
+could pass those leaf-only checks; the receipt bytes and inode need not change.
+
+The read-only receipt reader now opens each directory component using
+descriptor-relative, no-follow operations, rejects explicit \`..\` traversal and
+symlinked parents, and rechecks that the visible ancestor chain still identifies
+the opened directories after reading. This is fail-closed on platforms without
+the required no-follow directory-opening facilities. Synthetic regression tests
+cover ordinary nested paths, initial symlink aliases, parent traversal, and an
+after-open parent alias swap preserving the receipt inode.
+
+This protects **local receipt source-path continuity** before any potentially
+large candidate ZIP rescan. It is not an independent historical source pin,
+does not authenticate original trace/report custody, and cannot authorize
+blinded human distribution or fabricate ratings. The five-task pilot remains
+diagnostic; frozen automated findings have post-collection, fixed-order and
+evaluator-comparability limitations; retrospective sensitivity analyses remain
+exploratory rather than prospective confirmatory evidence. No experimental
+treatments, evaluator outputs or frozen outcomes are changed.
+
 ## Original treatment duration/UTC-start nonoverlap (17 November 2026)
 
 At pinned treatment source `c3c15e46`, `logic.run.run_agent` records
