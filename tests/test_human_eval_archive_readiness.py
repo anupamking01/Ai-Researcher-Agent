@@ -840,8 +840,6 @@ def test_original_runtime_llm_controls_cannot_drift_between_treatments(
     ("smart_model", "", False),
     ("fast_model", "  ", False),
     ("temperature", True, False),
-    ("temperature", float("nan"), False),
-    ("temperature", float("inf"), False),
     ("fast_model", None, True),
     ("temperature", None, True),
 ])
@@ -863,6 +861,19 @@ def test_original_runtime_llm_controls_require_valid_trace_values(
     )
     assert field in result["trace_report_content"]["first_failure"]
     assert result["handoff_verified"] is False
+
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -float("inf")])
+def test_original_runtime_llm_controls_reject_nonfinite_in_memory(invalid):
+    """The production JSON reader also rejects nonfinite numbers before this gate."""
+    with pytest.raises(ValueError, match="temperature"):
+        audit._validate_recovered_llm_controls(
+            {"smart_model": "model-a", "fast_model": "model-b",
+             "temperature": invalid},
+            baseline=None,
+        )
+
 
 
 def test_missing_or_boolean_trace_counter_is_not_canonical_measurement(
