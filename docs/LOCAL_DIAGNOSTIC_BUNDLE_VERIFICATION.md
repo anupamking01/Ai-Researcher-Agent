@@ -36,6 +36,27 @@ order and evaluator comparability. Retrospective sensitivities are exploratory,
 not prospective confirmatory findings. Human validation is still blocked
 pending source-authenticated handoff and genuine independent annotators.
 
+## Bounded diagnostic bundle inventory checks
+
+The five-file verification now uses descriptor-relative `os.scandir` and a
+fixed membership check **both before reading and after recomputation**, instead
+of `set(os.listdir(...))`. The previous implementation materialized every
+entry in an untrusted directory before determining whether it contained the
+five permitted names. A directory with very many undeclared entries could
+therefore consume unbounded verification time and memory before failing.
+
+The verifier now retains only permitted names (at most five) and rejects the
+first unexpected or repeated name immediately. A synthetic iterator regression
+fails if it is consumed past that first unknown entry; another test adds an
+undeclared file after retained-byte verification and checks the final inventory
+gate. Existing tests cover valid five-file bundles, initial extras, file
+identity substitutions and symlinked ancestors.
+
+This is a local resource-safety and inventory-consistency improvement, **not**
+an atomic snapshot, historical report/trace authentication, or evidence that
+human ratings were collected. Pilot, qualified frozen automated, exploratory
+and pending human-evaluation claims are unchanged.
+
 ## Exact JSON-number types in diagnostic provenance
 
 The locally retained manifest is untrusted metadata, even when its declared

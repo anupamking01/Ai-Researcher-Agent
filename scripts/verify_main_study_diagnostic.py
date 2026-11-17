@@ -53,6 +53,24 @@ def _directory_identity(st: os.stat_result) -> tuple:
     return st.st_dev, st.st_ino, st.st_mode
 
 
+def _require_exact_bundle_inventory(directory_fd: int, required: set[str], failure: str) -> None:
+    """Fail closed on a fixed bundle inventory without unbounded os.listdir().
+
+    Accept at most the five declared names. Encountering an undeclared entry
+    stops enumeration immediately rather than materializing an attacker-sized
+    directory listing in memory. This is an observed inventory check, not an
+    atomic filesystem snapshot.
+    """
+    seen: set[str] = set()
+    with os.scandir(directory_fd) as entries:
+        for entry in entries:
+            if entry.name not in required or entry.name in seen:
+                raise ValueError(failure)
+            seen.add(entry.name)
+    if seen != required:
+        raise ValueError(failure)
+
+
 @contextmanager
 def _bound_diagnostic_bundle(directory: Path):
     """Pin all five members and each ancestor for the entire verification.
@@ -89,8 +107,9 @@ def _bound_diagnostic_bundle(directory: Path):
                 chain.append((parent_fd, component, child_fd))
                 parent_fd = child_fd
 
-            if set(os.listdir(parent_fd)) != required:
-                raise ValueError("diagnostic bundle file set mismatch")
+            _require_exact_bundle_inventory(
+                parent_fd, required, "diagnostic bundle file set mismatch"
+            )
             pinned = {}
             for name in sorted(required):
                 st = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
@@ -102,8 +121,9 @@ def _bound_diagnostic_bundle(directory: Path):
 
             yield parent_fd, pinned
 
-            if set(os.listdir(parent_fd)) != required:
-                raise ValueError("diagnostic bundle file set changed during verification")
+            _require_exact_bundle_inventory(
+                parent_fd, required, "diagnostic bundle file set changed during verification"
+            )
             for name, original in pinned.items():
                 try:
                     observed = os.stat(

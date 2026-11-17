@@ -2,6 +2,7 @@
 import csv
 import hashlib
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -112,6 +113,52 @@ def test_manifest_cannot_relabel_local_diagnostic_as_canonical(inputs):
     manifest["scope"] = "canonical"
     path.write_text(json.dumps(manifest))
     with pytest.raises(ValueError, match="study/scope mismatch"):
+        verifier.verify_diagnostic_bundle(destination)
+
+
+def test_bundle_inventory_scan_stops_at_first_undeclared_name(monkeypatch):
+    """An untrusted directory cannot force unbounded enumeration or allocation."""
+    required = set(verifier.ARTIFACTS) | {diagnostic.DIAGNOSTIC_MANIFEST}
+    visited = []
+
+    class SyntheticListing:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def __iter__(self):
+            for name in sorted(required):
+                visited.append(name)
+                yield SimpleNamespace(name=name)
+            visited.append("undeclared-synthetic")
+            yield SimpleNamespace(name="undeclared-synthetic")
+            raise AssertionError("directory scan continued after unexpected entry")
+
+    monkeypatch.setattr(verifier.os, "scandir", lambda _fd: SyntheticListing())
+    with pytest.raises(ValueError, match="file set mismatch"):
+        verifier._require_exact_bundle_inventory(
+            -1, required, "diagnostic bundle file set mismatch"
+        )
+    assert len(visited) == len(required) + 1
+
+
+def test_undeclared_file_added_after_verification_fails_at_final_inventory(
+    inputs, monkeypatch,
+):
+    destination, _ = _build(inputs)
+    original = verifier._verify_bound_diagnostic_bundle
+
+    def add_extra_after_read(*args, **kwargs):
+        result = original(*args, **kwargs)
+        (destination / "late-undeclared-synthetic.txt").write_text(
+            "not research evidence", encoding="utf-8"
+        )
+        return result
+
+    monkeypatch.setattr(verifier, "_verify_bound_diagnostic_bundle", add_extra_after_read)
+    with pytest.raises(ValueError, match="file set changed during verification"):
         verifier.verify_diagnostic_bundle(destination)
 
 
