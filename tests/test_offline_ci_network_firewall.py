@@ -207,7 +207,7 @@ def test_firewall_order_failure_rollback_and_exit_code(
         v6_check = index("v6 -w -C OUTPUT -j ")
         v4_policy = index("v4 -w -S VERA_OFFLINE_")
         v6_policy = index("v6 -w -S VERA_OFFLINE_")
-        pytest_index = index("pytest -m pytest -q --strict-markers --strict-config")
+        pytest_index = index("pytest -m pytest -vv --durations=10 --strict-markers --strict-config")
         assert v4_check < v4_policy < v6_policy < pytest_index
         v6_remove = index("v6 -w -D OUTPUT -j ")
         assert v4_link < v6_link < v4_check < v6_check < pytest_index < v6_remove
@@ -215,10 +215,28 @@ def test_firewall_order_failure_rollback_and_exit_code(
         assert any(row.startswith("v4 -w -F VERA_OFFLINE_") for row in commands)
         assert any(row.startswith("v6 -w -X VERA_OFFLINE_") for row in commands)
 
+def test_verbose_pytest_progress_exposes_interrupted_test_context(tmp_path):
+    """Synthetic failure retains node identity, not only a progress percentage."""
+    (tmp_path / "test_progress_probe.py").write_text(
+        "def test_observable_failure():\\n"
+        "    assert False, 'synthetic-only failure'\\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-vv", "--durations=10",
+         "--strict-markers", "--strict-config", "-p", "no:cacheprovider",
+         "test_progress_probe.py"],
+        cwd=tmp_path, capture_output=True, text=True, timeout=30, check=False,
+    )
+    assert result.returncode == 1
+    assert "test_progress_probe.py::test_observable_failure" in result.stdout
+    assert "FAILED" in result.stdout
+
+
 def test_firewalled_pytest_requires_strict_collection_and_configuration():
     """The shared entrypoint must never certify unknown markers/config as green."""
     command = WRAPPER.read_text(encoding="utf-8").rstrip().splitlines()[-1]
-    assert command == 'python -m pytest -q --strict-markers --strict-config "$@"'
+    assert command == 'python -m pytest -vv --durations=10 --strict-markers --strict-config "$@"'
 
 
 @pytest.mark.parametrize(
@@ -305,4 +323,4 @@ def test_firewalled_runner_keeps_explicit_test_arguments_with_empty_pytest_env()
     """Existing wrapper contract keeps the call sites' explicit selection."""
     source = WRAPPER.read_text(encoding="utf-8")
     assert '[[ -n "${PYTEST_ADDOPTS:-}" || -n "${PYTEST_PLUGINS:-}" ]]' in source
-    assert 'python -m pytest -q --strict-markers --strict-config "$@"' in source
+    assert 'python -m pytest -vv --durations=10 --strict-markers --strict-config "$@"' in source

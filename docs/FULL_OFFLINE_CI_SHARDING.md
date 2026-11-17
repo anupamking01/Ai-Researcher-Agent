@@ -69,6 +69,32 @@ New custom discovery patterns require a separately reviewed selector
 update. Sharding changes execution scheduling only: no estimates,
 outcomes, frozen inputs, analysis policies or rating data are changed.
 
+## Interrupted-shard visibility — 17 November 2026
+
+On exact-head push run [44018470493](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/44018470493)
+and PR run [44018475946](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/44018475946),
+shard 5 was cancelled during firewalled pytest, at about 35% and 46% of
+its visible progress respectively. Other shards completed. Those partial
+dot-only logs did not reveal the active test node, and cannot establish
+whether a test, host, or external cancellation caused the interruption.
+Neither run established the required complete sixteen-shard replay.
+
+The **same complete, strictly selected, firewalled test suite** now invokes
+pytest with `-vv --durations=10` instead of `-q`. Each test's node ID
+is printed when execution begins, enabling the existing best-effort
+unverified cancellation transcript to identify the last started test.
+For *completed* suites, pytest additionally reports the ten slowest
+test phases to inform future **outcome-blind** CI workload analysis.
+This changes diagnostic verbosity only. A listed in-progress node is not
+proof that the test hung or caused GitHub to cancel the job. An interrupted
+run has no successful pytest summary, verified shard receipt, or aggregate
+replay, regardless of the last visible node. The existing 16 MiB test-log
+capture bound and strict source-bound receipt checks remain in force; an
+oversized log fails rather than silently truncating evidence. New synthetic
+regressions verify node-ID visibility on failure and the firewalled
+invocation's preserved ordering and strict flags. No study outcomes or
+human ratings are changed.
+
 The five-task pilot remains diagnostic; the designated-primary automated
 results retain post-collection plan timing, fixed treatment ordering and
 historical evaluator-recovery comparability limitations. Retrospective
