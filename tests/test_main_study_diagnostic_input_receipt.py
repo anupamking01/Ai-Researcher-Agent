@@ -277,7 +277,7 @@ def test_diagnostic_external_pin_rejects_self_consistent_result_rewrite(inputs):
     # A separately preserved fingerprint of the original manifest must reject
     # that self-consistent rewrite before the altered metadata is interpreted.
     output = destination / diagnostic.DIAGNOSTIC_JSON
-    output.write_bytes(output.read_bytes() + b"\\n")
+    output.write_bytes(output.read_bytes() + b"\n")
     _rehash_claimed_artifact(destination, diagnostic.DIAGNOSTIC_JSON)
     assert verifier.verify_diagnostic_bundle(
         destination
@@ -295,7 +295,7 @@ def test_diagnostic_external_pin_binds_raw_bytes_not_equivalent_json(inputs):
     archived_sha256 = hashlib.sha256(original).hexdigest()
     payload = json.loads(original)
     # Same semantic receipt and source fingerprints; different published bytes.
-    rewritten = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\\n").encode()
+    rewritten = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
     assert rewritten != original
     manifest_path.write_bytes(rewritten)
     assert verifier.verify_diagnostic_bundle(
