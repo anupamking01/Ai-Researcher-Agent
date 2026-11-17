@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -314,3 +315,57 @@ def test_bundle_parent_traversal_rejected(tmp_path, monkeypatch):
     _bundle(directory, monkeypatch)
     with pytest.raises(ValueError, match="parent traversal"):
         _verify(directory / ".." / "five-json")
+
+def test_independently_supplied_index_pin_anchors_all_five_files(tmp_path, monkeypatch):
+    directory = _bundle(tmp_path, monkeypatch)
+    index_sha256 = hashlib.sha256((directory / bundle.INDEX).read_bytes()).hexdigest()
+    assert _verify(directory)["expected_index_sha256_matched"] is False
+    assert _verify(directory, expected_index_sha256=index_sha256)[
+        "expected_index_sha256_matched"
+    ] is True
+
+
+def test_external_pin_rejects_reserialized_index_even_when_local_replay_passes(
+    tmp_path, monkeypatch,
+):
+    directory = _bundle(tmp_path, monkeypatch)
+    index_file = directory / bundle.INDEX
+    original_digest = hashlib.sha256(index_file.read_bytes()).hexdigest()
+    # The self-declared four-file ledger remains semantically identical.
+    # Without an earlier external byte pin, local verification still passes.
+    index_file.write_text(
+        json.dumps(json.loads(index_file.read_text()), sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    assert hashlib.sha256(index_file.read_bytes()).hexdigest() != original_digest
+    assert _verify(directory)["files_verified"] == 5
+    with pytest.raises(ValueError, match="differs from supplied external pin"):
+        _verify(directory, expected_index_sha256=original_digest)
+
+
+@pytest.mark.parametrize("bad", [
+    "", "0" * 63, "0" * 65, "A" * 64, "g" * 64, 17, True,
+])
+def test_external_pin_malformed_input_fails_closed(tmp_path, monkeypatch, bad):
+    directory = _bundle(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="expected index SHA-256"):
+        _verify(directory, expected_index_sha256=bad)
+
+
+def test_cli_honors_external_index_sha256(tmp_path, monkeypatch, capsys):
+    directory = _bundle(tmp_path, monkeypatch)
+    pin = hashlib.sha256((directory / bundle.INDEX).read_bytes()).hexdigest()
+    args = [
+        "verify_exploratory_measurement_bundle", "--directory", str(directory),
+        "--expected-repository", REPO, "--expected-checkout-sha", SHA,
+        "--expected-run-id", RUN, "--expected-run-attempt", ATTEMPT,
+        "--expected-index-sha256", pin,
+    ]
+    monkeypatch.setattr(sys, "argv", args)
+    assert bundle.main() == 0
+    assert json.loads(capsys.readouterr().out)["expected_index_sha256_matched"] is True
+    monkeypatch.setattr(sys, "argv", [*args[:-1], "b" * 64])
+    with pytest.raises(SystemExit) as exc:
+        bundle.main()
+    assert exc.value.code == 1
+    assert "differs from supplied external pin" in capsys.readouterr().err

@@ -46,8 +46,20 @@ python -m scripts.verify_exploratory_measurement_bundle \
   --expected-repository anupamking01/Ai-Researcher-Agent \
   --expected-checkout-sha <full-40-character-run-checkout-SHA> \
   --expected-run-id <GitHub-Actions-run-ID> \
-  --expected-run-attempt <GitHub-Actions-attempt-number>
+  --expected-run-attempt <GitHub-Actions-attempt-number> \
+  --expected-index-sha256 <independently-retained-artifact_index.json-SHA256>
 ```
+
+The final `--expected-index-sha256` flag is optional for older downloaded
+bundles, but strongly recommended when a trusted index digest was retained
+**outside the bundle before download or subsequent replay**. Retrieve the
+index digest from an independently controlled archival receipt, not by
+hashing the untrusted extracted bundle during verification. A valid external
+index SHA-256 anchors its four recorded member hashes and therefore the exact
+bytes of all five files. Without this external pin, the verifier continues
+to provide **local consistency only**, even when its independently replayed
+diagnostic arithmetic passes. The JSON replay receipt says whether an
+expected index hash was checked; it does not prove its custody or age.
 
 The verifier rejects missing or extra members, symlinks/hardlinks, changed
 bundle bytes, duplicate JSON keys, false research-status claims, missing or
@@ -59,7 +71,10 @@ runs this same check **before upload**, and each workflow re-run uses a
 distinct run-attempt artifact name. Manifest schema v2 records that attempt.
 
 **Trust boundary:** The index is a self-declared digest ledger, not a
-signature or trusted original-execution attestation. The externally checked
+signature or trusted original-execution attestation. An externally supplied
+index hash detects bundle reserialization/substitution only when the original
+pin was independently retained; a hash computed from the download itself
+does not provide this protection. The externally checked
 run identity and independently verified **published summary CSVs** are
 necessary; neither establishes original treatment report/trace custody.
 A downloaded v1 bundle from an earlier run is not silently upgraded: replay

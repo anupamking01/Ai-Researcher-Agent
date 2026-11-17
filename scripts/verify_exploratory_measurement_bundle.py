@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 from contextlib import ExitStack, contextmanager
 import hashlib
+import hmac
 import os
 import stat
 import json
@@ -250,17 +251,29 @@ def _verify_source_checkout(checkout_sha: str) -> None:
 
 
 def verify_bundle(directory: Path, *, repository: str, checkout_sha: str,
-                  run_id: str, run_attempt: str) -> dict:
-    """Bind five stable bundle files to external run pins and independent CSV replay."""
+                  run_id: str, run_attempt: str,
+                  expected_index_sha256: str | None = None) -> dict:
+    """Replay five stable files and optionally enforce an external index-byte pin."""
     _require(re.fullmatch(r"[0-9a-f]{40}", checkout_sha) is not None,
              "expected checkout SHA must be a full lower-case commit hash")
     _require(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is not None,
              "invalid expected GitHub repository")
     _positive_id(run_id, label="run ID")
     _positive_id(run_attempt, label="run attempt")
+    if expected_index_sha256 is not None:
+        _require(type(expected_index_sha256) is str and
+                 re.fullmatch(r"[0-9a-f]{64}", expected_index_sha256) is not None,
+                 "expected index SHA-256 must be 64 lower-case hex characters")
     _verify_source_checkout(checkout_sha)
     directory = Path(directory)
     with _capture_bundle_window(directory) as raw:
+        # The self-declared index hashes the other four files. An externally
+        # retained index digest therefore anchors all five exact byte strings,
+        # unlike the index's own circular-free but untrusted digest ledger.
+        if expected_index_sha256 is not None:
+            actual_index_sha256 = hashlib.sha256(raw[INDEX]).hexdigest()
+            _require(hmac.compare_digest(actual_index_sha256, expected_index_sha256),
+                     "bundle index SHA-256 differs from supplied external pin")
         digests = {name: hashlib.sha256(raw[name]).hexdigest() for name in FILES}
         index = _parse_metadata(raw[INDEX], label="bundle index")
         _same(index, {
@@ -297,6 +310,7 @@ def verify_bundle(directory: Path, *, repository: str, checkout_sha: str,
             "workflow_run_id": run_id,
             "workflow_run_attempt": run_attempt,
             "files_verified": len(EXPECTED_FILES),
+            "expected_index_sha256_matched": expected_index_sha256 is not None,
             "cells_checked_per_diagnostic": 40,
             "paired_contrast_rows_checked_per_diagnostic": 30,
             "frozen_confirmatory_inference_changed": False,
@@ -312,12 +326,18 @@ def main() -> int:
     parser.add_argument("--expected-checkout-sha", required=True)
     parser.add_argument("--expected-run-id", required=True)
     parser.add_argument("--expected-run-attempt", required=True)
+    parser.add_argument(
+        "--expected-index-sha256",
+        help="Optional 64-character SHA-256 of artifact_index.json retained "
+             "independently before obtaining the bundle",
+    )
     args = parser.parse_args()
     try:
         receipt = verify_bundle(
             args.directory, repository=args.expected_repository,
             checkout_sha=args.expected_checkout_sha, run_id=args.expected_run_id,
             run_attempt=args.expected_run_attempt,
+            expected_index_sha256=args.expected_index_sha256,
         )
     except (OSError, ValueError, audit.InputIntegrityError) as exc:
         parser.exit(1, f"EXPLORATORY BUNDLE: FAIL: {exc}\n")
