@@ -273,8 +273,8 @@ def test_full_ci_accepts_large_whitespace_heavy_parameter_id(tmp_path, monkeypat
     log, manifest = _synthetic_full_shard(tmp_path, monkeypatch)
     node = "tests/test_00.py::test_case[{\"extra\":0  " + (" " * (512 * 1024)) + "-exceeds size limit]"
     log = log.replace(
-        b"tests/test_00.py::test_ok PASSED [100%]\\n",
-        (node + " PASSED [100%]\\n").encode("utf-8"),
+        b"tests/test_00.py::test_ok PASSED [100%]\n",
+        (node + " PASSED [100%]\n").encode("utf-8"),
     )
     receipt = evidence.build_receipt(
         log, context=CONTEXT, checkout_sha=SHA,
