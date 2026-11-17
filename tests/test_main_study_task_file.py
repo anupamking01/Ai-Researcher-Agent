@@ -1026,7 +1026,18 @@ def test_main_study_manifest_records_task_snapshot_before_execution(tmp_path, mo
     monkeypatch.setitem(sys.modules, "logic.experiment", experiment_module)
     monkeypatch.setitem(sys.modules, "logic.run", run_module)
 
-    asyncio.run(run_budget_main_study.main())
+    # Stubbed agent returns normally without publishing a completed trace.
+    # The retained task/source snapshot is pre-execution evidence, not
+    # synthetic proof of a completed treatment.
+    with pytest.raises(SystemExit, match="stopped after D3/main-01 status=failed"):
+        asyncio.run(run_budget_main_study.main())
+    progress = json.loads(
+        (tmp_path / "outputs" / "main_study_progress.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert progress["completed_runs"] == 0
+    assert progress["failed_runs"] == 1
 
     manifest = json.loads(
         (tmp_path / "outputs" / "main_study_manifest.json").read_text(
