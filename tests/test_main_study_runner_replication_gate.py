@@ -72,3 +72,65 @@ def test_workflow_carries_acknowledgment_into_direct_runner():
         "--noncanonical-replication-ack NONCANONICAL_REPLICATION"
     ) in workflow
     assert "Require explicit noncanonical replication acknowledgement" in workflow
+
+
+@pytest.fixture
+def configured_replication_env(monkeypatch):
+    """Synthetic settings only; no provider credentials or network calls."""
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-test-not-a-real-key")
+    monkeypatch.setenv("SMART_LLM_MODEL", "synthetic-smart")
+    monkeypatch.setenv("FAST_LLM_MODEL", "synthetic-fast")
+    monkeypatch.setenv("TEMPERATURE", "0.7")
+
+
+@pytest.mark.parametrize("value", [
+    "NaN", "nan", "Inf", "-Infinity", "1e999", "-0.01", "2.01",
+    "not-a-number",
+])
+def test_replication_temperature_rejects_invalid_or_nonfinite_settings(
+    configured_replication_env, monkeypatch, value,
+):
+    """No invalid numerical parameter may enter a new study manifest."""
+    monkeypatch.setenv("TEMPERATURE", value)
+    with pytest.raises(SystemExit, match="TEMPERATURE must be a finite number"):
+        study._check_environment()
+
+
+@pytest.mark.parametrize("value", ["0", "0.7", "1", "2"])
+def test_replication_temperature_accepts_finite_domain(
+    configured_replication_env, monkeypatch, value,
+):
+    monkeypatch.setenv("TEMPERATURE", value)
+    study._check_environment()
+
+
+@pytest.mark.parametrize("name", [
+    "OPENAI_API_KEY", "SMART_LLM_MODEL", "FAST_LLM_MODEL", "TEMPERATURE",
+])
+def test_replication_rejects_whitespace_only_required_settings(
+    configured_replication_env, monkeypatch, name,
+):
+    monkeypatch.setenv(name, "   \\t  ")
+    with pytest.raises(SystemExit, match="Missing or blank experiment"):
+        study._check_environment()
+
+
+def test_invalid_temperature_blocks_before_task_selection_or_model_import(
+    configured_replication_env, monkeypatch,
+):
+    monkeypatch.setenv("TEMPERATURE", "NaN")
+    monkeypatch.setattr(
+        study.sys, "argv",
+        ["run_budget_main_study.py", "--noncanonical-replication-ack",
+         study.NONCANONICAL_REPLICATION_ACK],
+    )
+    monkeypatch.setattr(
+        study, "_load_task_file",
+        lambda *_: pytest.fail("invalid settings must not select any tasks"),
+    )
+    monkeypatch.setattr(
+        study.importlib, "import_module",
+        lambda *_: pytest.fail("invalid settings must not import agent modules"),
+    )
+    with pytest.raises(SystemExit, match="TEMPERATURE must be a finite number"):
+        asyncio.run(study._run_main_study())

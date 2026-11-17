@@ -83,10 +83,28 @@ def _noncanonical_replication_provenance() -> dict:
 
 
 def _check_environment() -> None:
-    missing = [name for name in REQUIRED_ENV if not os.getenv(name)]
+    """Reject unusable treatment settings before selecting tasks or writing state.
+
+    Python accepts non-finite floats such as NaN and Infinity, which would
+    otherwise reach the replication manifest as nonstandard JSON numbers.
+    This validates the requested parameter domain, not model-specific support.
+    """
+    missing = [
+        name for name in REQUIRED_ENV
+        if not (os.getenv(name) or "").strip()
+    ]
     if missing:
-        raise SystemExit(f"Missing required experiment environment variables: {', '.join(missing)}")
-    float(os.environ["TEMPERATURE"])
+        raise SystemExit(
+            f"Missing or blank experiment environment variables: {', '.join(missing)}"
+        )
+    try:
+        temperature = float(os.environ["TEMPERATURE"])
+    except ValueError as exc:
+        raise SystemExit(
+            "TEMPERATURE must be a finite number between 0 and 2"
+        ) from exc
+    if not math.isfinite(temperature) or not 0 <= temperature <= 2:
+        raise SystemExit("TEMPERATURE must be a finite number between 0 and 2")
 
 
 @contextlib.contextmanager
