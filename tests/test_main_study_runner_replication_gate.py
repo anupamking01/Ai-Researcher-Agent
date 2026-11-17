@@ -110,7 +110,7 @@ def test_replication_temperature_accepts_finite_domain(
 def test_replication_rejects_whitespace_only_required_settings(
     configured_replication_env, monkeypatch, name,
 ):
-    monkeypatch.setenv(name, "   \\t  ")
+    monkeypatch.setenv(name, "   " + chr(9) + "   ")
     with pytest.raises(SystemExit, match="Missing or blank experiment"):
         study._check_environment()
 
