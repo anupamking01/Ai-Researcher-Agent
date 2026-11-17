@@ -162,6 +162,35 @@ def test_undeclared_file_added_after_verification_fails_at_final_inventory(
         verifier.verify_diagnostic_bundle(destination)
 
 
+
+def test_verifier_rejects_hardlinked_bundle_member_with_external_alias(inputs):
+    destination, _ = _build(inputs)
+    retained = destination / diagnostic.DIAGNOSTIC_MAIN_INPUT
+    external = destination.parent / "same-inode-outside-diagnostic.csv"
+    external.hardlink_to(retained)
+    assert retained.stat().st_ino == external.stat().st_ino
+    with pytest.raises(ValueError, match="hardlinked"):
+        verifier.verify_diagnostic_bundle(destination)
+
+
+def test_verifier_rejects_hardlinked_analysis_source_with_external_alias(
+    inputs, monkeypatch,
+):
+    destination, _ = _build(inputs)
+    name = "scripts/analyze_main_study.py"
+    original = verifier.SOURCES[name]
+    local_source = destination.parent / "copied-analysis-source.py"
+    local_source.write_bytes(original.read_bytes())
+    external = destination.parent / "same-inode-outside-source.py"
+    external.hardlink_to(local_source)
+    assert local_source.stat().st_ino == external.stat().st_ino
+    monkeypatch.setattr(
+        verifier, "SOURCES", {**verifier.SOURCES, name: local_source}
+    )
+    # The byte-identical local source would otherwise match the manifest.
+    with pytest.raises(ValueError, match="hardlinked"):
+        verifier.verify_diagnostic_bundle(destination)
+
 def test_undeclared_file_fails_verification(inputs):
     destination, _ = _build(inputs)
     (destination / "unexpected.json").write_text("{}", encoding="utf-8")

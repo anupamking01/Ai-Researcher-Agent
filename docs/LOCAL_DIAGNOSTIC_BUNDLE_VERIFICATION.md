@@ -123,3 +123,23 @@ or authentication of the missing original September treatment reports. A
 change fully reversed between observations is not detectable. The existing
 pilot, frozen automated, exploratory, and pending human-validation claim
 boundaries remain unchanged.
+
+
+## Refuse off-tree hardlink aliases during local verification
+
+The retained five-file bundle and its four analysis-source files must each
+have exactly one filesystem hard link (`st_nlink == 1`). A file could
+previously have the expected name, source bytes, manifest fingerprint, and
+stable pathname while sharing an inode with an untracked path outside the
+bundle or source tree. That alias provides a separate write route to the
+same retained bytes, outside the explicitly inventoried five-file directory.
+
+The verifier now rejects hardlinked members and source files before trusting
+fingerprints, and its bounded file reader repeats this check at open time.
+Two offline synthetic tests create byte-identical outside hardlinks for a
+bundle CSV and an analysis-source file, respectively. Ordinary one-link
+bundles are unchanged; no frozen research files are modified. This reduces
+untracked *local* mutation avenues but cannot establish tamper-proof archival
+custody, detect all transient race conditions, or authenticate unavailable
+historical reports/traces. No pilot, qualified automated, exploratory, or
+human-validation finding changes.

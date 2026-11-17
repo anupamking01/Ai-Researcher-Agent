@@ -117,6 +117,8 @@ def _bound_diagnostic_bundle(directory: Path):
                     raise ValueError(f"diagnostic file is a symlink: {name}")
                 if not stat.S_ISREG(st.st_mode):
                     raise ValueError(f"diagnostic file type invalid: {name}")
+                if st.st_nlink != 1:
+                    raise ValueError(f"diagnostic bundle member is hardlinked: {name}")
                 pinned[name] = _member_generation(st)
 
             yield parent_fd, pinned
@@ -167,6 +169,8 @@ def _read_regular(path: Path, *, limit: int, directory_fd: int | None = None,
         raise ValueError(f"diagnostic file is a symlink: {path.name}")
     if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= limit:
         raise ValueError(f"diagnostic file type/size invalid: {path.name}")
+    if before.st_nlink != 1:
+        raise ValueError(f"diagnostic file is hardlinked: {path.name}")
     if (expected_generation is not None
             and _member_generation(before) != expected_generation):
         raise ValueError(f"diagnostic bundle member changed before read: {path.name}")
@@ -242,6 +246,8 @@ def _bound_diagnostic_sources():
                 )
                 if not stat.S_ISREG(before.st_mode):
                     raise ValueError(f"diagnostic source is not regular: {name}")
+                if before.st_nlink != 1:
+                    raise ValueError(f"diagnostic source is hardlinked: {name}")
                 generation = _member_generation(before)
                 raw = _read_regular(
                     absolute, limit=1024 * 1024, directory_fd=parent_fd,
