@@ -1,3 +1,11 @@
+## Linear-time parsing of verbose pytest completion records (17 November 2026)
+
+An exact-head [PR full CI run 44048983792](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/44048983792) passed pytest on shard 4 (327 tests), then stalled for over nineteen minutes during `Bind exact-commit offline test evidence` and was cancelled. The retained runner log shows one **524,471-character** line for a legitimate parameterized pytest node ID containing extensive whitespace (in `test_historical_workflow_metadata_json_integrity.py`). The receipt verifier's reluctant `.+?` node-ID regex followed by `\\s+` backtracked quadratically on this input. This is a verified parser scalability problem, distinct from a failing scientific experiment. The companion cancellation of shard 5 is **not** attributed to this parser without evidence.
+
+The completion reader now separates the short terminal status/progress suffix from the **right** using bounded string operations and a small anchored suffix regex, preserving the full node ID (including spaces and brackets). The same strict unique-node, exact-selected-module, collected/completed/summary counts, and receipt replay checks remain intact. Synthetic regression tests cover an over-512-KiB whitespace-heavy parameter ID and malformed suffixes, without imposing a brittle wall-clock timing assertion.
+
+This repairs CI provenance verification only. It does not authenticate missing original treatment/recovery report archives, change the diagnostic pilot, remove the post-collection/fixed-order/evaluator-comparability qualifications on automated findings, upgrade exploratory sensitivity analysis to prospective confirmation, or constitute completed human evaluation.
+
 ## Bind verbose pytest completion identities to selected CI modules (17 November 2026)
 
 The 16-shard success receipt now checks the **node ID** of every recorded

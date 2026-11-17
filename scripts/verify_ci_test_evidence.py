@@ -42,9 +42,12 @@ SUMMARY = re.compile(
 VERBOSE_COLLECTION = re.compile(
     r"collecting \.\.\. collected (?P<count>[1-9][0-9]*) items"
 )
-VERBOSE_COMPLETION = re.compile(
-    r"(?P<nodeid>.+?)\s+(?P<status>PASSED|SKIPPED|XFAIL|XPASS|FAILED|ERROR)"
-    r"\s+\[\s*[0-9]+%\]"
+# Parse the short terminal suffix from the right: pytest parameter IDs may
+# contain hundreds of KiB of whitespace (see CI shard 4, 17 Nov 2026).
+# A lazy node-ID regex followed by \\s+ was quadratic on those valid IDs.
+VERBOSE_PROGRESS_SUFFIX = re.compile(r"\[\s*[0-9]+%\]")
+VERBOSE_TERMINAL_STATUSES = frozenset(
+    ("PASSED", "SKIPPED", "XFAIL", "XPASS", "FAILED", "ERROR")
 )
 
 REQUIRED_ENV = (
@@ -187,6 +190,22 @@ def _verify_full_ci_selection(
     }
 
 
+def _parse_verbose_completion(line: str) -> tuple[str, str] | None:
+    """Parse a pytest completion in linear time without truncating its node ID.
+
+    A historical parameterized node ID included more than 500 KiB of spaces.
+    Splitting after the rightmost progress bracket avoids quadratic regex
+    backtracking while preserving valid parameter IDs containing whitespace.
+    """
+    bracket = line.rfind("[")
+    if bracket < 0 or VERBOSE_PROGRESS_SUFFIX.fullmatch(line[bracket:]) is None:
+        return None
+    parts = line[:bracket].rstrip().rsplit(None, 1)
+    if len(parts) != 2 or parts[1] not in VERBOSE_TERMINAL_STATUSES:
+        return None
+    return parts[0], parts[1]
+
+
 def _verify_verbose_full_ci_progress(
     test_output_lines: list[str], *, expected: dict[str, int],
     allowed_modules: frozenset[str] | None = None,
@@ -208,12 +227,12 @@ def _verify_verbose_full_ci_progress(
     observed: dict[str, int] = {}
     seen_nodes: set[str] = set()
     for index, line in enumerate(test_output_lines):
-        completion = VERBOSE_COMPLETION.fullmatch(line)
+        completion = _parse_verbose_completion(line)
         if completion is None:
             continue
         if index <= collected_position:
             raise ValueError("full CI test completion precedes collection")
-        nodeid = completion["nodeid"]
+        nodeid, status = completion
         module, separator, case = nodeid.partition("::")
         if (not separator or not case or not module.startswith("tests/")
                 or not module.endswith(".py")
@@ -222,7 +241,6 @@ def _verify_verbose_full_ci_progress(
         if nodeid in seen_nodes:
             raise ValueError("full CI pytest duplicate completion node ID")
         seen_nodes.add(nodeid)
-        status = completion["status"]
         observed[status] = observed.get(status, 0) + 1
     if sum(observed.values()) != int(collection["count"]):
         raise ValueError(

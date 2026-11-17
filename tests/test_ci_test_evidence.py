@@ -267,6 +267,30 @@ def test_full_ci_accepts_distinct_parameterized_node_ids_in_selected_module(
     assert receipt["test_counts"]["passed"] == 2
 
 
+def test_full_ci_accepts_large_whitespace_heavy_parameter_id(tmp_path, monkeypatch):
+    # Actual shard-4 CI emitted a >500 KiB pytest node ID containing spaces.
+    # The former lazy `.+?` / `\\s+` regex stalled receipt creation.
+    log, manifest = _synthetic_full_shard(tmp_path, monkeypatch)
+    node = "tests/test_00.py::test_case[{\"extra\":0  " + (" " * (512 * 1024)) + "-exceeds size limit]"
+    log = log.replace(
+        b"tests/test_00.py::test_ok PASSED [100%]\\n",
+        (node + " PASSED [100%]\\n").encode("utf-8"),
+    )
+    receipt = evidence.build_receipt(
+        log, context=CONTEXT, checkout_sha=SHA,
+        dependency_bytes=DEPS, selected_modules=manifest, shard=0,
+    )
+    assert receipt["test_counts"] == {"passed": 1}
+    assert receipt["log_bytes"] > 512 * 1024
+
+
+def test_verbose_completion_parser_rejects_near_miss_terminal_suffix():
+    node = "tests/test_00.py::test_case[" + (" " * 128 * 1024) + "]"
+    assert evidence._parse_verbose_completion(node + " PASSED [ 99%]") == (node, "PASSED")
+    assert evidence._parse_verbose_completion(node + " PASSED [ 99%] extra") is None
+    assert evidence._parse_verbose_completion(node + " PASSED [unknown%]") is None
+
+
 def test_verbose_completion_handles_parameter_ids_with_spaces_and_skip_xfail():
     # Real pytest node IDs can include JSON, spaces, colons or bracketed text.
     evidence._verify_verbose_full_ci_progress(
