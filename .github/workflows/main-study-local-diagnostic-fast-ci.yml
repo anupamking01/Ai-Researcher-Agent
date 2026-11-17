@@ -118,7 +118,7 @@ jobs:
             ${{ runner.temp }}/vera-stdlib-evaluation-receipt.json
           if-no-files-found: error
           retention-days: 90
-      - name: Install only pinned offline local-diagnostic-test dependencies
+      - name: Install only pinned offline diagnostic-test dependencies
         shell: bash
         run: |
           set -euo pipefail
