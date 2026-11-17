@@ -6,7 +6,10 @@ original experimental-execution authentication or human validation.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack, contextmanager
 import hashlib
+import os
+import stat
 import json
 from pathlib import Path
 import re
@@ -96,22 +99,112 @@ def _same(actual, expected, *, label: str) -> None:
         _require(actual == expected, f"{label} differs from independent replay")
 
 
-def _inventory(directory: Path) -> None:
-    _require(".." not in directory.parts and not directory.is_symlink(),
-             "bundle directory cannot be a symlink or contain traversal")
-    _require(directory.is_dir(), "bundle directory does not exist")
-    names = {item.name for item in directory.iterdir()}
-    _require(names == EXPECTED_FILES, "bundle must contain exactly the five expected files")
+@contextmanager
+def _capture_bundle_window(directory: Path):
+    """Pin five files and their no-follow ancestor chain through replay.
 
+    Independent diagnostic verifiers read pathnames. Detect substitutions of
+    the downloaded directory or equal-byte file objects during their work.
+    """
+    directory = Path(directory)
+    _require(".." not in directory.parts, "bundle directory contains parent traversal")
+    _require(hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY"),
+             "bundle custody requires no-follow directory support")
+    absolute = directory.absolute()
+    dflags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    fflags = (os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+              | getattr(os, "O_NONBLOCK", 0))
 
-def _capture(directory: Path) -> dict[str, bytes]:
-    _inventory(directory)
-    files = {
-        name: audit._capture_csv_bytes(directory / name, label=f"bundle {name}")
-        for name in sorted(EXPECTED_FILES)
-    }
-    _inventory(directory)
-    return files
+    def directory_identity(st):
+        return st.st_dev, st.st_ino, st.st_mode
+
+    def file_identity(st):
+        return (st.st_dev, st.st_ino, st.st_mode, st.st_nlink,
+                st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+    def inventory(fd):
+        names = []
+        with os.scandir(fd) as entries:
+            for entry in entries:
+                names.append(entry.name)
+                _require(len(names) <= len(EXPECTED_FILES),
+                         "bundle contains extra directory entries")
+        _require(set(names) == EXPECTED_FILES and len(names) == len(EXPECTED_FILES),
+                 "bundle must contain exactly the five expected files")
+
+    def read_bounded(fd, name):
+        os.lseek(fd, 0, os.SEEK_SET)
+        captured = bytearray()
+        while len(captured) <= MAX_JSON_BYTES:
+            part = os.read(fd, min(65536, MAX_JSON_BYTES + 1 - len(captured)))
+            if not part:
+                break
+            captured.extend(part)
+        _require(0 < len(captured) <= MAX_JSON_BYTES,
+                 f"bundle {name} is empty or exceeds byte limit")
+        return bytes(captured)
+
+    try:
+        with ExitStack() as stack:
+            parent_fd = os.open(absolute.anchor, dflags)
+            stack.callback(os.close, parent_fd)
+            ancestors = []
+            for component in absolute.parts[1:]:
+                child_fd = os.open(component, dflags, dir_fd=parent_fd)
+                stack.callback(os.close, child_fd)
+                _require(directory_identity(os.fstat(child_fd)) ==
+                         directory_identity(os.stat(
+                             component, dir_fd=parent_fd, follow_symlinks=False)),
+                         "bundle ancestor changed before capture")
+                ancestors.append((parent_fd, component, child_fd))
+                parent_fd = child_fd
+            root_fd = parent_fd
+            inventory(root_fd)
+            opened = {}
+            raw = {}
+            for name in sorted(EXPECTED_FILES):
+                before_path = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+                _require(stat.S_ISREG(before_path.st_mode)
+                         and before_path.st_nlink == 1,
+                         f"bundle {name} must be a single-link regular file")
+                _require(0 < before_path.st_size <= MAX_JSON_BYTES,
+                         f"bundle {name} is empty or exceeds byte limit")
+                fd = os.open(name, fflags, dir_fd=root_fd)
+                stack.callback(os.close, fd)
+                before = os.fstat(fd)
+                _require(file_identity(before_path) == file_identity(before),
+                         f"bundle {name} changed before capture")
+                content = read_bounded(fd, name)
+                _require(file_identity(before) == file_identity(os.fstat(fd))
+                         == file_identity(os.stat(
+                             name, dir_fd=root_fd, follow_symlinks=False))
+                         and len(content) == before.st_size,
+                         f"bundle {name} changed during capture")
+                opened[name] = (fd, before)
+                raw[name] = content
+
+            def recheck():
+                inventory(root_fd)
+                for name, (fd, before) in opened.items():
+                    _require(file_identity(os.fstat(fd)) == file_identity(before)
+                             == file_identity(os.stat(
+                                 name, dir_fd=root_fd, follow_symlinks=False)),
+                             f"bundle {name} changed during independent replay")
+                    _require(read_bounded(fd, name) == raw[name],
+                             f"bundle {name} bytes changed during independent replay")
+                for holder, component, child in ancestors:
+                    _require(directory_identity(os.fstat(child)) ==
+                             directory_identity(os.stat(
+                                 component, dir_fd=holder, follow_symlinks=False)),
+                             "bundle ancestor changed during independent replay")
+
+            recheck()
+            try:
+                yield raw
+            finally:
+                recheck()
+    except OSError as exc:
+        raise ValueError("bundle cannot be opened through stable no-follow paths") from exc
 
 
 def _positive_id(value: str, *, label: str) -> None:
@@ -164,50 +257,50 @@ def verify_bundle(directory: Path, *, repository: str, checkout_sha: str,
     _positive_id(run_attempt, label="run attempt")
     _verify_source_checkout(checkout_sha)
     directory = Path(directory)
-    raw = _capture(directory)
-    digests = {name: hashlib.sha256(raw[name]).hexdigest() for name in FILES}
-    index = _parse_metadata(raw[INDEX], label="bundle index")
-    _same(index, {
-        "schema_version": 2,
-        "status": STATUS,
-        "repository": repository,
-        "checkout_commit_sha": checkout_sha,
-        "workflow_run_id": run_id,
-        "workflow_run_attempt": run_attempt,
-        "files_sha256": dict(sorted(digests.items())),
-        "frozen_confirmatory_inference_changed": False,
-        "original_execution_authenticated": False,
-        "human_validation_performed": False,
-    }, label="bundle index")
+    with _capture_bundle_window(directory) as raw:
+        digests = {name: hashlib.sha256(raw[name]).hexdigest() for name in FILES}
+        index = _parse_metadata(raw[INDEX], label="bundle index")
+        _same(index, {
+            "schema_version": 2,
+            "status": STATUS,
+            "repository": repository,
+            "checkout_commit_sha": checkout_sha,
+            "workflow_run_id": run_id,
+            "workflow_run_attempt": run_attempt,
+            "files_sha256": dict(sorted(digests.items())),
+            "frozen_confirmatory_inference_changed": False,
+            "original_execution_authenticated": False,
+            "human_validation_performed": False,
+        }, label="bundle index")
 
-    # Invoke verifier implementations, not the diagnostic producers. Each
-    # verifier re-reads and validates the frozen CSVs independently.
-    for diagnostic, receipt, verifier in (
-        ("retrieval_exposure.json", "retrieval_exposure_verification.json", exposure),
-        ("claim_denominators.json", "claim_denominators_verification.json", denominators),
-    ):
-        recorded = _parse_metadata(raw[receipt], label=receipt)
-        recomputed = verifier.verify_published(directory / diagnostic)
-        _same(recorded, recomputed, label=receipt)
-        _require(recorded["diagnostic_sha256"] == digests[diagnostic],
-                 f"{receipt} does not bind the diagnostic bytes")
+        # Invoke verifier implementations, not the diagnostic producers. Each
+        # verifier re-reads and validates the frozen CSVs independently.
+        for diagnostic, receipt, verifier in (
+            ("retrieval_exposure.json", "retrieval_exposure_verification.json", exposure),
+            ("claim_denominators.json", "claim_denominators_verification.json", denominators),
+        ):
+            recorded = _parse_metadata(raw[receipt], label=receipt)
+            recomputed = verifier.verify_published(directory / diagnostic)
+            _same(recorded, recomputed, label=receipt)
+            _require(recorded["diagnostic_sha256"] == digests[diagnostic],
+                     f"{receipt} does not bind the diagnostic bytes")
 
-    # Detect observed content changes while independently replaying source rows.
-    _require(raw == _capture(directory), "bundle bytes changed during verification")
-    return {
-        "schema_version": 1,
-        "status": STATUS,
-        "repository": repository,
-        "checkout_commit_sha": checkout_sha,
-        "workflow_run_id": run_id,
-        "workflow_run_attempt": run_attempt,
-        "files_verified": len(EXPECTED_FILES),
-        "cells_checked_per_diagnostic": 40,
-        "paired_contrast_rows_checked_per_diagnostic": 30,
-        "frozen_confirmatory_inference_changed": False,
-        "original_execution_authenticated": False,
-        "human_validation_performed": False,
-    }
+        # Detect observed content changes while independently replaying source rows.
+        _require(raw == _capture(directory), "bundle bytes changed during verification")
+        return {
+            "schema_version": 1,
+            "status": STATUS,
+            "repository": repository,
+            "checkout_commit_sha": checkout_sha,
+            "workflow_run_id": run_id,
+            "workflow_run_attempt": run_attempt,
+            "files_verified": len(EXPECTED_FILES),
+            "cells_checked_per_diagnostic": 40,
+            "paired_contrast_rows_checked_per_diagnostic": 30,
+            "frozen_confirmatory_inference_changed": False,
+            "original_execution_authenticated": False,
+            "human_validation_performed": False,
+        }
 
 
 def main() -> int:

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -258,3 +260,57 @@ def test_source_checkout_rejects_unavailable_git_or_inaccessible_checkout(monkey
     _simulated_source_git(monkeypatch, fails=True)
     with pytest.raises(ValueError, match="cannot be verified"):
         bundle._verify_source_checkout(SHA)
+
+
+def test_same_byte_leaf_replacement_during_replay_rejected(tmp_path, monkeypatch):
+    directory = _bundle(tmp_path, monkeypatch)
+    original_verify = bundle.exposure.verify_published
+    original_bytes = (directory / "retrieval_exposure.json").read_bytes()
+
+    def replace_once(path):
+        target = directory / "retrieval_exposure.json"
+        target.unlink()
+        target.write_bytes(original_bytes)
+        return original_verify(path)
+
+    monkeypatch.setattr(bundle.exposure, "verify_published", replace_once)
+    with pytest.raises(ValueError, match="changed during independent replay"):
+        _verify(directory)
+
+
+def test_same_byte_directory_swap_during_replay_rejected(tmp_path, monkeypatch):
+    directory = tmp_path / "downloaded" / "five-json"
+    directory.mkdir(parents=True)
+    _bundle(directory, monkeypatch)
+    twin = tmp_path / "twin"
+    shutil.copytree(directory, twin)
+    relocated = tmp_path / "relocated"
+    original_verify = bundle.exposure.verify_published
+
+    def replace_once(path):
+        os.rename(directory, relocated)
+        os.rename(twin, directory)
+        return original_verify(path)
+
+    monkeypatch.setattr(bundle.exposure, "verify_published", replace_once)
+    with pytest.raises(ValueError, match="ancestor changed during independent replay"):
+        _verify(directory)
+
+
+def test_bundle_ancestor_symlink_rejected(tmp_path, monkeypatch):
+    root = tmp_path / "actual"
+    directory = root / "five-json"
+    directory.mkdir(parents=True)
+    _bundle(directory, monkeypatch)
+    alias = tmp_path / "alias"
+    alias.symlink_to(root, target_is_directory=True)
+    with pytest.raises(ValueError, match="stable no-follow paths"):
+        _verify(alias / "five-json")
+
+
+def test_bundle_parent_traversal_rejected(tmp_path, monkeypatch):
+    directory = tmp_path / "five-json"
+    directory.mkdir()
+    _bundle(directory, monkeypatch)
+    with pytest.raises(ValueError, match="parent traversal"):
+        _verify(directory / ".." / "five-json")

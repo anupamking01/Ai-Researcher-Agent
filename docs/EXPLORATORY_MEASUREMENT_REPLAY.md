@@ -90,3 +90,21 @@ new descriptive comparisons. The original treatment reports/traces remain
 unauthenticated independently, historical fixed-order temporal confounding
 remains unresolved, and blinded human validation still requires original
 source custody plus two eligible, independent annotators and real ratings.
+
+
+### Cross-file pathname custody during independent replay
+
+A retained five-file bundle is now captured through held, no-follow descriptors
+for every ancestor directory and every single-link member. Its exact inventory,
+bounded bytes, inode/metadata identity, and full ancestor chain are rechecked
+after both independent diagnostic verifiers have run. A same-byte replacement
+of an individual file, or a same-byte swap of the entire downloaded bundle
+directory during replay, fails rather than acquiring a misleading PASS.
+Regression fixtures cover these substitutions, symlinked ancestors and parent
+traversal. The original frozen inputs and exploratory arithmetic are unchanged.
+
+This is **local verification-window continuity**, not an independent external
+signature or a guarantee against an attacker who can substitute and restore
+an object invisibly between observations. It does not recover or authenticate
+historical report/trace custody, establish prospective confirmatory evidence,
+or create human-evaluation observations.
