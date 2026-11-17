@@ -35,3 +35,20 @@ qualified by post-collection analysis-plan chronology, fixed treatment
 order and evaluator comparability. Retrospective sensitivities are exploratory,
 not prospective confirmatory findings. Human validation is still blocked
 pending source-authenticated handoff and genuine independent annotators.
+
+## Exact JSON-number types in diagnostic provenance
+
+The locally retained manifest is untrusted metadata, even when its declared
+hashes agree with the files. Its analysis configuration must contain precisely
+the expected integer fields, and each declared source/artifact fingerprint must
+contain exactly one positive **integer** `bytes` and one string `sha256`.
+JSON floating-point numbers are rejected even when they compare equal to
+integers in Python (for example, `8.0 == 8`). Unexpected fingerprint members
+are also rejected. Synthetic regression tests prove that these otherwise
+numerically equal rewrites cannot be accepted as the original schema.
+
+This verifies schema fidelity, not independent provenance: an adversary can
+still rewrite local evidence and self-consistently recalculate its digest.
+The optional offline recomputation checks inference consistency, not source
+custody. The September original artifacts and human ratings remain unverified
+or unavailable, and no pilot, frozen automated or exploratory outcome changes.

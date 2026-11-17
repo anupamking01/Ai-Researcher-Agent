@@ -181,6 +181,55 @@ def test_duplicate_manifest_key_fails_closed(inputs):
         verifier.verify_diagnostic_bundle(destination)
 
 
+
+@pytest.mark.parametrize(
+    "section,field",
+    [
+        ("analysis_config", "bootstrap_draws"),
+        ("analysis_config", "bootstrap_seed"),
+        ("analysis_config", "expected_tasks"),
+        ("sources", "bytes"),
+        ("artifacts", "bytes"),
+    ],
+)
+def test_manifest_rejects_numerically_equal_float_as_integer(
+    inputs, section, field,
+):
+    destination, _ = _build(inputs)
+    path = destination / diagnostic.DIAGNOSTIC_MANIFEST
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    # These preserve Python's equality comparison with the expected integer.
+    # A verifier relying on dict == would incorrectly accept them.
+    if section == "analysis_config":
+        original = manifest[section][field]
+        manifest[section][field] = float(original)
+        assert manifest[section][field] == original
+    else:
+        name = sorted(manifest[section])[0]
+        original = manifest[section][name][field]
+        manifest[section][name][field] = float(original)
+        assert manifest[section][name][field] == original
+    path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError, match="configuration differs|fingerprint schema mismatch"
+    ):
+        verifier.verify_diagnostic_bundle(destination)
+
+
+@pytest.mark.parametrize("section", ["sources", "artifacts"])
+def test_manifest_rejects_undeclared_fingerprint_metadata(inputs, section):
+    destination, _ = _build(inputs)
+    path = destination / diagnostic.DIAGNOSTIC_MANIFEST
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    name = sorted(manifest[section])[0]
+    manifest[section][name]["undeclared"] = "not a frozen fingerprint field"
+    path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="fingerprint schema mismatch"):
+        verifier.verify_diagnostic_bundle(destination)
+
+
 def _rehash_claimed_artifact(destination, name):
     """Simulate a locally rewritten result accompanied by its forged receipt."""
     content = (destination / name).read_bytes()

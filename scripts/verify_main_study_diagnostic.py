@@ -191,6 +191,21 @@ def _fingerprint(raw: bytes) -> dict:
     return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
 
 
+def _check_fingerprint_table(table: object, names, *, kind: str) -> None:
+    """Require exact JSON types, not Python's numerically equal float/int values."""
+    if type(table) is not dict or set(table) != set(names):
+        raise ValueError(f"diagnostic {kind} fingerprint schema mismatch")
+    for value in table.values():
+        if (
+            type(value) is not dict
+            or set(value) != {"bytes", "sha256"}
+            or type(value["bytes"]) is not int
+            or value["bytes"] <= 0
+            or type(value["sha256"]) is not str
+        ):
+            raise ValueError(f"diagnostic {kind} fingerprint schema mismatch")
+
+
 
 def _verify_recomputed_inference(
     treatment_rows: list[dict[str, str]],
@@ -293,16 +308,22 @@ def _verify_bound_diagnostic_bundle(
         "bootstrap_seed": frozen.BOOTSTRAP_SEED,
         "expected_tasks": frozen.EXPECTED_TASKS,
     }
-    if receipt["analysis_config"] != expected_config:
+    config = receipt["analysis_config"]
+    if (
+        type(config) is not dict
+        or set(config) != set(expected_config)
+        or any(
+            type(config[name]) is not int or config[name] != expected
+            for name, expected in expected_config.items()
+        )
+    ):
         raise ValueError("diagnostic inference configuration differs from verifier")
-    if not isinstance(receipt["sources"], dict) or set(receipt["sources"]) != set(SOURCES):
-        raise ValueError("diagnostic source fingerprint schema mismatch")
+    _check_fingerprint_table(receipt["sources"], SOURCES, kind="source")
     for name, path in SOURCES.items():
         if receipt["sources"][name] != _fingerprint(_read_regular(path, limit=1024 * 1024)):
             raise ValueError(f"diagnostic analysis source drift: {name}")
 
-    if not isinstance(receipt["artifacts"], dict) or set(receipt["artifacts"]) != set(ARTIFACTS):
-        raise ValueError("diagnostic artifact fingerprint schema mismatch")
+    _check_fingerprint_table(receipt["artifacts"], ARTIFACTS, kind="artifact")
     contents = {}
     for name in ARTIFACTS:
         limit = (
