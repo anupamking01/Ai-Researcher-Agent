@@ -84,3 +84,21 @@ human-validation results.
 Synthetic regressions cover valid and malformed pins, exact-byte formatting
 changes, locally rehashed output forgery, and CLI pin forwarding. No model,
 evaluator, treatment, or human-scoring calls are needed.
+
+## Analysis-source ancestor and generation continuity
+
+The four source-code fingerprints are now captured using held, no-follow
+directory descriptors rather than a fresh pathname read at verification time.
+The verifier retains the identities of all four source files and their
+ancestor directories throughout the five-file validation and optional offline
+recomputation. It rejects a source path reached through a symlinked ancestor
+and a byte-identical source replacement after fingerprint capture. Synthetic
+tests cover both cases without touching the actual research source or
+historical artifacts.
+
+These are local continuity checks, **not** proof of which Python bytecode was
+originally executed, an atomic snapshot, independently archived code custody,
+or authentication of the missing original September treatment reports. A
+change fully reversed between observations is not detectable. The existing
+pilot, frozen automated, exploratory, and pending human-validation claim
+boundaries remain unchanged.

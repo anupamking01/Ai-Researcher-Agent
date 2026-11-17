@@ -179,6 +179,91 @@ def _read_regular(path: Path, *, limit: int, directory_fd: int | None = None,
         os.close(fd)
 
 
+@contextmanager
+def _bound_diagnostic_sources():
+    """Retain exact source file and ancestor identities across verification.
+
+    A source digest obtained through a symlinked or replaced directory does
+    not establish which local code checkout was examined. This still does
+    not independently authenticate the checkout or loaded Python bytecode.
+    """
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise ValueError("diagnostic source requires no-follow directory opens")
+    flags = (os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+             | getattr(os, "O_CLOEXEC", 0))
+    try:
+        with ExitStack() as stack:
+            pinned = []
+            fingerprints = {}
+            for name, source_path in sorted(SOURCES.items()):
+                path = Path(source_path)
+                if ".." in path.parts:
+                    raise ValueError("diagnostic source path contains parent traversal")
+                absolute = Path(os.path.abspath(path))
+                parent_fd = os.open(absolute.anchor, flags)
+                stack.callback(os.close, parent_fd)
+                ancestors = []
+                for component in absolute.parts[1:-1]:
+                    child_fd = os.open(component, flags, dir_fd=parent_fd)
+                    stack.callback(os.close, child_fd)
+                    visible = os.stat(
+                        component, dir_fd=parent_fd, follow_symlinks=False
+                    )
+                    if _directory_identity(visible) != _directory_identity(
+                        os.fstat(child_fd)
+                    ):
+                        raise ValueError(
+                            "diagnostic source ancestor changed before verification"
+                        )
+                    ancestors.append((parent_fd, component, child_fd))
+                    parent_fd = child_fd
+                before = os.stat(
+                    absolute.name, dir_fd=parent_fd, follow_symlinks=False
+                )
+                if not stat.S_ISREG(before.st_mode):
+                    raise ValueError(f"diagnostic source is not regular: {name}")
+                generation = _member_generation(before)
+                raw = _read_regular(
+                    absolute, limit=1024 * 1024, directory_fd=parent_fd,
+                    expected_generation=generation,
+                )
+                fingerprints[name] = _fingerprint(raw)
+                pinned.append((name, absolute.name, parent_fd, generation, ancestors))
+
+            yield fingerprints
+
+            for name, basename, parent_fd, generation, ancestors in pinned:
+                try:
+                    visible = os.stat(
+                        basename, dir_fd=parent_fd, follow_symlinks=False
+                    )
+                except OSError as exc:
+                    raise ValueError(
+                        f"diagnostic source changed during verification: {name}"
+                    ) from exc
+                if _member_generation(visible) != generation:
+                    raise ValueError(
+                        f"diagnostic source changed during verification: {name}"
+                    )
+                for holder_fd, component, child_fd in ancestors:
+                    try:
+                        directory = os.stat(
+                            component, dir_fd=holder_fd, follow_symlinks=False
+                        )
+                    except OSError as exc:
+                        raise ValueError(
+                            "diagnostic source ancestor changed during verification"
+                        ) from exc
+                    if _directory_identity(directory) != _directory_identity(
+                        os.fstat(child_fd)
+                    ):
+                        raise ValueError(
+                            "diagnostic source ancestor changed during verification"
+                        )
+    except OSError as exc:
+        raise ValueError("diagnostic source cannot be opened safely") from exc
+
+
 def _unique_pairs(pairs):
     result = {}
     for name, value in pairs:
@@ -282,16 +367,19 @@ def verify_diagnostic_bundle(
     ):
         raise ValueError("expected diagnostic manifest SHA-256 must be 64 lowercase hex digits")
     directory = Path(directory)
-    with _bound_diagnostic_bundle(directory) as (bundle_fd, pinned):
-        return _verify_bound_diagnostic_bundle(
-            directory, bundle_fd, pinned, recompute=recompute,
-            expected_manifest_sha256=expected_manifest_sha256,
-        )
+    with _bound_diagnostic_sources() as source_fingerprints:
+        with _bound_diagnostic_bundle(directory) as (bundle_fd, pinned):
+            return _verify_bound_diagnostic_bundle(
+                directory, bundle_fd, pinned, recompute=recompute,
+                expected_manifest_sha256=expected_manifest_sha256,
+                source_fingerprints=source_fingerprints,
+            )
 
 
 def _verify_bound_diagnostic_bundle(
     directory: Path, bundle_fd: int, pinned: dict, *, recompute: bool,
     expected_manifest_sha256: str | None,
+    source_fingerprints: dict[str, dict],
 ) -> dict:
     raw_manifest = _read_regular(
         directory / diagnostic.DIAGNOSTIC_MANIFEST, limit=MAX_MANIFEST_BYTES,
@@ -342,7 +430,7 @@ def _verify_bound_diagnostic_bundle(
         raise ValueError("diagnostic inference configuration differs from verifier")
     _check_fingerprint_table(receipt["sources"], SOURCES, kind="source")
     for name, path in SOURCES.items():
-        if receipt["sources"][name] != _fingerprint(_read_regular(path, limit=1024 * 1024)):
+        if receipt["sources"][name] != source_fingerprints[name]:
             raise ValueError(f"diagnostic analysis source drift: {name}")
 
     _check_fingerprint_table(receipt["artifacts"], ARTIFACTS, kind="artifact")

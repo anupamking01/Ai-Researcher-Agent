@@ -324,6 +324,53 @@ def test_diagnostic_cli_forwards_external_pin(inputs, monkeypatch, capsys):
     ] is True
 
 
+def test_verifier_refuses_symlinked_analysis_source_ancestor(inputs, monkeypatch):
+    destination, _ = _build(inputs)
+    name = "scripts/analyze_main_study.py"
+    original = verifier.SOURCES[name]
+    alias = destination.parent / "source-code-alias"
+    alias.symlink_to(original.parent, target_is_directory=True)
+    monkeypatch.setattr(
+        verifier, "SOURCES",
+        {**verifier.SOURCES, name: alias / original.name},
+    )
+    # Byte-identical target: hashing the redirected pathname alone used to pass.
+    with pytest.raises(ValueError, match="diagnostic source cannot be opened safely"):
+        verifier.verify_diagnostic_bundle(destination)
+
+
+def test_verifier_detects_identical_byte_source_replacement_after_capture(
+    inputs, monkeypatch,
+):
+    destination, _ = _build(inputs)
+    name = "scripts/analyze_main_study.py"
+    original = verifier.SOURCES[name]
+    copy = destination.parent / "retained-analyzer-copy.py"
+    copy.write_bytes(original.read_bytes())
+    monkeypatch.setattr(verifier, "SOURCES", {**verifier.SOURCES, name: copy})
+    read = verifier._read_regular
+    swapped = False
+
+    def replace_after_manifest(path, *, limit, directory_fd=None,
+                               expected_generation=None):
+        nonlocal swapped
+        raw = read(
+            path, limit=limit, directory_fd=directory_fd,
+            expected_generation=expected_generation,
+        )
+        if directory_fd is not None and path.name == diagnostic.DIAGNOSTIC_MANIFEST:
+            replacement = destination.parent / "replacement-analyzer.py"
+            replacement.write_bytes(copy.read_bytes())
+            replacement.replace(copy)
+            swapped = True
+        return raw
+
+    monkeypatch.setattr(verifier, "_read_regular", replace_after_manifest)
+    with pytest.raises(ValueError, match="diagnostic source changed during verification"):
+        verifier.verify_diagnostic_bundle(destination)
+    assert swapped
+
+
 def test_opt_in_recomputation_matches_both_synthetic_outputs(inputs):
     destination, _ = _build(inputs)
     verified = verifier.verify_diagnostic_bundle(destination, recompute=True)
