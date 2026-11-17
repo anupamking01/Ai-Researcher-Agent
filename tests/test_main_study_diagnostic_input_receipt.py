@@ -309,6 +309,8 @@ def test_diagnostic_external_pin_binds_raw_bytes_not_equivalent_json(inputs):
 
 def test_diagnostic_cli_forwards_external_pin(inputs, monkeypatch, capsys):
     destination, _ = _build(inputs)
+    # The diagnostic producer prints its own JSON; capture only the verifier CLI.
+    capsys.readouterr()
     manifest = destination / diagnostic.DIAGNOSTIC_MANIFEST
     archived_sha256 = hashlib.sha256(manifest.read_bytes()).hexdigest()
     monkeypatch.setattr(
