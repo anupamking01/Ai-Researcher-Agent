@@ -36,6 +36,17 @@ SUMMARY = re.compile(
     r"(?: \([0-9:.]+\))?"
     r"(?(ruler) ={3,})"
 )
+# Verbose full-suite logs expose both collected test cases and per-case
+# completion records. Validate all three independent representations (collection,
+# progress, footer) rather than trusting only an otherwise green footer.
+VERBOSE_COLLECTION = re.compile(
+    r"collecting \.\.\. collected (?P<count>[1-9][0-9]*) items"
+)
+VERBOSE_COMPLETION = re.compile(
+    r".+\s+(?P<status>PASSED|SKIPPED|XFAIL|XPASS|FAILED|ERROR)"
+    r"\s+\[\s*[0-9]+%\]"
+)
+
 REQUIRED_ENV = (
     "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_RUN_ID",
     "GITHUB_RUN_ATTEMPT", "GITHUB_EVENT_NAME",
@@ -176,6 +187,50 @@ def _verify_full_ci_selection(
     }
 
 
+def _verify_verbose_full_ci_progress(
+    test_output_lines: list[str], *, expected: dict[str, int],
+) -> None:
+    """Check collected items against actual verbose per-test terminal records.
+
+    This validates the captured pytest transcript's internal consistency.
+    It does not independently authenticate the runner or discover omitted
+    tests that never appeared in pytest collection.
+    """
+    collections = [
+        (index, match)
+        for index, line in enumerate(test_output_lines)
+        if (match := VERBOSE_COLLECTION.fullmatch(line))
+    ]
+    if len(collections) != 1:
+        raise ValueError("full CI verbose pytest collection record missing or ambiguous")
+    collected_position, collection = collections[0]
+    observed: dict[str, int] = {}
+    for index, line in enumerate(test_output_lines):
+        completion = VERBOSE_COMPLETION.fullmatch(line)
+        if completion is None:
+            continue
+        if index <= collected_position:
+            raise ValueError("full CI test completion precedes collection")
+        status = completion["status"]
+        observed[status] = observed.get(status, 0) + 1
+    if sum(observed.values()) != int(collection["count"]):
+        raise ValueError(
+            "full CI verbose pytest collected and completed test counts disagree"
+        )
+    summary_outcomes = {
+        "PASSED": expected.get("passed", 0),
+        "SKIPPED": expected.get("skipped", 0),
+        "XFAIL": expected.get("xfailed", 0),
+        "XPASS": expected.get("xpassed", 0),
+    }
+    if observed != {
+        status: count for status, count in summary_outcomes.items() if count
+    }:
+        raise ValueError(
+            "full CI pytest per-test completion outcomes differ from terminal summary"
+        )
+
+
 def build_receipt(log: bytes, *, context: dict[str, str],
                   checkout_sha: str, dependency_bytes: dict[str, bytes],
                   selected_modules: bytes | None = None,
@@ -241,6 +296,13 @@ def build_receipt(log: bytes, *, context: dict[str, str],
         raise ValueError("invalid GitHub Actions event or run identity")
     if (selected_modules is None) != (shard is None):
         raise ValueError("full CI shard identity and module inventory must be supplied together")
+    # Full CI uses -vv; require the actual collected count, per-test result
+    # records, and terminal summary to agree before creating a success receipt.
+    # Narrow specialist receipts retain their previously supported formats.
+    if selected_modules is not None:
+        _verify_verbose_full_ci_progress(
+            lines[markers[0] + 1:summary_index], expected=parsed,
+        )
     full_ci = (
         _verify_full_ci_selection(
             decoded, selected_modules=selected_modules,

@@ -158,7 +158,9 @@ def _synthetic_full_shard(tmp_path, monkeypatch):
     manifest = b"tests/test_00.py\n"
     header = f"VERA full-suite shard 0/16; selected 1 modules; checkout {SHA}"
     log = (header + "\ntests/test_00.py\n" + evidence.FIREWALL_MARKER
-           + "\n1 passed in 0.2s\n").encode()
+           + "\ncollecting ... collected 1 items\n"
+           + "tests/test_00.py::test_ok PASSED [100%]\n"
+           + "1 passed in 0.2s\n").encode()
     return log, manifest
 
 
@@ -173,6 +175,45 @@ def test_full_ci_receipt_binds_actual_source_shard_and_log(tmp_path, monkeypatch
     assert receipt["full_ci_selected_module_count"] == 1
     assert receipt["full_ci_total_modules"] == 16
     assert receipt["full_ci_selected_modules_sha256"] == hashlib.sha256(manifest).hexdigest()
+
+
+@pytest.mark.parametrize("mutation,reason", [
+    ("missing_collection", "collection"),
+    ("missing_completion", "collected and completed"),
+    ("duplicated_completion", "collected and completed"),
+    ("wrong_outcome", "per-test completion outcomes"),
+])
+def test_full_ci_receipt_rejects_inconsistent_verbose_completion(
+    tmp_path, monkeypatch, mutation, reason,
+):
+    log, manifest = _synthetic_full_shard(tmp_path, monkeypatch)
+    if mutation == "missing_collection":
+        log = log.replace(b"collecting ... collected 1 items\n", b"")
+    elif mutation == "missing_completion":
+        log = log.replace(b"tests/test_00.py::test_ok PASSED [100%]\n", b"")
+    elif mutation == "duplicated_completion":
+        node = b"tests/test_00.py::test_ok PASSED [100%]\n"
+        log = log.replace(node, node + node)
+    elif mutation == "wrong_outcome":
+        log = log.replace(b" PASSED [100%]", b" SKIPPED [100%]")
+    with pytest.raises(ValueError, match=reason):
+        evidence.build_receipt(
+            log, context=CONTEXT, checkout_sha=SHA,
+            dependency_bytes=DEPS, selected_modules=manifest, shard=0,
+        )
+
+
+def test_verbose_completion_handles_parameter_ids_with_spaces_and_skip_xfail():
+    # Real pytest node IDs can include JSON, spaces, colons or bracketed text.
+    evidence._verify_verbose_full_ci_progress(
+        [
+            "collecting ... collected 3 items",
+            'tests/test_a.py::test_case[{"a": 1}-with spaces] PASSED       [ 33%]',
+            "tests/test_b.py::test_skip SKIPPED [ 66%]",
+            "tests/test_c.py::test_expected_failure XFAIL [100%]",
+        ],
+        expected={"passed": 1, "skipped": 1, "xfailed": 1},
+    )
 
 
 @pytest.mark.parametrize("failure", ["wrong_bytes", "wrong_shard", "missing", "log_changed", "duplicate_header"])

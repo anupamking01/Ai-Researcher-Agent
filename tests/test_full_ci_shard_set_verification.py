@@ -52,6 +52,11 @@ def evidence(tmp_path, monkeypatch):
         log = (
             header + "\n" + "\n".join(selected) + "\n"
             + producer.FIREWALL_MARKER + "\n"
+            + "collecting ... collected 2 items\n"
+            + "".join(
+                f"{name}::test_synthetic_only PASSED [{(index + 1) * 50}%]\n"
+                for index, name in enumerate(selected)
+            )
             + "2 passed in 0.04s\n"
         ).encode()
         receipt = producer.build_receipt(

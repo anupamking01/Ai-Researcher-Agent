@@ -1,3 +1,29 @@
+## Full-suite pytest collection-to-completion integrity (17 November 2026)
+
+The ordinary 16-shard CI now requires three independently inspectable counts
+from each *complete* verbose pytest transcript to agree before issuing a
+source-bound success receipt: the single `collecting ... collected N items`
+record, the number and categories of per-test `PASSED` / `SKIPPED` / `XFAIL`
+terminal status records, and the single final pytest summary. Missing,
+duplicated, reordered-before-collection or contradictory completion records
+fail closed. The check accepts parameterized test identifiers containing spaces
+and treats warnings as warnings, not completed tests. Legacy short specialist
+receipts (without a selected-module inventory) still use the existing strict
+terminal-summary contract. Both producer and independent replay perform the
+new check, because replay recomputes the exact producer receipt.
+
+This adds transcript-level completeness evidence to the already retained
+source-bound module inventory and helps distinguish an interrupted job from a
+finished one. It does **not** prove collection of all Python test functions,
+attest GitHub runner honesty, prevent external cancellation, or authenticate
+historical research artifacts. At predecessor SHA
+`3590f96ef30a937a0791f917705eedf9767fb1f0`, both full CI suites
+were cancelled (push run `44032344250` and PR run `44032352298`),
+although 14 of 16 push shards and 15 of 16 PR shards completed. Neither
+cancelled workflow qualifies as an independent complete-shard replay, and the
+cause of cancellation remains unconfirmed. This change does not modify
+treatments, evaluators, frozen numerical outcomes, analysis plans or ratings.
+
 # Source-bound offline CI test evidence
 
 The normal VERA `tests.yml` job retains a raw log and a small JSON receipt
