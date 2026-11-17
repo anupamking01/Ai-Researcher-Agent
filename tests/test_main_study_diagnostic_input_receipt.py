@@ -238,3 +238,63 @@ def test_recomputation_restores_historical_analyzer_globals_on_failure(inputs, m
     assert frozen._read_csv is original_reader
     assert frozen.OUT_JSON == original_json
     assert frozen.OUT_MD == original_md
+
+
+def test_symlinked_source_ancestor_refused_before_analysis(inputs, monkeypatch):
+    main, _, destination = inputs
+    source_dir = main.parent / "original-source"
+    source_dir.mkdir()
+    moved = source_dir / main.name
+    main.rename(moved)
+    alias = main.parent / "source-alias"
+    alias.symlink_to(source_dir, target_is_directory=True)
+    monkeypatch.setattr(frozen, "MAIN_CSV", alias / main.name)
+    with pytest.raises(ValueError, match="cannot be opened safely"):
+        diagnostic.main(output_dir=destination)
+    assert moved.is_file()
+    assert not destination.exists()
+
+
+def test_parent_traversal_refused_before_analysis(inputs, monkeypatch):
+    main, _, destination = inputs
+    source_dir = main.parent / "source-folder"
+    source_dir.mkdir()
+    moved = source_dir / main.name
+    main.rename(moved)
+    monkeypatch.setattr(
+        frozen, "MAIN_CSV",
+        source_dir / ".." / source_dir.name / moved.name,
+    )
+    with pytest.raises(ValueError, match="parent components"):
+        diagnostic.main(output_dir=destination)
+    assert moved.is_file()
+    assert not destination.exists()
+
+
+def test_source_ancestor_swapped_after_descriptor_read_fails_closed(
+    inputs, monkeypatch,
+):
+    main, _, destination = inputs
+    source_dir = main.parent / "source-folder"
+    source_dir.mkdir()
+    moved = source_dir / main.name
+    main.rename(moved)
+    monkeypatch.setattr(frozen, "MAIN_CSV", moved)
+    original_read = diagnostic.os.read
+    replaced = False
+
+    def substitute_parent(fd, size):
+        nonlocal replaced
+        raw = original_read(fd, size)
+        if raw and not replaced:
+            replaced = True
+            relocated = main.parent / "relocated-source"
+            source_dir.rename(relocated)
+            source_dir.symlink_to(relocated, target_is_directory=True)
+        return raw
+
+    monkeypatch.setattr(diagnostic.os, "read", substitute_parent)
+    with pytest.raises(ValueError, match="parent directory changed"):
+        diagnostic.main(output_dir=destination)
+    assert replaced
+    assert not destination.exists()

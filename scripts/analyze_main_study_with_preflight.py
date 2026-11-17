@@ -32,20 +32,27 @@ DIAGNOSTIC_MANIFEST = "main_study_diagnostic_provenance.json"
 
 
 def _capture_csv_input(path: Path) -> bytes:
-    """Capture one bounded regular-file generation before scientific validation."""
+    """Capture one bounded CSV through pinned, no-follow parent directories.
+
+    A regular final file is not enough: a symlinked or swapped ancestor can
+    redirect an apparently stable source path to a different evidence tree.
+    The pathname chain is checked before and after reading the held leaf FD.
+    This verifies local input-path continuity, not historical source custody.
+    """
     path = Path(path)
-    try:
-        original = os.stat(path, follow_symlinks=False)
-        if not stat.S_ISREG(original.st_mode):
-            raise ValueError(f"diagnostic input must be a regular file: {path}")
-        if not 0 < original.st_size <= MAX_DIAGNOSTIC_INPUT_BYTES:
-            raise ValueError(f"diagnostic input exceeds size limit or is empty: {path}")
-        fd = os.open(
-            path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_NONBLOCK", 0),
-        )
-    except OSError as exc:
-        raise ValueError(f"diagnostic input cannot be opened safely: {path}") from exc
+    if ".." in path.parts:
+        raise ValueError("diagnostic input path must not traverse parent components")
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise ValueError("diagnostic input requires no-follow directory opens")
+    absolute = Path(os.path.abspath(path))
+    directory_flags = (
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    file_flags = (
+        os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
 
     def identity(entry):
         return (
@@ -53,31 +60,74 @@ def _capture_csv_input(path: Path) -> bytes:
             entry.st_mtime_ns, entry.st_ctime_ns,
         )
 
+    # Each record pins (parent FD, component name, opened directory FD).
+    directories = []
     try:
-        before = os.fstat(fd)
-        if identity(original) != identity(before):
-            raise ValueError(f"diagnostic input changed before capture: {path}")
-        parts = []
-        total = 0
-        while True:
-            block = os.read(fd, min(1024 * 1024, MAX_DIAGNOSTIC_INPUT_BYTES + 1 - total))
-            if not block:
-                break
-            total += len(block)
-            if total > MAX_DIAGNOSTIC_INPUT_BYTES:
-                raise ValueError(f"diagnostic input exceeds size limit: {path}")
-            parts.append(block)
-        after = os.fstat(fd)
-        named = os.stat(path, follow_symlinks=False)
-        if (
-            total != before.st_size
-            or identity(original) != identity(after)
-            or identity(after) != identity(named)
-        ):
-            raise ValueError(f"diagnostic input changed during capture: {path}")
-        return b"".join(parts)
+        root_fd = os.open(absolute.anchor, directory_flags)
+        directories.append((None, None, root_fd))
+        for component in absolute.parts[1:-1]:
+            parent_fd = directories[-1][2]
+            child_fd = os.open(component, directory_flags, dir_fd=parent_fd)
+            directories.append((parent_fd, component, child_fd))
+            if identity(os.fstat(child_fd)) != identity(os.stat(
+                component, dir_fd=parent_fd, follow_symlinks=False
+            )):
+                raise ValueError("diagnostic input parent directory changed before capture")
+
+        parent_fd = directories[-1][2]
+        original = os.stat(
+            absolute.name, dir_fd=parent_fd, follow_symlinks=False
+        )
+        if not stat.S_ISREG(original.st_mode):
+            raise ValueError(f"diagnostic input must be a regular file: {path}")
+        if not 0 < original.st_size <= MAX_DIAGNOSTIC_INPUT_BYTES:
+            raise ValueError(f"diagnostic input exceeds size limit or is empty: {path}")
+        fd = os.open(absolute.name, file_flags, dir_fd=parent_fd)
+        try:
+            before = os.fstat(fd)
+            if identity(original) != identity(before):
+                raise ValueError(f"diagnostic input changed before capture: {path}")
+            parts = []
+            total = 0
+            while True:
+                block = os.read(
+                    fd, min(1024 * 1024, MAX_DIAGNOSTIC_INPUT_BYTES + 1 - total)
+                )
+                if not block:
+                    break
+                total += len(block)
+                if total > MAX_DIAGNOSTIC_INPUT_BYTES:
+                    raise ValueError(f"diagnostic input exceeds size limit: {path}")
+                parts.append(block)
+            after = os.fstat(fd)
+            named = os.stat(
+                absolute.name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if (
+                total != before.st_size
+                or identity(original) != identity(after)
+                or identity(after) != identity(named)
+            ):
+                raise ValueError(f"diagnostic input changed during capture: {path}")
+            for ancestor_fd, component, directory_fd in directories[1:]:
+                visible = os.stat(
+                    component, dir_fd=ancestor_fd, follow_symlinks=False
+                )
+                if (
+                    not stat.S_ISDIR(visible.st_mode)
+                    or identity(os.fstat(directory_fd)) != identity(visible)
+                ):
+                    raise ValueError(
+                        f"diagnostic input parent directory changed during capture: {path}"
+                    )
+            return b"".join(parts)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise ValueError(f"diagnostic input cannot be opened safely: {path}") from exc
     finally:
-        os.close(fd)
+        for _, _, directory_fd in reversed(directories):
+            os.close(directory_fd)
 
 
 @contextmanager

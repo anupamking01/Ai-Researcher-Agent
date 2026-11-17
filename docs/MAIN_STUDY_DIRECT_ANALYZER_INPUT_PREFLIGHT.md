@@ -193,3 +193,31 @@ concurrent mutations, or any canonical manuscript-facing verification.
 Omitting `--recompute` retains the existing inexpensive byte-only verifier
 behavior. Frozen confirmatory results, exploratory diagnostics, pilot
 observations and pending blinded human validation remain distinct.
+
+
+## Diagnostic input ancestor-path continuity (17 November 2026)
+
+The optional local analyzer's bounded CSV capture previously used a no-follow
+**leaf** open, but parent components were resolved by the ambient pathname.
+A symlinked directory could redirect a syntactically legitimate treatment or
+evaluator CSV path to a different tree without violating leaf identity, and a
+parent replaced during a read could leave the opened file's bytes unchanged.
+
+The diagnostic wrapper now opens every ancestor from the filesystem root
+through held, descriptor-relative, no-follow directory FDs. It rejects
+explicit parent traversal and initial directory aliases, then rechecks the
+visible ancestor identities after the bounded leaf read. Synthetic tests cover
+a legitimate unchanged input (the existing full 40-cell fixture), an initial
+symlinked parent, an explicit \`..\` traversal, and an after-open parent swap
+to a symlink pointing at the original CSV. All invalid cases must fail before
+diagnostic inference publication.
+
+This is **local path consistency**, not an immutable source archive or proof
+that a historical treatment/evaluator was ever run. A transient mutation that
+escapes observations may not be detected. The unchanged, byte-pinned historical
+analyzer and canonical results still require the published manifest-pinned
+runner; the optional diagnostic remains noncanonical. Pilot findings remain
+diagnostic, the frozen automated analysis retains post-collection planning,
+fixed treatment order and evaluator comparability limitations, exploratory
+sensitivities are not prospective confirmatory findings, and genuine blinded
+human ratings and independent original report custody remain outstanding.
