@@ -218,8 +218,8 @@ def test_firewall_order_failure_rollback_and_exit_code(
 def test_verbose_pytest_progress_exposes_interrupted_test_context(tmp_path):
     """Synthetic failure retains node identity, not only a progress percentage."""
     (tmp_path / "test_progress_probe.py").write_text(
-        "def test_observable_failure():\\n"
-        "    assert False, 'synthetic-only failure'\\n",
+        "def test_observable_failure():\n"
+        "    assert False, 'synthetic-only failure'\n",
         encoding="utf-8",
     )
     result = subprocess.run(
