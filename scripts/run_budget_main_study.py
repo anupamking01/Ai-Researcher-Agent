@@ -644,7 +644,12 @@ def _load_pricing(path: Path) -> tuple[dict, dict]:
     return payload, snapshot
 
 
-def _trace_cost_usd(path: Path, pricing: dict) -> float:
+def _trace_cost_usd(
+    path: Path,
+    pricing: dict,
+    *,
+    expected_completed_cell: tuple[str, str, str] | None = None,
+) -> float:
     if path.parent.is_symlink() or not path.parent.is_dir():
         raise SystemExit(
             f"Invalid treatment trace directory {path.parent}: must be a regular directory"
@@ -663,10 +668,19 @@ def _trace_cost_usd(path: Path, pricing: dict) -> float:
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise SystemExit(f"Invalid treatment trace {path}: {exc}") from exc
 
-    return _validated_trace_cost(payload, path=path, pricing=pricing)
+    return _validated_trace_cost(
+        payload, path=path, pricing=pricing,
+        expected_completed_cell=expected_completed_cell,
+    )
 
 
-def _validated_trace_cost(payload: dict, *, path: Path, pricing: dict) -> float:
+def _validated_trace_cost(
+    payload: dict,
+    *,
+    path: Path,
+    pricing: dict,
+    expected_completed_cell: tuple[str, str, str] | None = None,
+) -> float:
     """Validate one captured treatment trace and recompute its frozen cost."""
 
     if not isinstance(payload, dict):
@@ -718,6 +732,21 @@ def _validated_trace_cost(payload: dict, *, path: Path, pricing: dict) -> float:
         raise SystemExit(
             f"Invalid treatment trace {path}: completed must be a boolean"
         )
+    if expected_completed_cell is not None:
+        variant_id, task_set_id, task_id = expected_completed_cell
+        if (
+            not completed
+            or experiment_variant != variant_id
+            or trace_variant != variant_id
+            or experiment_task != task_id
+            or trace_task != task_id
+            or experiment.get("task_set_id") != task_set_id
+            or trace.get("task_set_id") != task_set_id
+        ):
+            raise SystemExit(
+                f"Invalid treatment trace {path}: new completed cell must match "
+                "the requested variant, task set and task"
+            )
 
     experiment_source_budget = experiment.get("source_budget")
     source_budget = trace.get("source_budget")
@@ -949,6 +978,45 @@ def _current_treatment_cost(pricing: dict) -> float:
         _trace_cost_usd(path, pricing)
         for path in _treatment_trace_paths()
     )
+
+
+def _require_new_completed_trace(
+    prior_paths: tuple[Path, ...],
+    *,
+    variant_id: str,
+    task_set_id: str,
+    task_id: str,
+    pricing: dict,
+) -> float:
+    """Gate the next treatment on one correctly attributed completed trace.
+
+    An agent can return without raising even when its saved report is empty,
+    and an absent trace would otherwise contribute no recorded spend.
+    """
+    previous = set(prior_paths)
+    current = set(_treatment_trace_paths())
+    created = current - previous
+    if not previous.issubset(current) or len(created) != 1:
+        raise ValueError(
+            f"Treatment {variant_id}/{task_id} must publish exactly one new "
+            "trace without removing earlier treatment evidence"
+        )
+    (new_path,) = tuple(created)
+    if new_path.parent.name != variant_id:
+        raise ValueError(
+            f"Treatment {variant_id}/{task_id} published a trace under "
+            "the wrong variant"
+        )
+    try:
+        return _trace_cost_usd(
+            new_path, pricing,
+            expected_completed_cell=(variant_id, task_set_id, task_id),
+        )
+    except SystemExit as exc:
+        raise ValueError(
+            f"Treatment {variant_id}/{task_id} did not publish a valid "
+            f"completed trace: {exc}"
+        ) from exc
 
 
 def _preflight_new_study_state(pricing: dict) -> float:
@@ -1192,6 +1260,7 @@ async def _run_main_study() -> None:
 
             status = "completed"
             error = None
+            prior_trace_paths = _treatment_trace_paths()
             try:
                 await run_agent(
                     task=task["question"],
@@ -1200,6 +1269,11 @@ async def _run_main_study() -> None:
                     agent_role_prompt=None,
                     websocket=socket,
                     experiment_config=config,
+                )
+                _require_new_completed_trace(
+                    prior_trace_paths, variant_id=variant_id,
+                    task_set_id=task_set_id, task_id=task["id"],
+                    pricing=pricing,
                 )
             except Exception as exc:
                 status = "timeout" if isinstance(exc, TimeoutError) else "failed"

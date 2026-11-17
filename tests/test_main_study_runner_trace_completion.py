@@ -1,0 +1,160 @@
+"""Synthetic, offline regression for noncanonical treatment completion gating."""
+import asyncio
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from logic.experiment import ExperimentConfig
+from scripts import run_budget_main_study as study
+
+PRICING = {"models": {"fake": {"input": 1.0, "output": 1.0}}}
+
+
+def _payload(run_id="run-1", completed=True, task="main-01",
+             task_set="test-tasks", variant="D3"):
+    return {
+        "schema_version": 2,
+        "experiment": {
+            "variant_id": variant, "task_set_id": task_set, "task_id": task,
+            "source_budget": 3 if variant == "D3" else 6,
+        },
+        "trace": {
+            "run_id": run_id, "variant_id": variant, "task_set_id": task_set,
+            "task_id": task, "completed": completed,
+            "source_budget": 3 if variant == "D3" else 6,
+            "source_count": 0, "successful_source_count": 0,
+            "failed_source_count": 0, "scheduled_urls": [],
+            "successful_urls": [], "failed_urls": [], "query_count": 0,
+            "search_call_count": 0, "latency_seconds": 1.0,
+            "report_words": 2 if completed else 0,
+            "model_call_count": 1, "unavailable_usage_call_count": 0,
+            "prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12,
+            "usage_accounting_status": "provider_usage_complete",
+            "provider_usage_by_model": {"fake": {
+                "model_calls": 1, "unavailable_calls": 0,
+                "prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12,
+            }},
+        },
+    }
+
+
+def _write(root, payload):
+    path = root / payload["trace"]["variant_id"] / (
+        payload["trace"]["run_id"] + ".json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _check(root, monkeypatch, old=()):
+    monkeypatch.setattr(study, "TRACE_ROOT", root)
+    return study._require_new_completed_trace(
+        tuple(old), variant_id="D3", task_set_id="test-tasks",
+        task_id="main-01", pricing=PRICING,
+    )
+
+
+def test_matching_completed_trace_has_verifiable_cost(tmp_path, monkeypatch):
+    root = tmp_path / "traces"
+    _write(root, _payload())
+    assert _check(root, monkeypatch) == pytest.approx(0.000012)
+
+
+def test_missing_trace_is_not_a_completed_treatment(tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match="exactly one new trace"):
+        _check(tmp_path / "traces", monkeypatch)
+
+
+@pytest.mark.parametrize(("variation", "message"), [
+    ("incomplete", "valid completed trace"),
+    ("wrong_task", "valid completed trace"),
+    ("wrong_task_set", "valid completed trace"),
+    ("wrong_variant", "wrong variant"),
+    ("unaccounted_usage", "valid completed trace"),
+    ("duplicate", "exactly one new trace"),
+])
+def test_completion_gate_rejects_bad_trace(
+    tmp_path, monkeypatch, variation, message,
+):
+    root = tmp_path / "traces"
+    p = _payload()
+    if variation == "incomplete":
+        p["trace"]["completed"] = False
+        p["trace"]["report_words"] = 0
+    elif variation == "wrong_task":
+        p["trace"]["task_id"] = "main-99"
+        p["experiment"]["task_id"] = "main-99"
+    elif variation == "wrong_task_set":
+        p["trace"]["task_set_id"] = "other-tasks"
+        p["experiment"]["task_set_id"] = "other-tasks"
+    elif variation == "wrong_variant":
+        p = _payload(variant="D6")
+    elif variation == "unaccounted_usage":
+        p["trace"]["provider_usage_by_model"]["fake"]["unavailable_calls"] = 1
+    _write(root, p)
+    if variation == "duplicate":
+        _write(root, _payload(run_id="run-2"))
+    with pytest.raises(ValueError, match=message):
+        _check(root, monkeypatch)
+
+
+def test_disappeared_prior_trace_rejected(tmp_path, monkeypatch):
+    root = tmp_path / "traces"
+    p = _write(root, _payload())
+    with pytest.raises(ValueError, match="without removing earlier"):
+        _check(root, monkeypatch, old=(p.parent / "old.json",))
+
+
+def test_agent_return_without_trace_stops_next_treatment(tmp_path, monkeypatch):
+    """The stub never performs provider calls or publishes experimental data."""
+    monkeypatch.setattr(study, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(study, "TRACE_ROOT", tmp_path / "outputs" / "experiment_traces")
+    monkeypatch.setattr(study.sys, "argv", [
+        "run_budget_main_study.py", "--noncanonical-replication-ack",
+        study.NONCANONICAL_REPLICATION_ACK,
+    ])
+    for name, value in {
+        "OPENAI_API_KEY": "synthetic-nonsecret", "SMART_LLM_MODEL": "fake",
+        "FAST_LLM_MODEL": "fake", "TEMPERATURE": "1",
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(study, "_load_task_file", lambda *_: (
+        "test-tasks", [{"id": "main-01", "question": "Synthetic question"}],
+        {"path": "test.json", "size_bytes": 2, "sha256": "0" * 64},
+    ))
+    monkeypatch.setattr(study, "_load_pricing", lambda *_: (
+        PRICING, {"path": "rates.json", "size_bytes": 2, "sha256": "0" * 64},
+    ))
+    monkeypatch.setattr(study, "_git_source_state", lambda: {
+        "commit": "a" * 40, "tree": "b" * 40,
+    })
+    monkeypatch.setattr(study, "_execution_environment", lambda: {})
+    monkeypatch.setattr(study, "_verify_repository_module_origin", lambda *_: None)
+    attempts = []
+
+    async def fake_agent(**kwargs):
+        attempts.append(kwargs["experiment_config"].variant_id)
+        return "Synthetic report", "synthetic-report.md"
+
+    actual_import = study.importlib.import_module
+    def fake_import(name):
+        if name == "logic.experiment":
+            return SimpleNamespace(ExperimentConfig=ExperimentConfig)
+        if name == "logic.run":
+            return SimpleNamespace(run_agent=fake_agent)
+        return actual_import(name)
+
+    monkeypatch.setattr(study.importlib, "import_module", fake_import)
+    with pytest.raises(SystemExit, match="stopped after D3/main-01 status=failed"):
+        asyncio.run(study._run_main_study())
+    progress = json.loads(
+        (tmp_path / "outputs" / "main_study_progress.json").read_text()
+    )
+    assert attempts == ["D3"]
+    assert progress["attempted_runs"] == 1
+    assert progress["completed_runs"] == 0
+    assert progress["failed_runs"] == 1
+    assert "exactly one new trace" in progress["events"][0]["error"]
