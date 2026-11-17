@@ -1,3 +1,21 @@
+## Bind verbose pytest completion identities to selected CI modules (17 November 2026)
+
+The 16-shard success receipt now checks the **node ID** of every recorded
+pytest completion, not only collection and outcome totals. Each test node must
+belong to an exact-checkout selected source module and appear only once.
+Replacing a test's completion with one from another shard or repeating an
+earlier completion while keeping a green summary is therefore rejected.
+Distinct parameterized test IDs (including spaces) remain valid. Independent
+retained-evidence replay applies the same requirement.
+
+This strengthens *transcript consistency*, not independent runner attestation
+or proof that all source test functions were collected. It does not prevent
+external CI cancellation or authenticate missing original research archives.
+The pilot remains diagnostic, designated-primary automated inference retains
+post-collection planning, fixed-order and evaluator-policy qualifications,
+and retrospective analyses remain exploratory; human validation is pending.
+No experiments, evaluators, frozen outcomes or human scores were changed.
+
 ## Full-suite pytest collection-to-completion integrity (17 November 2026)
 
 The ordinary 16-shard CI now requires three independently inspectable counts

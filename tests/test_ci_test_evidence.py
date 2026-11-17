@@ -203,6 +203,70 @@ def test_full_ci_receipt_rejects_inconsistent_verbose_completion(
         )
 
 
+
+@pytest.mark.parametrize("mutation,reason", [
+    ("duplicate_node", "duplicate completion node"),
+    ("unselected_module", "outside selected modules"),
+    ("lookalike_module", "outside selected modules"),
+    ("missing_node_identifier", "outside selected modules"),
+])
+def test_full_ci_rejects_count_preserving_node_substitution(
+    tmp_path, monkeypatch, mutation, reason,
+):
+    # Counts and final footer stay green: provenance fails only on node ID.
+    log, manifest = _synthetic_full_shard(tmp_path, monkeypatch)
+    log = log.replace(
+        b"collecting ... collected 1 items",
+        b"collecting ... collected 2 items",
+    ).replace(
+        b"tests/test_00.py::test_ok PASSED [100%]\n",
+        (
+            b"tests/test_00.py::test_first PASSED [ 50%]\n"
+            b"tests/test_00.py::test_second PASSED [100%]\n"
+        ),
+    ).replace(b"1 passed in 0.2s", b"2 passed in 0.2s")
+    if mutation == "duplicate_node":
+        log = log.replace(b"test_second", b"test_first")
+    elif mutation == "unselected_module":
+        log = log.replace(
+            b"test_00.py::test_second", b"test_01.py::test_second",
+        )
+    elif mutation == "lookalike_module":
+        log = log.replace(
+            b"test_00.py::test_second", b"test_00.py.bak::test_second",
+        )
+    elif mutation == "missing_node_identifier":
+        log = log.replace(
+            b"tests/test_00.py::test_second", b"outside_test_second",
+        )
+    with pytest.raises(ValueError, match=reason):
+        evidence.build_receipt(
+            log, context=CONTEXT, checkout_sha=SHA,
+            dependency_bytes=DEPS, selected_modules=manifest, shard=0,
+        )
+
+
+def test_full_ci_accepts_distinct_parameterized_node_ids_in_selected_module(
+    tmp_path, monkeypatch,
+):
+    log, manifest = _synthetic_full_shard(tmp_path, monkeypatch)
+    log = log.replace(
+        b"collecting ... collected 1 items",
+        b"collecting ... collected 2 items",
+    ).replace(
+        b"tests/test_00.py::test_ok PASSED [100%]\n",
+        (
+            b"tests/test_00.py::test_case[alpha with spaces] PASSED [ 50%]\n"
+            b"tests/test_00.py::test_case[beta with spaces] PASSED [100%]\n"
+        ),
+    ).replace(b"1 passed in 0.2s", b"2 passed in 0.2s")
+    receipt = evidence.build_receipt(
+        log, context=CONTEXT, checkout_sha=SHA,
+        dependency_bytes=DEPS, selected_modules=manifest, shard=0,
+    )
+    assert receipt["test_counts"]["passed"] == 2
+
+
 def test_verbose_completion_handles_parameter_ids_with_spaces_and_skip_xfail():
     # Real pytest node IDs can include JSON, spaces, colons or bracketed text.
     evidence._verify_verbose_full_ci_progress(

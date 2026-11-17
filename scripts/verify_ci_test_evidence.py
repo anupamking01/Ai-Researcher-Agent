@@ -43,7 +43,7 @@ VERBOSE_COLLECTION = re.compile(
     r"collecting \.\.\. collected (?P<count>[1-9][0-9]*) items"
 )
 VERBOSE_COMPLETION = re.compile(
-    r".+\s+(?P<status>PASSED|SKIPPED|XFAIL|XPASS|FAILED|ERROR)"
+    r"(?P<nodeid>.+?)\s+(?P<status>PASSED|SKIPPED|XFAIL|XPASS|FAILED|ERROR)"
     r"\s+\[\s*[0-9]+%\]"
 )
 
@@ -189,8 +189,9 @@ def _verify_full_ci_selection(
 
 def _verify_verbose_full_ci_progress(
     test_output_lines: list[str], *, expected: dict[str, int],
+    allowed_modules: frozenset[str] | None = None,
 ) -> None:
-    """Check collected items against actual verbose per-test terminal records.
+    """Check collected items against source-bound, unique pytest node IDs.
 
     This validates the captured pytest transcript's internal consistency.
     It does not independently authenticate the runner or discover omitted
@@ -205,12 +206,22 @@ def _verify_verbose_full_ci_progress(
         raise ValueError("full CI verbose pytest collection record missing or ambiguous")
     collected_position, collection = collections[0]
     observed: dict[str, int] = {}
+    seen_nodes: set[str] = set()
     for index, line in enumerate(test_output_lines):
         completion = VERBOSE_COMPLETION.fullmatch(line)
         if completion is None:
             continue
         if index <= collected_position:
             raise ValueError("full CI test completion precedes collection")
+        nodeid = completion["nodeid"]
+        module, separator, case = nodeid.partition("::")
+        if (not separator or not case or not module.startswith("tests/")
+                or not module.endswith(".py")
+                or (allowed_modules is not None and module not in allowed_modules)):
+            raise ValueError("full CI pytest completion node is outside selected modules")
+        if nodeid in seen_nodes:
+            raise ValueError("full CI pytest duplicate completion node ID")
+        seen_nodes.add(nodeid)
         status = completion["status"]
         observed[status] = observed.get(status, 0) + 1
     if sum(observed.values()) != int(collection["count"]):
@@ -296,19 +307,20 @@ def build_receipt(log: bytes, *, context: dict[str, str],
         raise ValueError("invalid GitHub Actions event or run identity")
     if (selected_modules is None) != (shard is None):
         raise ValueError("full CI shard identity and module inventory must be supplied together")
-    # Full CI uses -vv; require the actual collected count, per-test result
-    # records, and terminal summary to agree before creating a success receipt.
-    # Narrow specialist receipts retain their previously supported formats.
-    if selected_modules is not None:
-        _verify_verbose_full_ci_progress(
-            lines[markers[0] + 1:summary_index], expected=parsed,
-        )
+    # First verify the selected-module inventory against this checkout.
+    # Then reject count-preserving substitutions from other modules or
+    # duplicated node IDs. Specialist receipts keep their prior contract.
     full_ci = (
         _verify_full_ci_selection(
             decoded, selected_modules=selected_modules,
             shard=shard, checkout_sha=checkout_sha,
         ) if selected_modules is not None else {}
     )
+    if selected_modules is not None:
+        _verify_verbose_full_ci_progress(
+            lines[markers[0] + 1:summary_index], expected=parsed,
+            allowed_modules=frozenset(selected_modules.decode("utf-8").splitlines()),
+        )
     expected_dependencies = {"requirements.txt", "requirements-ci.lock"}
     if set(dependency_bytes) != expected_dependencies:
         raise ValueError("offline test dependencies must be fully fingerprinted")
