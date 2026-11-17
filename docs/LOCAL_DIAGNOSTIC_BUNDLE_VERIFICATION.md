@@ -161,3 +161,20 @@ console payload while preserving successful exact-output recomputation.
 This is a local resource-safety measure, not an independent reimplementation
 of inference, authentication of the missing historical trace/report archive,
 or a new scientific or human-evaluation result.
+
+## Dedicated fast CI for local diagnostic provenance
+
+The exact-commit `main-study-local-diagnostic-fast-ci` workflow now
+exercises `tests/test_main_study_diagnostic_input_receipt.py` **and**
+its structural scope/receipt regression independently of the sixteen-shard
+suite. The existing `diagnostic-evaluation-fast-ci` only tests
+`logic/evaluation.py` and must not be described as validation of this
+bundle verifier. This added lane uses pinned Python/dependencies, a
+firewalled offline pytest invocation, source-checkout checks, and an
+independently replayed run-bound test receipt retained for 90 days.
+
+It runs on relevant research-branch and PR changes and by manual dispatch.
+A green targeted check does not replace the full-suite aggregate replay,
+authenticate the unavailable original September reports/traces, change
+frozen automated outcomes, establish prospective precollection statistical
+registration, or supply genuine independent human ratings.
