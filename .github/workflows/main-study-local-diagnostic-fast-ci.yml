@@ -146,7 +146,7 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |
           set -euo pipefail
-          bash scripts/run_offline_pytest_firewalled.sh tests/test_main_study_diagnostic_input_receipt.py tests/test_main_study_diagnostic_fast_ci_workflow.py 2>&1 | tee "$RUNNER_TEMP/vera-local-local-diagnostic-tests.log"
+          bash scripts/run_offline_pytest_firewalled.sh tests/test_main_study_diagnostic_input_receipt.py tests/test_main_study_diagnostic_fast_ci_workflow.py 2>&1 | tee "$RUNNER_TEMP/vera-local-diagnostic-tests.log"
 
       - name: Verify source checkout after targeted tests
         run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests
@@ -159,16 +159,16 @@ jobs:
         run: |
           set -euo pipefail
           python -m scripts.verify_ci_test_evidence \
-            --log "$RUNNER_TEMP/vera-local-local-diagnostic-tests.log" \
-            --out "$RUNNER_TEMP/vera-local-local-diagnostic-test-receipt.json"
+            --log "$RUNNER_TEMP/vera-local-diagnostic-tests.log" \
+            --out "$RUNNER_TEMP/vera-local-diagnostic-test-receipt.json"
 
       - name: Independently replay diagnostic receipt before retention
         shell: bash
         run: |
           set -euo pipefail
           python -m scripts.verify_retained_ci_test_evidence \
-            --log "$RUNNER_TEMP/vera-local-local-diagnostic-tests.log" \
-            --receipt "$RUNNER_TEMP/vera-local-local-diagnostic-test-receipt.json" \
+            --log "$RUNNER_TEMP/vera-local-diagnostic-tests.log" \
+            --receipt "$RUNNER_TEMP/vera-local-diagnostic-test-receipt.json" \
             --checkout-sha "$GITHUB_SHA" \
             --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
@@ -177,9 +177,9 @@ jobs:
       - name: Retain source-bound targeted local diagnostic test evidence (90 days)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: vera-local-local-diagnostic-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          name: vera-local-diagnostic-tests-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/vera-local-local-diagnostic-tests.log
-            ${{ runner.temp }}/vera-local-local-diagnostic-test-receipt.json
+            ${{ runner.temp }}/vera-local-diagnostic-tests.log
+            ${{ runner.temp }}/vera-local-diagnostic-test-receipt.json
           if-no-files-found: error
           retention-days: 90
