@@ -34,6 +34,68 @@ def test_synthetic_success_receipt_is_exact_commit_bound():
     assert result["human_validation_performed"] is False
 
 
+def test_verbose_pytest_durations_footer_can_issue_complete_receipt():
+    # Reproduces -vv --durations=10: last pytest line has both '=' borders.
+    log = (
+        evidence.FIREWALL_MARKER + "\n"
+        "tests/test_example.py::test_one PASSED [100%]\n"
+        "======================= slowest 10 durations =======================\n"
+        "0.01s call     tests/test_example.py::test_one\n"
+        "======================= 1 passed in 0.02s =======================\n"
+    ).encode()
+    receipt = evidence.build_receipt(
+        log, context=CONTEXT, checkout_sha=SHA, dependency_bytes=DEPS,
+    )
+    assert receipt["test_counts"] == {"passed": 1}
+    assert receipt["pytest_elapsed_seconds"] == "0.02"
+
+
+def test_verbose_summary_crlf_is_bound_by_independent_replay():
+    import json
+    from scripts import verify_retained_ci_test_evidence as replay
+
+    log = _log(
+        "================= 6 passed, 4 warnings in 1.25s (0:00:01) =================="
+    ).replace(b"\n", b"\r\n")
+    receipt = evidence.build_receipt(
+        log, context=CONTEXT, checkout_sha=SHA, dependency_bytes=DEPS,
+    )
+    receipt["python_version"] = replay.runtime.PINNED_VERSION_TEXT
+    retained = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode()
+    assert replay.verify_retained_evidence(
+        log, retained, checkout_sha=SHA, run_id="123456",
+        run_attempt="1", event="push", dependency_bytes=DEPS,
+    ) == receipt
+
+
+@pytest.mark.parametrize("bad_summary", [
+    "========== 1 passed in 0.02s",
+    "1 passed in 0.02s ==========",
+    "========== 1 failed, 1 passed in 0.02s ==========",
+    "========== 1 passed, 1 xpassed in 0.02s ==========",
+    "========== 1 passed, 2 deselected in 0.02s ==========",
+    "========== 1 passed in 0.02s ========== garbage",
+])
+def test_decorated_pytest_summary_fails_closed_on_partial_or_unsafe_footer(
+    bad_summary,
+):
+    with pytest.raises(ValueError):
+        evidence.build_receipt(
+            _log(bad_summary), context=CONTEXT,
+            checkout_sha=SHA, dependency_bytes=DEPS,
+        )
+
+
+def test_duplicate_verbose_and_plain_summary_is_not_certified():
+    log = _log(
+        "============ 2 passed in 0.03s ============"
+    ) + b"2 passed in 0.03s\n"
+    with pytest.raises(ValueError, match="ambiguous"):
+        evidence.build_receipt(
+            log, context=CONTEXT, checkout_sha=SHA, dependency_bytes=DEPS,
+        )
+
+
 @pytest.mark.parametrize("bad_log", [
     b"", b"6 passed in 1.2s\n",
     _log("1 failed, 5 passed in 1.2s"),

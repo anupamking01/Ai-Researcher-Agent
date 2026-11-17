@@ -24,6 +24,34 @@ automated analysis retains the post-collection plan qualification; exploratory
 bounds and future human validation remain separate.
 
 
+## Verbose pytest completion receipts (17 November 2026)
+
+The firewalled offline pytest runner now uses `-vv --durations=10` to
+expose the active test node and report slow phases. Its successful stdout
+ends with a **decorated** pytest footer (for example,
+`================ 501 passed in 8.46s ================`), whereas the
+original source-bound receipt parser only recognized an undecorated
+`501 passed in 8.46s` line. This caused both full CI suites and several
+specialist evidence jobs to fail *after pytest itself passed*, with
+`offline pytest success summary missing or ambiguous`. This was a
+producer/consumer formatting mismatch, not evidence of failed research
+treatments or unsuccessful unit test assertions.
+
+The receipt producer and independent replayer now accept **either** the
+original plain pytest footer or a pytest-decorated footer with runs of at
+least three `=` characters on **both** sides. They still require exactly
+one complete physical terminal success line *after* the unique firewall
+marker and reject malformed, duplicated, appended, failed, deselected or
+unexpectedly passing records. They continue to bind original log bytes,
+checkout SHA, dependencies, selected module inventory and run identity.
+Synthetic tests exercise real-looking verbose duration output, CRLF and
+independent replay, as well as ambiguous/one-sided/rejected summaries.
+
+This restores the receipt contract while retaining per-test CI diagnostics;
+it does not weaken suite scope, infer a successful cancelled CI run,
+authenticate historical report/trace custody or generate any new
+pilot, designated-primary, exploratory or human-validation measurement.
+
 ## Preserve failing CI transcripts without implying successful verification (15 November 2026)
 
 Ordinary successful eight-shard CI retains one *verified* per-shard

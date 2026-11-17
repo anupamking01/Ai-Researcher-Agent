@@ -25,11 +25,16 @@ FIREWALL_MARKER = (
     "Offline pytest egress isolation active "
     "(IPv4 + IPv6; loopback allowed; policy inspected)."
 )
+# Pytest -q emits a bare summary; -vv emits the same summary bracketed
+# by '=' runs. Require *both* bars if either is present, and preserve the
+# unique, physically last success-line requirement in build_receipt().
 SUMMARY = re.compile(
+    r"(?:(?P<ruler>={3,}) )?"
     r"(?P<counts>[1-9][0-9]* passed(?:, [0-9]+ "
     r"(?:skipped|xfailed|xpassed|warnings?|deselected))*) "
     r"in (?P<elapsed>[0-9]+(?:\.[0-9]+)?)s"
     r"(?: \([0-9:.]+\))?"
+    r"(?(ruler) ={3,})"
 )
 REQUIRED_ENV = (
     "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_RUN_ID",
