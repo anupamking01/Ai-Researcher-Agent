@@ -241,6 +241,87 @@ def _rehash_claimed_artifact(destination, name):
     path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
 
 
+@pytest.mark.parametrize(
+    "bad_pin", ["", "0" * 63, "A" * 64, "g" * 64, 123, True],
+)
+def test_diagnostic_manifest_external_pin_requires_exact_sha256_format(
+    inputs, bad_pin,
+):
+    destination, _ = _build(inputs)
+    with pytest.raises(ValueError, match="64 lowercase hex digits"):
+        verifier.verify_diagnostic_bundle(
+            destination, expected_manifest_sha256=bad_pin
+        )
+
+
+def test_diagnostic_external_manifest_pin_accepts_exact_archived_bytes(inputs):
+    destination, _ = _build(inputs)
+    raw = (destination / diagnostic.DIAGNOSTIC_MANIFEST).read_bytes()
+    archived_sha256 = hashlib.sha256(raw).hexdigest()
+    result = verifier.verify_diagnostic_bundle(
+        destination, expected_manifest_sha256=archived_sha256
+    )
+    assert result["supplied_manifest_pin_matched"] is True
+    assert result["status"] == "verified_local_diagnostic_bytes_not_canonical_provenance"
+    assert verifier.verify_diagnostic_bundle(
+        destination
+    )["supplied_manifest_pin_matched"] is False
+
+
+def test_diagnostic_external_pin_rejects_self_consistent_result_rewrite(inputs):
+    destination, _ = _build(inputs)
+    manifest_path = destination / diagnostic.DIAGNOSTIC_MANIFEST
+    archived_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
+    # Rewriting output and its *local* receipt can fool an unpinned byte check.
+    # A separately preserved fingerprint of the original manifest must reject
+    # that self-consistent rewrite before the altered metadata is interpreted.
+    output = destination / diagnostic.DIAGNOSTIC_JSON
+    output.write_bytes(output.read_bytes() + b"\\n")
+    _rehash_claimed_artifact(destination, diagnostic.DIAGNOSTIC_JSON)
+    assert verifier.verify_diagnostic_bundle(
+        destination
+    )["supplied_manifest_pin_matched"] is False
+    with pytest.raises(ValueError, match="differs from supplied external SHA-256 pin"):
+        verifier.verify_diagnostic_bundle(
+            destination, expected_manifest_sha256=archived_sha256
+        )
+
+
+def test_diagnostic_external_pin_binds_raw_bytes_not_equivalent_json(inputs):
+    destination, _ = _build(inputs)
+    manifest_path = destination / diagnostic.DIAGNOSTIC_MANIFEST
+    original = manifest_path.read_bytes()
+    archived_sha256 = hashlib.sha256(original).hexdigest()
+    payload = json.loads(original)
+    # Same semantic receipt and source fingerprints; different published bytes.
+    rewritten = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\\n").encode()
+    assert rewritten != original
+    manifest_path.write_bytes(rewritten)
+    assert verifier.verify_diagnostic_bundle(
+        destination
+    )["retained_input_cells"] == 40
+    with pytest.raises(ValueError, match="differs from supplied external SHA-256 pin"):
+        verifier.verify_diagnostic_bundle(
+            destination, expected_manifest_sha256=archived_sha256
+        )
+
+
+def test_diagnostic_cli_forwards_external_pin(inputs, monkeypatch, capsys):
+    destination, _ = _build(inputs)
+    manifest = destination / diagnostic.DIAGNOSTIC_MANIFEST
+    archived_sha256 = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    monkeypatch.setattr(
+        "sys.argv",
+        ["verify_main_study_diagnostic", str(destination),
+         "--expected-manifest-sha256", archived_sha256],
+    )
+    assert verifier._cli() == 0
+    assert json.loads(capsys.readouterr().out)[
+        "supplied_manifest_pin_matched"
+    ] is True
+
+
 def test_opt_in_recomputation_matches_both_synthetic_outputs(inputs):
     destination, _ = _build(inputs)
     verified = verifier.verify_diagnostic_bundle(destination, recompute=True)

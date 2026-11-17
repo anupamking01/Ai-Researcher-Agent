@@ -11,6 +11,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import stat
 import tempfile
 from contextlib import ExitStack, contextmanager, redirect_stdout
@@ -265,22 +266,43 @@ def _verify_recomputed_inference(
                 raise ValueError(f"diagnostic recomputed inference byte mismatch: {name}")
 
 
-def verify_diagnostic_bundle(directory: Path, *, recompute: bool = False) -> dict:
+def verify_diagnostic_bundle(
+    directory: Path, *, recompute: bool = False,
+    expected_manifest_sha256: str | None = None,
+) -> dict:
+    """Optionally bind a diagnostic receipt to a separately retained digest.
+
+    The caller is responsible for establishing that the supplied pin predates
+    any potential modification. An arbitrary locally computed pin is not
+    independent archive custody.
+    """
+    if expected_manifest_sha256 is not None and (
+        type(expected_manifest_sha256) is not str
+        or re.fullmatch(r"[0-9a-f]{64}", expected_manifest_sha256) is None
+    ):
+        raise ValueError("expected diagnostic manifest SHA-256 must be 64 lowercase hex digits")
     directory = Path(directory)
     with _bound_diagnostic_bundle(directory) as (bundle_fd, pinned):
         return _verify_bound_diagnostic_bundle(
-            directory, bundle_fd, pinned, recompute=recompute
+            directory, bundle_fd, pinned, recompute=recompute,
+            expected_manifest_sha256=expected_manifest_sha256,
         )
 
 
 def _verify_bound_diagnostic_bundle(
-    directory: Path, bundle_fd: int, pinned: dict, *, recompute: bool
+    directory: Path, bundle_fd: int, pinned: dict, *, recompute: bool,
+    expected_manifest_sha256: str | None,
 ) -> dict:
     raw_manifest = _read_regular(
         directory / diagnostic.DIAGNOSTIC_MANIFEST, limit=MAX_MANIFEST_BYTES,
         directory_fd=bundle_fd,
         expected_generation=pinned[diagnostic.DIAGNOSTIC_MANIFEST],
     )
+    # Compare the exact captured manifest bytes *before* interpreting its
+    # self-declared fingerprints. JSON reformatting is not equivalent custody.
+    if (expected_manifest_sha256 is not None
+            and hashlib.sha256(raw_manifest).hexdigest() != expected_manifest_sha256):
+        raise ValueError("diagnostic manifest differs from supplied external SHA-256 pin")
     try:
         receipt = json.loads(
             raw_manifest.decode("utf-8"),
@@ -356,6 +378,7 @@ def _verify_bound_diagnostic_bundle(
         "study_id": "budget-main-v1",
         "retained_input_cells": len(treatment),
         "files_verified": len(ARTIFACTS),
+        "supplied_manifest_pin_matched": expected_manifest_sha256 is not None,
     }
     if recompute:
         result["offline_inference_recomputed"] = True
@@ -368,11 +391,18 @@ def _cli() -> int:
     )
     parser.add_argument("directory", type=Path)
     parser.add_argument(
+        "--expected-manifest-sha256",
+        help="optional previously and independently retained SHA-256 of exact manifest bytes",
+    )
+    parser.add_argument(
         "--recompute", action="store_true",
         help="also regenerate local inference offline from retained CSV rows and compare exact output bytes",
     )
     args = parser.parse_args()
-    print(json.dumps(verify_diagnostic_bundle(args.directory, recompute=args.recompute), sort_keys=True))
+    print(json.dumps(verify_diagnostic_bundle(
+        args.directory, recompute=args.recompute,
+        expected_manifest_sha256=args.expected_manifest_sha256,
+    ), sort_keys=True))
     return 0
 
 

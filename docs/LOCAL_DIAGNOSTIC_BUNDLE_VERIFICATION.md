@@ -52,3 +52,35 @@ still rewrite local evidence and self-consistently recalculate its digest.
 The optional offline recomputation checks inference consistency, not source
 custody. The September original artifacts and human ratings remain unverified
 or unavailable, and no pilot, frozen automated or exploratory outcome changes.
+
+## Optional independently retained diagnostic manifest pin
+
+A local diagnostic receipt can be rewritten together with a result file, so
+self-consistent local hashes alone do **not** establish that a previously
+inspected diagnostic has remained unchanged. The verifier now accepts an
+optional `--expected-manifest-sha256` pin for the **exact manifest file
+bytes**. The pin must be a 64-character lowercase SHA-256 hex digest, retained
+outside the editable bundle **before** a possible revision. It is checked
+before trusting any of the manifest's self-declared source/artifact hashes:
+
+```bash
+python -m scripts.verify_main_study_diagnostic LOCAL_BUNDLE_DIR \\
+  --expected-manifest-sha256 PREVIOUSLY_RETAINED_LOWERCASE_SHA256
+```
+
+The JSON result reports `supplied_manifest_pin_matched` (true only after a
+supplied pin matches); the unchanged status still describes **local,
+noncanonical** diagnostics. The comparison uses exact captured bytes, not a
+canonicalized JSON object: even semantically identical reformatting must
+fail against a previously retained fingerprint. Without a pin, existing
+offline checks remain usable but cannot detect a fully self-consistent rewrite
+of the bundle and its manifest. A pin calculated from an already rewritten
+local file does **not** establish independent custody or when the evidence
+was created. This feature neither authenticates the missing September 2026
+source archive nor permits human-evaluation distribution; it does not turn
+pilot or retrospective exploratory results into prospective confirmatory or
+human-validation results.
+
+Synthetic regressions cover valid and malformed pins, exact-byte formatting
+changes, locally rehashed output forgery, and CLI pin forwarding. No model,
+evaluator, treatment, or human-scoring calls are needed.
