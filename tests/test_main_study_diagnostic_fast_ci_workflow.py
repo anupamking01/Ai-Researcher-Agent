@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/main-study-local-diagnostic-fast-ci.yml"
 TARGETS = (
     "tests/test_main_study_diagnostic_input_receipt.py",
+    "tests/test_main_study_diagnostic_publication_content.py",
     "tests/test_main_study_diagnostic_fast_ci_workflow.py",
 )
 SOURCE_PATHS = (
@@ -22,6 +23,15 @@ SOURCE_PATHS = (
     "scripts/validate_main_study_inputs.py",
     "scripts/validate_numeric_inputs.py",
 )
+
+
+def test_local_diagnostic_lane_includes_every_diagnostic_regression_module():
+    """Prevent new source-linked diagnostic modules silently missing fast CI."""
+    discovered = {
+        str(path.relative_to(ROOT))
+        for path in (ROOT / "tests").glob("test_main_study_diagnostic_*.py")
+    }
+    assert set(TARGETS) == discovered
 
 
 def _workflow():
