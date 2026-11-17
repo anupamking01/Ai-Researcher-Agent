@@ -270,8 +270,10 @@ def verify_bundle(directory: Path, *, repository: str, checkout_sha: str,
         # The self-declared index hashes the other four files. An externally
         # retained index digest therefore anchors all five exact byte strings,
         # unlike the index's own circular-free but untrusted digest ledger.
+        # Pin the exact descriptor-held index bytes for optional external
+        # retention in the Actions job log/summary, without a later path read.
+        actual_index_sha256 = hashlib.sha256(raw[INDEX]).hexdigest()
         if expected_index_sha256 is not None:
-            actual_index_sha256 = hashlib.sha256(raw[INDEX]).hexdigest()
             _require(hmac.compare_digest(actual_index_sha256, expected_index_sha256),
                      "bundle index SHA-256 differs from supplied external pin")
         digests = {name: hashlib.sha256(raw[name]).hexdigest() for name in FILES}
@@ -310,6 +312,7 @@ def verify_bundle(directory: Path, *, repository: str, checkout_sha: str,
             "workflow_run_id": run_id,
             "workflow_run_attempt": run_attempt,
             "files_verified": len(EXPECTED_FILES),
+            "artifact_index_sha256": actual_index_sha256,
             "expected_index_sha256_matched": expected_index_sha256 is not None,
             "cells_checked_per_diagnostic": 40,
             "paired_contrast_rows_checked_per_diagnostic": 30,

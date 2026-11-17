@@ -159,7 +159,48 @@ jobs:
             --expected-repository "$GITHUB_REPOSITORY" \
             --expected-checkout-sha "$GITHUB_SHA" \
             --expected-run-id "$GITHUB_RUN_ID" \
-            --expected-run-attempt "$GITHUB_RUN_ATTEMPT"
+            --expected-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            | tee "$RUNNER_TEMP/vera-exploratory-bundle-verification.json"
+
+      # Archive the verified index fingerprint separately from the five-file
+      # download. This log/summary is GitHub-controlled, not external escrow.
+      - name: Publish separately archivable exploratory index SHA-256
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          receipt = json.loads(
+              (Path(os.environ["RUNNER_TEMP"]) /
+               "vera-exploratory-bundle-verification.json").read_text(encoding="utf-8")
+          )
+          assert receipt["status"] == "verified_local_post_hoc_exploratory_measurements_only"
+          assert receipt["repository"] == os.environ["GITHUB_REPOSITORY"]
+          assert receipt["checkout_commit_sha"] == os.environ["GITHUB_SHA"]
+          assert receipt["workflow_run_id"] == os.environ["GITHUB_RUN_ID"]
+          assert receipt["workflow_run_attempt"] == os.environ["GITHUB_RUN_ATTEMPT"]
+          digest = receipt["artifact_index_sha256"]
+          assert type(digest) is str and re.fullmatch(r"[0-9a-f]{64}", digest)
+          run_url = (
+              f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/"
+              f"{os.environ['GITHUB_RUN_ID']}/attempts/{os.environ['GITHUB_RUN_ATTEMPT']}"
+          )
+          print(f"VERA_EXPLORATORY_INDEX_SHA256={digest}")
+          print(f"VERA_EXPLORATORY_RUN_URL={run_url}")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(
+                  "### VERA exploratory bundle byte fingerprint\\n\\n"
+                  f"- Verified index SHA-256: **{digest}**\\n"
+                  f"- Checkout: **{os.environ['GITHUB_SHA']}**\\n"
+                  f"- [Run/attempt]({run_url})\\n\\n"
+                  f"Replay with --expected-index-sha256 {digest} after retaining "
+                  "this value outside the downloadable artifact. This is local "
+                  "exploratory verification, not original execution or human validation.\\n"
+              )
+          PY
 
       - name: Retain checked diagnostic JSONs, independent receipts and checkout index
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

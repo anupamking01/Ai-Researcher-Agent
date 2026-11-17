@@ -99,3 +99,28 @@ def test_reruns_retain_separate_attempt_bound_artifacts():
     text = _workflow()
     assert 'vera-exploratory-measurement-${{ github.run_id }}-${{ github.run_attempt }}' in text
     assert 'name: vera-exploratory-measurement-${{ github.run_id }}' in text
+
+
+def test_verified_exact_index_digest_is_retained_in_log_and_summary_before_upload():
+    text = _workflow()
+    verify = text.index("python -m scripts.verify_exploratory_measurement_bundle")
+    captured = text.index('tee "$RUNNER_TEMP/vera-exploratory-bundle-verification.json"')
+    publish = text.index("name: Publish separately archivable exploratory index SHA-256")
+    upload = text.index("name: Retain checked diagnostic JSONs")
+    assert verify < captured < publish < upload
+    # Publish the digest from verified, descriptor-held bytes; do not re-read
+    # an untrusted index pathname after verification to generate the pin.
+    body = text[publish:upload]
+    for token in (
+        "vera-exploratory-bundle-verification.json",
+        'receipt["artifact_index_sha256"]',
+        'receipt["checkout_commit_sha"]',
+        'receipt["workflow_run_id"]',
+        'receipt["workflow_run_attempt"]',
+        "GITHUB_STEP_SUMMARY",
+        "VERA_EXPLORATORY_INDEX_SHA256=",
+        "VERA_EXPLORATORY_RUN_URL=",
+        "--expected-index-sha256",
+    ):
+        assert token in body
+    assert "artifact_index.json" not in body

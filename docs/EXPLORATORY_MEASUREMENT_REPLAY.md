@@ -61,6 +61,19 @@ to provide **local consistency only**, even when its independently replayed
 diagnostic arithmetic passes. The JSON replay receipt says whether an
 expected index hash was checked; it does not prove its custody or age.
 
+**Separately archivable CI fingerprint:** After the full bundle verifier passes,
+Actions prints the exact verified `artifact_index.json` SHA-256 and the
+run/attempt URL in the **job log** and **job summary**, before artifact upload.
+The new `artifact_index_sha256` verification-receipt field is computed from
+the same descriptor-held bytes used for the five-file replay, not from a
+later path read. Neither log nor job summary is included in the downloaded
+five-file artifact. A custodian can preserve the digest, checkout SHA and
+run/attempt identity in a separate controlled archive, then supply the
+recorded digest through `--expected-index-sha256` for a later replay.
+**External retention is not automatic or currently established.** Logs and
+summaries are GitHub-controlled channels, not independent timestamps,
+signatures, original-treatment custody, confirmatory results or human ratings.
+
 The verifier rejects missing or extra members, symlinks/hardlinks, changed
 bundle bytes, duplicate JSON keys, false research-status claims, missing or
 altered run/attempt identity, and mismatched file digests. It independently

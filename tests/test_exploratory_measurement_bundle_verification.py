@@ -88,6 +88,9 @@ def test_valid_synthetic_bundle_recomputes_both_receipts(tmp_path, monkeypatch):
     receipt = _verify(directory)
     assert receipt["files_verified"] == 5
     assert receipt["status"] == bundle.STATUS
+    assert receipt["artifact_index_sha256"] == hashlib.sha256(
+        (directory / bundle.INDEX).read_bytes()
+    ).hexdigest()
     assert receipt["original_execution_authenticated"] is False
     assert receipt["human_validation_performed"] is False
 
@@ -320,9 +323,9 @@ def test_independently_supplied_index_pin_anchors_all_five_files(tmp_path, monke
     directory = _bundle(tmp_path, monkeypatch)
     index_sha256 = hashlib.sha256((directory / bundle.INDEX).read_bytes()).hexdigest()
     assert _verify(directory)["expected_index_sha256_matched"] is False
-    assert _verify(directory, expected_index_sha256=index_sha256)[
-        "expected_index_sha256_matched"
-    ] is True
+    pinned = _verify(directory, expected_index_sha256=index_sha256)
+    assert pinned["expected_index_sha256_matched"] is True
+    assert pinned["artifact_index_sha256"] == index_sha256
 
 
 def test_external_pin_rejects_reserialized_index_even_when_local_replay_passes(
@@ -338,7 +341,12 @@ def test_external_pin_rejects_reserialized_index_even_when_local_replay_passes(
         encoding="utf-8",
     )
     assert hashlib.sha256(index_file.read_bytes()).hexdigest() != original_digest
-    assert _verify(directory)["files_verified"] == 5
+    receipt = _verify(directory)
+    assert receipt["files_verified"] == 5
+    assert receipt["artifact_index_sha256"] == hashlib.sha256(
+        index_file.read_bytes()
+    ).hexdigest()
+    assert receipt["artifact_index_sha256"] != original_digest
     with pytest.raises(ValueError, match="differs from supplied external pin"):
         _verify(directory, expected_index_sha256=original_digest)
 
