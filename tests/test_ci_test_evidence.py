@@ -180,7 +180,7 @@ def test_full_ci_receipt_binds_actual_source_shard_and_log(tmp_path, monkeypatch
 @pytest.mark.parametrize("mutation,reason", [
     ("missing_collection", "collection"),
     ("missing_completion", "collected and completed"),
-    ("duplicated_completion", "collected and completed"),
+    ("duplicated_completion", "duplicate completion node"),
     ("wrong_outcome", "per-test completion outcomes"),
 ])
 def test_full_ci_receipt_rejects_inconsistent_verbose_completion(
