@@ -52,8 +52,23 @@ def _decode(monkeypatch, payload: bytes):
         (b'{"extra":\xff}', "bounded valid UTF-8 JSON"),
         (b'{"extra":0' + b" " * (inventory.MAX_RESPONSE_BYTES + 1), "exceeds size limit"),
     ],
+    ids=[
+        "positive-integer-digit-limit",
+        "negative-integer-digit-limit",
+        "decimal-number",
+        "unbounded-exponent",
+        "nesting-depth-limit",
+        "duplicate-json-key",
+        "nan-constant",
+        "infinity-constant",
+        "invalid-utf8",
+        "response-byte-limit",
+    ],
 )
-def test_fail_closed_on_untrusted_run_scoped_metadata(monkeypatch, payload, message):
+def test_fail_closed_on_untrusted_run_scoped_metadata(monkeypatch, request, payload, message):
+    # Pytest -vv includes parameter IDs in the CI log. The last payload is
+    # >512 KiB; keep it intact for the parser guard, not in the log node ID.
+    assert len(request.node.nodeid.encode("utf-8")) <= 256
     with pytest.raises(inventory.ArtifactInventoryError, match=message):
         _decode(monkeypatch, payload)
 

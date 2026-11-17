@@ -1,3 +1,24 @@
+## Bound adversarial metadata test IDs without weakening the payload (17 November 2026)
+
+The exact-head [push shard-4 CI log](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/44057192442)
+contains a **524,471-character** verbose pytest completion line for
+`test_historical_workflow_metadata_json_integrity.py`. The synthetic
+oversized HTTP-response input must remain larger than the 512 KiB parser
+limit to test rejection, but pytest previously derived the displayed test
+node ID from its entire untrusted payload. That bloated both runner logs and
+retained CI evidence, independently of whether the test passed.
+
+The ten existing parameter cases now have explicit, stable, human-readable,
+bounded node IDs. Each case also asserts at execution time that its full
+UTF-8 pytest node ID is at most 256 bytes; a future accidental reintroduction
+of raw-payload IDs therefore fails instead of silently expanding successful
+16-shard evidence logs. The **test inputs, parser limits, expected exceptions,
+number of cases, network boundary and scientific evidence are unchanged**.
+This is a test-observability/resource safeguard, not evidence that oversized
+identifiers caused the separate cancelled CI shards, nor a re-run of treatments,
+evaluators or human ratings. Earlier CI parsing already became linear-time
+for legitimately long IDs; that independent protection remains.
+
 ## Linear-time parsing of verbose pytest completion records (17 November 2026)
 
 An exact-head [PR full CI run 44048983792](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/44048983792) passed pytest on shard 4 (327 tests), then stalled for over nineteen minutes during `Bind exact-commit offline test evidence` and was cancelled. The retained runner log shows one **524,471-character** line for a legitimate parameterized pytest node ID containing extensive whitespace (in `test_historical_workflow_metadata_json_integrity.py`). The receipt verifier's reluctant `.+?` node-ID regex followed by `\\s+` backtracked quadratically on this input. This is a verified parser scalability problem, distinct from a failing scientific experiment. The companion cancellation of shard 5 is **not** attributed to this parser without evidence.
