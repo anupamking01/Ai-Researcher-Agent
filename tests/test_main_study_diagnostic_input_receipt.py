@@ -298,3 +298,73 @@ def test_source_ancestor_swapped_after_descriptor_read_fails_closed(
         diagnostic.main(output_dir=destination)
     assert replaced
     assert not destination.exists()
+
+
+def test_verifier_refuses_symlinked_bundle_ancestor(inputs):
+    destination, _ = _build(inputs)
+    container = destination.parent / "source-bundles"
+    container.mkdir()
+    destination.rename(container / destination.name)
+    alias = destination.parent / "redirected-bundles"
+    alias.symlink_to(container, target_is_directory=True)
+    with pytest.raises(ValueError, match="cannot be opened safely"):
+        verifier.verify_diagnostic_bundle(alias / destination.name)
+
+
+def test_verifier_refuses_explicit_bundle_parent_traversal(inputs):
+    destination, _ = _build(inputs)
+    folder = destination.parent / "subfolder"
+    folder.mkdir()
+    via_parent = folder / ".." / destination.name
+    with pytest.raises(ValueError, match="parent traversal"):
+        verifier.verify_diagnostic_bundle(via_parent)
+
+
+def test_verifier_detects_bundle_directory_substitution_during_verification(
+    inputs, monkeypatch,
+):
+    destination, _ = _build(inputs)
+    reader = verifier._read_regular
+    swapped = False
+
+    def swap_after_manifest(path, *, limit, directory_fd=None, expected_generation=None):
+        nonlocal swapped
+        raw = reader(path, limit=limit, directory_fd=directory_fd,
+                     expected_generation=expected_generation)
+        if directory_fd is not None and path.name == diagnostic.DIAGNOSTIC_MANIFEST:
+            relocated = destination.parent / "relocated-diagnostic"
+            destination.rename(relocated)
+            destination.symlink_to(relocated, target_is_directory=True)
+            swapped = True
+        return raw
+
+    monkeypatch.setattr(verifier, "_read_regular", swap_after_manifest)
+    with pytest.raises(ValueError, match="ancestor changed during verification"):
+        verifier.verify_diagnostic_bundle(destination)
+    assert swapped
+
+
+def test_verifier_detects_identical_byte_member_swap_after_its_read(
+    inputs, monkeypatch,
+):
+    destination, _ = _build(inputs)
+    reader = verifier._read_regular
+    swapped = False
+
+    def swap_after_last_artifact(path, *, limit, directory_fd=None,
+                                 expected_generation=None):
+        nonlocal swapped
+        raw = reader(path, limit=limit, directory_fd=directory_fd,
+                     expected_generation=expected_generation)
+        if directory_fd is not None and path.name == diagnostic.DIAGNOSTIC_MD:
+            first = destination / diagnostic.DIAGNOSTIC_MAIN_INPUT
+            replacement = destination.parent / "same-content-replacement.csv"
+            replacement.write_bytes(first.read_bytes())
+            replacement.replace(first)
+            swapped = True
+        return raw
+
+    monkeypatch.setattr(verifier, "_read_regular", swap_after_last_artifact)
+    with pytest.raises(ValueError, match="member changed during verification"):
+        verifier.verify_diagnostic_bundle(destination)
+    assert swapped

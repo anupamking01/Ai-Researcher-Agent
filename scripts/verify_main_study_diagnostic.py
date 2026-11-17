@@ -13,7 +13,7 @@ import json
 import os
 import stat
 import tempfile
-from contextlib import redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stdout
 from pathlib import Path
 
 from scripts import analyze_main_study as frozen
@@ -39,14 +39,119 @@ SOURCES = {
 }
 
 
-def _read_regular(path: Path, *, limit: int) -> bytes:
-    if path.is_symlink():
+def _member_generation(st: os.stat_result) -> tuple:
+    """Identity and write generation of one retained bundle member."""
+    return (
+        st.st_dev, st.st_ino, st.st_mode, st.st_nlink, st.st_size,
+        st.st_mtime_ns, st.st_ctime_ns,
+    )
+
+
+def _directory_identity(st: os.stat_result) -> tuple:
+    """Stable directory identity; unrelated sibling writes need not fail."""
+    return st.st_dev, st.st_ino, st.st_mode
+
+
+@contextmanager
+def _bound_diagnostic_bundle(directory: Path):
+    """Pin all five members and each ancestor for the entire verification.
+
+    This checks local pathname/file continuity only. It is not an atomic
+    snapshot or independent historical custody authentication.
+    """
+    directory = Path(directory)
+    if ".." in directory.parts:
+        raise ValueError("diagnostic bundle path must not contain parent traversal")
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise ValueError("diagnostic bundle requires no-follow directory opens")
+    absolute = Path(os.path.abspath(directory))
+    flags = (os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+             | getattr(os, "O_CLOEXEC", 0))
+    required = set(ARTIFACTS) | {diagnostic.DIAGNOSTIC_MANIFEST}
+    try:
+        with ExitStack() as stack:
+            parent_fd = os.open(absolute.anchor, flags)
+            stack.callback(os.close, parent_fd)
+            chain = []
+            for component in absolute.parts[1:]:
+                child_fd = os.open(component, flags, dir_fd=parent_fd)
+                stack.callback(os.close, child_fd)
+                named = os.stat(
+                    component, dir_fd=parent_fd, follow_symlinks=False
+                )
+                if _directory_identity(named) != _directory_identity(
+                    os.fstat(child_fd)
+                ):
+                    raise ValueError(
+                        "diagnostic bundle ancestor changed before verification"
+                    )
+                chain.append((parent_fd, component, child_fd))
+                parent_fd = child_fd
+
+            if set(os.listdir(parent_fd)) != required:
+                raise ValueError("diagnostic bundle file set mismatch")
+            pinned = {}
+            for name in sorted(required):
+                st = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                if stat.S_ISLNK(st.st_mode):
+                    raise ValueError(f"diagnostic file is a symlink: {name}")
+                if not stat.S_ISREG(st.st_mode):
+                    raise ValueError(f"diagnostic file type invalid: {name}")
+                pinned[name] = _member_generation(st)
+
+            yield parent_fd, pinned
+
+            if set(os.listdir(parent_fd)) != required:
+                raise ValueError("diagnostic bundle file set changed during verification")
+            for name, original in pinned.items():
+                try:
+                    observed = os.stat(
+                        name, dir_fd=parent_fd, follow_symlinks=False
+                    )
+                except OSError as exc:
+                    raise ValueError(
+                        f"diagnostic bundle member changed during verification: {name}"
+                    ) from exc
+                if _member_generation(observed) != original:
+                    raise ValueError(
+                        f"diagnostic bundle member changed during verification: {name}"
+                    )
+            for holder_fd, component, child_fd in chain:
+                try:
+                    visible = os.stat(
+                        component, dir_fd=holder_fd, follow_symlinks=False
+                    )
+                except OSError as exc:
+                    raise ValueError(
+                        "diagnostic bundle ancestor changed during verification"
+                    ) from exc
+                if _directory_identity(visible) != _directory_identity(
+                    os.fstat(child_fd)
+                ):
+                    raise ValueError(
+                        "diagnostic bundle ancestor changed during verification"
+                    )
+    except OSError as exc:
+        raise ValueError("diagnostic bundle cannot be opened safely") from exc
+
+
+def _read_regular(path: Path, *, limit: int, directory_fd: int | None = None,
+                  expected_generation: tuple | None = None) -> bytes:
+    # Bundle members are opened relative to the held directory, not via the
+    # mutable caller pathname. Source-code files retain their existing reads.
+    target = path if directory_fd is None else path.name
+    options = {} if directory_fd is None else {"dir_fd": directory_fd}
+    before = os.stat(target, follow_symlinks=False, **options)
+    if stat.S_ISLNK(before.st_mode):
         raise ValueError(f"diagnostic file is a symlink: {path.name}")
-    before = os.stat(path, follow_symlinks=False)
     if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= limit:
         raise ValueError(f"diagnostic file type/size invalid: {path.name}")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    fd = os.open(path, flags)
+    if (expected_generation is not None
+            and _member_generation(before) != expected_generation):
+        raise ValueError(f"diagnostic bundle member changed before read: {path.name}")
+    flags = (os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_NONBLOCK", 0))
+    fd = os.open(target, flags, **options)
     try:
         opened = os.fstat(fd)
         raw = bytearray()
@@ -58,19 +163,14 @@ def _read_regular(path: Path, *, limit: int) -> bytes:
             if len(raw) > limit:
                 raise ValueError(f"diagnostic file exceeds size limit: {path.name}")
         after = os.fstat(fd)
-        named = os.stat(path, follow_symlinks=False)
-
-        def identity(value):
-            return (
-                value.st_dev, value.st_ino, value.st_mode, value.st_size,
-                value.st_mtime_ns, value.st_ctime_ns,
-            )
-
+        named = os.stat(target, follow_symlinks=False, **options)
         if (
             len(raw) != opened.st_size
-            or identity(before) != identity(opened)
-            or identity(before) != identity(after)
-            or identity(after) != identity(named)
+            or _member_generation(before) != _member_generation(opened)
+            or _member_generation(before) != _member_generation(after)
+            or _member_generation(after) != _member_generation(named)
+            or (expected_generation is not None
+                and _member_generation(after) != expected_generation)
         ):
             raise ValueError(f"diagnostic file changed during verification: {path.name}")
         return bytes(raw)
@@ -152,15 +252,19 @@ def _verify_recomputed_inference(
 
 def verify_diagnostic_bundle(directory: Path, *, recompute: bool = False) -> dict:
     directory = Path(directory)
-    if directory.is_symlink() or not directory.is_dir():
-        raise ValueError("diagnostic directory must exist and not be a symlink")
-    names = {entry.name for entry in directory.iterdir()}
-    required = set(ARTIFACTS) | {diagnostic.DIAGNOSTIC_MANIFEST}
-    if names != required:
-        raise ValueError(f"diagnostic bundle file set mismatch: {sorted(names ^ required)}")
+    with _bound_diagnostic_bundle(directory) as (bundle_fd, pinned):
+        return _verify_bound_diagnostic_bundle(
+            directory, bundle_fd, pinned, recompute=recompute
+        )
 
+
+def _verify_bound_diagnostic_bundle(
+    directory: Path, bundle_fd: int, pinned: dict, *, recompute: bool
+) -> dict:
     raw_manifest = _read_regular(
-        directory / diagnostic.DIAGNOSTIC_MANIFEST, limit=MAX_MANIFEST_BYTES
+        directory / diagnostic.DIAGNOSTIC_MANIFEST, limit=MAX_MANIFEST_BYTES,
+        directory_fd=bundle_fd,
+        expected_generation=pinned[diagnostic.DIAGNOSTIC_MANIFEST],
     )
     try:
         receipt = json.loads(
@@ -206,7 +310,10 @@ def verify_diagnostic_bundle(directory: Path, *, recompute: bool = False) -> dic
             if name in (diagnostic.DIAGNOSTIC_MAIN_INPUT, diagnostic.DIAGNOSTIC_SUPPORT_INPUT)
             else diagnostic.DIAGNOSTIC_MAX_FILE_BYTES
         )
-        raw = _read_regular(directory / name, limit=limit)
+        raw = _read_regular(
+            directory / name, limit=limit, directory_fd=bundle_fd,
+            expected_generation=pinned[name],
+        )
         if receipt["artifacts"][name] != _fingerprint(raw):
             raise ValueError(f"diagnostic retained artifact byte mismatch: {name}")
         contents[name] = raw
