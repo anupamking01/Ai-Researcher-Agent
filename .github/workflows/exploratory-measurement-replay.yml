@@ -192,13 +192,13 @@ jobs:
           print(f"VERA_EXPLORATORY_RUN_URL={run_url}")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
               summary.write(
-                  "### VERA exploratory bundle byte fingerprint\\n\\n"
-                  f"- Verified index SHA-256: **{digest}**\\n"
-                  f"- Checkout: **{os.environ['GITHUB_SHA']}**\\n"
-                  f"- [Run/attempt]({run_url})\\n\\n"
+                  "### VERA exploratory bundle byte fingerprint\n\n"
+                  f"- Verified index SHA-256: **{digest}**\n"
+                  f"- Checkout: **{os.environ['GITHUB_SHA']}**\n"
+                  f"- [Run/attempt]({run_url})\n\n"
                   f"Replay with --expected-index-sha256 {digest} after retaining "
                   "this value outside the downloadable artifact. This is local "
-                  "exploratory verification, not original execution or human validation.\\n"
+                  "exploratory verification, not original execution or human validation.\n"
               )
           PY
 
