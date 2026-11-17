@@ -185,7 +185,18 @@ def test_main_study_manifest_records_pricing_snapshot_before_execution(
     monkeypatch.setitem(sys.modules, "logic.experiment", experiment_module)
     monkeypatch.setitem(sys.modules, "logic.run", run_module)
 
-    asyncio.run(run_budget_main_study.main())
+    # The stub returns normally but never publishes a treatment trace. The
+    # runner must still persist the pre-execution pricing snapshot and then
+    # stop rather than declaring a synthetic treatment complete.
+    with pytest.raises(SystemExit, match="stopped after D3/main-01 status=failed"):
+        asyncio.run(run_budget_main_study.main())
+    progress = json.loads(
+        (tmp_path / "outputs" / "main_study_progress.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert progress["completed_runs"] == 0
+    assert progress["failed_runs"] == 1
 
     manifest = json.loads(
         (tmp_path / "outputs" / "main_study_manifest.json").read_text(
