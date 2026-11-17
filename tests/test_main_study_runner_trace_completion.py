@@ -1,6 +1,7 @@
 """Synthetic, offline regression for noncanonical treatment completion gating."""
 import asyncio
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -49,10 +50,13 @@ def _write(root, payload):
     return path
 
 
-def _check(root, monkeypatch, old=()):
+def _check(root, monkeypatch, old=(), *, prior_fingerprints=None):
     monkeypatch.setattr(study, "TRACE_ROOT", root)
+    if prior_fingerprints is None:
+        prior_fingerprints = study._snapshot_treatment_traces(tuple(old))
     return study._require_new_completed_trace(
-        tuple(old), variant_id="D3", task_set_id="test-tasks",
+        tuple(old), prior_fingerprints=prior_fingerprints,
+        variant_id="D3", task_set_id="test-tasks",
         task_id="main-01", pricing=PRICING,
     )
 
@@ -103,9 +107,42 @@ def test_completion_gate_rejects_bad_trace(
 
 def test_disappeared_prior_trace_rejected(tmp_path, monkeypatch):
     root = tmp_path / "traces"
-    p = _write(root, _payload())
+    old = _write(root, _payload(run_id="old"))
+    pins = study._snapshot_treatment_traces((old,))
+    old.unlink()
+    _write(root, _payload())
     with pytest.raises(ValueError, match="without removing earlier"):
-        _check(root, monkeypatch, old=(p.parent / "old.json",))
+        _check(root, monkeypatch, old=(old,), prior_fingerprints=pins)
+
+
+def test_unchanged_prior_trace_and_new_completed_trace_accepted(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "traces"
+    old = _write(root, _payload(run_id="old"))
+    pins = study._snapshot_treatment_traces((old,))
+    _write(root, _payload())
+    assert _check(
+        root, monkeypatch, old=(old,), prior_fingerprints=pins,
+    ) == pytest.approx(0.000012)
+
+
+@pytest.mark.parametrize("mutation", ["different_bytes", "same_bytes_new_inode"])
+def test_prior_trace_change_cannot_be_hidden_by_new_completed_trace(
+    tmp_path, monkeypatch, mutation,
+):
+    root = tmp_path / "traces"
+    old = _write(root, _payload(run_id="old"))
+    pins = study._snapshot_treatment_traces((old,))
+    _write(root, _payload())
+    if mutation == "different_bytes":
+        old.write_bytes(old.read_bytes() + b" ")
+    else:
+        replacement = old.with_suffix(".replacement")
+        replacement.write_bytes(old.read_bytes())
+        os.replace(replacement, old)
+    with pytest.raises(ValueError, match="Prior treatment trace changed"):
+        _check(root, monkeypatch, old=(old,), prior_fingerprints=pins)
 
 
 def test_agent_return_without_trace_stops_next_treatment(tmp_path, monkeypatch):

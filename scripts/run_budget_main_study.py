@@ -980,9 +980,50 @@ def _current_treatment_cost(pricing: dict) -> float:
     )
 
 
+def _trace_file_fingerprint(path: Path) -> tuple[int, int, int, int, int, int, str]:
+    """Record identity, metadata and bytes of a prior local treatment trace.
+
+    The no-follow descriptor binds the digest to an opened regular file.
+    This detects observed mutations, not concurrent adversarial filesystem races.
+    """
+    if path.parent.is_symlink() or not path.parent.is_dir():
+        raise ValueError(f"Invalid prior treatment trace directory: {path.parent}")
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode):
+                raise ValueError(f"Prior treatment trace is not a regular file: {path}")
+            digest = hashlib.sha256()
+            with os.fdopen(fd, "rb", closefd=False) as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            after = os.fstat(fd)
+            def identity(st):
+                return (
+                    st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns,
+                    st.st_ctime_ns, st.st_nlink,
+                )
+            if identity(before) != identity(after):
+                raise ValueError(f"Prior treatment trace changed while reading: {path}")
+            return (*identity(after), digest.hexdigest())
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise ValueError(f"Cannot pin prior treatment trace {path}: {exc}") from exc
+
+
+def _snapshot_treatment_traces(
+    paths: tuple[Path, ...],
+) -> dict[Path, tuple[int, int, int, int, int, int, str]]:
+    """Pin earlier treatment evidence before starting the next treatment."""
+    return {path: _trace_file_fingerprint(path) for path in paths}
+
+
 def _require_new_completed_trace(
     prior_paths: tuple[Path, ...],
     *,
+    prior_fingerprints: dict[Path, tuple[int, int, int, int, int, int, str]],
     variant_id: str,
     task_set_id: str,
     task_id: str,
@@ -994,6 +1035,8 @@ def _require_new_completed_trace(
     and an absent trace would otherwise contribute no recorded spend.
     """
     previous = set(prior_paths)
+    if previous != set(prior_fingerprints):
+        raise ValueError("Prior treatment trace snapshot does not match inventory")
     current = set(_treatment_trace_paths())
     created = current - previous
     if not previous.issubset(current) or len(created) != 1:
@@ -1001,6 +1044,18 @@ def _require_new_completed_trace(
             f"Treatment {variant_id}/{task_id} must publish exactly one new "
             "trace without removing earlier treatment evidence"
         )
+    for prior_path in prior_paths:
+        try:
+            current_fingerprint = _trace_file_fingerprint(prior_path)
+        except ValueError as exc:
+            raise ValueError(
+                f"Prior treatment trace integrity check failed: {prior_path}: {exc}"
+            ) from exc
+        if current_fingerprint != prior_fingerprints[prior_path]:
+            raise ValueError(
+                f"Prior treatment trace changed during {variant_id}/{task_id}: "
+                f"{prior_path}"
+            )
     (new_path,) = tuple(created)
     if new_path.parent.name != variant_id:
         raise ValueError(
@@ -1262,6 +1317,9 @@ async def _run_main_study() -> None:
             error = None
             prior_trace_paths = _treatment_trace_paths()
             try:
+                prior_trace_fingerprints = _snapshot_treatment_traces(
+                    prior_trace_paths
+                )
                 await run_agent(
                     task=task["question"],
                     report_type="research_report",
@@ -1271,8 +1329,9 @@ async def _run_main_study() -> None:
                     experiment_config=config,
                 )
                 _require_new_completed_trace(
-                    prior_trace_paths, variant_id=variant_id,
-                    task_set_id=task_set_id, task_id=task["id"],
+                    prior_trace_paths, prior_fingerprints=prior_trace_fingerprints,
+                    variant_id=variant_id, task_set_id=task_set_id,
+                    task_id=task["id"],
                     pricing=pricing,
                 )
             except Exception as exc:
