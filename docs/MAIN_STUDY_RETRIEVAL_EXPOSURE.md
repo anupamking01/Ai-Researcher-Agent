@@ -70,3 +70,35 @@ This extra verification does not preregister the post-hoc diagnostic, promote
 resource exposure into a causal explanation, create confidence intervals or
 p-values, or change any frozen primary comparisons. The pending independent
 human-evaluation and historical fixed-order confounding gates remain unchanged.
+
+
+
+## Optional independent saved-receipt byte pin
+
+The arithmetic replay alone checks *contents* against the frozen summary CSVs:
+two differently serialized JSON files with identical descriptive fields can
+both pass. For a research archive that must identify **the exact previously
+retained receipt revision**, a custodian may independently record its full
+SHA-256 **before** later verification, outside the directory and control of
+the artifact being audited. Replay with that previously saved value:
+
+```bash
+python -m scripts.verify_main_study_retrieval_exposure_artifact \
+  --artifact exposure.json \
+  --expected-artifact-sha256 '<64-lowercase-hex SHA-256 retained beforehand>'
+```
+
+The optional digest is checked against the **same bounded, descriptor-bound
+file bytes** later parsed for independent arithmetic verification. In
+particular, whitespace-only or key-order reserialization can still pass the
+unpinned arithmetic check but fails the external-byte-pin check. A malformed
+digest is rejected before reading the artifact. Offline synthetic and
+frozen-source regressions exercise this distinction and the CLI.
+
+This feature **verifies a supplied prior fingerprint**; it cannot certify
+who recorded it, whether it was retained independently or before alteration,
+or whether the recovered historical reports and traces are authentic. A
+freshly recomputed digest of an already altered local file is not
+independent custody. Leaving the option out retains the previous local
+consistency-only behavior. This remains a post-hoc exploratory exposure audit,
+not prospective confirmatory evidence or human validation.

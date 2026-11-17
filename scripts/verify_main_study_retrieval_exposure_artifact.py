@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 
 from scripts import audit_frozen_analysis_csv_inputs as audit
 from scripts import verify_ci_test_evidence as evidence_capture
@@ -265,8 +266,20 @@ def _read_artifact(path: Path) -> bytes:
     )
 
 
-def verify_published(artifact_path: Path) -> dict:
-    """Fail closed on either changed published CSV or a forged diagnostic."""
+def verify_published(
+    artifact_path: Path, *, expected_artifact_sha256: str | None = None
+) -> dict:
+    """Check an optionally externally pinned receipt against published CSVs.
+
+    The caller-supplied hash is not independently authenticated by this tool;
+    retain it before verification in a separate, trusted archive.
+    """
+    if expected_artifact_sha256 is not None:
+        _require(
+            type(expected_artifact_sha256) is str
+            and re.fullmatch(r"[0-9a-f]{64}", expected_artifact_sha256) is not None,
+            "expected external artifact SHA-256 must be 64 lowercase hex digits",
+        )
     audit.audit_frozen_csv_inputs()
     captured, rows = audit._read_csv(
         audit.DEFAULT_MAIN, label="published treatment ledger for exposure verification"
@@ -277,8 +290,17 @@ def verify_published(artifact_path: Path) -> dict:
     _require(sorted({row["task_id"] for row in rows}) ==
              [f"main-{index:02d}" for index in range(1, 11)],
              "treatment ledger has unexpected frozen task IDs")
+    # Hash the exact, descriptor-bound bytes subsequently parsed. A locally
+    # regenerated or reserialized artifact is not the externally pinned revision,
+    # even when its descriptive values and original CSV references still agree.
+    artifact_raw = _read_artifact(Path(artifact_path))
+    if expected_artifact_sha256 is not None:
+        _require(
+            hashlib.sha256(artifact_raw).hexdigest() == expected_artifact_sha256,
+            "saved retrieval-exposure artifact differs from external SHA-256 pin",
+        )
     receipt = verify_bytes(
-        rows, _read_artifact(Path(artifact_path)),
+        rows, artifact_raw,
         main_sha256=observed, support_sha256=audit.FROZEN_SUPPORT_CSV_SHA256,
         aggregate_sha256=audit.PUBLISHED_INPUT_AGGREGATE_SHA256,
     )
@@ -291,9 +313,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact", type=Path, required=True,
                         help="Saved JSON output of analyze_main_study_retrieval_exposure")
+    parser.add_argument(
+        "--expected-artifact-sha256",
+        help="Optional 64-character lowercase SHA-256 retained independently "
+             "before verification; checks the exact saved JSON bytes",
+    )
     args = parser.parse_args()
     try:
-        receipt = verify_published(args.artifact)
+        receipt = verify_published(
+            args.artifact, expected_artifact_sha256=args.expected_artifact_sha256
+        )
     except (OSError, ValueError, audit.InputIntegrityError) as exc:
         parser.exit(1, f"RETRIEVAL EXPOSURE ARTIFACT: FAIL: {exc}\n")
     print(json.dumps(receipt, sort_keys=True, indent=2, allow_nan=False))

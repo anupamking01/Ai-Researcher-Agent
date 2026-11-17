@@ -5,7 +5,10 @@ No experiment, evaluator, model, or human-annotation execution occurs.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import subprocess
+import sys
 import os
 
 import pytest
@@ -223,3 +226,61 @@ def test_production_receipt_verifies_against_published_frozen_bytes(tmp_path):
     assert verified["published_input_aggregate_sha256_reference"] == (
         audit.PUBLISHED_INPUT_AGGREGATE_SHA256
     )
+
+
+def test_externally_pinned_saved_receipt_rejects_reserialized_equivalent_bytes(tmp_path):
+    """A self-consistent JSON reserialization must not impersonate archived bytes."""
+    saved = producer.run_verified()  # published frozen CSVs; no live agents
+    path = tmp_path / "saved-exposure.json"
+    path.write_text(json.dumps(saved, sort_keys=True, indent=2), encoding="utf-8")
+    original = path.read_bytes()
+    retained_digest = hashlib.sha256(original).hexdigest()
+
+    result = verifier.verify_published(
+        path, expected_artifact_sha256=retained_digest
+    )
+    assert result["diagnostic_sha256"] == retained_digest
+    assert result["cells_checked"] == 40
+
+    # JSON whitespace is semantically irrelevant to arithmetic replay but
+    # changes which archival object an independent custodian previously pinned.
+    path.write_bytes(original + b" ")
+    assert verifier.verify_published(path)["cells_checked"] == 40
+    with pytest.raises(ValueError, match="external SHA-256 pin"):
+        verifier.verify_published(
+            path, expected_artifact_sha256=retained_digest
+        )
+
+
+@pytest.mark.parametrize("invalid_pin", ["", "f" * 63, "F" * 64, 1, True])
+def test_external_artifact_pin_rejects_invalid_format(tmp_path, invalid_pin):
+    source = tmp_path / "source.json"
+    source.write_bytes(b"{}")
+    with pytest.raises(ValueError, match="64 lowercase hex digits"):
+        verifier.verify_published(
+            source, expected_artifact_sha256=invalid_pin
+        )
+
+
+def test_cli_external_artifact_pin_rejects_byte_replacement(tmp_path):
+    saved = producer.run_verified()
+    path = tmp_path / "exposure.json"
+    path.write_text(json.dumps(saved, sort_keys=True, indent=2), encoding="utf-8")
+    original_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    command = [
+        sys.executable,
+        "-m", "scripts.verify_main_study_retrieval_exposure_artifact",
+        "--artifact", str(path),
+        "--expected-artifact-sha256", original_digest,
+    ]
+    valid = subprocess.run(
+        command, cwd=audit.REPO_ROOT, capture_output=True, text=True, check=False
+    )
+    assert valid.returncode == 0, valid.stderr
+    assert json.loads(valid.stdout)["diagnostic_sha256"] == original_digest
+    path.write_bytes(path.read_bytes() + b" ")
+    invalid = subprocess.run(
+        command, cwd=audit.REPO_ROOT, capture_output=True, text=True, check=False
+    )
+    assert invalid.returncode != 0
+    assert "external SHA-256 pin" in invalid.stderr
