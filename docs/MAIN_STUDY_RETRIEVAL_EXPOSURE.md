@@ -46,6 +46,13 @@ rows, altered denominators, reordered cells, invalid status/provenance claims,
 additional inferential fields and inconsistent source fingerprints fail closed.
 Strict JSON input handling rejects duplicate keys, nonfinite numbers, excess
 integer length, excessive nesting and oversized or non-regular saved receipts.
+The saved-receipt byte capture also reuses the established descriptor-relative
+CI evidence reader: it rejects symlinked ancestor directories and explicit
+parent traversal, pins each ancestor and the single-link file while reading,
+and rechecks their identity afterward. A leaf-only no-follow open could
+otherwise read a relocated directory's unchanged receipt through a parent
+symlink. This is local path-continuity hardening, **not** an external SHA-256
+custody pin or authentication of the missing original treatment sources.
 The command rechecks the published CSV integrity before a PASS and prints a
 compact SHA-256-bound verification receipt. These checks are exercised with
 synthetic tampering tests and a read-only original-frozen-CSV smoke test.

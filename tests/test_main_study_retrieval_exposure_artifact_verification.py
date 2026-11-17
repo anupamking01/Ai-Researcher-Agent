@@ -165,19 +165,48 @@ def test_receipt_file_rejects_symlink_and_hardlink_aliases(tmp_path):
     original.write_text("{}", encoding="utf-8")
     alias = tmp_path / "shortcut.json"
     alias.symlink_to(original)
-    with pytest.raises(OSError):
+    with pytest.raises(ValueError, match="cannot be opened"):
         verifier._read_artifact(alias)
     hardlink = tmp_path / "hardlink.json"
     os.link(original, hardlink)
-    with pytest.raises(ValueError, match="single-link"):
+    with pytest.raises(ValueError, match="filesystem link"):
         verifier._read_artifact(original)
 
 
 def test_receipt_file_rejects_oversize(tmp_path):
     path = tmp_path / "large.json"
     path.write_bytes(b"0" * (verifier.MAX_ARTIFACT_BYTES + 1))
-    with pytest.raises(ValueError, match="byte limit"):
+    with pytest.raises(ValueError, match="size limit"):
         verifier._read_artifact(path)
+
+
+def test_saved_exposure_reader_accepts_nested_regular_receipt(tmp_path):
+    directory = tmp_path / "verified" / "nested"
+    directory.mkdir(parents=True)
+    receipt = directory / "exposure.json"
+    receipt.write_bytes(b'{"status":"synthetic"}')
+    assert verifier._read_artifact(receipt) == b'{"status":"synthetic"}'
+
+
+def test_saved_exposure_reader_rejects_symlinked_parent_even_for_same_bytes(tmp_path):
+    real = tmp_path / "actual"
+    real.mkdir()
+    receipt = real / "exposure.json"
+    receipt.write_bytes(b'{"status":"synthetic"}')
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+    # A leaf O_NOFOLLOW check alone follows the ancestor and would pass.
+    with pytest.raises(ValueError, match="cannot be opened"):
+        verifier._read_artifact(alias / "exposure.json")
+
+
+def test_saved_exposure_reader_rejects_parent_traversal(tmp_path):
+    directory = tmp_path / "capture"
+    directory.mkdir()
+    receipt = directory / "exposure.json"
+    receipt.write_bytes(b"{}")
+    with pytest.raises(ValueError, match="parent traversal"):
+        verifier._read_artifact(directory / ".." / "capture" / "exposure.json")
 
 
 def test_production_receipt_verifies_against_published_frozen_bytes(tmp_path):

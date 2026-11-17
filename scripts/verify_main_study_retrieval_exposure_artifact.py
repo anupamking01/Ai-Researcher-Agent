@@ -10,11 +10,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
-import stat
 from pathlib import Path
 
 from scripts import audit_frozen_analysis_csv_inputs as audit
+from scripts import verify_ci_test_evidence as evidence_capture
 
 MAX_ARTIFACT_BYTES = 256 * 1024
 MAX_JSON_DEPTH = 32
@@ -253,36 +252,17 @@ def verify_bytes(rows: list[dict[str, str]], artifact_raw: bytes, *,
 
 
 def _read_artifact(path: Path) -> bytes:
-    """Bound a single-link regular file and reject observed replacement/write."""
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    descriptor = os.open(path, flags)
-    try:
-        before = os.fstat(descriptor)
-        _require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1,
-                 "retrieval-exposure artifact must be a single-link regular file")
-        _require(before.st_size <= MAX_ARTIFACT_BYTES,
-                 "retrieval-exposure artifact exceeds byte limit")
-        chunks = []
-        remaining = MAX_ARTIFACT_BYTES
-        while True:
-            chunk = os.read(descriptor, min(65536, remaining + 1))
-            if not chunk:
-                break
-            _require(len(chunk) <= remaining,
-                     "retrieval-exposure artifact exceeds byte limit")
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        after = os.fstat(descriptor)
-        visible = os.stat(path, follow_symlinks=False)
-        signature = lambda value: (
-            value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
-            value.st_size, value.st_mtime_ns, value.st_ctime_ns,
-        )
-        _require(signature(before) == signature(after) == signature(visible),
-                 "retrieval-exposure artifact changed during capture")
-        return b"".join(chunks)
-    finally:
-        os.close(descriptor)
+    """Read a saved exploratory receipt with descriptor-pinned ancestor custody.
+
+    Reuse the independently tested CI evidence reader for its bounded, no-follow
+    ancestry/file capture. This local pathname check is not an archival hash pin
+    or independent authentication of historical experiment execution.
+    """
+    return evidence_capture.read_bounded_evidence(
+        Path(path),
+        maximum=MAX_ARTIFACT_BYTES,
+        label="retrieval-exposure artifact",
+    )
 
 
 def verify_published(artifact_path: Path) -> dict:
