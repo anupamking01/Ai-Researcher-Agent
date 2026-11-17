@@ -143,3 +143,21 @@ untracked *local* mutation avenues but cannot establish tamper-proof archival
 custody, detect all transient race conditions, or authenticate unavailable
 historical reports/traces. No pilot, qualified automated, exploratory, or
 human-validation finding changes.
+
+## Bound stdout memory during optional offline recomputation
+
+The optional `--recompute` path executes the unchanged frozen analyzer on
+previously captured diagnostic CSV rows and byte-compares its two outputs.
+The analyzer also prints a result payload to stdout, which the verifier does
+not need. Previously it redirected that output into an in-memory `StringIO`,
+so an excessively verbose analyzer could consume memory proportional to its
+console output even though the output was discarded afterward. Verification
+now redirects console output to the operating system's null device without
+retaining it. The generated JSON and Markdown files are still checked byte
+for byte, and source/manifest custody checks remain in place. A synthetic
+regression requires descriptor-backed stdout and exercises a large irrelevant
+console payload while preserving successful exact-output recomputation.
+
+This is a local resource-safety measure, not an independent reimplementation
+of inference, authentication of the missing historical trace/report archive,
+or a new scientific or human-evaluation result.

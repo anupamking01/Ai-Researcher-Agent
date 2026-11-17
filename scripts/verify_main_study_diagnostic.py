@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import io
 import json
 import os
 import re
@@ -359,10 +358,13 @@ def _verify_recomputed_inference(
             frozen._read_csv = retained_reader
             frozen.OUT_JSON = recomputed_paths[diagnostic.DIAGNOSTIC_JSON]
             frozen.OUT_MD = recomputed_paths[diagnostic.DIAGNOSTIC_MD]
-            # The original analyzer prints a complete result payload; do not
-            # echo it during a byte-consistency verification command.
-            with redirect_stdout(io.StringIO()):
-                status = frozen.main()
+            # The frozen analyzer emits its complete result payload. A
+            # StringIO sink retains that potentially large payload in memory
+            # despite it not being used by the byte-consistency check.
+            # Discard stdout through a real file descriptor instead.
+            with open(os.devnull, "w", encoding="utf-8") as discarded_stdout:
+                with redirect_stdout(discarded_stdout):
+                    status = frozen.main()
         finally:
             frozen._read_csv = original_reader
             frozen.OUT_JSON, frozen.OUT_MD = original_json, original_md

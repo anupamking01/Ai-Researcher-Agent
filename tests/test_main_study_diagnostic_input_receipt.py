@@ -454,6 +454,28 @@ def test_opt_in_recomputation_matches_both_synthetic_outputs(inputs):
     assert verified["files_verified"] == 4
 
 
+def test_opt_in_recomputation_discards_large_stdout_without_buffering(
+    inputs, monkeypatch, capsys,
+):
+    """Recomputing a retained result must not retain analyzer console output."""
+    import sys
+
+    destination, _ = _build(inputs)
+    analyzer_main = frozen.main
+
+    def noisy_analyzer():
+        # StringIO, the former sink, has no usable fileno. A descriptor-backed
+        # discard stream does not retain this irrelevant console payload.
+        assert sys.stdout.fileno() >= 0
+        print("synthetic non-evidence console line " * 50000)
+        return analyzer_main()
+
+    monkeypatch.setattr(frozen, "main", noisy_analyzer)
+    receipt = verifier.verify_diagnostic_bundle(destination, recompute=True)
+    assert receipt["offline_inference_recomputed"] is True
+    assert "synthetic non-evidence console line" not in capsys.readouterr().out
+
+
 def test_recomputation_detects_forged_json_with_repaired_local_receipt(inputs):
     destination, _ = _build(inputs)
     path = destination / diagnostic.DIAGNOSTIC_JSON
