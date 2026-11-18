@@ -38,6 +38,16 @@ cleanup() {
   local cleanup_failed=0
   trap - EXIT INT TERM
   set +e
+  # A successful pytest run is not sufficient for an offline CI PASS if the
+  # firewall was removed or shadowed while tests were executing. Check both
+  # effective policies again *before* undoing this invocation's rules.
+  # This is an end-boundary check, not continuous or privileged attestation.
+  if (( status == 0 && v4_linked && v6_linked )); then
+    if ! verify_family_policy iptables || ! verify_family_policy ip6tables; then
+      echo "CRITICAL: offline test firewall policy changed before teardown" >&2
+      status=1
+    fi
+  fi
   if (( v6_linked )); then
     sudo -n ip6tables -w 5 -D OUTPUT -j "$chain" || cleanup_failed=1
   fi

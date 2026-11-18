@@ -212,3 +212,24 @@ workflow step could still request a GitHub token through a new expression,
 and `persist-credentials: false` does not block all other credential
 sources or authenticated artifact downloads. It supplies no new pilot,
 designated-primary automated, exploratory, or human-evaluation observations.
+
+## Post-pytest firewall integrity gate — 18 November 2026
+
+The existing effective-policy inspection happened **only before** pytest.
+Consequently a successful pytest summary could be followed by a successful
+wrapper exit even if a later process had removed the IPv4/IPv6 REJECT rule or
+inserted a shadowing OUTPUT ACCEPT while pytest ran. The EXIT trap now checks
+both families' effective ordered policies again **after successful pytest but
+before firewall teardown**, failing the CI shard on a changed/uninspectable
+policy. Cleanup still executes on failure, and no selected tests or other
+receipt criteria are removed. Four synthetic, rootless tests deliberately
+alter effective IPv4/IPv6 policy during a fake successful pytest and require
+the wrapper to reject each case and attempt teardown.
+
+This provides an additional *endpoint* integrity check only. It does not
+observe every instant of the test window, prevent privileged adversarial
+temporary changes that are restored before checking, or independently attest
+network egress. Previous cancelled full-suite shards remain incomplete even
+when their pytest summary printed passing tests; their causes are not
+established by this change. The diagnostic pilot, frozen automated analysis,
+exploratory sensitivity results, and pending human validation remain distinct.

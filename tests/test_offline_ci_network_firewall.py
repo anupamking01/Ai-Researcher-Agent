@@ -119,18 +119,20 @@ def _fake_iptables(family: str) -> str:
         + 'if [[ "${VERA_FAKE_LOCK_FAILURE:-}" == "' + family + '" && "$3" == "-N" ]]; then exit 75; fi\n'
         + 'if [[ "$VERA_FAIL_V6_LINK" == "1" && "' + family + '" == "v6" && "$*" == *" -I OUTPUT "* ]]; then exit 42; fi\n'
         + 'chain=$(cat "$VERA_FAKE_CHAIN_FILE" 2>/dev/null || true)\n'
+        + 'policy="${VERA_FAKE_POLICY:-}"\n'
+        + 'if [[ -n "${VERA_FAKE_POST_POLICY_FILE:-}" && -f "$VERA_FAKE_POST_POLICY_FILE" ]]; then policy="$(cat "$VERA_FAKE_POST_POLICY_FILE")"; fi\n'
         + 'if [[ "$*" == "-w 5 -S $chain" && -n "$chain" ]]; then\n'
-        + '  if [[ "$VERA_FAKE_POLICY" == "' + family + '_query_failure" ]]; then exit 44; fi\n'
+        + '  if [[ "$policy" == "' + family + '_query_failure" ]]; then exit 44; fi\n'
         + '  printf -- "-N %s\\n-A %s -o lo -j RETURN\\n" "$chain" "$chain"\n'
-        + '  if [[ "$VERA_FAKE_POLICY" != "' + family + '_missing_reject" ]]; then\n'
-        + '    if [[ "$VERA_FAKE_POLICY" == "' + family + '_normalized_reject" ]]; then\n'
+        + '  if [[ "$policy" != "' + family + '_missing_reject" ]]; then\n'
+        + '    if [[ "$policy" == "' + family + '_normalized_reject" ]]; then\n'
         + '      if [[ "' + family + '" == "v4" ]]; then suffix="icmp-port-unreachable"; else suffix="icmp6-port-unreachable"; fi\n'
         + '      printf -- "-A %s -j REJECT --reject-with %s\\n" "$chain" "$suffix"\n'
         + '    else printf -- "-A %s -j REJECT\\n" "$chain"; fi\n'
         + '  fi\n'
         + 'elif [[ "$*" == "-w 5 -S OUTPUT" ]]; then\n'
         + '  printf -- "-P OUTPUT ACCEPT\\n"\n'
-        + '  if [[ "$VERA_FAKE_POLICY" == "' + family + '_shadowed_output" ]]; then printf -- "-A OUTPUT -j ACCEPT\\n"; fi\n'
+        + '  if [[ "$policy" == "' + family + '_shadowed_output" ]]; then printf -- "-A OUTPUT -j ACCEPT\\n"; fi\n'
         + '  printf -- "-A OUTPUT -j %s\\n" "$chain"\n'
         + 'fi\n'
         + "exit 0\n"
@@ -235,6 +237,67 @@ def test_firewall_order_failure_rollback_and_exit_code(
         assert pytest_index < v4_remove
         assert any(row.startswith("v4 -w 5 -F VERA_OFFLINE_") for row in commands)
         assert any(row.startswith("v6 -w 5 -X VERA_OFFLINE_") for row in commands)
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux-only firewall wrapper")
+@pytest.mark.parametrize("drift", [
+    "v4_missing_reject", "v6_missing_reject",
+    "v4_shadowed_output", "v6_shadowed_output",
+])
+def test_successful_pytest_cannot_certify_post_run_firewall_drift(
+    tmp_path: Path, drift: str,
+):
+    """A clean pytest summary is not a PASS if its firewall was altered."""
+    fake = tmp_path / "fake-bin"
+    fake.mkdir()
+    scripts = {
+        "sudo": '#!/bin/sh\n[ "$1" = "-n" ] || exit 80\nshift\nexec "$@"\n',
+        "iptables": _fake_iptables("v4"),
+        "ip6tables": _fake_iptables("v6"),
+        "python": (
+            '#!/usr/bin/env bash\n'
+            'printf "pytest %s\\n" "$*" >> "$VERA_FAKE_FIREWALL_LOG"\n'
+            'printf "%s" "$VERA_FAKE_POST_PYTEST_POLICY" > "$VERA_FAKE_POST_POLICY_FILE"\n'
+            'exit 0\n'
+        ),
+    }
+    for filename, source in scripts.items():
+        executable = fake / filename
+        executable.write_text(source, encoding="utf-8")
+        executable.chmod(0o755)
+    log = tmp_path / "commands.txt"
+    env = os.environ.copy()
+    env.pop("PYTEST_ADDOPTS", None)
+    env.pop("PYTEST_PLUGINS", None)
+    env.update({
+        "PATH": str(fake) + os.pathsep + env["PATH"],
+        "VERA_FAKE_FIREWALL_LOG": str(log),
+        "VERA_FAKE_CHAIN_FILE": str(tmp_path / "chain"),
+        "VERA_FAKE_POST_POLICY_FILE": str(tmp_path / "post-policy"),
+        "VERA_FAKE_POST_PYTEST_POLICY": drift,
+        "VERA_FAKE_POLICY": "",
+        "VERA_FAIL_V6_LINK": "0",
+    })
+    result = subprocess.run(
+        ["bash", str(WRAPPER)], cwd=ROOT, env=env,
+        text=True, capture_output=True, timeout=15, check=False,
+    )
+    assert result.returncode == 1, result.stderr
+    assert "offline test firewall policy changed before teardown" in result.stderr
+    commands = log.read_text(encoding="utf-8").splitlines()
+    pytest_index = next(i for i, command in enumerate(commands)
+                        if command.startswith("pytest -m pytest "))
+    remove_index = next(i for i, command in enumerate(commands)
+                        if command.startswith("v4 -w 5 -D OUTPUT "))
+    assert pytest_index < remove_index
+    family = drift[:2]
+    assert any(
+        command.startswith(f"{family} -w 5 -S ")
+        for command in commands[pytest_index + 1:remove_index]
+    ), "an effective policy check is required after pytest and before cleanup"
+    assert any(command.startswith("v6 -w 5 -D OUTPUT ") for command in commands)
+    assert any(command.startswith("v4 -w 5 -X VERA_OFFLINE_") for command in commands)
+    assert any(command.startswith("v6 -w 5 -X VERA_OFFLINE_") for command in commands)
+
 
 def test_verbose_pytest_progress_exposes_interrupted_test_context(tmp_path):
     """Synthetic failure retains node identity, not only a progress percentage."""
