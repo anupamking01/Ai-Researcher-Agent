@@ -1135,12 +1135,14 @@ def _treatment_trace_paths() -> tuple[Path, ...]:
     try:
         with os.scandir(TRACE_ROOT) as directories:
             for directory in directories:
-                if (
-                    directory.name not in VARIANTS
-                    or not directory.is_dir(follow_symlinks=False)
-                ):
+                if directory.name not in VARIANTS:
                     raise SystemExit(
                         f"Unexpected treatment trace root entry: {directory.path}"
+                    )
+                if not directory.is_dir(follow_symlinks=False):
+                    raise SystemExit(
+                        f"Invalid treatment trace directory {directory.path}: "
+                        "must be a regular directory"
                     )
                 with os.scandir(directory.path) as files:
                     for file in files:
