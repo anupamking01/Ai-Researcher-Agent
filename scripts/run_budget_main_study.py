@@ -360,7 +360,12 @@ def _require_source_state_unchanged(expected: dict, *, phase: str) -> None:
 
 
 def _read_tracked_requirements_lock(lock_path: Path, expected_path: str) -> bytes:
-    """Read one exact tracked regular-file requirements blob at ``HEAD``."""
+    """Capture a bounded worktree lock matching its exact tracked HEAD blob.
+
+    Both the committed blob and published worktree pathname are checked before
+    importing treatment code. This is an observed local integrity gate, not an
+    atomic multi-file snapshot or authentication of historical artifacts.
+    """
     repository_root = REPO_ROOT.resolve()
     requirements_path = Path(os.path.abspath(lock_path))
     tracked_file_error = (
@@ -386,12 +391,6 @@ def _read_tracked_requirements_lock(lock_path: Path, expected_path: str) -> byte
             env=git_environment,
             stderr=subprocess.DEVNULL,
         )
-        committed_bytes = subprocess.check_output(
-            ["git", "show", f"HEAD:{relative_path}"],
-            cwd=repository_root,
-            env=git_environment,
-            stderr=subprocess.DEVNULL,
-        )
     except (OSError, subprocess.SubprocessError) as exc:
         raise SystemExit(tracked_file_error) from exc
     if not re.fullmatch(
@@ -402,23 +401,32 @@ def _read_tracked_requirements_lock(lock_path: Path, expected_path: str) -> byte
     ):
         raise SystemExit(tracked_file_error)
 
-    descriptor = None
     try:
-        descriptor = os.open(
-            requirements_path,
-            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        committed_size_raw = subprocess.check_output(
+            ["git", "cat-file", "-s", f"HEAD:{relative_path}"],
+            cwd=repository_root,
+            env=git_environment,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        if not re.fullmatch(rb"[0-9]+", committed_size_raw):
+            raise ValueError("invalid committed blob size")
+        committed_size = int(committed_size_raw)
+        if committed_size > _MAX_STUDY_INPUT_BYTES:
+            raise ValueError("committed requirements lock exceeds input size limit")
+        committed_bytes = subprocess.check_output(
+            ["git", "show", f"HEAD:{relative_path}"],
+            cwd=repository_root,
+            env=git_environment,
+            stderr=subprocess.DEVNULL,
         )
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise OSError("requirements lock is not a regular file")
-        with os.fdopen(descriptor, "rb") as requirements_handle:
-            descriptor = None
-            requirements_raw = requirements_handle.read()
-    except OSError as exc:
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
         raise SystemExit(tracked_file_error) from exc
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
+    if len(committed_bytes) != committed_size:
+        raise SystemExit(tracked_file_error)
 
+    requirements_raw = _read_study_input_bytes(
+        requirements_path, label=f"Repository requirements lock {expected_path}"
+    )
     if requirements_raw != committed_bytes:
         raise SystemExit(
             f"Repository requirements lock {expected_path} bytes do not match "
@@ -477,8 +485,10 @@ def _parse_exact_distribution_pins(lock_raw: bytes, lock_label: str) -> dict[str
 def _execution_environment() -> dict:
     """Validate and capture the interpreter and distributions used by treatments."""
     try:
-        pinned_python = PYTHON_VERSION_FILE.read_text(encoding="utf-8").strip()
-    except OSError as exc:
+        pinned_python = _read_study_input_bytes(
+            PYTHON_VERSION_FILE, label="Python version pin"
+        ).decode("utf-8").strip()
+    except (SystemExit, UnicodeDecodeError) as exc:
         raise SystemExit(
             "Cannot read the repository Python version pin for main study"
         ) from exc

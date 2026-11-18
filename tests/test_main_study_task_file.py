@@ -676,6 +676,82 @@ def test_execution_environment_rejects_unsatisfied_or_ambiguous_requirements(
         run_budget_main_study._execution_environment()
 
 
+
+@pytest.mark.parametrize(
+    ("filename", "reader_name", "path_attribute"),
+    [
+        ("requirements.txt", "_read_requirements_lock", "REQUIREMENTS_FILE"),
+        ("requirements-ci.lock", "_read_ci_requirements_lock", "CI_REQUIREMENTS_FILE"),
+    ],
+)
+def test_tracked_requirements_lock_captures_exact_head_blob(
+    tmp_path, monkeypatch, filename, reader_name, path_attribute
+):
+    _initialize_git_repository(tmp_path)
+    lock_path = tmp_path / filename
+    original = b"example-package==1.0\\n".replace(b"\\n", b"\n")
+    lock_path.write_bytes(original)
+    _git("add", filename, cwd=tmp_path)
+    _git("commit", "-q", "-m", "track lock fixture", cwd=tmp_path)
+    monkeypatch.setattr(run_budget_main_study, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(run_budget_main_study, path_attribute, lock_path)
+
+    assert getattr(run_budget_main_study, reader_name)() == original
+
+
+@pytest.mark.parametrize(
+    ("filename", "reader_name", "path_attribute"),
+    [
+        ("requirements.txt", "_read_requirements_lock", "REQUIREMENTS_FILE"),
+        ("requirements-ci.lock", "_read_ci_requirements_lock", "CI_REQUIREMENTS_FILE"),
+    ],
+)
+@pytest.mark.parametrize("substitution", ["fifo", "hardlink", "oversized"])
+def test_tracked_requirements_lock_rejects_unsafe_worktree_input(
+    tmp_path, monkeypatch, filename, reader_name, path_attribute, substitution
+):
+    _initialize_git_repository(tmp_path)
+    lock_path = tmp_path / filename
+    lock_path.write_text("example-package==1.0\\n".replace("\\n", "\n"), encoding="utf-8")
+    _git("add", filename, cwd=tmp_path)
+    _git("commit", "-q", "-m", "track lock fixture", cwd=tmp_path)
+    if substitution == "fifo":
+        lock_path.unlink()
+        os.mkfifo(lock_path)
+    elif substitution == "hardlink":
+        os.link(lock_path, tmp_path / f"{filename}.alias")
+    else:
+        with lock_path.open("r+b") as handle:
+            handle.truncate(run_budget_main_study._MAX_STUDY_INPUT_BYTES + 1)
+    monkeypatch.setattr(run_budget_main_study, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(run_budget_main_study, path_attribute, lock_path)
+
+    with pytest.raises(SystemExit, match="Cannot read repository requirements lock"):
+        getattr(run_budget_main_study, reader_name)()
+
+
+@pytest.mark.parametrize("substitution", ["fifo", "hardlink", "oversized"])
+def test_python_version_pin_rejects_unsafe_worktree_input_before_imports(
+    tmp_path, monkeypatch, substitution
+):
+    pin_path = tmp_path / ".python-version"
+    pin_path.write_text("3.11\\n".replace("\\n", "\n"), encoding="utf-8")
+    if substitution == "fifo":
+        pin_path.unlink()
+        os.mkfifo(pin_path)
+    elif substitution == "hardlink":
+        os.link(pin_path, tmp_path / "python-version.alias")
+    else:
+        with pin_path.open("r+b") as handle:
+            handle.truncate(run_budget_main_study._MAX_STUDY_INPUT_BYTES + 1)
+    monkeypatch.setattr(run_budget_main_study, "PYTHON_VERSION_FILE", pin_path)
+
+    with pytest.raises(
+        SystemExit, match="Cannot read the repository Python version pin"
+    ):
+        run_budget_main_study._execution_environment()
+
+
 def test_requirements_lock_rejects_tracked_symlink(tmp_path, monkeypatch):
     _initialize_git_repository(tmp_path)
     external_requirements = tmp_path.parent / "external-requirements.txt"

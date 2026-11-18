@@ -74,3 +74,21 @@ diagnostic; frozen automated findings retain post-collection timing, fixed-order
 and evaluator-comparability limitations. Exploratory sensitivity findings,
 prospective confirmation and pending human validation remain distinct. No
 original treatments or evaluators, frozen scores or human ratings were changed.
+
+## Bounded execution-environment pin capture
+
+The noncanonical runner also captures both tracked dependency lock files
+(`requirements.txt` and `requirements-ci.lock`) through the existing bounded
+8 MiB, nonblocking, no-follow, single-link regular-file reader. It checks the
+committed Git blob size before obtaining its bytes, verifies that the
+worktree capture matches that exact committed blob, and checks the observed
+published pathname after reading. The `.python-version` runtime pin uses the
+same bounded reader before dependency inspection. These guards close another
+pre-execution route for FIFO hangs, unexpectedly large inputs, hardlink aliases,
+or path substitution, without altering any frozen study input or outcome.
+
+Synthetic offline tests cover exact-blob acceptance and FIFO, hardlink, and
+oversized-file rejection for both locks, plus the three unsafe Python-version
+pin cases. The observed local checks are not atomic filesystem snapshots,
+and they neither recover missing original evidence nor authorize any new
+treatments or blinded human distribution.
