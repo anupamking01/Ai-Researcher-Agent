@@ -1,3 +1,27 @@
+## Create-only, no-follow CI receipt publication (19 November 2026)
+
+The offline test receipt producer previously wrote its final JSON with
+\`Path.write_text\`, which silently **overwrote a preexisting receipt** and
+followed a symlink at the output path. That could replace earlier local CI
+evidence or redirect the producer's output despite an otherwise valid test
+transcript. The producer now creates the receipt exclusively, relative to
+held no-follow directory descriptors, and rejects preexisting destinations,
+leaf aliases, parent-directory symlinks, and observed pathname swaps. It
+checks the newly written regular file, size, link count and parent-path
+identity before reporting local publication success.
+
+Five rootless regressions cover ordinary create-only publication, overwrite
+refusal, leaf and parent symlink refusal, and parent traversal rejection.
+The independent log/receipt replay and mandatory verified-artifact upload
+remain unchanged. The writer can leave an **unverified partial file** if
+interrupted during writing; this is not an accepted success receipt.
+The check cannot prove filesystem integrity after publication or attest
+GitHub's runner. It neither reruns experiments nor authenticates the
+unavailable original treatment/recovery archives. The pilot remains
+diagnostic, automated findings retain post-collection/fixed-order/evaluator
+comparability qualifications, retrospective sensitivities remain
+exploratory, and human ratings are still pending.
+
 ## Bound adversarial metadata test IDs without weakening the payload (17 November 2026)
 
 The exact-head [push shard-4 CI log](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/44057192442)

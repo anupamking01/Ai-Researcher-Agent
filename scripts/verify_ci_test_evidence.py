@@ -394,6 +394,62 @@ def build_receipt(log: bytes, *, context: dict[str, str],
     }
 
 
+
+def write_create_only_receipt(path: Path, receipt: dict) -> None:
+    """Publish a CI receipt once, without following aliases or overwriting evidence.
+
+    Local filesystem publication safety does not attest the GitHub runner.
+    """
+    path = Path(path)
+    if ".." in path.parts or not path.name:
+        raise ValueError("CI receipt destination must not traverse parent directories")
+    if not hasattr(os, "O_DIRECTORY") or not hasattr(os, "O_NOFOLLOW"):
+        raise ValueError("CI receipt publication requires no-follow directory support")
+    absolute = path.absolute()
+    payload = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    directory_flags = (os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                       | getattr(os, "O_CLOEXEC", 0))
+    file_flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                  | getattr(os, "O_CLOEXEC", 0))
+
+    def identity(metadata):
+        return (metadata.st_dev, metadata.st_ino, metadata.st_mode,
+                metadata.st_nlink, metadata.st_size,
+                metadata.st_mtime_ns, metadata.st_ctime_ns)
+
+    with ExitStack() as stack:
+        parent_fd = os.open(absolute.anchor, directory_flags)
+        stack.callback(os.close, parent_fd)
+        ancestors = []
+        for component in absolute.parts[1:-1]:
+            child_fd = os.open(component, directory_flags, dir_fd=parent_fd)
+            stack.callback(os.close, child_fd)
+            ancestors.append((parent_fd, component, child_fd))
+            parent_fd = child_fd
+
+        receipt_fd = os.open(absolute.name, file_flags, 0o600, dir_fd=parent_fd)
+        with os.fdopen(receipt_fd, "wb") as output:
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+            observed = os.fstat(output.fileno())
+            visible = os.stat(
+                absolute.name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if (not stat.S_ISREG(observed.st_mode) or observed.st_nlink != 1
+                    or observed.st_size != len(payload)
+                    or identity(observed) != identity(visible)):
+                raise ValueError("CI receipt changed during create-only publication")
+
+            for ancestor_fd, component, child_fd in ancestors:
+                named = os.stat(
+                    component, dir_fd=ancestor_fd, follow_symlinks=False
+                )
+                if identity(named) != identity(os.fstat(child_fd)):
+                    raise ValueError(
+                        "CI receipt parent directory changed during publication"
+                    )
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--log", type=Path, required=True)
@@ -425,8 +481,7 @@ def main() -> int:
             shard=args.shard,
         )
         # No read from treatment/evaluator artifacts, no network calls.
-        args.out.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n",
-                            encoding="utf-8")
+        write_create_only_receipt(args.out, receipt)
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         parser.exit(1, f"VERA OFFLINE TEST EVIDENCE: FAIL: {exc}\n")
     return 0

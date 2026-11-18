@@ -736,3 +736,48 @@ def test_bounded_evidence_capture_rejects_unlinked_path_during_read(
         evidence.read_bounded_evidence(
             source, maximum=64, label="synthetic CI receipt"
         )
+
+
+def test_ci_receipt_publication_creates_complete_private_json_once(tmp_path):
+    import json
+    import stat
+
+    target = tmp_path / "evidence.json"
+    evidence.write_create_only_receipt(target, {"run": 9, "passed": True})
+    assert target.read_bytes() == (
+        b'{\n  "passed": true,\n  "run": 9\n}\n'
+    )
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_ci_receipt_publication_refuses_overwrite_without_mutation(tmp_path):
+    target = tmp_path / "evidence.json"
+    target.write_bytes(b"original immutable bytes")
+    with pytest.raises(FileExistsError):
+        evidence.write_create_only_receipt(target, {"run": 10})
+    assert target.read_bytes() == b"original immutable bytes"
+
+
+def test_ci_receipt_publication_refuses_symlink_to_other_file(tmp_path):
+    outside = tmp_path / "other.json"
+    outside.write_bytes(b"protected outside receipt")
+    alias = tmp_path / "evidence.json"
+    alias.symlink_to(outside)
+    with pytest.raises(FileExistsError):
+        evidence.write_create_only_receipt(alias, {"run": 11})
+    assert outside.read_bytes() == b"protected outside receipt"
+
+
+def test_ci_receipt_publication_refuses_symlinked_parent(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    alias = tmp_path / "aliased-parent"
+    alias.symlink_to(real, target_is_directory=True)
+    with pytest.raises(OSError):
+        evidence.write_create_only_receipt(alias / "evidence.json", {"run": 12})
+    assert not (real / "evidence.json").exists()
+
+
+def test_ci_receipt_publication_refuses_parent_traversal(tmp_path):
+    with pytest.raises(ValueError, match="parent directories"):
+        evidence.write_create_only_receipt(tmp_path / "tmp" / ".." / "receipt.json", {})
