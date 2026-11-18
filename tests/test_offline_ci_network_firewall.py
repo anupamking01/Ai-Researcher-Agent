@@ -499,6 +499,60 @@ def test_firewalled_runner_rejects_inherited_python_import_roots_before_sudo(
     assert "Offline pytest egress isolation active" not in result.stdout
 
 
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux-only firewall wrapper")
+@pytest.mark.parametrize("value", ["0", "1", "2"])
+def test_firewalled_runner_rejects_inherited_python_optimization_before_sudo(
+    value: str, tmp_path: Path,
+):
+    """Optimizer flags must not silently weaken non-pytest Python assertions."""
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    marker = tmp_path / "sudo-was-called"
+    fake_sudo = fake_bin / "sudo"
+    fake_sudo.write_text(
+        '#!/bin/sh\\nprintf invoked > "$VERA_SUDO_MARKER"\\nexit 91\\n',
+        encoding="utf-8",
+    )
+    fake_sudo.chmod(0o755)
+    env = os.environ.copy()
+    for name in (
+        "PYTEST_ADDOPTS", "PYTEST_PLUGINS", "PYTHONPATH", "PYTHONHOME"
+    ):
+        env.pop(name, None)
+    env.update({
+        "PYTHONOPTIMIZE": value,
+        "VERA_SUDO_MARKER": str(marker),
+        "PATH": str(fake_bin) + os.pathsep + env["PATH"],
+    })
+    result = subprocess.run(
+        ["bash", str(WRAPPER)], cwd=ROOT, env=env,
+        text=True, capture_output=True, timeout=10, check=False,
+    )
+    assert result.returncode == 1, result.stderr
+    assert "refuses inherited PYTHONOPTIMIZE" in result.stderr
+    assert not marker.exists(), "optimized Python reached privileged setup"
+    assert "Offline pytest egress isolation active" not in result.stdout
+
+
+def test_python_optimization_changes_normal_assertion_semantics():
+    """Show why forbidding optimization is a validity gate, not cosmetic."""
+    baseline = os.environ.copy()
+    baseline.pop("PYTHONOPTIMIZE", None)
+    command = [sys.executable, "-c", 'assert False, "validation guard"']
+    normal = subprocess.run(
+        command, env=baseline, text=True, capture_output=True,
+        timeout=10, check=False,
+    )
+    optimized = subprocess.run(
+        command, env={**baseline, "PYTHONOPTIMIZE": "1"},
+        text=True, capture_output=True, timeout=10, check=False,
+    )
+    assert normal.returncode != 0
+    assert "AssertionError" in normal.stderr
+    assert optimized.returncode == 0
+
+
 def test_firewalled_runner_keeps_explicit_test_arguments_with_empty_pytest_env():
     """Existing wrapper contract keeps the call sites' explicit selection."""
     source = WRAPPER.read_text(encoding="utf-8")

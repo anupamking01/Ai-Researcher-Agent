@@ -24,6 +24,16 @@ fi
 # Force their exclusion even if the caller inherited a false value.
 export PYTHONNOUSERSITE=1
 
+# Optimized Python removes ordinary assert statements from imported modules.
+# Test helpers and provenance validators must run under normal interpreter
+# semantics; even an inherited "0" is rejected to make the environment
+# contract explicit rather than silently accepting alternate startup modes.
+# Reject before making any privileged firewall changes.
+if [[ -n "${PYTHONOPTIMIZE:-}" ]]; then
+  echo "Offline pytest refuses inherited PYTHONOPTIMIZE (optimized assertions change validation semantics)" >&2
+  exit 1
+fi
+
 # Disable ambient pytest11 entry-point plugins before pytest startup. Pytest
 # imports these plugins before tests/conftest.py installs its Python socket
 # guard; unreviewed plugins can also change test collection or reporting.

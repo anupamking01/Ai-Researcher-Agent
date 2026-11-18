@@ -1,5 +1,27 @@
 # Complete offline pytest via deterministic CI shards
 
+## Python assertion-semantics isolation — 18 November 2026
+
+The shared firewalled pytest entrypoint now rejects any nonempty inherited
+`PYTHONOPTIMIZE` value **before sudo and firewall setup**, including explicit
+`0`, `1`, or `2`. With `PYTHONOPTIMIZE=1` or `2`, CPython can remove
+ordinary `assert` statements in imported helper and verification modules.
+Pytest's own assertion rewriting does not establish the semantics of every
+imported module: an optimized interpreter could otherwise make a source-identical
+CI test run exercise different guards. The wrapper requires an unset variable
+for the normal pinned-interpreter path; it does not change Python dependencies,
+test selection, test outcomes, or the host egress firewall.
+
+Three rootless synthetic cases reject optimizer values before any fake sudo
+invocation. A fourth regression demonstrates that a normal Python assertion
+fails while the identical script under `PYTHONOPTIMIZE=1` succeeds. This
+protects *future offline verification*, not earlier CI runs, and does not prove
+that inherited optimization caused any historical cancellation. Full sixteen-
+shard exact-run certification and original report/trace custody remain separate
+requirements. The pilot remains diagnostic, frozen automated inference remains
+post-collection and qualified, retrospective sensitivity remains exploratory,
+and human evaluation has not been completed.
+
 ## Host Python import-root isolation — 18 November 2026
 
 The shared firewalled pytest entrypoint now rejects nonempty inherited
