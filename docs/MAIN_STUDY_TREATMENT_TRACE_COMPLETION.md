@@ -52,3 +52,18 @@ synthetic oversized sparse files, hardlinks, symlinks, and simulated in-read
 mutation; no treatment or evaluator is run. This is observed local custody
 and bounded memory use, not an atomic snapshot, proof of provider billing,
 or independent authentication of missing original artifacts.
+
+
+### Bounded prior-evidence fingerprints
+
+Prior completed trace and Markdown report fingerprints now enforce their
+respective **8 MiB limits** before reading and cap streamed bytes even if
+a file grows while being hashed. They also require a single-link regular file
+and use nonblocking, no-follow opens, so an externally hardlinked file or
+a FIFO substituted for a prior trace cannot be silently accepted or hang the
+fingerprinting step. The same bounds apply before and after each subsequent
+noncanonical treatment. Synthetic offline regressions cover oversized sparse
+prior evidence, untracked hardlink aliases, and FIFO substitution. These
+checks do not authenticate the original inaccessible September artifacts,
+provide an atomic or hostile-race-proof snapshot, establish true provider
+billing, or create human-evaluation measurements.

@@ -1025,23 +1025,43 @@ def _current_treatment_cost(pricing: dict) -> float:
     )
 
 
-def _trace_file_fingerprint(path: Path) -> tuple[int, int, int, int, int, int, str]:
-    """Record identity, metadata and bytes of a prior local treatment trace.
+def _trace_file_fingerprint(
+    path: Path, *, max_bytes: int,
+) -> tuple[int, int, int, int, int, int, str]:
+    """Bound prior trace/report custody checks to one regular file generation.
 
-    The no-follow descriptor binds the digest to an opened regular file.
-    This detects observed mutations, not concurrent adversarial filesystem races.
+    Check size and link count before streaming, cap the streamed bytes even if
+    the file grows, and refuse blocking on a replaced named pipe. This detects
+    observed changes, not adversarial races or an atomic filesystem snapshot.
     """
     if path.parent.is_symlink() or not path.parent.is_dir():
-        raise ValueError(f"Invalid prior treatment trace directory: {path.parent}")
+        raise ValueError(f"Invalid prior treatment evidence directory: {path.parent}")
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        fd = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
         try:
             before = os.fstat(fd)
-            if not stat.S_ISREG(before.st_mode):
-                raise ValueError(f"Prior treatment trace is not a regular file: {path}")
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or not 0 <= before.st_size <= max_bytes
+            ):
+                raise ValueError(
+                    f"Prior evidence must be a bounded single-link regular file: {path}"
+                )
             digest = hashlib.sha256()
+            bytes_read = 0
             with os.fdopen(fd, "rb", closefd=False) as stream:
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                while True:
+                    chunk = stream.read(min(1024 * 1024, max_bytes + 1 - bytes_read))
+                    if not chunk:
+                        break
+                    bytes_read += len(chunk)
+                    if bytes_read > max_bytes:
+                        raise ValueError(f"Prior evidence grew beyond limit: {path}")
                     digest.update(chunk)
             after = os.fstat(fd)
             def identity(st):
@@ -1049,20 +1069,23 @@ def _trace_file_fingerprint(path: Path) -> tuple[int, int, int, int, int, int, s
                     st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns,
                     st.st_ctime_ns, st.st_nlink,
                 )
-            if identity(before) != identity(after):
-                raise ValueError(f"Prior treatment trace changed while reading: {path}")
+            if identity(before) != identity(after) or bytes_read != after.st_size:
+                raise ValueError(f"Prior evidence changed while reading: {path}")
             return (*identity(after), digest.hexdigest())
         finally:
             os.close(fd)
     except OSError as exc:
-        raise ValueError(f"Cannot pin prior treatment trace {path}: {exc}") from exc
+        raise ValueError(f"Cannot pin prior treatment evidence {path}: {exc}") from exc
 
 
 def _snapshot_treatment_traces(
     paths: tuple[Path, ...],
 ) -> dict[Path, tuple[int, int, int, int, int, int, str]]:
     """Pin earlier treatment evidence before starting the next treatment."""
-    return {path: _trace_file_fingerprint(path) for path in paths}
+    return {
+        path: _trace_file_fingerprint(path, max_bytes=_MAX_TREATMENT_TRACE_BYTES)
+        for path in paths
+    }
 
 
 
@@ -1133,7 +1156,7 @@ def _snapshot_treatment_reports(
     """Pin prior Markdown report generations alongside their treatment traces."""
     return {
         _completed_report_markdown(path): _trace_file_fingerprint(
-            _completed_report_markdown(path)
+            _completed_report_markdown(path), max_bytes=_MAX_COMPLETED_REPORT_BYTES,
         )
         for path in prior_paths
     }
@@ -1166,7 +1189,9 @@ def _require_new_completed_trace(
         )
     for prior_path in prior_paths:
         try:
-            current_fingerprint = _trace_file_fingerprint(prior_path)
+            current_fingerprint = _trace_file_fingerprint(
+                prior_path, max_bytes=_MAX_TREATMENT_TRACE_BYTES,
+            )
         except ValueError as exc:
             raise ValueError(
                 f"Prior treatment trace integrity check failed: {prior_path}: {exc}"
@@ -1180,7 +1205,9 @@ def _require_new_completed_trace(
         if report not in prior_report_fingerprints:
             raise ValueError(f"Missing prior report fingerprint: {report}")
         try:
-            current_report = _trace_file_fingerprint(report)
+            current_report = _trace_file_fingerprint(
+                report, max_bytes=_MAX_COMPLETED_REPORT_BYTES,
+            )
         except ValueError as exc:
             raise ValueError(f"Prior completed report integrity check failed: {report}") from exc
         if current_report != prior_report_fingerprints[report]:

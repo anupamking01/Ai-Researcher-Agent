@@ -278,3 +278,76 @@ def test_completed_report_gate_reuses_bounded_trace_capture(
     with pytest.raises(ValueError, match="second-trace-capture rejection"):
         _check(root, monkeypatch)
     assert captures == [trace_path, trace_path]
+
+
+@pytest.mark.parametrize("kind", ["trace", "report"])
+def test_prior_fingerprint_refuses_oversized_sparse_evidence_before_read(
+    tmp_path, monkeypatch, kind,
+):
+    root = tmp_path / "traces"
+    old = _write(root, _payload(run_id="old"))
+    monkeypatch.setattr(study, "TRACE_ROOT", root)
+    if kind == "trace":
+        path = old
+        limit = study._MAX_TREATMENT_TRACE_BYTES
+        snapshot = lambda: study._snapshot_treatment_traces((old,))
+    else:
+        path = study._completed_report_markdown(old)
+        limit = study._MAX_COMPLETED_REPORT_BYTES
+        snapshot = lambda: study._snapshot_treatment_reports((old,))
+    with path.open("r+b") as stream:
+        stream.truncate(limit + 1)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            study.os, "fdopen",
+            lambda *args, **kwargs: pytest.fail("oversized prior evidence was opened for reading"),
+        )
+        with pytest.raises(ValueError, match="bounded single-link regular file"):
+            snapshot()
+
+
+@pytest.mark.parametrize("kind", ["trace", "report"])
+def test_prior_fingerprint_refuses_uninventoried_hardlink_alias(
+    tmp_path, monkeypatch, kind,
+):
+    root = tmp_path / "traces"
+    old = _write(root, _payload(run_id="old"))
+    monkeypatch.setattr(study, "TRACE_ROOT", root)
+    path = old if kind == "trace" else study._completed_report_markdown(old)
+    alias = tmp_path / f"untracked-{kind}-alias"
+    os.link(path, alias)
+
+    with pytest.raises(ValueError, match="bounded single-link regular file"):
+        if kind == "trace":
+            study._snapshot_treatment_traces((old,))
+        else:
+            study._snapshot_treatment_reports((old,))
+    assert alias.read_bytes() == path.read_bytes()
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "mkfifo") or not hasattr(os, "O_NONBLOCK"),
+    reason="requires POSIX nonblocking FIFO open",
+)
+def test_prior_trace_fingerprint_rejects_fifo_without_blocking(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "traces"
+    old = _write(root, _payload(run_id="old"))
+    old.unlink()
+    os.mkfifo(old)
+    actual_open = os.open
+    observed = []
+
+    def require_nonblocking_open(path, flags, *args, **kwargs):
+        if Path(path) == old:
+            assert flags & os.O_NONBLOCK, "opening an untrusted FIFO could block"
+            observed.append(flags)
+        return actual_open(path, flags, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(study.os, "open", require_nonblocking_open)
+        with pytest.raises(ValueError, match="bounded single-link regular file"):
+            study._snapshot_treatment_traces((old,))
+    assert observed
