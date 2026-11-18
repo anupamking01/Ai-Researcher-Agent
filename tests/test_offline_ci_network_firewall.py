@@ -240,6 +240,85 @@ def test_firewall_order_failure_rollback_and_exit_code(
         assert any(row.startswith("v4 -w 5 -F VERA_OFFLINE_") for row in commands)
         assert any(row.startswith("v6 -w 5 -X VERA_OFFLINE_") for row in commands)
 
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux-only firewall wrapper")
+@pytest.mark.parametrize("failure_at, expected_exit", [
+    ("", 0), ("setup", 124), ("teardown", 1),
+])
+def test_all_privileged_firewall_commands_have_total_deadlines(
+    tmp_path: Path, failure_at: str, expected_exit: int,
+):
+    """Rootless timeout faults distinguish setup from teardown; neither certifies CI."""
+    fake = tmp_path / "fake-bin"
+    fake.mkdir()
+    scripts = {
+        "sudo": '#!/bin/sh\n[ "$1" = "-n" ] || exit 80\nshift\nexec "$@"\n',
+        "iptables": _fake_iptables("v4"),
+        "ip6tables": _fake_iptables("v6"),
+        "python": (
+            '#!/bin/sh\nprintf "pytest %s\\n" "$*" >> "$VERA_FAKE_FIREWALL_LOG"\n'
+            'exit 0\n'
+        ),
+        # Simulate expiry instantly; normal commands delegate to the fake sudo.
+        "timeout": (
+            '#!/usr/bin/env bash\n'
+            'printf "%s\\n" "$*" >> "$VERA_FAKE_TIMEOUT_LOG"\n'
+            'if [[ "$VERA_FAKE_TIMEOUT_WHEN" == "setup" && '
+            '"$*" == *" -N VERA_OFFLINE_"* ]]; then exit 124; fi\n'
+            'if [[ "$VERA_FAKE_TIMEOUT_WHEN" == "teardown" && '
+            '"$*" == *" -D OUTPUT -j "* ]]; then exit 124; fi\n'
+            'shift 3\nexec "$@"\n'
+        ),
+    }
+    for filename, source in scripts.items():
+        executable = fake / filename
+        executable.write_text(source, encoding="utf-8")
+        executable.chmod(0o755)
+    commands_log = tmp_path / "commands.txt"
+    timeout_log = tmp_path / "timeouts.txt"
+    env = os.environ.copy()
+    for key in ("PYTHONPATH", "PYTHONHOME", "PYTHONOPTIMIZE",
+                "PYTEST_ADDOPTS", "PYTEST_PLUGINS", "VERA_FAKE_POST_POLICY_FILE"):
+        env.pop(key, None)
+    env.update({
+        "PATH": str(fake) + os.pathsep + env["PATH"],
+        "VERA_FAKE_FIREWALL_LOG": str(commands_log),
+        "VERA_FAKE_TIMEOUT_LOG": str(timeout_log),
+        "VERA_FAKE_TIMEOUT_WHEN": failure_at,
+        "VERA_FAKE_CHAIN_FILE": str(tmp_path / "chain"),
+        "VERA_FAKE_POLICY": "",
+        "VERA_FAIL_V6_LINK": "0",
+    })
+    result = subprocess.run(
+        ["bash", str(WRAPPER)], cwd=ROOT, env=env,
+        text=True, capture_output=True, timeout=15, check=False,
+    )
+    assert result.returncode == expected_exit, result.stderr
+    timed = timeout_log.read_text(encoding="utf-8").splitlines()
+    assert timed and all(
+        line.startswith("--signal=TERM --kill-after=2s 15s sudo -n ")
+        for line in timed
+    )
+    if failure_at:
+        assert "exceeded 15-second wall-clock bound" in result.stderr
+    commands = commands_log.read_text(encoding="utf-8").splitlines() if commands_log.exists() else []
+    privileged = [line for line in commands if line.startswith(("v4 ", "v6 "))]
+    if not failure_at:
+        assert len(timed) == len(privileged) > 12
+        assert any(line.startswith("pytest ") for line in commands)
+    elif failure_at == "setup":
+        assert len(timed) == 1
+        assert not privileged and not any(line.startswith("pytest ") for line in commands)
+    else:
+        assert any(line.startswith("pytest ") for line in commands)
+        assert any(" -D OUTPUT " in line for line in timed)
+        # One teardown timeout must not prevent attempts at the other family
+        # or at best-effort removal of both custom chains.
+        assert any(" iptables -w 5 -X " in line for line in timed)
+        assert any(" ip6tables -w 5 -X " in line for line in timed)
+        assert "offline test firewall cleanup failed" in result.stderr
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux-only firewall wrapper")
 @pytest.mark.parametrize("inherited", [None, "0", "false"])
 def test_firewalled_pytest_disables_ambient_plugins(

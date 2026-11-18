@@ -122,6 +122,28 @@ rerun treatment/evaluator calls, change frozen automated analysis, or establish
 pending human-validation results.
 
 
+## Full-command timeout for privileged firewall operations (19 November 2026)
+
+The existing `-w 5` flag limits **xtables lock acquisition only**; it cannot
+bound a hung `sudo` process, helper, or non-lock netfilter operation. All 18
+privileged IPv4/IPv6 firewall operations now run behind GNU `timeout`
+(`--signal=TERM --kill-after=2s 15s`) with a required executable preflight.
+This includes initial setup, the effective rule and precedence checks both
+before and after pytest, and the best-effort teardown. A timed-out command
+returns a failure; setup never proceeds to pytest, and teardown continues
+attempting every owned-chain removal before reporting failure. No timeout
+can be interpreted as a successful source-bound test receipt.
+
+Rootless fake-timeout regressions cover all commands on the passing path,
+instantaneous setup-timeout rejection, and teardown-timeout failure with
+continued cleanup attempts. The timeout cannot guarantee complete kernel
+rule removal when the host or privilege helper is unresponsive, nor is it
+a network egress attestation. Repeated CI cancellations after green pytest
+summaries motivated inspecting this separately identifiable bounded-wait
+risk, but **the cancellations' cause is unproven**; this is not presented
+as a cure for GitHub runner cancellations or as full-suite certification.
+No research treatments/evaluators, frozen analyses, or human ratings changed.
+
 ## Bounded xtables lock waits during offline pytest
 
 Each IPv4 and IPv6 `iptables`/`ip6tables` operation in the shared host-level
