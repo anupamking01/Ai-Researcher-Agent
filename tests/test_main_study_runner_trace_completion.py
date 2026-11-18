@@ -185,6 +185,47 @@ def test_completion_gate_requires_source_bound_markdown_report(
         _check(root, monkeypatch)
 
 
+@pytest.mark.skipif(
+    not hasattr(os, "mkfifo") or not hasattr(os, "O_NONBLOCK"),
+    reason="requires POSIX nonblocking FIFO open",
+)
+def test_new_completed_report_rejects_fifo_without_blocking(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "traces"
+    _write(root, _payload())
+    report = root.parent / "run-1" / "research_report.md"
+    report.unlink()
+    os.mkfifo(report)
+    real_open = os.open
+    observed = []
+
+    def require_nonblocking_open(path, flags, *args, **kwargs):
+        if Path(path) == report:
+            assert flags & os.O_NONBLOCK, "untrusted report FIFO may block at open"
+            observed.append(flags)
+        return real_open(path, flags, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(study.os, "open", require_nonblocking_open)
+        with pytest.raises(ValueError, match="bounded regular file"):
+            _check(root, monkeypatch)
+    assert observed
+
+
+def test_new_completed_report_rejects_external_hardlink_alias(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "traces"
+    _write(root, _payload())
+    report = root.parent / "run-1" / "research_report.md"
+    alias = tmp_path / "untracked-report-alias.md"
+    os.link(report, alias)
+    with pytest.raises(ValueError, match="bounded regular file"):
+        _check(root, monkeypatch)
+    assert alias.read_bytes() == b"Synthetic report"
+
+
 @pytest.mark.parametrize("mutation", ["modified_bytes", "same_bytes_new_inode"])
 def test_prior_report_change_cannot_be_hidden_by_new_completed_trace(
     tmp_path, monkeypatch, mutation,

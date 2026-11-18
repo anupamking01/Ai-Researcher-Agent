@@ -1122,7 +1122,13 @@ def _require_completed_report(trace_path: Path) -> None:
     if report.parent.is_symlink() or not report.parent.is_dir():
         raise ValueError(f"Missing or redirected completed report directory: {report.parent}")
     try:
-        fd = os.open(report, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        # Opening an untrusted named pipe read-only can block forever before
+        # fstat can reject its file type. Keep the descriptor nonblocking.
+        fd = os.open(
+            report,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
         try:
             before = os.fstat(fd)
             if (

@@ -68,6 +68,21 @@ checks do not authenticate the original inaccessible September artifacts,
 provide an atomic or hostile-race-proof snapshot, establish true provider
 billing, or create human-evaluation measurements.
 
+### Nonblocking capture of newly completed reports
+
+A newly generated report is untrusted local filesystem evidence until its
+regular-file identity is checked. A read-only `open()` of an attacker- or
+accidentally substituted FIFO can wait indefinitely for a writer **before**
+the existing `fstat()` regular-file gate executes. The completed-report reader
+now uses `O_NONBLOCK` alongside its existing `O_NOFOLLOW`, 8 MiB cap,
+single-link requirement, bounded read, and before/after identity checks. A FIFO
+therefore fails closed rather than stalling completion accounting or leaving
+progress stuck at an active treatment. Synthetic POSIX tests check that the
+open itself is nonblocking and that an external hardlink alias is rejected;
+no live research treatment is launched. This is a local execution-robustness
+safeguard, not archive authentication or protection against hostile ancestor
+races. Frozen measurements and human-validation status are unchanged.
+
 ## Durable failure recording when post-treatment spend is unreadable
 
 A malformed JSON trace can be present after a stub/agent returns, cause the
