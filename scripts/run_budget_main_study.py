@@ -1441,6 +1441,7 @@ async def _run_main_study() -> None:
         "failed_runs": 0,
         "timeout_runs": 0,
         "estimated_treatment_cost_usd": initial_treatment_cost,
+        "trace_cost_reconciliation": "recomputed_from_retained_traces",
         "events": [],
         "current": None,
         "started_at_utc": _utc_now(),
@@ -1502,6 +1503,22 @@ async def _run_main_study() -> None:
                 status = "timeout" if isinstance(exc, TimeoutError) else "failed"
                 error = f"{type(exc).__name__}: {str(exc)[:800]}"
 
+            # Invalid retained trace bytes may make the spend ledger unreadable
+            # after completion verification has already failed. Persist the
+            # attempted treatment and its failure rather than letting a second
+            # SystemExit strand progress with current still populated.
+            try:
+                reconciled_cost = _current_treatment_cost(pricing)
+            except (SystemExit, ValueError) as exc:
+                reconciled_cost = None
+                cost_error = (
+                    "post-treatment trace spend cannot be verified: "
+                    f"{type(exc).__name__}: {str(exc)[:400]}"
+                )
+                error = f"{error}; {cost_error}"[:800] if error else cost_error
+                if status == "completed":
+                    status = "failed"
+
             progress["attempted_runs"] += 1
             progress[f"{status}_runs"] += 1
             event = {
@@ -1515,7 +1532,11 @@ async def _run_main_study() -> None:
                 event["error"] = error
             progress["events"].append(event)
             progress["current"] = None
-            progress["estimated_treatment_cost_usd"] = _current_treatment_cost(pricing)
+            progress["estimated_treatment_cost_usd"] = reconciled_cost
+            progress["trace_cost_reconciliation"] = (
+                "recomputed_from_retained_traces"
+                if reconciled_cost is not None else "unverifiable"
+            )
             _write_json("main_study_progress.json", progress)
 
             if status != "completed":

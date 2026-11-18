@@ -208,7 +208,10 @@ def test_prior_report_change_cannot_be_hidden_by_new_completed_trace(
             prior_report_fingerprints=report_pins,
         )
 
-def test_agent_return_without_trace_stops_next_treatment(tmp_path, monkeypatch):
+@pytest.mark.parametrize("malformed_trace", [False, True])
+def test_agent_return_without_valid_trace_stops_and_records_failure(
+    tmp_path, monkeypatch, malformed_trace,
+):
     """The stub never performs provider calls or publishes experimental data."""
     monkeypatch.setattr(study, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(study, "TRACE_ROOT", tmp_path / "outputs" / "experiment_traces")
@@ -237,6 +240,10 @@ def test_agent_return_without_trace_stops_next_treatment(tmp_path, monkeypatch):
 
     async def fake_agent(**kwargs):
         attempts.append(kwargs["experiment_config"].variant_id)
+        if malformed_trace:
+            broken = study.TRACE_ROOT / "D3" / "run-1.json"
+            broken.parent.mkdir(parents=True, exist_ok=True)
+            broken.write_text("{not valid JSON", encoding="utf-8")
         return "Synthetic report", "synthetic-report.md"
 
     actual_import = study.importlib.import_module
@@ -257,7 +264,16 @@ def test_agent_return_without_trace_stops_next_treatment(tmp_path, monkeypatch):
     assert progress["attempted_runs"] == 1
     assert progress["completed_runs"] == 0
     assert progress["failed_runs"] == 1
-    assert "exactly one new trace" in progress["events"][0]["error"]
+    assert progress["current"] is None
+    assert progress["events"][0]["status"] == "failed"
+    if malformed_trace:
+        assert progress["estimated_treatment_cost_usd"] is None
+        assert progress["trace_cost_reconciliation"] == "unverifiable"
+        assert "post-treatment trace spend cannot be verified" in progress["events"][0]["error"]
+    else:
+        assert progress["estimated_treatment_cost_usd"] == 0
+        assert progress["trace_cost_reconciliation"] == "recomputed_from_retained_traces"
+        assert "exactly one new trace" in progress["events"][0]["error"]
 
 
 def test_completed_report_gate_reuses_bounded_trace_capture(

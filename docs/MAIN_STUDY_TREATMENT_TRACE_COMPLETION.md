@@ -67,3 +67,25 @@ prior evidence, untracked hardlink aliases, and FIFO substitution. These
 checks do not authenticate the original inaccessible September artifacts,
 provide an atomic or hostile-race-proof snapshot, establish true provider
 billing, or create human-evaluation measurements.
+
+## Durable failure recording when post-treatment spend is unreadable
+
+A malformed JSON trace can be present after a stub/agent returns, cause the
+completed-evidence gate to fail, **and** cause a second spend-ledger read to
+raise `SystemExit`. Previously that latter read occurred *after* the in-memory
+failure event was constructed but before progress was written; consequently
+the durable progress file could still show an active treatment and zero attempts.
+
+The noncanonical runner now attempts post-treatment spend reconciliation
+**before** committing the terminal progress event. If retained traces cannot
+be accounted for, it records the attempted cell and its failure/timeout,
+sets `estimated_treatment_cost_usd` to JSON `null` rather than a misleading
+number, labels `trace_cost_reconciliation` as `unverifiable`, and stops further
+treatment execution. The original failure classification is retained for
+timeouts, and an otherwise completed treatment is not marked successful when
+post-treatment accounting is invalid. A synthetic offline regression exercises
+a malformed newly created trace as well as the existing missing-trace case.
+
+This is not a recovered historical usage ledger or proof of actual provider
+billing. It neither triggers retries nor updates original treatments, frozen
+automated outcomes, exploratory sensitivity findings or human ratings.
