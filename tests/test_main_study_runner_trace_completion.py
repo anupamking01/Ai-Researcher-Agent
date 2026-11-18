@@ -408,3 +408,52 @@ def test_prior_trace_fingerprint_rejects_fifo_without_blocking(
         with pytest.raises(ValueError, match="bounded single-link regular file"):
             study._snapshot_treatment_traces((old,))
     assert observed
+
+@pytest.mark.parametrize("reader_kind", [
+    "new_trace", "new_report", "prior_fingerprint",
+])
+def test_published_evidence_path_cannot_swap_parent_directory_after_open(
+    tmp_path, monkeypatch, reader_kind,
+):
+    """Reject same-byte replacement through parent relocation after fd open.
+
+    Moving the parent keeps the old inode, its link, bytes, and timestamps
+    unchanged; the filename becomes a different inode. No live runs are made.
+    """
+    root = tmp_path / "traces"
+    trace = _write(root, _payload())
+    monkeypatch.setattr(study, "TRACE_ROOT", root)
+    target = (
+        root.parent / "run-1" / "research_report.md"
+        if reader_kind == "new_report" else trace
+    )
+    original_inode = target.stat().st_ino
+    original_bytes = target.read_bytes()
+    original_fdopen = study.os.fdopen
+    relocated_dirs = []
+
+    def redirect_after_fstat(fd, *args, **kwargs):
+        stream = original_fdopen(fd, *args, **kwargs)
+        if not relocated_dirs and os.fstat(fd).st_ino == original_inode:
+            relocated = target.parent.with_name(target.parent.name + "-relocated")
+            os.rename(target.parent, relocated)
+            target.parent.mkdir()
+            target.write_bytes(original_bytes)
+            relocated_dirs.append(relocated)
+        return stream
+
+    with monkeypatch.context() as patch:
+        patch.setattr(study.os, "fdopen", redirect_after_fstat)
+        with pytest.raises(
+            (SystemExit, ValueError), match="published path changed during capture"
+        ):
+            if reader_kind == "new_trace":
+                study._read_treatment_trace_bytes(trace)
+            elif reader_kind == "new_report":
+                study._require_completed_report(trace)
+            else:
+                study._trace_file_fingerprint(
+                    trace, max_bytes=study._MAX_TREATMENT_TRACE_BYTES,
+                )
+    assert relocated_dirs, "test must redirect the parent after descriptor open"
+    assert target.read_bytes() == original_bytes

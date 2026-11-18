@@ -104,3 +104,21 @@ a malformed newly created trace as well as the existing missing-trace case.
 This is not a recovered historical usage ledger or proof of actual provider
 billing. It neither triggers retries nor updates original treatments, frozen
 automated outcomes, exploratory sensitivity findings or human ratings.
+
+### Bind captured bytes to the published evidence pathname
+
+An unchanged descriptor does not prove that its published pathname still
+resolves to that inode. Renaming the enclosing directory after opening a file
+can preserve the file's existing metadata while a new directory publishes a
+different inode under the same name. The noncanonical runner now checks the
+no-follow *published path* after bounded captures of new traces, completed
+Markdown reports, and prior trace/report fingerprints. It also rejects
+incomplete bounded reads of traces or reports. Observed path redirection
+therefore fails closed rather than being accepted into completion or
+provider-spend accounting.
+
+Three synthetic offline regressions simulate a same-byte path replacement by
+moving the containing directory after the original descriptor was opened.
+This detects the observed swap; it is not an atomic snapshot, complete defense
+against hostile ancestor races, independent authentication of missing original
+archives, or a claim about frozen automated or human results.

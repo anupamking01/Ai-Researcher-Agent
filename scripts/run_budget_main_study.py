@@ -647,6 +647,27 @@ def _load_pricing(path: Path) -> tuple[dict, dict]:
 _MAX_TREATMENT_TRACE_BYTES = 8 * 1024 * 1024
 
 
+def _require_published_evidence_path(path: Path, opened: os.stat_result, *, label: str) -> None:
+    """Detect path substitution after descriptor capture, not hostile atomic races.
+
+    Moving the *parent directory* can leave fstat of an already-opened inode
+    unchanged while a replacement directory exposes a different published file.
+    """
+    try:
+        visible = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError(f"{label} published path disappeared during capture: {path}") from exc
+    fields = (
+        "st_dev", "st_ino", "st_mode", "st_nlink", "st_size",
+        "st_mtime_ns", "st_ctime_ns",
+    )
+    if (
+        not stat.S_ISREG(visible.st_mode)
+        or any(getattr(opened, field) != getattr(visible, field) for field in fields)
+    ):
+        raise ValueError(f"{label} published path changed during capture: {path}")
+
+
 def _read_treatment_trace_bytes(path: Path) -> bytes:
     """Capture one bounded, unaliased trace generation through a no-follow fd.
 
@@ -691,6 +712,12 @@ def _read_treatment_trace_bytes(path: Path) -> bytes:
                 raise SystemExit(
                     f"Invalid treatment trace {path}: changed during bounded read"
                 )
+            if len(raw) != after.st_size:
+                raise SystemExit(f"Invalid treatment trace {path}: incomplete bounded read")
+            try:
+                _require_published_evidence_path(path, after, label="Treatment trace")
+            except ValueError as exc:
+                raise SystemExit(str(exc)) from exc
             return raw
         finally:
             os.close(fd)
@@ -1071,6 +1098,7 @@ def _trace_file_fingerprint(
                 )
             if identity(before) != identity(after) or bytes_read != after.st_size:
                 raise ValueError(f"Prior evidence changed while reading: {path}")
+            _require_published_evidence_path(path, after, label="Prior evidence")
             return (*identity(after), digest.hexdigest())
         finally:
             os.close(fd)
@@ -1145,6 +1173,9 @@ def _require_completed_report(trace_path: Path) -> None:
                 or any(getattr(before, field) != getattr(after, field) for field in fields)
             ):
                 raise ValueError(f"Completed report changed while reading: {report}")
+            if len(raw) != after.st_size:
+                raise ValueError(f"Completed report has an incomplete bounded read: {report}")
+            _require_published_evidence_path(report, after, label="Completed report")
         finally:
             os.close(fd)
         text = raw.decode("utf-8")
