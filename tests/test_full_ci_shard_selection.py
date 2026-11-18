@@ -153,18 +153,18 @@ def test_named_pipes_in_test_tree_are_rejected_without_opening(tmp_path, leaf_na
 
 
 @pytest.mark.parametrize("unsafe", [
-    "test_embedded\\nrecord.py", "test_embedded\\rrecord.py",
-    "test_embedded\\tfield.py", "test_embedded\\u2028line.py",
-    "fixture\\x7f.data", "fixture\\u0085line.data",
+    "test_embedded\nrecord.py", "test_embedded\rrecord.py",
+    "test_embedded\tfield.py", "test_embedded\u2028line.py",
+    "fixture\x7f.data", "fixture\u0085line.data",
 ])
 def test_discovery_rejects_ambiguous_record_delimiters_in_every_leaf(tmp_path, unsafe):
     _make_tree(tmp_path, ["tests/test_visible.py"])
-    (tmp_path / "tests" / unsafe).write_text("harmless fixture\\n", encoding="utf-8")
+    (tmp_path / "tests" / unsafe).write_text("harmless fixture\n", encoding="utf-8")
     with pytest.raises(ValueError, match="control character"):
         partition.discover_modules(tmp_path)
 
 
-@pytest.mark.parametrize("unsafe", ["nested\\nnewline", "nested\\u2029line"])
+@pytest.mark.parametrize("unsafe", ["nested\nnewline", "nested\u2029line"])
 def test_discovery_rejects_ambiguous_test_subdirectory_names(tmp_path, unsafe):
     _make_tree(tmp_path, ["tests/test_visible.py", f"tests/{unsafe}/test_nested.py"])
     with pytest.raises(ValueError, match="control character"):
@@ -172,7 +172,7 @@ def test_discovery_rejects_ambiguous_test_subdirectory_names(tmp_path, unsafe):
 
 
 @pytest.mark.parametrize("unsafe_module", [
-    "tests/test_embedded\\nrecord.py", "tests/test_embedded\\u2028record.py",
+    "tests/test_embedded\nrecord.py", "tests/test_embedded\u2028record.py",
 ])
 def test_direct_partition_api_rejects_unrepresentable_module_paths(unsafe_module):
     with pytest.raises(ValueError, match="unexpected offline test module path"):
