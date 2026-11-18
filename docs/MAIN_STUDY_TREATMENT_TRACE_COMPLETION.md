@@ -13,14 +13,24 @@ observed in-place edit or same-byte inode replacement even if the prior filename
 still exists. The trace must reside under the requested
 variant, pass the existing scientific/provider usage ledger validator, declare
 completed=true and match the requested variant, task set and task ID in both
-its experiment configuration and trace record. Failure stops further
+its experiment configuration and trace record. **A trace alone is not sufficient:**
+the matching `outputs/<run_id>/research_report.md` must be present as a
+regular, unlinked UTF-8 file of at most 8 MiB, its word count must match
+`trace.report_words`, and the recorded `report_path` must point to the same
+run's Markdown or PDF export. This covers the generated Markdown that the
+report writer retains even when PDF conversion fails. Earlier reports are
+fingerprinted alongside earlier traces before each later treatment; observed
+report content or inode replacement stops execution even when the new
+trace and report look valid. Failure stops further
 treatment execution; it never retries or replaces the attempted treatment.
 
 Offline tests use synthetic traces and a stub agent, not real provider calls.
 This does not modify canonical evidence or the original historical runner,
 authenticate original missing archives, guarantee an atomic filesystem
-snapshot against concurrent tampering, protect files outside the trace
-inventory, or prove recorded provider usage matches billing. Missing trace evidence
+snapshot against concurrent tampering, protect other files outside the
+tracked trace/report paths, or prove recorded provider usage matches billing.
+The Markdown validation checks observed content and declared word count,
+not semantic factual correctness or independent provider provenance. Missing trace evidence
 must be investigated rather than rerun to chase a preferred outcome.
 
 The five-task pilot remains diagnostic. Frozen automated results retain

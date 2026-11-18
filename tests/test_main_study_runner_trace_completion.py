@@ -25,6 +25,7 @@ def _payload(run_id="run-1", completed=True, task="main-01",
             "run_id": run_id, "variant_id": variant, "task_set_id": task_set,
             "task_id": task, "completed": completed,
             "source_budget": 3 if variant == "D3" else 6,
+            "report_path": f"./outputs/{run_id}/research_report.md",
             "source_count": 0, "successful_source_count": 0,
             "failed_source_count": 0, "scheduled_urls": [],
             "successful_urls": [], "failed_urls": [], "query_count": 0,
@@ -47,15 +48,24 @@ def _write(root, payload):
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
+    report = root.parent / payload["trace"]["run_id"] / "research_report.md"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text("Synthetic report", encoding="utf-8")
     return path
 
 
-def _check(root, monkeypatch, old=(), *, prior_fingerprints=None):
+def _check(
+    root, monkeypatch, old=(), *, prior_fingerprints=None,
+    prior_report_fingerprints=None,
+):
     monkeypatch.setattr(study, "TRACE_ROOT", root)
     if prior_fingerprints is None:
         prior_fingerprints = study._snapshot_treatment_traces(tuple(old))
+    if prior_report_fingerprints is None:
+        prior_report_fingerprints = study._snapshot_treatment_reports(tuple(old))
     return study._require_new_completed_trace(
         tuple(old), prior_fingerprints=prior_fingerprints,
+        prior_report_fingerprints=prior_report_fingerprints,
         variant_id="D3", task_set_id="test-tasks",
         task_id="main-01", pricing=PRICING,
     )
@@ -144,6 +154,59 @@ def test_prior_trace_change_cannot_be_hidden_by_new_completed_trace(
     with pytest.raises(ValueError, match="Prior treatment trace changed"):
         _check(root, monkeypatch, old=(old,), prior_fingerprints=pins)
 
+
+
+
+@pytest.mark.parametrize("problem", [
+    "absent", "empty", "wrong_words", "redirected", "misattributed",
+])
+def test_completion_gate_requires_source_bound_markdown_report(
+    tmp_path, monkeypatch, problem,
+):
+    root = tmp_path / "traces"
+    trace = _write(root, _payload())
+    report = root.parent / "run-1" / "research_report.md"
+    if problem == "absent":
+        report.unlink()
+    elif problem == "empty":
+        report.write_text("", encoding="utf-8")
+    elif problem == "wrong_words":
+        report.write_text("Only one", encoding="utf-8")
+    elif problem == "redirected":
+        report.unlink()
+        destination = tmp_path / "outsider.md"
+        destination.write_text("Synthetic report", encoding="utf-8")
+        report.symlink_to(destination)
+    elif problem == "misattributed":
+        payload = json.loads(trace.read_text(encoding="utf-8"))
+        payload["trace"]["report_path"] = "./outputs/someone-else/research_report.md"
+        trace.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="report"):
+        _check(root, monkeypatch)
+
+
+@pytest.mark.parametrize("mutation", ["modified_bytes", "same_bytes_new_inode"])
+def test_prior_report_change_cannot_be_hidden_by_new_completed_trace(
+    tmp_path, monkeypatch, mutation,
+):
+    root = tmp_path / "traces"
+    old = _write(root, _payload(run_id="old"))
+    monkeypatch.setattr(study, "TRACE_ROOT", root)
+    pins = study._snapshot_treatment_traces((old,))
+    report_pins = study._snapshot_treatment_reports((old,))
+    _write(root, _payload())
+    report = root.parent / "old" / "research_report.md"
+    if mutation == "modified_bytes":
+        report.write_text("Modified report", encoding="utf-8")
+    else:
+        replacement = report.with_suffix(".replacement")
+        replacement.write_bytes(report.read_bytes())
+        os.replace(replacement, report)
+    with pytest.raises(ValueError, match="Prior completed report changed"):
+        _check(
+            root, monkeypatch, old=(old,), prior_fingerprints=pins,
+            prior_report_fingerprints=report_pins,
+        )
 
 def test_agent_return_without_trace_stops_next_treatment(tmp_path, monkeypatch):
     """The stub never performs provider calls or publishes experimental data."""

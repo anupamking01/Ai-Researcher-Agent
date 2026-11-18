@@ -1020,10 +1020,85 @@ def _snapshot_treatment_traces(
     return {path: _trace_file_fingerprint(path) for path in paths}
 
 
+
+_MAX_COMPLETED_REPORT_BYTES = 8 * 1024 * 1024
+
+
+def _completed_report_markdown(trace_path: Path) -> Path:
+    """The treatment writer always saves Markdown, including when PDF export fails."""
+    return TRACE_ROOT.parent / trace_path.stem / "research_report.md"
+
+
+def _require_completed_report(trace_path: Path) -> None:
+    """Bind a completed treatment trace to its retained, nonempty Markdown report."""
+    try:
+        payload = json.loads(
+            trace_path.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+        trace = payload["trace"]
+    except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError) as exc:
+        raise ValueError(f"Cannot inspect completed report trace {trace_path}") from exc
+
+    run_id = trace_path.stem
+    expected = {
+        f"./outputs/{run_id}/research_report.md",
+        f"./outputs/{run_id}/research_report.pdf",
+    }
+    if trace.get("report_path") not in expected:
+        raise ValueError(
+            f"Completed treatment trace has a missing or misattributed report_path: "
+            f"{trace_path}"
+        )
+    report = _completed_report_markdown(trace_path)
+    if report.parent.is_symlink() or not report.parent.is_dir():
+        raise ValueError(f"Missing or redirected completed report directory: {report.parent}")
+    try:
+        fd = os.open(report, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            before = os.fstat(fd)
+            if (
+                not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                or before.st_size > _MAX_COMPLETED_REPORT_BYTES
+            ):
+                raise ValueError(f"Completed report is not a bounded regular file: {report}")
+            with os.fdopen(fd, "rb", closefd=False) as stream:
+                raw = stream.read(_MAX_COMPLETED_REPORT_BYTES + 1)
+            after = os.fstat(fd)
+            fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns", "st_nlink")
+            if (
+                len(raw) > _MAX_COMPLETED_REPORT_BYTES
+                or any(getattr(before, field) != getattr(after, field) for field in fields)
+            ):
+                raise ValueError(f"Completed report changed while reading: {report}")
+        finally:
+            os.close(fd)
+        text = raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ValueError(f"Cannot read completed Markdown report {report}: {exc}") from exc
+    if not text.strip() or len(text.split()) != trace["report_words"]:
+        raise ValueError(
+            f"Completed report content does not match trace report_words: {report}"
+        )
+
+
+def _snapshot_treatment_reports(
+    prior_paths: tuple[Path, ...],
+) -> dict[Path, tuple[int, int, int, int, int, int, str]]:
+    """Pin prior Markdown report generations alongside their treatment traces."""
+    return {
+        _completed_report_markdown(path): _trace_file_fingerprint(
+            _completed_report_markdown(path)
+        )
+        for path in prior_paths
+    }
+
+
 def _require_new_completed_trace(
     prior_paths: tuple[Path, ...],
     *,
     prior_fingerprints: dict[Path, tuple[int, int, int, int, int, int, str]],
+    prior_report_fingerprints: dict[Path, tuple[int, int, int, int, int, int, str]],
     variant_id: str,
     task_set_id: str,
     task_id: str,
@@ -1056,6 +1131,17 @@ def _require_new_completed_trace(
                 f"Prior treatment trace changed during {variant_id}/{task_id}: "
                 f"{prior_path}"
             )
+    for report in (_completed_report_markdown(path) for path in prior_paths):
+        if report not in prior_report_fingerprints:
+            raise ValueError(f"Missing prior report fingerprint: {report}")
+        try:
+            current_report = _trace_file_fingerprint(report)
+        except ValueError as exc:
+            raise ValueError(f"Prior completed report integrity check failed: {report}") from exc
+        if current_report != prior_report_fingerprints[report]:
+            raise ValueError(f"Prior completed report changed during treatment: {report}")
+    if len(prior_report_fingerprints) != len(prior_paths):
+        raise ValueError("Prior report fingerprint inventory does not match traces")
     (new_path,) = tuple(created)
     if new_path.parent.name != variant_id:
         raise ValueError(
@@ -1063,10 +1149,12 @@ def _require_new_completed_trace(
             "the wrong variant"
         )
     try:
-        return _trace_cost_usd(
+        cost = _trace_cost_usd(
             new_path, pricing,
             expected_completed_cell=(variant_id, task_set_id, task_id),
         )
+        _require_completed_report(new_path)
+        return cost
     except SystemExit as exc:
         raise ValueError(
             f"Treatment {variant_id}/{task_id} did not publish a valid "
@@ -1320,6 +1408,9 @@ async def _run_main_study() -> None:
                 prior_trace_fingerprints = _snapshot_treatment_traces(
                     prior_trace_paths
                 )
+                prior_report_fingerprints = _snapshot_treatment_reports(
+                    prior_trace_paths
+                )
                 await run_agent(
                     task=task["question"],
                     report_type="research_report",
@@ -1330,6 +1421,7 @@ async def _run_main_study() -> None:
                 )
                 _require_new_completed_trace(
                     prior_trace_paths, prior_fingerprints=prior_trace_fingerprints,
+                    prior_report_fingerprints=prior_report_fingerprints,
                     variant_id=variant_id, task_set_id=task_set_id,
                     task_id=task["id"],
                     pricing=pricing,
