@@ -344,10 +344,44 @@ def test_full_ci_accepts_large_whitespace_heavy_parameter_id(tmp_path, monkeypat
 
 def test_verbose_completion_parser_rejects_near_miss_terminal_suffix():
     node = "tests/test_00.py::test_case[" + (" " * 128 * 1024) + "]"
-    assert evidence._parse_verbose_completion(node + " PASSED [ 99%]") == (node, "PASSED")
+    assert evidence._parse_verbose_completion(node + " PASSED [ 99%]") == (node, "PASSED", 99)
     assert evidence._parse_verbose_completion(node + " PASSED [ 99%] extra") is None
     assert evidence._parse_verbose_completion(node + " PASSED [unknown%]") is None
 
+
+@pytest.mark.parametrize("progress", [
+    ("100", "100"),  # Two distinct completions both claim the last item.
+    ("0", "100"),    # Count-correct transcript has a mismatched first step.
+    ("50", "99"),   # Every node appears, but the last step never reaches 100%.
+    ("50", "101"),  # Out-of-range progress was previously accepted.
+])
+def test_full_ci_rejects_count_consistent_progress_substitution(progress):
+    # A green footer and unique selected-module node IDs are insufficient
+    # when per-case progress contradicts the collection/completion order.
+    with pytest.raises(ValueError, match="completion progress"):
+        evidence._verify_verbose_full_ci_progress(
+            [
+                "collecting ... collected 2 items",
+                f"tests/test_a.py::test_first PASSED [{progress[0]}%]",
+                f"tests/test_a.py::test_second PASSED [{progress[1]}%]",
+            ],
+            expected={"passed": 2},
+            allowed_modules=frozenset({"tests/test_a.py"}),
+        )
+
+
+@pytest.mark.parametrize("count", [1, 3, 324])
+def test_full_ci_accepts_pytest_integer_floor_progress(count):
+    # Observed successful shard logs use floor(100 * completed / collected).
+    # For 324 items the first several complete at 0%, not 1%.
+    evidence._verify_verbose_full_ci_progress(
+        [f"collecting ... collected {count} items"] + [
+            f"tests/test_a.py::test_case_{i} PASSED [{(i * 100) // count}%]"
+            for i in range(1, count + 1)
+        ],
+        expected={"passed": count},
+        allowed_modules=frozenset({"tests/test_a.py"}),
+    )
 
 def test_verbose_completion_handles_parameter_ids_with_spaces_and_skip_xfail():
     # Real pytest node IDs can include JSON, spaces, colons or bracketed text.

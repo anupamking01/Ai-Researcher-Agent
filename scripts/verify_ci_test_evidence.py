@@ -190,7 +190,7 @@ def _verify_full_ci_selection(
     }
 
 
-def _parse_verbose_completion(line: str) -> tuple[str, str] | None:
+def _parse_verbose_completion(line: str) -> tuple[str, str, int] | None:
     """Parse a pytest completion in linear time without truncating its node ID.
 
     A historical parameterized node ID included more than 500 KiB of spaces.
@@ -203,7 +203,9 @@ def _parse_verbose_completion(line: str) -> tuple[str, str] | None:
     parts = line[:bracket].rstrip().rsplit(None, 1)
     if len(parts) != 2 or parts[1] not in VERBOSE_TERMINAL_STATUSES:
         return None
-    return parts[0], parts[1]
+    # The suffix is already matched as '[ <decimal>%]'. Retain its value
+    # for an independent collection-order consistency check.
+    return parts[0], parts[1], int(line[bracket + 1:-2].strip())
 
 
 def _verify_verbose_full_ci_progress(
@@ -225,6 +227,7 @@ def _verify_verbose_full_ci_progress(
         raise ValueError("full CI verbose pytest collection record missing or ambiguous")
     collected_position, collection = collections[0]
     observed: dict[str, int] = {}
+    progress_percentages: list[int] = []
     observed_modules: set[str] = set()
     seen_nodes: set[str] = set()
     for index, line in enumerate(test_output_lines):
@@ -233,7 +236,7 @@ def _verify_verbose_full_ci_progress(
             continue
         if index <= collected_position:
             raise ValueError("full CI test completion precedes collection")
-        nodeid, status = completion
+        nodeid, status, percent = completion
         module, separator, case = nodeid.partition("::")
         if (not separator or not case or not module.startswith("tests/")
                 or not module.endswith(".py")
@@ -242,6 +245,7 @@ def _verify_verbose_full_ci_progress(
         if nodeid in seen_nodes:
             raise ValueError("full CI pytest duplicate completion node ID")
         seen_nodes.add(nodeid)
+        progress_percentages.append(percent)
         observed_modules.add(module)
         observed[status] = observed.get(status, 0) + 1
     if sum(observed.values()) != int(collection["count"]):
@@ -269,6 +273,17 @@ def _verify_verbose_full_ci_progress(
     }:
         raise ValueError(
             "full CI pytest per-test completion outcomes differ from terminal summary"
+        )
+    # Pytest -vv prints floor(100 * completed / collected) after each item.
+    # Counts and unique node IDs alone can accept an inconsistent transcript
+    # whose footer still claims green completion. Never infer elapsed time.
+    total = int(collection["count"])
+    if any(
+        percent != (position * 100) // total
+        for position, percent in enumerate(progress_percentages, start=1)
+    ):
+        raise ValueError(
+            "full CI pytest completion progress disagrees with collection order"
         )
 
 

@@ -1,3 +1,25 @@
+# Pytest verbose progress must agree with collection — 19 November 2026
+
+The full-suite evidence receipt binds unique selected-module test nodes to
+pytest's collection count and terminal outcomes. A count-consistent transcript
+could nevertheless claim duplicated, out-of-order, or unfinished per-case
+progress percentages (for example two completions both at 100%) without
+failing those checks. The receipt producer and retained-evidence replay now
+verify every `-vv` completion's percentage against its ordinal and collection
+size using pytest's integer floor rule. The last item must reach 100%.
+Synthetic regressions reject count-preserving progress substitutions and
+accept the normal rounding at 1, 3 and 324 collected items. Three genuine
+successful CI shard logs (324, 315 and 686 completed cases) were checked
+against this rule before implementation.
+
+This is an internal transcript-consistency check, not independently attested
+runner execution, proof that every source test was collected, or a remedy
+for externally cancelled CI jobs. It does not rerun research treatments,
+change frozen automated estimates, or substitute for authenticated original
+evidence and genuine blinded human ratings. Pilot, frozen automated,
+retrospective exploratory and pending human-validation claims retain their
+distinct scope.
+
 # Complete offline pytest via deterministic CI shards
 
 ## Every selected test module must contribute a collected test — 19 November 2026
