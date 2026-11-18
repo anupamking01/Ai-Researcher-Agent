@@ -52,3 +52,25 @@ task set/prices. This is an observed local integrity and resource safeguard,
 not an atomic filesystem snapshot, a guarantee against hostile races in
 ancestor directories, authentication of inaccessible historical source
 artifacts, or evidence of experimental/human-evaluation results.
+
+
+## Complete noncanonical trace-root inventory
+
+Before preflight/spend reconciliation, the runner now enumerates all entries
+under its treatment trace root. Only known variant directories (D3, D6,
+P6, P6V) containing single-link regular JSON trace files qualify;
+unexpected directories, loose files, symlinked entries, non-JSON leftovers or
+unreadable inventory entries fail closed. Previously, wildcard JSON globbing
+could silently omit unpriced files or relocated evidence and make a later
+replication appear to have fewer retained treatments than actually existed.
+A new invalid entry appearing after the agent returns is translated into an
+ordinary failed-cell validation event for the progress ledger. Synthetic
+offline regressions exercise ignored root/variant entries, accepted valid
+cells, and the post-execution rejection; no model calls are made.
+
+This verifies the local replication inventory, not historical source
+authenticity or an atomic multi-directory snapshot. The five-task pilot remains
+diagnostic; frozen automated findings retain post-collection timing, fixed-order
+and evaluator-comparability limitations. Exploratory sensitivity findings,
+prospective confirmation and pending human validation remain distinct. No
+original treatments or evaluators, frozen scores or human ratings were changed.

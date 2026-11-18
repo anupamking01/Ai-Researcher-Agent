@@ -632,3 +632,53 @@ def test_git_source_gate_detects_same_bytes_published_path_swap(tmp_path, monkey
         with pytest.raises(SystemExit, match="Cannot attest exact Git source bytes"):
             study._git_source_state()
     assert swapped
+
+
+@pytest.mark.parametrize("unlisted_entry", [
+    "unknown_variant_directory",
+    "loose_root_file",
+    "ignored_variant_file",
+])
+def test_noncanonical_trace_inventory_rejects_unlisted_evidence(
+    tmp_path, monkeypatch, unlisted_entry,
+):
+    """Unpriced leftovers must not disappear from an apparent empty inventory."""
+    root = tmp_path / "outputs" / "experiment_traces"
+    original = _write(root, _payload())
+    monkeypatch.setattr(study, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(study, "TRACE_ROOT", root)
+    if unlisted_entry == "unknown_variant_directory":
+        hidden = root / "ARCHIVED" / "note.txt"
+        hidden.parent.mkdir()
+    elif unlisted_entry == "loose_root_file":
+        hidden = root / "detached.json"
+    else:
+        hidden = root / "D3" / "hidden-trace.txt"
+    hidden.write_text("Synthetic ignored evidence", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="Unexpected treatment trace"):
+        study._treatment_trace_paths()
+    with pytest.raises(SystemExit, match="Unexpected treatment trace"):
+        study._preflight_new_study_state(PRICING)
+    assert original.exists()
+    assert not (root.parent / "main_study_manifest.json").exists()
+
+
+def test_noncanonical_trace_inventory_accepts_only_known_json_cells(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "traces"
+    d3 = _write(root, _payload())
+    d6 = _write(root, _payload(run_id="d6-run", variant="D6"))
+    monkeypatch.setattr(study, "TRACE_ROOT", root)
+    assert study._treatment_trace_paths() == tuple(sorted((d3, d6)))
+
+
+def test_post_treatment_unlisted_trace_is_reportable_validation_failure(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "traces"
+    _write(root, _payload())
+    (root / "D3" / "unpriced.tmp").write_text("Synthetic extra file", encoding="utf-8")
+    with pytest.raises(ValueError, match="Invalid treatment trace inventory after execution"):
+        _check(root, monkeypatch)

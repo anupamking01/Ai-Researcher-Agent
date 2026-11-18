@@ -1119,22 +1119,45 @@ def _validated_trace_cost(
 
 
 def _treatment_trace_paths() -> tuple[Path, ...]:
+    """Inventory every trace-root entry before accepting a spend ledger.
+
+    A wildcard for */*.json silently skips renamed directories, loose files,
+    non-JSON traces and other unpriced evidence. In a noncanonical replication,
+    an incomplete inventory must stop execution, not count as zero cost.
+    """
     if TRACE_ROOT.is_symlink():
         raise SystemExit(f"Invalid treatment trace root: {TRACE_ROOT}")
     if not TRACE_ROOT.exists():
         return ()
     if not TRACE_ROOT.is_dir():
         raise SystemExit(f"Invalid treatment trace root: {TRACE_ROOT}")
-    for variant in VARIANTS:
-        variant_dir = TRACE_ROOT / variant
-        if variant_dir.is_symlink() or (
-            variant_dir.exists() and not variant_dir.is_dir()
-        ):
-            raise SystemExit(
-                f"Invalid treatment trace directory {variant_dir}: "
-                "must be a regular directory"
-            )
-    return tuple(sorted(TRACE_ROOT.glob("*/*.json")))
+    found: list[Path] = []
+    try:
+        with os.scandir(TRACE_ROOT) as directories:
+            for directory in directories:
+                if (
+                    directory.name not in VARIANTS
+                    or not directory.is_dir(follow_symlinks=False)
+                ):
+                    raise SystemExit(
+                        f"Unexpected treatment trace root entry: {directory.path}"
+                    )
+                with os.scandir(directory.path) as files:
+                    for file in files:
+                        if (
+                            not file.name.endswith(".json")
+                            or not file.is_file(follow_symlinks=False)
+                            or file.stat(follow_symlinks=False).st_nlink != 1
+                        ):
+                            raise SystemExit(
+                                f"Unexpected treatment trace entry: {file.path}"
+                            )
+                        found.append(Path(file.path))
+    except OSError as exc:
+        raise SystemExit(
+            f"Cannot enumerate complete treatment trace inventory: {TRACE_ROOT}"
+        ) from exc
+    return tuple(sorted(found))
 
 
 def _current_treatment_cost(pricing: dict) -> float:
@@ -1309,7 +1332,14 @@ def _require_new_completed_trace(
     previous = set(prior_paths)
     if previous != set(prior_fingerprints):
         raise ValueError("Prior treatment trace snapshot does not match inventory")
-    current = set(_treatment_trace_paths())
+    try:
+        current = set(_treatment_trace_paths())
+    except SystemExit as exc:
+        # A newly published stray file must be recorded as a failed cell,
+        # not bypass the progress ledger by exiting mid-validation.
+        raise ValueError(
+            f"Invalid treatment trace inventory after execution: {exc}"
+        ) from exc
     created = current - previous
     if not previous.issubset(current) or len(created) != 1:
         raise ValueError(
