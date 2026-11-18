@@ -31,3 +31,24 @@ limitations. Retrospective sensitivities remain exploratory; prospective
 confirmatory evidence and real human ratings remain absent. Neither this
 workflow nor its tests rerun original treatments, recover missing evidence,
 change frozen effect estimates, or create human-validation results.
+
+
+## Bounded noncanonical task/pricing input capture
+
+The acknowledged noncanonical study runner now reads the selected task JSON and
+frozen pricing JSON through the same **8 MiB per-file**, no-follow,
+nonblocking, single-link regular-file capture. It verifies the opened inode
+and published pathname after a complete bounded read, then parses the exact
+captured bytes and records their existing size/SHA-256 manifest snapshots.
+This closes a pre-execution gap where unbounded `Path.read_bytes()` could
+block on a substituted FIFO, follow a linked file or ingest an unexpectedly
+large input before cost/task validity checks. Both gates run **before** any
+model module is imported or new study manifest is written.
+
+Synthetic offline cases exercise symlinks, hardlinks, FIFOs, oversized sparse
+files, and same-byte parent-directory replacement for **both** task and
+pricing inputs. They do not execute treatments or change the original frozen
+task set/prices. This is an observed local integrity and resource safeguard,
+not an atomic filesystem snapshot, a guarantee against hostile races in
+ancestor directories, authentication of inaccessible historical source
+artifacts, or evidence of experimental/human-evaluation results.

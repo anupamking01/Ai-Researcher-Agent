@@ -1149,3 +1149,66 @@ def test_main_study_rejects_source_drift_while_loading_treatment_code(
 
     assert model_calls == []
     assert not (tmp_path / "outputs" / "main_study_manifest.json").exists()
+
+
+@pytest.mark.parametrize("input_kind", ["task", "pricing"])
+@pytest.mark.parametrize("defect", ["symlink", "hardlink", "oversized", "fifo"])
+def test_main_study_inputs_reject_unsafe_files_before_parsing(
+    tmp_path, input_kind, defect,
+):
+    """Both provenance snapshots must fail closed without invoking a model."""
+    path = tmp_path / f"{input_kind}.json"
+    target = tmp_path / "external.json"
+    reader = (
+        run_budget_main_study._load_task_file
+        if input_kind == "task" else run_budget_main_study._load_pricing
+    )
+    if defect in {"symlink", "hardlink"}:
+        target.write_bytes(b"{}")
+        if defect == "symlink":
+            path.symlink_to(target)
+        else:
+            os.link(target, path)
+    elif defect == "oversized":
+        with path.open("wb") as source:
+            source.truncate(run_budget_main_study._MAX_STUDY_INPUT_BYTES + 1)
+    else:
+        if not hasattr(os, "mkfifo") or not hasattr(os, "O_NONBLOCK"):
+            pytest.skip("nonblocking FIFO support required")
+        os.mkfifo(path)
+
+    with pytest.raises(SystemExit, match=f"Cannot read {input_kind} file"):
+        reader(path)
+
+
+@pytest.mark.parametrize("input_kind", ["task", "pricing"])
+def test_main_study_inputs_detect_same_bytes_parent_substitution(
+    tmp_path, monkeypatch, input_kind,
+):
+    """Descriptor continuity alone must not authenticate a republished path."""
+    parent = tmp_path / "inputs"
+    parent.mkdir()
+    path = parent / f"{input_kind}.json"
+    path.write_bytes(b"{}")
+    held = tmp_path / "original-inputs"
+    reader = (
+        run_budget_main_study._load_task_file
+        if input_kind == "task" else run_budget_main_study._load_pricing
+    )
+    actual_open = os.open
+    swapped = False
+
+    def open_then_republish(name, flags, *args, **kwargs):
+        nonlocal swapped
+        fd = actual_open(name, flags, *args, **kwargs)
+        if not swapped and Path(name) == path:
+            swapped = True
+            parent.rename(held)
+            parent.mkdir()
+            path.write_bytes(b"{}")  # Same content, different inode/parent.
+        return fd
+
+    monkeypatch.setattr(os, "open", open_then_republish)
+    with pytest.raises(SystemExit, match=f"Cannot read {input_kind} file"):
+        reader(path)
+    assert swapped

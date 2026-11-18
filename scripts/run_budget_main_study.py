@@ -575,11 +575,55 @@ def _file_label(path: Path) -> str:
         return str(resolved)
 
 
-def _load_task_file(path: Path) -> tuple[str, list[dict], dict]:
+
+_MAX_STUDY_INPUT_BYTES = 8 * 1024 * 1024
+
+
+def _read_study_input_bytes(path: Path, *, label: str) -> bytes:
+    """Capture one bounded task/pricing generation before the study manifest.
+
+    This detects observed local substitution, not simultaneous hostile races
+    against ancestor directories or an atomic snapshot of the filesystem.
+    """
+    descriptor = None
     try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        raise SystemExit(f"Cannot read task file {path}: {exc}") from exc
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_size < 0
+            or before.st_size > _MAX_STUDY_INPUT_BYTES
+        ):
+            raise ValueError("must be a bounded single-link regular file")
+        with os.fdopen(descriptor, "rb", closefd=False) as source:
+            raw = source.read(_MAX_STUDY_INPUT_BYTES + 1)
+        after = os.fstat(descriptor)
+        fields = (
+            "st_dev", "st_ino", "st_mode", "st_nlink",
+            "st_size", "st_mtime_ns", "st_ctime_ns",
+        )
+        if (
+            len(raw) > _MAX_STUDY_INPUT_BYTES
+            or len(raw) != before.st_size
+            or any(getattr(before, field) != getattr(after, field) for field in fields)
+        ):
+            raise ValueError("changed or incompletely read during bounded capture")
+        _require_published_evidence_path(path, after, label=label)
+        return raw
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"Cannot read {label.lower()} {path}: {exc}") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _load_task_file(path: Path) -> tuple[str, list[dict], dict]:
+    raw = _read_study_input_bytes(path, label="Task file")
     try:
         payload = json.loads(
             raw.decode("utf-8"),
@@ -629,10 +673,7 @@ def _load_task_file(path: Path) -> tuple[str, list[dict], dict]:
 
 
 def _load_pricing(path: Path) -> tuple[dict, dict]:
-    try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        raise SystemExit(f"Cannot read pricing file {path}: {exc}") from exc
+    raw = _read_study_input_bytes(path, label="Pricing file")
     try:
         payload = json.loads(
             raw.decode("utf-8"),
