@@ -647,3 +647,52 @@ def test_invalid_trace_ledger_fails_before_outputs_and_model_imports(
     assert imported == []
     assert not (tmp_path / "outputs").exists()
 
+
+
+def test_trace_cost_rejects_oversized_sparse_capture_before_json_parse(tmp_path):
+    path = _write_trace(tmp_path)
+    with path.open("r+b") as handle:
+        handle.truncate(run_budget_main_study._MAX_TREATMENT_TRACE_BYTES + 1)
+
+    with pytest.raises(SystemExit, match="bounded, single-link regular file"):
+        run_budget_main_study._trace_cost_usd(path, PRICING)
+
+
+def test_trace_cost_rejects_hardlink_alias_outside_trace_inventory(tmp_path):
+    path = _write_trace(tmp_path)
+    alias = tmp_path / "untracked-trace-alias.json"
+    os.link(path, alias)
+
+    with pytest.raises(SystemExit, match="bounded, single-link regular file"):
+        run_budget_main_study._trace_cost_usd(path, PRICING)
+    assert alias.read_bytes() == path.read_bytes()
+
+
+def test_trace_cost_rejects_in_place_change_during_bounded_read(
+    tmp_path, monkeypatch,
+):
+    path = _write_trace(tmp_path)
+    actual_fstat = os.fstat
+    observations = 0
+
+    def mutate_between_fstats(fd):
+        nonlocal observations
+        observations += 1
+        if observations == 2:
+            with path.open("ab") as handle:
+                handle.write(b" ")
+        return actual_fstat(fd)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(run_budget_main_study.os, "fstat", mutate_between_fstats)
+        with pytest.raises(SystemExit, match="changed during bounded read"):
+            run_budget_main_study._trace_cost_usd(path, PRICING)
+    assert observations == 2
+
+
+def test_trace_cost_rejects_direct_symlink_even_to_valid_json(tmp_path):
+    original = _write_trace(tmp_path)
+    link = original.with_name("linked.json")
+    link.symlink_to(original)
+    with pytest.raises(SystemExit, match="Cannot read treatment trace"):
+        run_budget_main_study._trace_cost_usd(link, PRICING)

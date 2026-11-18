@@ -37,3 +37,18 @@ The five-task pilot remains diagnostic. Frozen automated results retain
 post-collection analysis-plan, fixed-order and evaluator comparability
 limitations; retrospective sensitivities remain exploratory. Independent
 blinded human validation is still pending.
+
+### Bounded trace capture for noncanonical replication
+
+The budget-runner cost guard and subsequent report-path/word-count gate now
+read each JSON trace through a no-follow regular-file descriptor with an
+**8 MiB maximum**, a single-link requirement, and file-generation/metadata
+consistency checks before and after reading. Oversized or externally hardlinked
+traces fail closed instead of being fully loaded into memory or accepted into
+the next-treatment spend decision. The maximum is a conservative ingestion
+limit for *new noncanonical execution*, not a finding about archived trace
+sizes or a modification of the frozen September dataset. Regression cases use
+synthetic oversized sparse files, hardlinks, symlinks, and simulated in-read
+mutation; no treatment or evaluator is run. This is observed local custody
+and bounded memory use, not an atomic snapshot, proof of provider billing,
+or independent authentication of missing original artifacts.

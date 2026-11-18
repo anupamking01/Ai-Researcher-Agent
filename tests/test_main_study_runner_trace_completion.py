@@ -258,3 +258,23 @@ def test_agent_return_without_trace_stops_next_treatment(tmp_path, monkeypatch):
     assert progress["completed_runs"] == 0
     assert progress["failed_runs"] == 1
     assert "exactly one new trace" in progress["events"][0]["error"]
+
+
+def test_completed_report_gate_reuses_bounded_trace_capture(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "traces"
+    trace_path = _write(root, _payload())
+    original_read = study._read_treatment_trace_bytes
+    captures = []
+
+    def guarded_capture(path):
+        captures.append(path)
+        if len(captures) == 2:
+            raise SystemExit("synthetic second-trace-capture rejection")
+        return original_read(path)
+
+    monkeypatch.setattr(study, "_read_treatment_trace_bytes", guarded_capture)
+    with pytest.raises(ValueError, match="second-trace-capture rejection"):
+        _check(root, monkeypatch)
+    assert captures == [trace_path, trace_path]

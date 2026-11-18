@@ -644,22 +644,67 @@ def _load_pricing(path: Path) -> tuple[dict, dict]:
     return payload, snapshot
 
 
+_MAX_TREATMENT_TRACE_BYTES = 8 * 1024 * 1024
+
+
+def _read_treatment_trace_bytes(path: Path) -> bytes:
+    """Capture one bounded, unaliased trace generation through a no-follow fd.
+
+    This guards observed file replacement and size growth, not simultaneous
+    hostile changes to ancestor directories or an atomic filesystem snapshot.
+    """
+    if path.parent.is_symlink() or not path.parent.is_dir():
+        raise SystemExit(
+            f"Invalid treatment trace directory {path.parent}: must be a regular directory"
+        )
+    try:
+        fd = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+        try:
+            before = os.fstat(fd)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or before.st_size > _MAX_TREATMENT_TRACE_BYTES
+            ):
+                raise SystemExit(
+                    f"Invalid treatment trace {path}: must be a bounded, "
+                    "single-link regular file"
+                )
+            with os.fdopen(fd, "rb", closefd=False) as stream:
+                raw = stream.read(_MAX_TREATMENT_TRACE_BYTES + 1)
+            after = os.fstat(fd)
+            fields = (
+                "st_dev", "st_ino", "st_size", "st_mtime_ns",
+                "st_ctime_ns", "st_nlink",
+            )
+            if (
+                len(raw) > _MAX_TREATMENT_TRACE_BYTES
+                or any(
+                    getattr(before, field) != getattr(after, field)
+                    for field in fields
+                )
+            ):
+                raise SystemExit(
+                    f"Invalid treatment trace {path}: changed during bounded read"
+                )
+            return raw
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise SystemExit(f"Cannot read treatment trace {path}: {exc}") from exc
+
+
 def _trace_cost_usd(
     path: Path,
     pricing: dict,
     *,
     expected_completed_cell: tuple[str, str, str] | None = None,
 ) -> float:
-    if path.parent.is_symlink() or not path.parent.is_dir():
-        raise SystemExit(
-            f"Invalid treatment trace directory {path.parent}: must be a regular directory"
-        )
-    if path.is_symlink() or not path.is_file():
-        raise SystemExit(f"Invalid treatment trace {path}: must be a regular file")
-    try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        raise SystemExit(f"Cannot read treatment trace {path}: {exc}") from exc
+    raw = _read_treatment_trace_bytes(path)
     try:
         payload = json.loads(
             raw.decode("utf-8"),
@@ -1033,7 +1078,7 @@ def _require_completed_report(trace_path: Path) -> None:
     """Bind a completed treatment trace to its retained, nonempty Markdown report."""
     try:
         payload = json.loads(
-            trace_path.read_text(encoding="utf-8"),
+            _read_treatment_trace_bytes(trace_path).decode("utf-8"),
             object_pairs_hook=_reject_duplicate_json_keys,
         )
         trace = payload["trace"]
