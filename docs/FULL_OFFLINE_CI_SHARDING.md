@@ -1,5 +1,28 @@
 # Complete offline pytest via deterministic CI shards
 
+## Unambiguous line-delimited shard evidence — 19 November 2026
+
+Full CI writes selected test-module paths to a **newline-delimited file** and
+replays that file against a hash-bound test transcript. A filename with a POSIX
+legal newline, carriage return or Unicode line separator previously passed
+test-module discovery, but could split one pathname into multiple apparent
+`mapfile` records and make the receipt's selected-module lines ambiguous.
+This is a test-source provenance and completeness risk, not an experimental
+outcome issue.
+
+The selector now rejects ASCII control characters and Unicode NEL/line/
+paragraph separators in **all** leaves and subdirectories beneath `tests/`,
+including non-test-named fixtures; directly supplied module tuples receive
+the same check. Ten synthetic rootless regressions cover filenames,
+support-file names, nested directory components, and direct shard selection.
+Ordinary regular files and deterministic 16-shard allocation retain their
+existing behavior. This does not independently attest GitHub runner custody,
+fix external CI cancellations, authenticate original expired treatment
+archives or produce genuine human ratings. The diagnostic pilot,
+post-collection automated analysis and exploratory sensitivities keep their
+existing distinct interpretation.
+
+
 ## Test-tree leaf custody and nonblocking inventory — 19 November 2026
 
 Before assigning modules to the sixteen full-suite shards, the deterministic

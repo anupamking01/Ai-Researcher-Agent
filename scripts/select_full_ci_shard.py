@@ -13,6 +13,23 @@ ROOT = Path(__file__).resolve().parents[1]
 SHARDS = 16
 PATTERNS = ("test_*.py", "*_test.py")
 
+# Module selections and CI receipts are newline-delimited. A legal POSIX
+# filename can embed a newline or another record separator, which would turn
+# one real test path into multiple apparent records when mapfile reads it.
+# Reject control characters in *all* test-tree components before selection.
+def _has_unsafe_control(value: str) -> bool:
+    return any(
+        ord(character) < 32 or ord(character) == 127
+        or character in ("\u0085", "\u2028", "\u2029")
+        for character in value
+    )
+
+
+def _validate_component(name: str) -> None:
+    if _has_unsafe_control(name):
+        raise ValueError(f"offline test path contains unsupported control character: {name!r}")
+
+
 
 def discover_modules(root: Path = ROOT) -> tuple[str, ...]:
     """Discover tests without silently hiding symlinked or unreadable subtrees.
@@ -38,12 +55,14 @@ def discover_modules(root: Path = ROOT) -> tuple[str, ...]:
         here = Path(current)
         # Do not follow aliases and do not silently omit test subtrees.
         for name in sorted(directories):
+            _validate_component(name)
             directory = here / name
             if directory.is_symlink() or not directory.is_dir():
                 raise ValueError(
                     f"offline test directory must be real, not a symlink: {directory}"
                 )
         for name in sorted(filenames):
+            _validate_component(name)
             path = here / name
             # A dangling directory alias is classified as a file by os.walk.
             # Reject even non-test-named links, including support-file aliases.
@@ -78,7 +97,7 @@ def select_shard(modules: tuple[str, ...], *, shard: int, shards: int = SHARDS) 
         raise ValueError("offline test modules must be nonempty and unique")
     if any(type(path) is not str or not path.startswith("tests/") or
            not (Path(path).name.startswith("test_") or Path(path).name.endswith("_test.py")) or
-           not path.endswith(".py") for path in modules):
+           not path.endswith(".py") or _has_unsafe_control(path) for path in modules):
         raise ValueError("unexpected offline test module path")
     selected = tuple(sorted(modules)[shard::shards])
     if not selected:

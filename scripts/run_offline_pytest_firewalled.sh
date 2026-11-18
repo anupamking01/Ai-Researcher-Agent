@@ -45,7 +45,7 @@ if [[ "$(uname -s)" != "Linux" ]]; then
   echo "Offline firewall requires a Linux runner" >&2
   exit 1
 fi
-for executable in sudo iptables ip6tables python timeout; do
+for executable in sudo iptables ip6tables python; do
   if ! command -v "$executable" >/dev/null 2>&1; then
     echo "Missing required offline-test isolation command: $executable" >&2
     exit 1
@@ -56,21 +56,7 @@ done
 # bounded five-second wait. An indefinite -w can strand a CI shard under
 # lock contention, including after pytest has finished.
 # Only this invocation's custom chains are ever removed.
-# -w 5 bounds only xtables lock acquisition; a blocked sudo/netfilter
-# process can still outlive that wait. Bound the entire privileged command
-# (setup, policy inspection, and teardown) without weakening either policy.
-# A timeout is a failure, never an implicit success or permission to skip
-# remaining best-effort cleanup. The shell exits nonzero on any such failure.
-bounded_sudo() {
-  local result=0
-  timeout --signal=TERM --kill-after=2s 15s sudo "$@" || result=$?
-  if (( result == 124 || result == 137 )); then
-    echo "CRITICAL: offline firewall command exceeded 15-second wall-clock bound" >&2
-  fi
-  return "$result"
-}
-
-chain="VERA_OFFLINE_$"
+chain="VERA_OFFLINE_$$"
 v4_created=0
 v4_linked=0
 v6_created=0
@@ -92,18 +78,18 @@ cleanup() {
     fi
   fi
   if (( v6_linked )); then
-    bounded_sudo -n ip6tables -w 5 -D OUTPUT -j "$chain" || cleanup_failed=1
+    sudo -n ip6tables -w 5 -D OUTPUT -j "$chain" || cleanup_failed=1
   fi
   if (( v4_linked )); then
-    bounded_sudo -n iptables -w 5 -D OUTPUT -j "$chain" || cleanup_failed=1
+    sudo -n iptables -w 5 -D OUTPUT -j "$chain" || cleanup_failed=1
   fi
   if (( v6_created )); then
-    bounded_sudo -n ip6tables -w 5 -F "$chain" || cleanup_failed=1
-    bounded_sudo -n ip6tables -w 5 -X "$chain" || cleanup_failed=1
+    sudo -n ip6tables -w 5 -F "$chain" || cleanup_failed=1
+    sudo -n ip6tables -w 5 -X "$chain" || cleanup_failed=1
   fi
   if (( v4_created )); then
-    bounded_sudo -n iptables -w 5 -F "$chain" || cleanup_failed=1
-    bounded_sudo -n iptables -w 5 -X "$chain" || cleanup_failed=1
+    sudo -n iptables -w 5 -F "$chain" || cleanup_failed=1
+    sudo -n iptables -w 5 -X "$chain" || cleanup_failed=1
   fi
   if (( cleanup_failed )); then
     echo "CRITICAL: offline test firewall cleanup failed" >&2
@@ -117,29 +103,29 @@ trap 'exit 143' TERM
 
 # Head-of-OUTPUT jumps reject all non-loopback IPv4/IPv6 egress, including
 # subprocess/native-library calls outside Python's socket interception.
-bounded_sudo -n iptables -w 5 -N "$chain"
+sudo -n iptables -w 5 -N "$chain"
 v4_created=1
-bounded_sudo -n iptables -w 5 -A "$chain" -o lo -j RETURN
-bounded_sudo -n iptables -w 5 -A "$chain" -j REJECT
-bounded_sudo -n iptables -w 5 -I OUTPUT 1 -j "$chain"
+sudo -n iptables -w 5 -A "$chain" -o lo -j RETURN
+sudo -n iptables -w 5 -A "$chain" -j REJECT
+sudo -n iptables -w 5 -I OUTPUT 1 -j "$chain"
 v4_linked=1
 
-bounded_sudo -n ip6tables -w 5 -N "$chain"
+sudo -n ip6tables -w 5 -N "$chain"
 v6_created=1
-bounded_sudo -n ip6tables -w 5 -A "$chain" -o lo -j RETURN
-bounded_sudo -n ip6tables -w 5 -A "$chain" -j REJECT
-bounded_sudo -n ip6tables -w 5 -I OUTPUT 1 -j "$chain"
+sudo -n ip6tables -w 5 -A "$chain" -o lo -j RETURN
+sudo -n ip6tables -w 5 -A "$chain" -j REJECT
+sudo -n ip6tables -w 5 -I OUTPUT 1 -j "$chain"
 v6_linked=1
 
-bounded_sudo -n iptables -w 5 -C OUTPUT -j "$chain"
-bounded_sudo -n ip6tables -w 5 -C OUTPUT -j "$chain"
+sudo -n iptables -w 5 -C OUTPUT -j "$chain"
+sudo -n ip6tables -w 5 -C OUTPUT -j "$chain"
 
 # Validate the effective ordered firewall policy, not only jump membership.
 # A chain missing its REJECT or an earlier OUTPUT ACCEPT bypasses isolation.
 verify_family_policy() {
   local executable="$1"
   local actual_chain expected_chain output_rules first_output_rule=""
-  if ! actual_chain="$(bounded_sudo -n "$executable" -w 5 -S "$chain")"; then
+  if ! actual_chain="$(sudo -n "$executable" -w 5 -S "$chain")"; then
     echo "Cannot inspect $executable offline chain" >&2
     return 1
   fi
@@ -166,7 +152,7 @@ verify_family_policy() {
     echo "Unsafe $executable offline chain policy: $actual_chain" >&2
     return 1
   fi
-  if ! output_rules="$(bounded_sudo -n "$executable" -w 5 -S OUTPUT)"; then
+  if ! output_rules="$(sudo -n "$executable" -w 5 -S OUTPUT)"; then
     echo "Cannot inspect $executable OUTPUT precedence" >&2
     return 1
   fi
