@@ -213,6 +213,30 @@ and `persist-credentials: false` does not block all other credential
 sources or authenticated artifact downloads. It supplies no new pilot,
 designated-primary automated, exploratory, or human-evaluation observations.
 
+## Pytest entry-point plugin isolation — 18 November 2026
+
+The shared firewalled pytest wrapper now **forces**
+`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` for every ordinary, specialist or
+manually authorized live-workflow **offline** test invocation. Pytest
+otherwise auto-imports installed third-party `pytest11` entry points
+*before* `tests/conftest.py` installs the process-local network guard.
+Such plugins may affect test discovery, execution, and reporting, even
+though the Linux firewall still constrains the selected test process.
+The wrapper already rejects inherited `PYTEST_ADDOPTS` and
+`PYTEST_PLUGINS`; this closes the separate ambient entry-point path
+without relaxing those checks, the 16-shard inventory, source-bound
+receipts, or firewall rules.
+
+Three synthetic rootless regressions verify that an unset, explicitly
+disabled, or incorrectly false inherited autoload setting reaches the
+test process only as `1`, after firewall setup. Built-in pytest
+plugins and the project's own `conftest.py` remain active. This
+reduces environment-dependent plugin execution; it is not a guarantee
+against malicious source code, explicitly imported plugins, or all
+pre-firewall Python initialization. No pilot, frozen automated,
+exploratory or human results are changed, and historical source
+authentication and genuine blinded ratings remain outstanding.
+
 ## Post-pytest firewall integrity gate — 18 November 2026
 
 The existing effective-policy inspection happened **only before** pytest.

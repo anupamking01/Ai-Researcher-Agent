@@ -12,6 +12,13 @@ if [[ -n "${PYTEST_ADDOPTS:-}" || -n "${PYTEST_PLUGINS:-}" ]]; then
   exit 1
 fi
 
+# Disable ambient pytest11 entry-point plugins before pytest startup. Pytest
+# imports these plugins before tests/conftest.py installs its Python socket
+# guard; unreviewed plugins can also change test collection or reporting.
+# Built-in pytest plugins and this repository's conftest remain available.
+# Force the invariant even if a caller inherited an explicit false value.
+export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "Offline firewall requires a Linux runner" >&2
   exit 1

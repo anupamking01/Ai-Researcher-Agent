@@ -239,6 +239,59 @@ def test_firewall_order_failure_rollback_and_exit_code(
         assert any(row.startswith("v6 -w 5 -X VERA_OFFLINE_") for row in commands)
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux-only firewall wrapper")
+@pytest.mark.parametrize("inherited", [None, "0", "false"])
+def test_firewalled_pytest_disables_ambient_plugins(
+    tmp_path: Path, inherited: str | None,
+):
+    """Even an inherited false setting cannot enable pre-conftest entry points."""
+    fake = tmp_path / "fake-bin"
+    fake.mkdir()
+    scripts = {
+        "sudo": '#!/bin/sh\n[ "$1" = "-n" ] || exit 80\nshift\nexec "$@"\n',
+        "iptables": _fake_iptables("v4"),
+        "ip6tables": _fake_iptables("v6"),
+        "python": (
+            '#!/bin/sh\n'
+            'printf "%s" "${PYTEST_DISABLE_PLUGIN_AUTOLOAD-unset}" > '
+            '"$VERA_FAKE_PLUGIN_CAPTURE"\n'
+            'exit 0\n'
+        ),
+    }
+    for filename, source in scripts.items():
+        executable = fake / filename
+        executable.write_text(source, encoding="utf-8")
+        executable.chmod(0o755)
+    log = tmp_path / "commands.txt"
+    capture = tmp_path / "autoload.txt"
+    env = os.environ.copy()
+    env.pop("PYTEST_ADDOPTS", None)
+    env.pop("PYTEST_PLUGINS", None)
+    env.pop("VERA_FAKE_POST_POLICY_FILE", None)
+    if inherited is None:
+        env.pop("PYTEST_DISABLE_PLUGIN_AUTOLOAD", None)
+    else:
+        env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = inherited
+    env.update({
+        "PATH": str(fake) + os.pathsep + env["PATH"],
+        "VERA_FAKE_FIREWALL_LOG": str(log),
+        "VERA_FAKE_CHAIN_FILE": str(tmp_path / "chain"),
+        "VERA_FAKE_PLUGIN_CAPTURE": str(capture),
+        "VERA_FAKE_POLICY": "",
+        "VERA_FAIL_V6_LINK": "0",
+    })
+    result = subprocess.run(
+        ["bash", str(WRAPPER)], cwd=ROOT, env=env,
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert capture.read_text(encoding="utf-8") == "1"
+    commands = log.read_text(encoding="utf-8").splitlines()
+    assert any(row.startswith("v4 -w 5 -I OUTPUT 1 -j ") for row in commands)
+    assert any(row.startswith("v6 -w 5 -I OUTPUT 1 -j ") for row in commands)
+    assert any(row.startswith("v6 -w 5 -X VERA_OFFLINE_") for row in commands)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux-only firewall wrapper")
 @pytest.mark.parametrize("drift", [
     "v4_missing_reject", "v6_missing_reject",
     "v4_shadowed_output", "v6_shadowed_output",
