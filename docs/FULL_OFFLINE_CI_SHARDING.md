@@ -139,3 +139,24 @@ evaluator-comparability limitations; retrospective sensitivities are
 exploratory. Historical original treatment artifact authentication and
 blinded human evaluation remain incomplete. No treatment, evaluator, or
 human ratings were rerun or generated to change outcomes.
+
+## Live-smoke regression inclusion after event isolation — 18 November 2026
+
+[PR test run 44287360341](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/44287360341)
+for source commit `8e3a89d32d9494a072d8eb59164a714e1eab3b21` exposed a
+**deterministic, non-scientific CI contract failure** in shard 15:
+`test_live_smoke_safety_checks_run_in_ordinary_offline_ci` still required a
+`research-*` push trigger. That expectation conflicts with the reviewed
+one-suite-per-PR policy above. Shard 15 reported **338 passed, one failed**;
+shard 5 was separately **cancelled**, so the full-set replay was skipped.
+Neither partial result is a complete CI certification.
+
+The live-smoke test now requires the **exact unfiltered pull-request event**,
+`main`-only push, and manual dispatch as parsed by PyYAML BaseLoader, while
+still requiring a pipefail-protected offline pytest invocation and forbidding
+live smoke execution inside ordinary CI. This restores the safety check to
+the intentional event policy rather than weakening it or reinstating the
+duplicate suite. The separate synthetic trigger mutation tests continue to
+reject filtered or missing PR events. Only a fresh, complete sixteen-shard
+passing workflow plus evidence replay can establish full-suite success.
+No research treatment, evaluator, frozen analysis or human rating is changed.

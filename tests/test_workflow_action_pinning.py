@@ -847,14 +847,24 @@ def test_bootstrap_guard_rejects_hidden_setup_python_environment(
 
 
 def test_live_smoke_safety_checks_run_in_ordinary_offline_ci() -> None:
-    """A manual-only live workflow still needs PR/push regression coverage."""
+    """A manual-only live workflow still needs the unfiltered PR safety gate.
+
+    An open research PR runs the complete suite on pull_request, not on both
+    push and pull_request; a standalone branch can use workflow_dispatch.
+    """
     ci = yaml.load(
         (WORKFLOWS / "tests.yml").read_text(encoding="utf-8"),
         Loader=yaml.BaseLoader,
     )
     triggers = ci["on"]
-    assert "pull_request" in triggers
-    assert "research-*" in triggers["push"]["branches"]
+    # BaseLoader represents unfiltered event scalars as empty strings.
+    # Keep the live-smoke safety regression in every PR's complete offline
+    # suite without reintroducing duplicate research-branch push suites.
+    assert triggers == {
+        "push": {"branches": ["main"]},
+        "pull_request": "",
+        "workflow_dispatch": "",
+    }
 
     steps = ci["jobs"]["unit-tests"]["steps"]
     commands = [str(step.get("run", "")).strip() for step in steps]
