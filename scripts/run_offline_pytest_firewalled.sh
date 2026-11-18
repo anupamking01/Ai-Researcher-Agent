@@ -12,6 +12,18 @@ if [[ -n "${PYTEST_ADDOPTS:-}" || -n "${PYTEST_PLUGINS:-}" ]]; then
   exit 1
 fi
 
+# Python can import unpinned modules from ambient paths *before* pytest or
+# conftest's socket guard starts. Refuse alternate interpreter/import roots
+# before touching privileged firewall state; pinned CI dependencies must be
+# importable without caller-supplied path injection.
+if [[ -n "${PYTHONPATH:-}" || -n "${PYTHONHOME:-}" ]]; then
+  echo "Offline pytest refuses inherited PYTHONPATH or PYTHONHOME (unreviewed Python import roots)" >&2
+  exit 1
+fi
+# User-site packages can also supply unreviewed sitecustomize or .pth modules.
+# Force their exclusion even if the caller inherited a false value.
+export PYTHONNOUSERSITE=1
+
 # Disable ambient pytest11 entry-point plugins before pytest startup. Pytest
 # imports these plugins before tests/conftest.py installs its Python socket
 # guard; unreviewed plugins can also change test collection or reporting.

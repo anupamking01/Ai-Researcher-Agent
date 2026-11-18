@@ -178,6 +178,8 @@ def test_firewall_order_failure_rollback_and_exit_code(
         path.chmod(0o755)
     log = tmp_path / "commands.txt"
     env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    env.pop("PYTHONHOME", None)
     env.update({
         "PATH": str(fake) + os.pathsep + env["PATH"],
         "VERA_FAKE_FIREWALL_LOG": str(log),
@@ -252,8 +254,8 @@ def test_firewalled_pytest_disables_ambient_plugins(
         "ip6tables": _fake_iptables("v6"),
         "python": (
             '#!/bin/sh\n'
-            'printf "%s" "${PYTEST_DISABLE_PLUGIN_AUTOLOAD-unset}" > '
-            '"$VERA_FAKE_PLUGIN_CAPTURE"\n'
+            'printf "%s|%s" "${PYTEST_DISABLE_PLUGIN_AUTOLOAD-unset}" '
+            '"${PYTHONNOUSERSITE-unset}" > "$VERA_FAKE_PLUGIN_CAPTURE"\n'
             'exit 0\n'
         ),
     }
@@ -264,9 +266,12 @@ def test_firewalled_pytest_disables_ambient_plugins(
     log = tmp_path / "commands.txt"
     capture = tmp_path / "autoload.txt"
     env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    env.pop("PYTHONHOME", None)
     env.pop("PYTEST_ADDOPTS", None)
     env.pop("PYTEST_PLUGINS", None)
     env.pop("VERA_FAKE_POST_POLICY_FILE", None)
+    env["PYTHONNOUSERSITE"] = "0"
     if inherited is None:
         env.pop("PYTEST_DISABLE_PLUGIN_AUTOLOAD", None)
     else:
@@ -284,7 +289,7 @@ def test_firewalled_pytest_disables_ambient_plugins(
         capture_output=True, text=True, timeout=15, check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert capture.read_text(encoding="utf-8") == "1"
+    assert capture.read_text(encoding="utf-8") == "1|1"
     commands = log.read_text(encoding="utf-8").splitlines()
     assert any(row.startswith("v4 -w 5 -I OUTPUT 1 -j ") for row in commands)
     assert any(row.startswith("v6 -w 5 -I OUTPUT 1 -j ") for row in commands)
@@ -319,6 +324,8 @@ def test_successful_pytest_cannot_certify_post_run_firewall_drift(
         executable.chmod(0o755)
     log = tmp_path / "commands.txt"
     env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    env.pop("PYTHONHOME", None)
     env.pop("PYTEST_ADDOPTS", None)
     env.pop("PYTEST_PLUGINS", None)
     env.update({
@@ -441,6 +448,8 @@ def test_firewalled_runner_rejects_hidden_pytest_selection_environment(
     )
     fake_sudo.chmod(0o755)
     env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    env.pop("PYTHONHOME", None)
     env.pop("PYTEST_ADDOPTS", None)
     env.pop("PYTEST_PLUGINS", None)
     env[variable] = value
@@ -453,6 +462,40 @@ def test_firewalled_runner_rejects_hidden_pytest_selection_environment(
     assert result.returncode == 1
     assert "refuses inherited PYTEST_ADDOPTS or PYTEST_PLUGINS" in result.stderr
     assert not marker.exists(), "an untrusted pytest environment reached sudo"
+    assert "Offline pytest egress isolation active" not in result.stdout
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux-only firewall wrapper")
+@pytest.mark.parametrize(("variable", "value"), [
+    ("PYTHONPATH", "/tmp/vera-unreviewed-python-imports"),
+    ("PYTHONHOME", "/tmp/vera-unreviewed-interpreter"),
+])
+def test_firewalled_runner_rejects_inherited_python_import_roots_before_sudo(
+    variable: str, value: str, tmp_path: Path,
+):
+    """A caller must not inject unpinned Python roots before socket guarding."""
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    marker = tmp_path / "sudo-was-called"
+    fake_sudo = fake_bin / "sudo"
+    fake_sudo.write_text(
+        '#!/bin/sh\\nprintf invoked > "$VERA_SUDO_MARKER"\\nexit 91\\n',
+        encoding="utf-8",
+    )
+    fake_sudo.chmod(0o755)
+    env = os.environ.copy()
+    for name in ("PYTEST_ADDOPTS", "PYTEST_PLUGINS", "PYTHONPATH", "PYTHONHOME"):
+        env.pop(name, None)
+    env[variable] = value
+    env["VERA_SUDO_MARKER"] = str(marker)
+    env["PATH"] = str(fake_bin) + os.pathsep + env["PATH"]
+    result = subprocess.run(
+        ["bash", str(WRAPPER)], cwd=ROOT, env=env,
+        text=True, capture_output=True, timeout=10, check=False,
+    )
+    assert result.returncode == 1, result.stderr
+    assert "refuses inherited PYTHONPATH or PYTHONHOME" in result.stderr
+    assert not marker.exists(), "unreviewed Python roots reached sudo"
     assert "Offline pytest egress isolation active" not in result.stdout
 
 

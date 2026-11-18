@@ -1,5 +1,28 @@
 # Complete offline pytest via deterministic CI shards
 
+## Host Python import-root isolation — 18 November 2026
+
+The shared firewalled pytest entrypoint now rejects nonempty inherited
+`PYTHONPATH` or `PYTHONHOME` **before** privileged firewall setup and forces
+`PYTHONNOUSERSITE=1` even when the caller supplied a false value. Those
+variables can otherwise redirect Python's pre-pytest imports to unreviewed
+packages, startup hooks or user-site code before the project's socket guard
+is installed. This complements the existing inherited `PYTEST_ADDOPTS` /
+`PYTEST_PLUGINS` rejection and disabled third-party pytest entry-point
+autoload; pinned dependencies and repository modules remain importable
+through the normal CI interpreter and current checkout.
+
+Synthetic rootless tests cover both rejected ambient import roots before
+any sudo call and a forced user-site exclusion observed by the pytest stub
+after simulated IPv4/IPv6 firewall setup. The safeguard does not prevent
+imports from compromised installed packages, global site startup hooks,
+explicitly executed code, or sources outside the Python interpreter. It
+does not alter or validate historical treatment archives, run a research
+treatment, revise frozen automated outcomes or create human annotations.
+The pilot remains diagnostic; the frozen automated results remain
+post-collection with fixed-order and evaluator-comparability qualifications,
+and later sensitivity analysis remains exploratory.
+
 At the 14 November 2026 predecessor, the ordinary `tests` workflow's
 20-minute `unit-tests` job was cancelled while the complete firewalled
 pytest step ran; passing selected fast lanes did not verify the full suite.
