@@ -122,6 +122,27 @@ rerun treatment/evaluator calls, change frozen automated analysis, or establish
 pending human-validation results.
 
 
+## Bounded xtables lock waits during offline pytest
+
+Each IPv4 and IPv6 `iptables`/`ip6tables` operation in the shared host-level
+firewall wrapper now uses `-w 5` rather than the previous unbounded `-w`.
+This applies to setup, rule and precedence inspection, and cleanup after pytest.
+If a competing process holds the kernel xtables lock for more than five seconds,
+the command fails rather than leaving the offline test or its teardown waiting
+indefinitely. A setup/inspection failure prevents any pytest execution; a
+cleanup failure preserves a nonzero job status instead of certifying a clean
+firewall teardown. This bound is on each lock acquisition, not an end-to-end
+five-second timeout or a guarantee that all cleanup can succeed.
+
+The synthetic firewall regressions enforce the bounded argument for every
+recorded IPv4/IPv6 command, simulate both IPv4 and IPv6 lock acquisition
+failures, and check that a failed IPv6 setup attempts to roll back IPv4 rules.
+No actual host firewall, provider, treatment, or evaluator is invoked by these
+regressions. Previous complete-suite shard cancellations are **not established
+to have been caused by xtables contention**; this closes a separately
+verifiable unbounded-wait risk without changing scientific results or dropping
+any required CI receipt.
+
 ## Verify firewall rules before offline tests
 
 A successful `iptables -C OUTPUT -j CHAIN` shows only that a jump exists. It

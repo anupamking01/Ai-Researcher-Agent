@@ -114,10 +114,12 @@ def _fake_iptables(family: str) -> str:
     return (
         "#!/usr/bin/env bash\n"
         + 'printf "' + family + ' %s\\n" "$*" >> "$VERA_FAKE_FIREWALL_LOG"\n'
-        + 'if [[ "$1" == "-w" && "$2" == "-N" ]]; then printf "%s" "$3" > "$VERA_FAKE_CHAIN_FILE"; fi\n'
+        + 'if [[ "$1" != "-w" || "$2" != "5" ]]; then exit 79; fi\n'
+        + 'if [[ "$3" == "-N" ]]; then printf "%s" "$4" > "$VERA_FAKE_CHAIN_FILE"; fi\n'
+        + 'if [[ "${VERA_FAKE_LOCK_FAILURE:-}" == "' + family + '" && "$3" == "-N" ]]; then exit 75; fi\n'
         + 'if [[ "$VERA_FAIL_V6_LINK" == "1" && "' + family + '" == "v6" && "$*" == *" -I OUTPUT "* ]]; then exit 42; fi\n'
         + 'chain=$(cat "$VERA_FAKE_CHAIN_FILE" 2>/dev/null || true)\n'
-        + 'if [[ "$*" == "-w -S $chain" && -n "$chain" ]]; then\n'
+        + 'if [[ "$*" == "-w 5 -S $chain" && -n "$chain" ]]; then\n'
         + '  if [[ "$VERA_FAKE_POLICY" == "' + family + '_query_failure" ]]; then exit 44; fi\n'
         + '  printf -- "-N %s\\n-A %s -o lo -j RETURN\\n" "$chain" "$chain"\n'
         + '  if [[ "$VERA_FAKE_POLICY" != "' + family + '_missing_reject" ]]; then\n'
@@ -126,7 +128,7 @@ def _fake_iptables(family: str) -> str:
         + '      printf -- "-A %s -j REJECT --reject-with %s\\n" "$chain" "$suffix"\n'
         + '    else printf -- "-A %s -j REJECT\\n" "$chain"; fi\n'
         + '  fi\n'
-        + 'elif [[ "$*" == "-w -S OUTPUT" ]]; then\n'
+        + 'elif [[ "$*" == "-w 5 -S OUTPUT" ]]; then\n'
         + '  printf -- "-P OUTPUT ACCEPT\\n"\n'
         + '  if [[ "$VERA_FAKE_POLICY" == "' + family + '_shadowed_output" ]]; then printf -- "-A OUTPUT -j ACCEPT\\n"; fi\n'
         + '  printf -- "-A OUTPUT -j %s\\n" "$chain"\n'
@@ -148,6 +150,8 @@ def _fake_iptables(family: str) -> str:
         (False, 0, "v6_query_failure", 1),
         (False, 0, "v4_normalized_reject", 0),
         (False, 0, "v6_normalized_reject", 0),
+        (False, 0, "v4_lock_busy", 75),
+        (False, 0, "v6_lock_busy", 75),
     ],
 )
 def test_firewall_order_failure_rollback_and_exit_code(
@@ -178,6 +182,9 @@ def test_firewall_order_failure_rollback_and_exit_code(
         "VERA_FAKE_PYTEST_EXIT": str(pytest_exit),
         "VERA_FAIL_V6_LINK": "1" if v6_failure else "0",
         "VERA_FAKE_POLICY": policy_failure,
+        "VERA_FAKE_LOCK_FAILURE": (
+            policy_failure[:2] if policy_failure.endswith("_lock_busy") else ""
+        ),
         "VERA_FAKE_CHAIN_FILE": str(tmp_path / "chain"),
     })
     result = subprocess.run(
@@ -188,32 +195,46 @@ def test_firewall_order_failure_rollback_and_exit_code(
     commands = log.read_text(encoding="utf-8").splitlines()
     def index(prefix: str) -> int:
         return next(i for i, row in enumerate(commands) if row.startswith(prefix))
-    v4_link = index("v4 -w -I OUTPUT 1 -j ")
-    v6_link = index("v6 -w -I OUTPUT 1 -j ")
-    v4_remove = index("v4 -w -D OUTPUT -j ")
+    assert all(
+        row.startswith(("v4 -w 5 ", "v6 -w 5 "))
+        for row in commands if row.startswith(("v4 ", "v6 "))
+    ), "every firewall call must have a bounded xtables lock wait"
+    if policy_failure.endswith("_lock_busy"):
+        # A synthetic acquisition failure aborts before pytest. If IPv4 was
+        # installed before the IPv6 lock failure, the trap must remove it.
+        assert not any(row.startswith("pytest ") for row in commands)
+        if policy_failure.startswith("v6_"):
+            assert any(row.startswith("v4 -w 5 -D OUTPUT -j ") for row in commands)
+            assert any(row.startswith("v4 -w 5 -X VERA_OFFLINE_") for row in commands)
+        else:
+            assert not any(" -I OUTPUT " in row for row in commands)
+        return
+    v4_link = index("v4 -w 5 -I OUTPUT 1 -j ")
+    v6_link = index("v6 -w 5 -I OUTPUT 1 -j ")
+    v4_remove = index("v4 -w 5 -D OUTPUT -j ")
     assert v4_link < v4_remove
     if v6_failure:
         assert not any(row.startswith("pytest ") for row in commands)
-        assert any(row.startswith("v6 -w -F VERA_OFFLINE_") for row in commands)
-        assert any(row.startswith("v6 -w -X VERA_OFFLINE_") for row in commands)
-        assert not any(row.startswith("v6 -w -D OUTPUT") for row in commands)
+        assert any(row.startswith("v6 -w 5 -F VERA_OFFLINE_") for row in commands)
+        assert any(row.startswith("v6 -w 5 -X VERA_OFFLINE_") for row in commands)
+        assert not any(row.startswith("v6 -w 5 -D OUTPUT") for row in commands)
     elif policy_failure and not policy_failure.endswith("_normalized_reject"):
         assert not any(row.startswith("pytest ") for row in commands)
         assert any(" -S " in row for row in commands)
-        assert any(row.startswith("v4 -w -F VERA_OFFLINE_") for row in commands)
-        assert any(row.startswith("v6 -w -X VERA_OFFLINE_") for row in commands)
+        assert any(row.startswith("v4 -w 5 -F VERA_OFFLINE_") for row in commands)
+        assert any(row.startswith("v6 -w 5 -X VERA_OFFLINE_") for row in commands)
     else:
-        v4_check = index("v4 -w -C OUTPUT -j ")
-        v6_check = index("v6 -w -C OUTPUT -j ")
-        v4_policy = index("v4 -w -S VERA_OFFLINE_")
-        v6_policy = index("v6 -w -S VERA_OFFLINE_")
+        v4_check = index("v4 -w 5 -C OUTPUT -j ")
+        v6_check = index("v6 -w 5 -C OUTPUT -j ")
+        v4_policy = index("v4 -w 5 -S VERA_OFFLINE_")
+        v6_policy = index("v6 -w 5 -S VERA_OFFLINE_")
         pytest_index = index("pytest -m pytest -vv --durations=10 --strict-markers --strict-config")
         assert v4_check < v4_policy < v6_policy < pytest_index
-        v6_remove = index("v6 -w -D OUTPUT -j ")
+        v6_remove = index("v6 -w 5 -D OUTPUT -j ")
         assert v4_link < v6_link < v4_check < v6_check < pytest_index < v6_remove
         assert pytest_index < v4_remove
-        assert any(row.startswith("v4 -w -F VERA_OFFLINE_") for row in commands)
-        assert any(row.startswith("v6 -w -X VERA_OFFLINE_") for row in commands)
+        assert any(row.startswith("v4 -w 5 -F VERA_OFFLINE_") for row in commands)
+        assert any(row.startswith("v6 -w 5 -X VERA_OFFLINE_") for row in commands)
 
 def test_verbose_pytest_progress_exposes_interrupted_test_context(tmp_path):
     """Synthetic failure retains node identity, not only a progress percentage."""

@@ -23,6 +23,9 @@ for executable in sudo iptables ip6tables python; do
   fi
 done
 
+# All xtables lock acquisitions (setup, validation, and cleanup) have a
+# bounded five-second wait. An indefinite -w can strand a CI shard under
+# lock contention, including after pytest has finished.
 # Only this invocation's custom chains are ever removed.
 chain="VERA_OFFLINE_$$"
 v4_created=0
@@ -36,18 +39,18 @@ cleanup() {
   trap - EXIT INT TERM
   set +e
   if (( v6_linked )); then
-    sudo -n ip6tables -w -D OUTPUT -j "$chain" || cleanup_failed=1
+    sudo -n ip6tables -w 5 -D OUTPUT -j "$chain" || cleanup_failed=1
   fi
   if (( v4_linked )); then
-    sudo -n iptables -w -D OUTPUT -j "$chain" || cleanup_failed=1
+    sudo -n iptables -w 5 -D OUTPUT -j "$chain" || cleanup_failed=1
   fi
   if (( v6_created )); then
-    sudo -n ip6tables -w -F "$chain" || cleanup_failed=1
-    sudo -n ip6tables -w -X "$chain" || cleanup_failed=1
+    sudo -n ip6tables -w 5 -F "$chain" || cleanup_failed=1
+    sudo -n ip6tables -w 5 -X "$chain" || cleanup_failed=1
   fi
   if (( v4_created )); then
-    sudo -n iptables -w -F "$chain" || cleanup_failed=1
-    sudo -n iptables -w -X "$chain" || cleanup_failed=1
+    sudo -n iptables -w 5 -F "$chain" || cleanup_failed=1
+    sudo -n iptables -w 5 -X "$chain" || cleanup_failed=1
   fi
   if (( cleanup_failed )); then
     echo "CRITICAL: offline test firewall cleanup failed" >&2
@@ -61,29 +64,29 @@ trap 'exit 143' TERM
 
 # Head-of-OUTPUT jumps reject all non-loopback IPv4/IPv6 egress, including
 # subprocess/native-library calls outside Python's socket interception.
-sudo -n iptables -w -N "$chain"
+sudo -n iptables -w 5 -N "$chain"
 v4_created=1
-sudo -n iptables -w -A "$chain" -o lo -j RETURN
-sudo -n iptables -w -A "$chain" -j REJECT
-sudo -n iptables -w -I OUTPUT 1 -j "$chain"
+sudo -n iptables -w 5 -A "$chain" -o lo -j RETURN
+sudo -n iptables -w 5 -A "$chain" -j REJECT
+sudo -n iptables -w 5 -I OUTPUT 1 -j "$chain"
 v4_linked=1
 
-sudo -n ip6tables -w -N "$chain"
+sudo -n ip6tables -w 5 -N "$chain"
 v6_created=1
-sudo -n ip6tables -w -A "$chain" -o lo -j RETURN
-sudo -n ip6tables -w -A "$chain" -j REJECT
-sudo -n ip6tables -w -I OUTPUT 1 -j "$chain"
+sudo -n ip6tables -w 5 -A "$chain" -o lo -j RETURN
+sudo -n ip6tables -w 5 -A "$chain" -j REJECT
+sudo -n ip6tables -w 5 -I OUTPUT 1 -j "$chain"
 v6_linked=1
 
-sudo -n iptables -w -C OUTPUT -j "$chain"
-sudo -n ip6tables -w -C OUTPUT -j "$chain"
+sudo -n iptables -w 5 -C OUTPUT -j "$chain"
+sudo -n ip6tables -w 5 -C OUTPUT -j "$chain"
 
 # Validate the effective ordered firewall policy, not only jump membership.
 # A chain missing its REJECT or an earlier OUTPUT ACCEPT bypasses isolation.
 verify_family_policy() {
   local executable="$1"
   local actual_chain expected_chain output_rules first_output_rule=""
-  if ! actual_chain="$(sudo -n "$executable" -w -S "$chain")"; then
+  if ! actual_chain="$(sudo -n "$executable" -w 5 -S "$chain")"; then
     echo "Cannot inspect $executable offline chain" >&2
     return 1
   fi
@@ -110,7 +113,7 @@ verify_family_policy() {
     echo "Unsafe $executable offline chain policy: $actual_chain" >&2
     return 1
   fi
-  if ! output_rules="$(sudo -n "$executable" -w -S OUTPUT)"; then
+  if ! output_rules="$(sudo -n "$executable" -w 5 -S OUTPUT)"; then
     echo "Cannot inspect $executable OUTPUT precedence" >&2
     return 1
   fi
