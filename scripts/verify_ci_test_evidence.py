@@ -225,6 +225,7 @@ def _verify_verbose_full_ci_progress(
         raise ValueError("full CI verbose pytest collection record missing or ambiguous")
     collected_position, collection = collections[0]
     observed: dict[str, int] = {}
+    observed_modules: set[str] = set()
     seen_nodes: set[str] = set()
     for index, line in enumerate(test_output_lines):
         completion = _parse_verbose_completion(line)
@@ -241,7 +242,18 @@ def _verify_verbose_full_ci_progress(
         if nodeid in seen_nodes:
             raise ValueError("full CI pytest duplicate completion node ID")
         seen_nodes.add(nodeid)
+        observed_modules.add(module)
         observed[status] = observed.get(status, 0) + 1
+    # A selected module that contributes no collected test item could be
+    # silently omitted by collection-time configuration or an import skip.
+    # Count-consistent green pytest summaries do not prove coverage of that
+    # source module. Intentional skip cases remain valid when collected as
+    # explicit SKIPPED test nodes.
+    if allowed_modules is not None and observed_modules != allowed_modules:
+        raise ValueError(
+            "full CI selected modules without collected test completions: "
+            + repr(sorted(allowed_modules - observed_modules))
+        )
     if sum(observed.values()) != int(collection["count"]):
         raise ValueError(
             "full CI verbose pytest collected and completed test counts disagree"

@@ -1,5 +1,33 @@
 # Complete offline pytest via deterministic CI shards
 
+## Every selected test module must contribute a collected test — 19 November 2026
+
+The sixteen-shard CI receipt already required that every verbose pytest
+completion belong to a selected module, that node IDs be unique, and that
+collected/completed counts agree with the terminal summary. However, it did
+not require the **converse**: a selected source module could contribute zero
+collected tests while the other selected modules produced a consistent green
+count and summary. A collection-time skip or exclusion can silently omit
+an entire module without appearing as pytest `deselected` results.
+
+The exact-run receipt producer and independent replay now require at least
+one completed pytest node from **every selected test module**. A test reported
+explicitly `SKIPPED` or `XFAIL` still counts as present, preserving existing
+declared test-outcome semantics. An entirely uncollected module fails closed
+even if the remaining node IDs, summary, and selection file all agree.
+Synthetic two-module tests demonstrate both a valid complete transcript and
+a count-preserving omission, plus an explicitly skipped collected test.
+
+This strengthens source-to-test-collection coverage, **not** independent
+runner attestation or proof that every individual test function was
+discovered. It may deliberately expose modules that collect no test items;
+such omissions require an explicit reviewed fix rather than an accepted
+complete-suite receipt. No experimental treatments, evaluators, frozen
+outcomes, or human ratings are changed. The pilot remains diagnostic;
+frozen automated findings remain post-collection and qualified by fixed
+order and evaluator comparability, while retrospective sensitivities are
+exploratory. Original-source custody and human validation remain pending.
+
 ## Unambiguous line-delimited shard evidence — 19 November 2026
 
 Full CI writes selected test-module paths to a **newline-delimited file** and

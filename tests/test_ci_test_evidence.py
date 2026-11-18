@@ -246,6 +246,64 @@ def test_full_ci_rejects_count_preserving_node_substitution(
         )
 
 
+def test_full_ci_requires_test_completion_from_every_selected_module(
+    tmp_path, monkeypatch,
+):
+    # A selected module may be omitted by collection without increasing
+    # pytest's deselected count. A count-consistent, green transcript with
+    # two results from one module must not certify both selected modules.
+    log, _ = _synthetic_full_shard(tmp_path, monkeypatch)
+    (tmp_path / "tests" / "test_zz.py").write_text(
+        "def test_other(): assert True\\n", encoding="utf-8"
+    )
+    manifest = b"tests/test_00.py\\ntests/test_zz.py\\n"
+    log = (
+        log.replace(b"selected 1 modules; checkout", b"selected 2 modules; checkout")
+        .replace(
+            b"tests/test_00.py\\n" + evidence.FIREWALL_MARKER.encode(),
+            b"tests/test_00.py\\ntests/test_zz.py\\n"
+            + evidence.FIREWALL_MARKER.encode(),
+        )
+        .replace(b"collected 1 items", b"collected 2 items")
+        .replace(
+            b"tests/test_00.py::test_ok PASSED [100%]",
+            b"tests/test_00.py::test_first PASSED [ 50%]\\n"
+            b"tests/test_zz.py::test_other PASSED [100%]",
+        )
+        .replace(b"1 passed in 0.2s", b"2 passed in 0.2s")
+    )
+    receipt = evidence.build_receipt(
+        log, context=CONTEXT, checkout_sha=SHA, dependency_bytes=DEPS,
+        selected_modules=manifest, shard=0,
+    )
+    assert receipt["full_ci_selected_module_count"] == 2
+    # Substitute a second distinct node from the first module. Counts,
+    # selection header, manifest, and pytest summary are still unchanged.
+    omitted = log.replace(
+        b"tests/test_zz.py::test_other PASSED",
+        b"tests/test_00.py::test_other PASSED",
+    )
+    assert omitted != log
+    with pytest.raises(ValueError, match="selected modules without collected"):
+        evidence.build_receipt(
+            omitted, context=CONTEXT, checkout_sha=SHA,
+            dependency_bytes=DEPS, selected_modules=manifest, shard=0,
+        )
+
+
+def test_full_ci_explicit_skipped_node_counts_toward_module_coverage():
+    # Collection-time omission differs from an observed, explicit test skip.
+    evidence._verify_verbose_full_ci_progress(
+        [
+            "collecting ... collected 2 items",
+            "tests/test_a.py::test_ok PASSED [ 50%]",
+            "tests/test_b.py::test_skip SKIPPED [100%]",
+        ],
+        expected={"passed": 1, "skipped": 1},
+        allowed_modules=frozenset({"tests/test_a.py", "tests/test_b.py"}),
+    )
+
+
 def test_full_ci_accepts_distinct_parameterized_node_ids_in_selected_module(
     tmp_path, monkeypatch,
 ):
