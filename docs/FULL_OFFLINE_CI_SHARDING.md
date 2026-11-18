@@ -1,5 +1,28 @@
 # Complete offline pytest via deterministic CI shards
 
+## Test-tree leaf custody and nonblocking inventory — 19 November 2026
+
+Before assigning modules to the sixteen full-suite shards, the deterministic
+selector now checks **every** file leaf under `tests/` with `lstat`, including
+`conftest.py`, helpers and non-test-named fixtures. It rejects hardlinked
+files (link count other than one) and nonregular entries such as named pipes,
+in addition to the existing symlink and symlinked-directory rejection. A
+hardlinked helper could be changed from a pathname outside the checkout;
+opening a FIFO as Python source or fixture could block pytest collection.
+Previously such non-test-named leaves were skipped before regular-file
+checking. Valid single-link regular helper files are still allowed, while
+test-module selection and all sixteen partitions remain unchanged.
+
+Seven synthetic rootless regressions cover aliased test modules and helper
+files, named pipes at selected and nonselected paths, and valid helpers.
+This is local source-tree preflight, **not** an atomic filesystem snapshot or
+proof of independent CI runner custody; concurrent replacement after preflight
+still requires the existing source-bound checkout and evidence checks.
+It does not execute treatments or evaluators, revise frozen results, or
+constitute human validation. The pilot remains diagnostic, designated-primary
+automated inference retains post-collection, fixed-order and evaluator-policy
+limitations, and retrospective sensitivity work remains exploratory.
+
 ## Python assertion-semantics isolation — 18 November 2026
 
 The shared firewalled pytest entrypoint now rejects any nonempty inherited

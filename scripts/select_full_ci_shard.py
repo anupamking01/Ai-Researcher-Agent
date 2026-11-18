@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import stat
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,12 +47,22 @@ def discover_modules(root: Path = ROOT) -> tuple[str, ...]:
             path = here / name
             # A dangling directory alias is classified as a file by os.walk.
             # Reject even non-test-named links, including support-file aliases.
-            if path.is_symlink():
+            # Inspect *all* test-tree leaves, not only selected test_*.py
+            # modules. A FIFO replacing conftest.py can block collection, and
+            # a hardlinked helper can be edited via an outside pathname.
+            # lstat never opens (and therefore cannot block on) a named pipe.
+            try:
+                metadata = path.lstat()
+            except OSError as exc:
+                raise ValueError(f"cannot inspect offline test file: {path}") from exc
+            if stat.S_ISLNK(metadata.st_mode):
                 raise ValueError(f"offline test file must not be a symlink: {path}")
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError(f"offline test file must be a regular file: {path}")
+            if metadata.st_nlink != 1:
+                raise ValueError(f"offline test file must have exactly one link: {path}")
             if not any(Path(name).match(pattern) for pattern in PATTERNS):
                 continue
-            if not path.is_file():
-                raise ValueError(f"offline test module must be a regular file: {path}")
             paths.add(path.relative_to(root).as_posix())
     if not paths:
         raise ValueError("offline test discovery returned no modules")

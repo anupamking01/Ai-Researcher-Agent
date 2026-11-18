@@ -1,5 +1,6 @@
 """Synthetic source/test matrix contracts for full offline CI coverage."""
 from pathlib import Path
+import os
 
 import pytest
 import yaml
@@ -128,3 +129,30 @@ def test_repository_partition_is_complete():
     modules = partition.discover_modules()
     assert "tests/test_full_ci_shard_selection.py" in modules
     partition.verify_partition(modules, shards=partition.SHARDS)
+
+
+@pytest.mark.parametrize("leaf_name", ["test_alias.py", "conftest.py", "helper.py"])
+def test_hardlinked_test_modules_and_helpers_fail_closed(tmp_path, leaf_name):
+    _make_tree(tmp_path, [
+        "tests/test_visible.py", "outside/original.py",
+    ])
+    (tmp_path / "tests" / leaf_name).hardlink_to(
+        tmp_path / "outside" / "original.py"
+    )
+    with pytest.raises(ValueError, match="exactly one link"):
+        partition.discover_modules(tmp_path)
+
+
+@pytest.mark.parametrize("leaf_name", ["test_blocked.py", "conftest.py", "fixture.pipe"])
+def test_named_pipes_in_test_tree_are_rejected_without_opening(tmp_path, leaf_name):
+    _make_tree(tmp_path, ["tests/test_visible.py"])
+    os.mkfifo(tmp_path / "tests" / leaf_name)
+    with pytest.raises(ValueError, match="regular file"):
+        partition.discover_modules(tmp_path)
+
+
+def test_regular_support_files_still_allow_exact_test_module_inventory(tmp_path):
+    _make_tree(tmp_path, [
+        "tests/test_visible.py", "tests/conftest.py", "tests/fixture.data",
+    ])
+    assert partition.discover_modules(tmp_path) == ("tests/test_visible.py",)
