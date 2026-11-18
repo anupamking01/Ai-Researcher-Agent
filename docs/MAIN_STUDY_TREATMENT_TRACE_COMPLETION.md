@@ -141,3 +141,19 @@ between checks, protect untracked/ignored runtime dependencies, or authenticate
 the missing original September artifacts. It does not promote the diagnostic
 pilot, retrospective exploratory findings, or pending human validation into
 confirmatory research evidence.
+
+### Bounded, path-bound Git-source attestation
+
+The per-treatment Git-source continuity gate also needs a safe reader:
+a tracked pathname can become a FIFO before its file type is checked, a
+sparse file can consume unbounded memory if hashed in one `read()`, and a
+published pathname can be replaced while an opened descriptor remains stable.
+The noncanonical runner now opens tracked blobs with `O_NONBLOCK | O_NOFOLLOW`,
+rejects nonregular files, external hardlink aliases and files over **64 MiB
+per tracked source file**, streams Git blob hashing in bounded chunks, and
+rechecks descriptor metadata and the published pathname after reading.
+Five synthetic offline regressions cover a clean attested blob, FIFO
+substitution, an oversized sparse file, a hardlink alias and same-byte
+pathname replacement. This caps a *new replication runner's* source ingestion;
+it does not alter frozen September measurements, assert an atomic snapshot,
+authenticate missing originals or infer a human-validation outcome.

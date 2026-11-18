@@ -1,5 +1,6 @@
 """Synthetic, offline regression for noncanonical treatment completion gating."""
 import asyncio
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -538,3 +539,96 @@ def test_source_drift_fails_closed_and_records_failed_cell(
         if drift != "unattestable_after_treatment"
         else "Cannot attest main-study Git sources" in progress["events"][0]["error"]
     )
+
+
+def _single_tracked_source_git(monkeypatch, tmp_path, content=b"safe source"):
+    """One synthetic clean Git tree without invoking Git or model providers."""
+    source = tmp_path / "tracked.py"
+    source.write_bytes(content)
+    raw_oid = hashlib.sha1(
+        b"blob " + str(len(content)).encode("ascii") + b"\0" + content
+    ).hexdigest().encode("ascii")
+    tree_record = b"100644 blob " + raw_oid + b"\ttracked.py\0"
+
+    def fake_check_output(command, **kwargs):
+        assert command[0] == "git"
+        if command[1:3] == ["rev-parse", "--show-toplevel"]:
+            return str(tmp_path) + "\n"
+        if command[1:3] == ["rev-parse", "--verify"]:
+            return ("a" if command[3] == "HEAD^{commit}" else "b") * 40 + "\n"
+        if command[1] == "status":
+            return ""
+        if command[1] == "ls-files":
+            return "H tracked.py\0"
+        if command[1] == "ls-tree":
+            return tree_record
+        raise AssertionError(f"unexpected synthetic Git command: {command!r}")
+
+    monkeypatch.setattr(study, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(study.subprocess, "check_output", fake_check_output)
+    return source
+
+
+def test_git_source_gate_streams_attested_clean_blob(tmp_path, monkeypatch):
+    _single_tracked_source_git(monkeypatch, tmp_path)
+    assert study._git_source_state() == {"commit": "a" * 40, "tree": "b" * 40}
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "mkfifo") or not hasattr(os, "O_NONBLOCK"),
+    reason="requires POSIX nonblocking FIFO open",
+)
+def test_git_source_gate_rejects_fifo_without_blocking(tmp_path, monkeypatch):
+    source = _single_tracked_source_git(monkeypatch, tmp_path)
+    source.unlink()
+    os.mkfifo(source)
+    real_open = os.open
+    seen = []
+
+    def require_nonblocking_open(path, flags, *args, **kwargs):
+        if Path(path) == source:
+            assert flags & os.O_NONBLOCK, "tracked FIFO must not block at open"
+            seen.append(True)
+        return real_open(path, flags, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(study.os, "open", require_nonblocking_open)
+        with pytest.raises(SystemExit, match="Cannot attest exact Git source bytes"):
+            study._git_source_state()
+    assert seen
+
+
+def test_git_source_gate_rejects_oversized_sparse_tracked_file(tmp_path, monkeypatch):
+    source = _single_tracked_source_git(monkeypatch, tmp_path)
+    with source.open("wb") as handle:
+        handle.truncate(study._MAX_TRACKED_SOURCE_BYTES + 1)
+    with pytest.raises(SystemExit, match="Cannot attest exact Git source bytes"):
+        study._git_source_state()
+
+
+def test_git_source_gate_rejects_external_hardlink(tmp_path, monkeypatch):
+    source = _single_tracked_source_git(monkeypatch, tmp_path)
+    os.link(source, tmp_path / "other_alias.py")
+    with pytest.raises(SystemExit, match="Cannot attest exact Git source bytes"):
+        study._git_source_state()
+
+
+def test_git_source_gate_detects_same_bytes_published_path_swap(tmp_path, monkeypatch):
+    source = _single_tracked_source_git(monkeypatch, tmp_path)
+    real_open = os.open
+    swapped = []
+
+    def replace_after_open(path, flags, *args, **kwargs):
+        fd = real_open(path, flags, *args, **kwargs)
+        if Path(path) == source and not swapped:
+            old = tmp_path / "removed-original.py"
+            os.replace(source, old)
+            source.write_bytes(old.read_bytes())
+            swapped.append(True)
+        return fd
+
+    with monkeypatch.context() as patch:
+        patch.setattr(study.os, "open", replace_after_open)
+        with pytest.raises(SystemExit, match="Cannot attest exact Git source bytes"):
+            study._git_source_state()
+    assert swapped

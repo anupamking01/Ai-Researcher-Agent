@@ -184,6 +184,9 @@ def _verify_repository_module_origin(module, relative_path: str) -> None:
         )
 
 
+_MAX_TRACKED_SOURCE_BYTES = 64 * 1024 * 1024
+
+
 def _git_source_state() -> dict:
     """Return immutable source identifiers only for a clean Git checkout."""
     git_environment = {
@@ -276,17 +279,51 @@ def _git_source_state() -> dict:
 
         relative_path = os.fsdecode(relative_path_bytes)
         source_path = repository_path / relative_path
+        algorithm = "sha1" if len(object_id_bytes) == 40 else "sha256"
+        worktree_object = hashlib.new(algorithm)
         descriptor = None
         try:
+            # A tracked pathname can be replaced with a FIFO before opening.
+            # Nonblocking open and bounded streaming protect the source gate.
             descriptor = os.open(
                 source_path,
-                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0),
             )
-            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-                raise OSError("tracked source is not a regular file")
-            with os.fdopen(descriptor, "rb") as source_handle:
+            before = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or before.st_size > _MAX_TRACKED_SOURCE_BYTES
+            ):
+                raise OSError("tracked source is not a bounded single-link regular file")
+            worktree_object.update(
+                b"blob " + str(before.st_size).encode("ascii") + b"\0"
+            )
+            with os.fdopen(descriptor, "rb", buffering=0) as source_handle:
                 descriptor = None
-                source_bytes = source_handle.read()
+                remaining = before.st_size
+                while remaining:
+                    chunk = source_handle.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise OSError("tracked source was truncated during hashing")
+                    worktree_object.update(chunk)
+                    remaining -= len(chunk)
+                if source_handle.read(1):
+                    raise OSError("tracked source grew during hashing")
+                after = os.fstat(source_handle.fileno())
+            fields = (
+                "st_dev", "st_ino", "st_mode", "st_nlink",
+                "st_size", "st_mtime_ns", "st_ctime_ns",
+            )
+            if any(getattr(before, field) != getattr(after, field) for field in fields):
+                raise OSError("tracked source changed during hashing")
+            try:
+                _require_published_evidence_path(
+                    source_path, after, label="Tracked Git source"
+                )
+            except ValueError as exc:
+                raise OSError("tracked source pathname changed during hashing") from exc
         except OSError as exc:
             raise SystemExit(
                 "Cannot attest exact Git source bytes for main study"
@@ -295,11 +332,6 @@ def _git_source_state() -> dict:
             if descriptor is not None:
                 os.close(descriptor)
 
-        algorithm = "sha1" if len(object_id_bytes) == 40 else "sha256"
-        worktree_object = hashlib.new(algorithm)
-        worktree_object.update(
-            b"blob " + str(len(source_bytes)).encode("ascii") + b"\0" + source_bytes
-        )
         if worktree_object.hexdigest().encode("ascii") != object_id_bytes:
             raise SystemExit(
                 "Git tracked source bytes do not match HEAD; "
