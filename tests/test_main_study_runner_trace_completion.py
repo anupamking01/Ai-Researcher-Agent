@@ -171,7 +171,7 @@ def test_completion_gate_requires_source_bound_markdown_report(
     elif problem == "empty":
         report.write_text("", encoding="utf-8")
     elif problem == "wrong_words":
-        report.write_text("Only one", encoding="utf-8")
+        report.write_text("One two three", encoding="utf-8")
     elif problem == "redirected":
         report.unlink()
         destination = tmp_path / "outsider.md"
