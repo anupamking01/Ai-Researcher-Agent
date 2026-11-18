@@ -1,10 +1,12 @@
 name: tests
 
+# Research pull requests use one complete, source-bound CI suite rather than
+# launching duplicate 16-shard suites for both push and pull_request events.
+# Standalone research branches can run this workflow via workflow_dispatch.
 on:
   push:
     branches:
       - main
-      - "research-*"
   pull_request:
   workflow_dispatch:
 

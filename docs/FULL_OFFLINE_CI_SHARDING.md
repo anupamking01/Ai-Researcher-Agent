@@ -101,3 +101,41 @@ historical evaluator-recovery comparability limitations. Retrospective
 sensitivities remain exploratory. Original report/trace authentication,
 human distribution, independent annotators, genuine ratings, agreement,
 and reconciliation remain blocked or pending.
+
+## One complete suite per open research PR — 18 November 2026
+
+The prior `tests.yml` automatically launched a sixteen-shard push suite **and**
+a sixteen-shard pull-request suite for each research-branch commit associated
+with an open PR, in addition to specialist workflows. Each full suite allowed
+up to eight concurrent shards, so the two events could make sixteen shard
+jobs eligible simultaneously. At commit
+`ea5f240d875623950888e8712c4ac45cd84a32c6`, [push run 44276856620](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/44276856620)
+had a cancelled shard 8, while [PR run 44276865248](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/44276865248)
+had cancelled shards 4 and 13. Their aggregate replay jobs were skipped.
+Different cancelled shards do not establish a single test failure or prove
+runner saturation; neither incomplete run certified the full suite.
+
+The ordinary suite now runs automatically on **all pull requests** and on
+**pushes to `main`**, but not on ordinary research-branch pushes. The open
+research PR's full 16-shard suite is still mandatory, including exact-tested
+checkout, strict firewalled pytest, complete per-shard receipts, and the
+success-only downloaded sixteen-shard replay. A standalone research branch
+**without a pull request** must use `workflow_dispatch` against that branch
+(or open a PR) to obtain full-suite certification. Specialist fast lanes
+retain their own push/PR triggers. This routing reduces duplicate full-suite
+work for an open research PR; it does **not** show that CI cancellation is
+fixed or relax the sixteen-shard success criterion. The GitHub PR integration
+checkout SHA may differ from the source branch head; all receipt verification
+continues to bind to the actual tested checkout SHA.
+
+Synthetic offline trigger-policy regressions in
+`tests/test_full_ci_event_isolation.py` reject research push duplication,
+removal of pull-request/manual triggers, and pull-request path or branch
+filters that could silently skip a complete research validation.
+
+Scientific boundaries are unchanged: the pilot is diagnostic; frozen
+main-study automated inference has post-collection plan, fixed-order and
+evaluator-comparability limitations; retrospective sensitivities are
+exploratory. Historical original treatment artifact authentication and
+blinded human evaluation remain incomplete. No treatment, evaluator, or
+human ratings were rerun or generated to change outcomes.
