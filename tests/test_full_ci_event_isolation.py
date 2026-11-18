@@ -37,9 +37,9 @@ def _event_policy_problems(source: str) -> list[str]:
         problems.append("unexpected or missing full-suite events")
     if events.get("push") != {"branches": ["main"]}:
         problems.append("full suite push must target only main")
-    if "pull_request" not in events or events["pull_request"] is not None:
+    if "pull_request" not in events or events["pull_request"] != "":
         problems.append("full suite must run for every pull request")
-    if "workflow_dispatch" not in events or events["workflow_dispatch"] is not None:
+    if "workflow_dispatch" not in events or events["workflow_dispatch"] != "":
         problems.append("full suite must permit manual research-branch dispatch")
     return problems
 
