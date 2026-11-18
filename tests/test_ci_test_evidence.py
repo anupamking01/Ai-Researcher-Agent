@@ -254,20 +254,20 @@ def test_full_ci_requires_test_completion_from_every_selected_module(
     # two results from one module must not certify both selected modules.
     log, _ = _synthetic_full_shard(tmp_path, monkeypatch)
     (tmp_path / "tests" / "test_zz.py").write_text(
-        "def test_other(): assert True\\n", encoding="utf-8"
+        "def test_other(): assert True\n", encoding="utf-8"
     )
-    manifest = b"tests/test_00.py\\ntests/test_zz.py\\n"
+    manifest = b"tests/test_00.py\ntests/test_zz.py\n"
     log = (
         log.replace(b"selected 1 modules; checkout", b"selected 2 modules; checkout")
         .replace(
-            b"tests/test_00.py\\n" + evidence.FIREWALL_MARKER.encode(),
-            b"tests/test_00.py\\ntests/test_zz.py\\n"
+            b"tests/test_00.py\n" + evidence.FIREWALL_MARKER.encode(),
+            b"tests/test_00.py\ntests/test_zz.py\n"
             + evidence.FIREWALL_MARKER.encode(),
         )
         .replace(b"collected 1 items", b"collected 2 items")
         .replace(
             b"tests/test_00.py::test_ok PASSED [100%]",
-            b"tests/test_00.py::test_first PASSED [ 50%]\\n"
+            b"tests/test_00.py::test_first PASSED [ 50%]\n"
             b"tests/test_zz.py::test_other PASSED [100%]",
         )
         .replace(b"1 passed in 0.2s", b"2 passed in 0.2s")
