@@ -308,6 +308,25 @@ def _git_source_state() -> dict:
     return {"commit": commit, "tree": tree}
 
 
+def _require_source_state_unchanged(expected: dict, *, phase: str) -> None:
+    """Fail closed on observed tracked-source drift between treatment cells.
+
+    Convert checkout-attestation exits into ordinary validation failures so
+    the active cell is recorded as failed rather than stranding its progress.
+    This is not an atomic snapshot of source bytes during an agent call.
+    """
+    try:
+        observed = _git_source_state()
+    except SystemExit as exc:
+        raise ValueError(
+            f"Cannot attest main-study Git sources {phase}: {exc}"
+        ) from exc
+    if observed != expected:
+        raise ValueError(
+            f"Main-study Git source identity changed {phase}; refusing treatment"
+        )
+
+
 def _read_tracked_requirements_lock(lock_path: Path, expected_path: str) -> bytes:
     """Read one exact tracked regular-file requirements blob at ``HEAD``."""
     repository_root = REPO_ROOT.resolve()
@@ -1515,20 +1534,30 @@ async def _run_main_study() -> None:
             error = None
             prior_trace_paths = _treatment_trace_paths()
             try:
+                _require_source_state_unchanged(
+                    source_state, phase="before treatment"
+                )
                 prior_trace_fingerprints = _snapshot_treatment_traces(
                     prior_trace_paths
                 )
                 prior_report_fingerprints = _snapshot_treatment_reports(
                     prior_trace_paths
                 )
-                await run_agent(
-                    task=task["question"],
-                    report_type="research_report",
-                    agent="Academic Research Agent",
-                    agent_role_prompt=None,
-                    websocket=socket,
-                    experiment_config=config,
-                )
+                try:
+                    await run_agent(
+                        task=task["question"],
+                        report_type="research_report",
+                        agent="Academic Research Agent",
+                        agent_role_prompt=None,
+                        websocket=socket,
+                        experiment_config=config,
+                    )
+                finally:
+                    # Check source provenance even when the agent times out or
+                    # raises: a modified checkout cannot be accepted silently.
+                    _require_source_state_unchanged(
+                        source_state, phase="after treatment"
+                    )
                 _require_new_completed_trace(
                     prior_trace_paths, prior_fingerprints=prior_trace_fingerprints,
                     prior_report_fingerprints=prior_report_fingerprints,

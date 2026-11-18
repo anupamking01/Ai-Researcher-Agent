@@ -122,3 +122,22 @@ moving the containing directory after the original descriptor was opened.
 This detects the observed swap; it is not an atomic snapshot, complete defense
 against hostile ancestor races, independent authentication of missing original
 archives, or a claim about frozen automated or human results.
+
+### Per-treatment Git source continuity for noncanonical replication
+
+A clean, byte-verified Git checkout at manifest creation does not by itself
+establish that the same tracked code remained in place during all later
+treatments. The noncanonical runner now reattests the tracked Git source state
+immediately before each agent call and again on exit, **including when the
+agent raises an exception**. An observed dirty/unattestable checkout or changed
+commit/tree is recorded as a failed treatment with durable progress, and no
+next treatment is started. Three offline synthetic regression cases cover
+pre-call drift, post-call identity drift, and failed post-call attestation,
+without running a model or producing scientific measurements.
+
+This detects observed local tracked-source changes at check boundaries; it
+does not establish a continuous atomic snapshot, rule out changes reverted
+between checks, protect untracked/ignored runtime dependencies, or authenticate
+the missing original September artifacts. It does not promote the diagnostic
+pilot, retrospective exploratory findings, or pending human validation into
+confirmatory research evidence.

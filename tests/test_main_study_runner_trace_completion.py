@@ -457,3 +457,84 @@ def test_published_evidence_path_cannot_swap_parent_directory_after_open(
                 )
     assert relocated_dirs, "test must redirect the parent after descriptor open"
     assert target.read_bytes() == original_bytes
+
+@pytest.mark.parametrize("drift", [
+    "before_treatment", "during_treatment", "unattestable_after_treatment",
+])
+def test_source_drift_fails_closed_and_records_failed_cell(
+    tmp_path, monkeypatch, drift,
+):
+    """Synthetic Git provenance changes never start a second agent treatment."""
+    monkeypatch.setattr(study, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        study, "TRACE_ROOT", tmp_path / "outputs" / "experiment_traces",
+    )
+    monkeypatch.setattr(study.sys, "argv", [
+        "run_budget_main_study.py", "--noncanonical-replication-ack",
+        study.NONCANONICAL_REPLICATION_ACK,
+    ])
+    for name, value in {
+        "OPENAI_API_KEY": "synthetic-nonsecret",
+        "SMART_LLM_MODEL": "fake", "FAST_LLM_MODEL": "fake",
+        "TEMPERATURE": "1",
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(study, "_load_task_file", lambda *_: (
+        "test-tasks", [{"id": "main-01", "question": "Synthetic question"}],
+        {"path": "test.json", "size_bytes": 2, "sha256": "0" * 64},
+    ))
+    monkeypatch.setattr(study, "_load_pricing", lambda *_: (
+        PRICING, {"path": "rates.json", "size_bytes": 2, "sha256": "0" * 64},
+    ))
+    monkeypatch.setattr(study, "_execution_environment", lambda: {})
+    monkeypatch.setattr(study, "_verify_repository_module_origin", lambda *_: None)
+
+    calls = []
+    source_checks = []
+
+    def synthetic_source_state():
+        source_checks.append(len(calls))
+        if drift == "before_treatment" and len(source_checks) >= 3:
+            return {"commit": "f" * 40, "tree": "b" * 40}
+        if calls and drift == "during_treatment":
+            return {"commit": "a" * 40, "tree": "f" * 40}
+        if calls and drift == "unattestable_after_treatment":
+            raise SystemExit("synthetic dirty checkout")
+        return {"commit": "a" * 40, "tree": "b" * 40}
+
+    monkeypatch.setattr(study, "_git_source_state", synthetic_source_state)
+
+    async def fake_agent(**kwargs):
+        calls.append(kwargs["experiment_config"].variant_id)
+        _write(study.TRACE_ROOT, _payload())
+        return "Synthetic report", "synthetic-report.md"
+
+    original_import = study.importlib.import_module
+
+    def fake_import(name):
+        if name == "logic.experiment":
+            return SimpleNamespace(ExperimentConfig=ExperimentConfig)
+        if name == "logic.run":
+            return SimpleNamespace(run_agent=fake_agent)
+        return original_import(name)
+
+    monkeypatch.setattr(study.importlib, "import_module", fake_import)
+    with pytest.raises(
+        SystemExit, match="stopped after D3/main-01 status=failed"
+    ):
+        asyncio.run(study._run_main_study())
+
+    progress = json.loads(
+        (tmp_path / "outputs" / "main_study_progress.json").read_text()
+    )
+    assert calls == ([] if drift == "before_treatment" else ["D3"])
+    assert len(source_checks) >= 3
+    assert progress["attempted_runs"] == progress["failed_runs"] == 1
+    assert progress["completed_runs"] == progress["timeout_runs"] == 0
+    assert progress["current"] is None
+    assert progress["events"][0]["status"] == "failed"
+    assert (
+        "Git source identity changed" in progress["events"][0]["error"]
+        if drift != "unattestable_after_treatment"
+        else "Cannot attest main-study Git sources" in progress["events"][0]["error"]
+    )
