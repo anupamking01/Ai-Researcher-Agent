@@ -363,6 +363,48 @@ def test_quadratic_weighted_kappa_is_undefined_for_single_constant_category():
     assert quadratic_weighted_kappa([(3, 3), (3, 3)]) is None
 
 
+def test_quadratic_weighted_kappa_accepts_single_use_pairs_without_reiteration():
+    class SingleUsePairs:
+        traversals = 0
+
+        def __iter__(self):
+            self.traversals += 1
+            if self.traversals != 1:
+                raise AssertionError("paired ratings traversed more than once")
+            yield from [(1, 1), (5, 5), (1, 5), (5, 1)]
+
+    source = SingleUsePairs()
+    assert quadratic_weighted_kappa(source) == pytest.approx(0.0)
+    assert source.traversals == 1
+    assert quadratic_weighted_kappa(iter(())) is None
+
+
+def test_quadratic_weighted_kappa_rejects_noniterable_pairs():
+    with pytest.raises(ValueError, match="pairs must be iterable"):
+        quadratic_weighted_kappa(None)
+
+
+def test_quadratic_weighted_kappa_stops_infinite_pairs_at_first_excess():
+    seen = 0
+
+    def unending_pairs():
+        nonlocal seen
+        while True:
+            seen += 1
+            yield (3, 3)
+
+    with pytest.raises(ValueError, match="diagnostic safety limit"):
+        quadratic_weighted_kappa(unending_pairs())
+    assert seen == freeze_module.MAX_DIRECT_AGREEMENT_ROWS + 1
+
+
+def test_quadratic_weighted_kappa_accepts_inclusive_diagnostic_boundary():
+    n = freeze_module.MAX_DIRECT_AGREEMENT_ROWS
+    # Perfect agreement with both endpoints represented has defined kappa 1.
+    pairs = ((1, 1) if i % 2 == 0 else (5, 5) for i in range(n))
+    assert quadratic_weighted_kappa(pairs) == pytest.approx(1.0)
+
+
 def test_freeze_fails_closed_until_every_packet_item_is_double_rated(tmp_path: Path):
     packet = _packet(tmp_path)
     protocol = _protocol(tmp_path)

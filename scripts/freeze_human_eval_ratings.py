@@ -11,6 +11,7 @@ No ratings are generated, imputed, adjudicated, or joined to treatment labels.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 import argparse
 import csv
 import ctypes
@@ -44,9 +45,10 @@ FROZEN_ANNOTATOR_GUIDE_SHA256 = (
     "3e27ef38231ed70fe36370af31ced7762a253a72dc5cc4997d8ef62d0a6e3370"
 )
 MIN_RATERS_PER_ITEM = 2
-# Resource guard for independent notebook diagnostics, not a new protocol
-# limit on eligible annotators. Canonical analysis still requires a verified
-# blinded freeze; a direct helper cannot establish readiness or authenticity.
+# Resource guard for independent notebook agreement and direct-kappa diagnostics,
+# not a new protocol limit on eligible annotators. Canonical analysis still
+# requires a verified blinded freeze; direct helpers cannot establish readiness
+# or authenticity.
 MAX_DIRECT_AGREEMENT_ROWS = 4096
 # Bound every externally supplied or retained freeze input before allocation.
 # The packet builder permits up to 64 MiB per capture; use the same ceiling
@@ -1098,22 +1100,31 @@ def _score(row: dict, field: str) -> int | None:
     )
 
 
-def quadratic_weighted_kappa(pairs: list[tuple[int, int]]) -> float | None:
+def quadratic_weighted_kappa(pairs: Iterable[tuple[int, int]]) -> float | None:
     """Return quadratic-weighted Cohen's kappa for ordinal 1-5 pairs.
 
-    ``None`` is returned when expected weighted disagreement is zero, where
-    kappa is mathematically undefined (for example both raters use one identical
-    category for every overlapping item).
+    Consume a one-pass stream once, rejecting the first excess observation
+    instead of hanging or silently computing agreement on a truncated subset.
+    ``None`` is returned for no pairs or zero expected weighted disagreement,
+    where kappa is mathematically undefined (e.g. identical constant ratings).
+    This helper does not authenticate a human-evaluation freeze.
     """
-    if not pairs:
-        return None
+    try:
+        iterator = iter(pairs)
+    except TypeError as exc:
+        raise ValueError("quadratic-weighted kappa pairs must be iterable") from exc
 
-    n = len(pairs)
+    n = 0
     first = [0] * 5
     second = [0] * 5
     observed = [[0] * 5 for _ in range(5)]
 
-    for pair in pairs:
+    for pair in iterator:
+        if n >= MAX_DIRECT_AGREEMENT_ROWS:
+            raise ValueError(
+                "quadratic-weighted kappa pairs exceed the "
+                f"{MAX_DIRECT_AGREEMENT_ROWS}-record diagnostic safety limit"
+            )
         # Python negative indexing otherwise maps a score of zero to category 5,
         # producing a plausible but invalid agreement estimate. Reject malformed
         # direct helper inputs even when no CSV importer has been called.
@@ -1130,6 +1141,10 @@ def quadratic_weighted_kappa(pairs: list[tuple[int, int]]) -> float | None:
         observed[i][j] += 1
         first[i] += 1
         second[j] += 1
+        n += 1
+
+    if n == 0:
+        return None
 
     # Both quadratic-weighted disagreements share the factor 1/16.
     # Cancel it algebraically, and accumulate exact integer category counts

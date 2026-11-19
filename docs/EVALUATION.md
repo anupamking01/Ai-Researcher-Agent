@@ -1059,6 +1059,20 @@ retains the exact attestation bytes and the independent verifier reparses them;
 the declaration is auditable provenance, not independent proof of identity or
 conduct.
 
+For independent **pre-unblinding agreement diagnostics**, the direct
+`quadratic_weighted_kappa` helper now consumes a one-pass paired-score
+iterator exactly once and fails on the first item above 4,096 observations.
+Previously a generator could fail at `len()` instead of evaluating its
+complete pairs; an unbounded producer could not be safely accepted. The
+bounded streaming implementation preserves the exact ordinal 1–5
+quadratic-weighted estimator and its undefined-kappa rule for empty or
+degenerate pairs. The 4,096-item boundary is a direct-helper resource
+limit, **not** a permitted subsampling rule or change to frozen assignment
+or inference. Synthetic regression tests cover one-pass, empty, invalid,
+infinite, and inclusive-boundary inputs. No human scores were created,
+inspected, or modified; a direct agreement value cannot substitute for a
+verified blinded freeze or genuine independent annotators.
+
 After real ratings are frozen, the complementary human-analysis command writes
 a create-only result bundle whose manifest binds the exact analysis and verifier
 sources, both `requirements.txt` and `requirements-ci.lock`, `.python-version`,
