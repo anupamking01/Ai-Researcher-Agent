@@ -603,3 +603,28 @@ treatment reports/traces, establish human annotation readiness, alter frozen
 automated outcomes, or run experimental treatments. Pilot, qualified
 post-collection designated-primary, exploratory, and pending human-validation
 claims remain separate.
+
+## Fail closed on unawaited early unittest test methods (19 November 2026)
+
+The pre-install, dependency-free diagnostic receipt checks the declared
+`unittest.TestCase` test-method names against a complete green transcript.
+Previously its AST inventory also accepted `async def test_*` methods, even
+though ordinary `unittest.TestCase` does **not** await them. When Python
+warnings are suppressed, a coroutine whose body would fail can be reported
+as `... ok` without its assertions ever executing; an internally consistent
+receipt could then certify a test that was never exercised.
+
+The source inventory now **rejects asynchronous test methods** in the fixed
+`DependencyFreeEvaluationGate` suite before accepting any successful receipt.
+Ordinary synchronous methods remain permitted, as do asynchronous helpers
+that are not test methods. Synthetic regression tests demonstrate the false
+green behavior with suppressed warnings and the new source-level rejection.
+
+This ensures one narrow test-execution semantic, not independent GitHub runner
+attestation or proof that every assertion in an arbitrary source file ran.
+No original research treatments or evaluator outputs are rerun or changed.
+The pilot remains diagnostic, the frozen automated findings remain
+post-collection and subject to fixed-order/evaluator-comparability
+qualifications, retrospective sensitivities remain exploratory, and
+human validation awaits authenticated original source reports and genuine
+independent ratings.

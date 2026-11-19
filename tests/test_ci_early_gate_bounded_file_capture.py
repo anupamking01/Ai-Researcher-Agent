@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 import stat
 import sys
@@ -116,3 +117,48 @@ def test_early_create_refuses_existing_receipt_without_overwrite(tmp_path, monke
     assert error.value.code == 1
     assert "VERA EARLY CI RECEIPT: FAIL" in capsys.readouterr().err
     assert existing.read_bytes() == b"earlier retained evidence"
+
+def test_async_unittest_cannot_pass_early_receipt_even_with_warnings_suppressed(tmp_path):
+    """A coroutine in unittest.TestCase can report OK without running assert False."""
+    source = (
+        "import unittest\n"
+        "class DependencyFreeEvaluationGate(unittest.TestCase):\n"
+        + "".join(
+            f"    def test_sync_{index}(self): assert True\n"
+            for index in range(7)
+        )
+        + "    async def test_unawaited(self): assert False\n"
+    )
+    path = tmp_path / "test_evaluation_stdlib_gate.py"
+    path.write_text(source, encoding="utf-8")
+    observed = subprocess.run(
+        [
+            sys.executable, "-W", "ignore", "-m", "unittest", "discover",
+            "-s", str(tmp_path), "-p", path.name, "-v",
+        ],
+        capture_output=True, text=True, check=False, timeout=20,
+    )
+    assert observed.returncode == 0, observed.stderr
+    assert "test_unawaited (" in observed.stderr
+    assert "Ran 8 tests" in observed.stderr
+    assert observed.stderr.rstrip().endswith("OK")
+    # The previous inventory accepted this source and could certify a
+    # forged-looking all-OK transcript for a test whose body never executed.
+    with pytest.raises(ValueError, match="async early diagnostic test methods"):
+        early._declared_early_test_names(path.read_bytes())
+
+
+def test_early_inventory_preserves_synchronous_tests_with_async_helpers():
+    """Only coroutine *test methods* are forbidden, not unrelated helpers."""
+    source = (
+        "import unittest\n"
+        "class DependencyFreeEvaluationGate(unittest.TestCase):\n"
+        + "".join(
+            f"    def test_sync_{index}(self): assert True\n"
+            for index in range(7)
+        )
+        + "    async def helper_not_a_test(self): return None\n"
+    ).encode("utf-8")
+    assert early._declared_early_test_names(source) == [
+        f"test_sync_{index}" for index in range(7)
+    ]

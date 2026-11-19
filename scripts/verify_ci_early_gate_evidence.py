@@ -61,9 +61,19 @@ def _declared_early_test_names(source: bytes) -> list[str]:
         for base in suites[0].bases
     ):
         raise ValueError("missing unique early diagnostic unittest suite")
-    names = [node.name for node in suites[0].body
-             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-             and node.name.startswith("test_")]
+    # unittest.TestCase does not await coroutine test methods. When Python
+    # warnings are suppressed, an async test can report "... ok" without
+    # evaluating its assertions; do not certify that as an executed test.
+    declared_tests = [
+        node for node in suites[0].body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("test_")
+    ]
+    if any(isinstance(node, ast.AsyncFunctionDef) for node in declared_tests):
+        raise ValueError(
+            "async early diagnostic test methods are not supported by unittest.TestCase"
+        )
+    names = [node.name for node in declared_tests]
     if len(names) < 7 or len(names) != len(set(names)):
         raise ValueError("incomplete or duplicated declared early test methods")
     return sorted(names)
