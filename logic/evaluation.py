@@ -366,6 +366,11 @@ def paired_metric_comparison(
 
     baseline_values = _finite_values(baseline, label="baseline values")
     candidate_values = _finite_values(candidate, label="candidate values")
+    # A live/custom Sequence may change between its len() check and iteration.
+    # zip() would otherwise silently drop unmatched observed tasks, reporting
+    # a smaller (but apparently valid) denominator for the paired comparison.
+    if len(baseline_values) != len(candidate_values):
+        raise ValueError("paired comparisons require equal-length sequences")
     deltas = [
         _finite_float(new - old, label="paired deltas")
         for old, new in zip(baseline_values, candidate_values)

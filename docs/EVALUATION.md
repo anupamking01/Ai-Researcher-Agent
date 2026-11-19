@@ -9,6 +9,26 @@ The project has progressed beyond the original proposed-study document. Pilot in
 Human quality ratings are **not yet results**. They remain pending and must be collected under `paper/HUMAN_EVAL_PROTOCOL.md` before any human-quality claim is made.
 
 
+### Positional diagnostic pairing checks observed row counts (prospective only)
+
+The low-level `paired_metric_comparison` now compares the **actual
+validated observation counts** after traversing each arm, in addition to its
+existing preliminary `len()` check. Previously, a custom or live `Sequence`
+could advertise equal lengths at that preliminary check but yield unequal
+numbers of rows when read. Python's `zip()` would silently omit unmatched
+observations, report a reduced `n_pairs` denominator and generate a
+plausible but invalid paired difference summary. Synthetic cases exercise
+both a disappearing baseline/candidate observation and an extra observation,
+while a compatible equal-sized one-pass traversal remains unchanged.
+
+This does not identify tasks or authenticate the underlying reference:
+callers still must align positional rows by task or use the stricter
+`paired_metric_comparison_by_task` with an independently supplied task manifest.
+It only protects **prospective in-memory diagnostics**, not the frozen
+post-collection automated analysis. The pilot remains diagnostic,
+retrospective sensitivity analysis exploratory, and actual independently
+blinded human ratings and original artifact authentication outstanding.
+
 ### One-population diagnostic aggregation (prospective only)
 
 `logic.evaluation.aggregate_runs` now takes **one in-memory tuple snapshot**

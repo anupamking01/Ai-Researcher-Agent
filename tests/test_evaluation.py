@@ -681,6 +681,62 @@ def test_paired_metric_comparison_preserves_task_pairing():
     assert summary["losses"] == 1
 
 
+@pytest.mark.parametrize(
+    ("baseline_rows", "candidate_rows"),
+    [
+        ([0.25, 0.5], [0.75]),
+        ([0.25], [0.75, 1.0]),
+    ],
+)
+def test_paired_metric_comparison_rejects_stale_sequence_lengths(
+    baseline_rows, candidate_rows
+):
+    # Both arms initially claim two rows, but one observation disappears
+    # or appears before the actual data traversal. zip() must not quietly
+    # truncate an unmatched candidate/baseline task.
+    class ChangingSequence:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def __len__(self):
+            return 2
+
+        def __iter__(self):
+            return iter(self.rows)
+
+        def __getitem__(self, index):
+            return self.rows[index]
+
+    with pytest.raises(ValueError, match="equal-length"):
+        paired_metric_comparison(
+            ChangingSequence(baseline_rows), ChangingSequence(candidate_rows)
+        )
+
+
+def test_paired_metric_comparison_accepts_equal_snapshot_sizes():
+    class OnceSequence:
+        def __init__(self, rows):
+            self.rows = rows
+            self.iterations = 0
+
+        def __len__(self):
+            return 2
+
+        def __iter__(self):
+            self.iterations += 1
+            return iter(self.rows)
+
+        def __getitem__(self, index):
+            return self.rows[index]
+
+    baseline = OnceSequence([0.25, 0.5])
+    candidate = OnceSequence([0.75, 0.25])
+    result = paired_metric_comparison(baseline, candidate)
+    assert result["n_pairs"] == 2
+    assert (result["wins"], result["ties"], result["losses"]) == (1, 0, 1)
+    assert baseline.iterations == candidate.iterations == 1
+
+
 def test_paired_metric_comparison_handles_empty_and_rejects_misalignment():
     assert paired_metric_comparison([], []) == {
         "n_pairs": 0,
