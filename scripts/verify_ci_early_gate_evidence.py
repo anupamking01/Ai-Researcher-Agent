@@ -14,7 +14,10 @@ import json
 from pathlib import Path
 import re
 
-from scripts.verify_ci_test_evidence import read_bounded_evidence
+from scripts.verify_ci_test_evidence import (
+    read_bounded_evidence,
+    write_create_only_receipt,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_LOG_BYTES = 256 * 1024
@@ -198,8 +201,9 @@ def main() -> int:
         )
         canonical = _canonical(expected)
         if args.mode == "create":
-            with args.receipt.open("xb") as output:
-                output.write(canonical)
+            # Reuse the vetted no-follow, create-only CI publisher rather than
+            # allowing a symlinked ancestor to redirect pre-install evidence.
+            write_create_only_receipt(args.receipt, expected)
         else:
             original = read_bounded_evidence(
                 args.receipt, maximum=MAX_RECEIPT_BYTES,

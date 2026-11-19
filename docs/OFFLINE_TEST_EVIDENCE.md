@@ -1,3 +1,25 @@
+## Bind pre-install diagnostic receipt publication to the actual destination (19 November 2026)
+
+The dependency-free early unittest receipt used exclusive `Path.open("xb")`,
+which refused a preexisting leaf but still followed a **symlinked parent**.
+Consequently, a redirected `--receipt` parent could publish its apparently
+verified pre-install result outside the intended evidence directory. The early
+producer now reuses the existing, source-fingerprinted full-pytest receipt
+writer, which opens each ancestor via no-follow directory descriptors, refuses
+parent traversal and existing leaves, creates private 0600 files, and checks
+identity after writing. The canonical JSON bytes and independent early-receipt
+replay contract are unchanged; there is no new evidence schema or copied
+publisher implementation.
+
+Synthetic early-CLI regressions cover redirected parent rejection, lexical
+parent-traversal rejection, overwrite refusal, and legitimate 0600 publication.
+This improves local diagnostic evidence custody, not independent GitHub-runner
+attestation, authentication of the expired historical treatment artifacts, or
+proof of any research outcome. The five-task pilot remains diagnostic; frozen
+automated inference retains its post-collection plan, fixed-order, and common-
+evaluator comparability limitations; sensitivity analyses remain exploratory;
+and genuine blinded human ratings and reconciliation are still pending.
+
 ## Create-only, no-follow CI receipt publication (19 November 2026)
 
 The offline test receipt producer previously wrote its final JSON with
