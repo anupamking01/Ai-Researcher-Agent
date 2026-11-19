@@ -193,8 +193,10 @@ def test_regular_support_files_still_allow_exact_test_module_inventory(tmp_path)
     "tests/nested/./test_alias.py",
     "tests//test_alias.py",
     "tests/nested//test_alias.py",
-    "tests\\\\test_windows_alias.py",
-    "tests/nested\\\\test_windows_alias.py",
+    "tests\\test_windows_alias.py",
+    "tests/nested\\test_windows_alias.py",
+    "tests\\\\test_double_alias.py",
+    "tests/nested\\\\test_double_alias.py",
 ])
 def test_direct_partition_api_rejects_noncanonical_module_aliases(unsafe_module):
     # Direct callers must not bypass the canonical POSIX file inventory that

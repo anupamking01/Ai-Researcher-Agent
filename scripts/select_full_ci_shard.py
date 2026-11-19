@@ -95,7 +95,7 @@ def _canonical_selected_module(path: object) -> bool:
     explicit list to select_shard/verify_partition. Do not accept aliases
     that collapse through '..', '.' or empty components, or backslash paths.
     """
-    if type(path) is not str or "\\\\" in path:
+    if type(path) is not str or "\\" in path:
         return False
     components = path.split("/")
     return (
