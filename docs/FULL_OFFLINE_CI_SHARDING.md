@@ -301,3 +301,26 @@ duplicate suite. The separate synthetic trigger mutation tests continue to
 reject filtered or missing PR events. Only a fresh, complete sixteen-shard
 passing workflow plus evidence replay can establish full-suite success.
 No research treatment, evaluator, frozen analysis or human rating is changed.
+
+
+## Canonical direct test-module selection — 19 November 2026
+
+The 16-shard source discoverer emits relative POSIX paths under `tests/`,
+but `select_shard` and `verify_partition` can also receive module lists
+from programmatic callers. These direct paths are now required to use the
+same canonical lexical representation: no `..` traversal, `.` aliases,
+empty path components (including repeated slashes), or backslashes, and a
+matching pytest module basename. A lexically different spelling of one file
+must not become a second purported selected module or escape the declared
+test-tree namespace. Synthetic negative cases exercise each alias family;
+a positive case retains nested modules matching both pytest naming patterns.
+
+This is a **local test-selection input contract**, not proof that all Python
+test functions were collected, an independent source-tree custody attestation,
+or a fix for cancelled CI jobs. The source-bound full-shard receipt, strict
+firewalled pytest, and exact-run sixteen-shard replay remain required.
+No research treatments, evaluators, frozen automated findings, retrospective
+sensitivities, or human ratings are changed. The pilot remains diagnostic;
+designated-primary automated estimates remain qualified by post-collection
+planning, fixed treatment order and evaluator comparability; sensitivity
+analyses are exploratory, and genuine human validation is pending.

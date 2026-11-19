@@ -88,6 +88,25 @@ def discover_modules(root: Path = ROOT) -> tuple[str, ...]:
     return tuple(sorted(paths))
 
 
+def _canonical_selected_module(path: object) -> bool:
+    """Keep direct API selections within unambiguous POSIX tests/ paths.
+
+    Discovery generates canonical relative paths, but callers can also pass an
+    explicit list to select_shard/verify_partition. Do not accept aliases
+    that collapse through '..', '.' or empty components, or backslash paths.
+    """
+    if type(path) is not str or "\\\\" in path:
+        return False
+    components = path.split("/")
+    return (
+        len(components) >= 2
+        and components[0] == "tests"
+        and all(part not in {"", ".", ".."} for part in components)
+        and not _has_unsafe_control(path)
+        and any(Path(components[-1]).match(pattern) for pattern in PATTERNS)
+    )
+
+
 def select_shard(modules: tuple[str, ...], *, shard: int, shards: int = SHARDS) -> tuple[str, ...]:
     if type(shards) is not int or not 1 <= shards <= 64:
         raise ValueError("shards must be an integer between 1 and 64")
@@ -95,9 +114,7 @@ def select_shard(modules: tuple[str, ...], *, shard: int, shards: int = SHARDS) 
         raise ValueError("shard index outside declared matrix")
     if not modules or len(modules) != len(set(modules)):
         raise ValueError("offline test modules must be nonempty and unique")
-    if any(type(path) is not str or not path.startswith("tests/") or
-           not (Path(path).name.startswith("test_") or Path(path).name.endswith("_test.py")) or
-           not path.endswith(".py") or _has_unsafe_control(path) for path in modules):
+    if any(not _canonical_selected_module(path) for path in modules):
         raise ValueError("unexpected offline test module path")
     selected = tuple(sorted(modules)[shard::shards])
     if not selected:

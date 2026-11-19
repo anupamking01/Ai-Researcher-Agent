@@ -184,3 +184,25 @@ def test_regular_support_files_still_allow_exact_test_module_inventory(tmp_path)
         "tests/test_visible.py", "tests/conftest.py", "tests/fixture.data",
     ])
     assert partition.discover_modules(tmp_path) == ("tests/test_visible.py",)
+
+
+@pytest.mark.parametrize("unsafe_module", [
+    "tests/../outside/test_escape.py",
+    "tests/nested/../../test_escape.py",
+    "tests/./test_alias.py",
+    "tests/nested/./test_alias.py",
+    "tests//test_alias.py",
+    "tests/nested//test_alias.py",
+    "tests\\\\test_windows_alias.py",
+    "tests/nested\\\\test_windows_alias.py",
+])
+def test_direct_partition_api_rejects_noncanonical_module_aliases(unsafe_module):
+    # Direct callers must not bypass the canonical POSIX file inventory that
+    # discover_modules() emits. These are synthetic strings, not live tests.
+    with pytest.raises(ValueError, match="unexpected offline test module path"):
+        partition.select_shard((unsafe_module,), shard=0, shards=1)
+
+
+def test_direct_partition_api_accepts_canonical_nested_pytest_patterns():
+    modules = ("tests/nested/test_alpha.py", "tests/nested/beta_test.py")
+    assert partition.select_shard(modules, shard=0, shards=1) == tuple(sorted(modules))
