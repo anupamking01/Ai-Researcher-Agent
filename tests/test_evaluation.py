@@ -713,6 +713,46 @@ def test_paired_metric_comparison_rejects_stale_sequence_lengths(
         )
 
 
+
+@pytest.mark.parametrize(
+    ("declared_length", "actual_rows"),
+    [
+        (2, [0.25]),        # Both arms simultaneously lose a declared task.
+        (1, [0.25, 0.5]),  # Both arms simultaneously gain an undeclared task.
+        (0, [0.25]),       # A declared empty comparison cannot gain a task.
+    ],
+)
+def test_paired_metric_comparison_rejects_common_mode_cardinality_drift(
+    declared_length, actual_rows
+):
+    # The earlier observed-count guard catches one-sided drift. This case
+    # has *equal* observed arm lengths despite both disagreeing with the
+    # original declared count, so a simple equality check is insufficient.
+    class ChangingSequence:
+        def __init__(self, rows):
+            self.rows = rows
+            self.iterations = 0
+            self.length_reads = 0
+
+        def __len__(self):
+            self.length_reads += 1
+            assert self.length_reads == 1  # Do not re-query a live length.
+            return declared_length
+
+        def __iter__(self):
+            self.iterations += 1
+            return iter(self.rows)
+
+        def __getitem__(self, index):
+            return self.rows[index]
+
+    baseline = ChangingSequence(actual_rows)
+    candidate = ChangingSequence(actual_rows)
+    with pytest.raises(ValueError, match="declared counts"):
+        paired_metric_comparison(baseline, candidate)
+    assert baseline.iterations == candidate.iterations == 1
+    assert baseline.length_reads == candidate.length_reads == 1
+
 def test_paired_metric_comparison_accepts_equal_snapshot_sizes():
     class OnceSequence:
         def __init__(self, rows):

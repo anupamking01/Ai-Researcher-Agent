@@ -361,16 +361,22 @@ def paired_metric_comparison(
     inferred here; the returned dispersion and win/tie/loss counts are
     descriptive evidence only.
     """
-    if len(baseline) != len(candidate):
+    expected_pairs = len(baseline)
+    if len(candidate) != expected_pairs:
         raise ValueError("paired comparisons require equal-length sequences")
 
     baseline_values = _finite_values(baseline, label="baseline values")
     candidate_values = _finite_values(candidate, label="candidate values")
-    # A live/custom Sequence may change between its len() check and iteration.
-    # zip() would otherwise silently drop unmatched observed tasks, reporting
-    # a smaller (but apparently valid) denominator for the paired comparison.
-    if len(baseline_values) != len(candidate_values):
-        raise ValueError("paired comparisons require equal-length sequences")
+    # A live/custom Sequence can yield fewer or more rows than advertised.
+    # Even if *both* arms drift by the same count, equal observed lengths
+    # would silently shrink/expand the task denominator. Preserve the
+    # initially declared cardinality as well as exact arm alignment.
+    if (len(baseline_values) != expected_pairs
+            or len(candidate_values) != expected_pairs):
+        raise ValueError(
+            "paired comparisons require equal-length sequences "
+            "matching declared counts"
+        )
     deltas = [
         _finite_float(new - old, label="paired deltas")
         for old, new in zip(baseline_values, candidate_values)

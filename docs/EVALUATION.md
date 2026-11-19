@@ -21,6 +21,15 @@ plausible but invalid paired difference summary. Synthetic cases exercise
 both a disappearing baseline/candidate observation and an extra observation,
 while a compatible equal-sized one-pass traversal remains unchanged.
 
+The same guard now also requires each observed arm to match the **original
+declared** cardinality. Equal observed arm lengths alone did not catch
+common-mode drift: two custom sequences could both advertise two tasks,
+then each yield only one (or advertise one and both yield two), producing
+an apparently valid but silently altered denominator. Three new synthetic
+cases reject both kinds of shared drift, including a falsely empty
+declaration; ordinary equal-length input and one traversal per arm retain
+the existing estimator and output schema.
+
 This does not identify tasks or authenticate the underlying reference:
 callers still must align positional rows by task or use the stricter
 `paired_metric_comparison_by_task` with an independently supplied task manifest.
