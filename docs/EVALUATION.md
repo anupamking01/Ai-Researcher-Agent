@@ -72,6 +72,17 @@ and empty-input conventions retain their original descriptive estimators.
 This is a prospective diagnostic resource boundary, not a limit on historical
 archives or an independent original-report custody check.
 
+Generic aggregation also now requires **validated RunTrace instances** at
+intake, before later input records are read or any metric is published.
+Previously, a duck-typed object exposing the same attribute names could bypass
+RunTrace's checked Boolean completion status and nonnegative/finite telemetry.
+For example, a string `"False"` could be treated as a truthy completed run.
+Synthetic tests reject schema-bypassing impostors even when they expose all
+derived fields, verify fail-fast one-pass behavior, and retain compatible
+RunTrace subclasses. This aligns generic aggregation with the stricter
+task-keyed input contract; the record class alone does not authenticate
+original external experiment traces.
+
 This is **prospective in-memory consistency**, not an atomic filesystem
 snapshot, thread-safe attestation, independent authentication of original
 treatment reports, reanalysis of frozen results, or a new human rating.

@@ -658,10 +658,14 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
     and dispersion expose run-to-run instability explicitly. This in-memory
     snapshot does not authenticate original trace files. Its one-pass capture
     is limited to 10,000 records so an endless or unexpectedly large producer
-    cannot prevent a diagnostic result from failing closed.
+    cannot prevent a diagnostic result from failing closed. Require actual
+    validated RunTrace objects, not duck-typed telemetry that bypasses the
+    record's Boolean, count, and finite-value invariants.
     """
     snapshot: list[RunTrace] = []
     for run in runs:
+        if not isinstance(run, RunTrace):
+            raise ValueError("aggregate_runs requires validated RunTrace records")
         if len(snapshot) >= MAX_DIAGNOSTIC_AGGREGATE_RUNS:
             raise ValueError(
                 "aggregate_runs exceeds the "

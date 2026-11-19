@@ -1,4 +1,5 @@
 from dataclasses import replace
+from types import SimpleNamespace
 import json
 
 import pytest
@@ -320,6 +321,48 @@ def test_aggregate_runs():
     assert summary["total_tokens_stddev"] == 37.5
     assert summary["avg_estimated_cost_usd"] == pytest.approx(0.035)
     assert summary["median_estimated_cost_usd"] == pytest.approx(0.035)
+
+
+@pytest.mark.parametrize("completed", [None, "False", 1])
+def test_aggregate_runs_rejects_unvalidated_duck_typed_records(completed):
+    # This impostor exposes every derived field used by the aggregator, so
+    # attribute-access duck typing used to accept it without RunTrace guards.
+    valid = RunTrace(run_id="valid", completed=False, source_count=2)
+    imposter = SimpleNamespace(**valid.to_dict())
+    if completed is not None:
+        imposter.completed = completed
+    with pytest.raises(ValueError, match="validated RunTrace"):
+        aggregate_runs([valid, imposter])
+
+
+def test_aggregate_runs_rejects_malformed_input_before_reading_more_records():
+    valid = RunTrace(run_id="valid", completed=True, source_count=1)
+    read = []
+
+    def stream():
+        read.append("valid")
+        yield valid
+        read.append("imposter")
+        yield SimpleNamespace(**valid.to_dict())
+        raise AssertionError("consumed rows beyond invalid telemetry")
+
+    with pytest.raises(ValueError, match="validated RunTrace"):
+        aggregate_runs(stream())
+    assert read == ["valid", "imposter"]
+
+
+def test_aggregate_runs_accepts_valid_runtrace_subclass_in_one_pass():
+    class SpecializedTrace(RunTrace):
+        pass
+
+    runs = (
+        SpecializedTrace(run_id=f"special-{i}", completed=bool(i), source_count=i)
+        for i in range(2)
+    )
+    result = aggregate_runs(runs)
+    assert result["n_runs"] == 2
+    assert result["completion_rate"] == 0.5
+    assert result["avg_sources"] == 0.5
 
 
 def test_aggregate_runs_snapshots_a_single_traversal_for_all_metrics():
