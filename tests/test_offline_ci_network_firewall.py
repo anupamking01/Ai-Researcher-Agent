@@ -563,10 +563,10 @@ def test_collection_warning_fails_offline_validation_even_with_a_passing_test(tm
     """One passing test must not conceal another silently uncollected test class."""
     source = tmp_path / "test_missed_collection.py"
     source.write_text(
-        "class TestNotCollected:\\n"
-        "    def __init__(self): pass\\n"
-        "    def test_missing(self): assert False\\n"
-        "def test_present(): assert True\\n",
+        "class TestNotCollected:\n"
+        "    def __init__(self): pass\n"
+        "    def test_missing(self): assert False\n"
+        "def test_present(): assert True\n",
         encoding="utf-8",
     )
     command = [
