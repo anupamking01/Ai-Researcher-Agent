@@ -751,7 +751,9 @@ def test_paired_metric_comparison_rejects_common_mode_cardinality_drift(
     candidate = ChangingSequence(actual_rows)
     with pytest.raises(ValueError, match="declared counts"):
         paired_metric_comparison(baseline, candidate)
-    assert baseline.iterations == candidate.iterations == 1
+    # A malformed first arm now fails before touching the second arm.
+    assert baseline.iterations == 1
+    assert candidate.iterations == 0
     assert baseline.length_reads == candidate.length_reads == 1
 
 def test_paired_metric_comparison_accepts_equal_snapshot_sizes():
