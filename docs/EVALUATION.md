@@ -63,6 +63,15 @@ including source epochs with deliberately contradictory completion and
 cost/latency values. Ordinary fixed `RunTrace` collections keep the same
 descriptive estimates and failed-run denominators.
 
+One-pass capture now also rejects diagnostic populations exceeding **10,000**
+run records. Previously `tuple(runs)` could consume an endless or unexpectedly
+large lazy run producer without ever emitting or rejecting a summary. The
+bounded snapshot reads at most 10,001 records, rejecting the first excess row
+without producing a truncated denominator; the inclusive ceiling, fixed inputs,
+and empty-input conventions retain their original descriptive estimators.
+This is a prospective diagnostic resource boundary, not a limit on historical
+archives or an independent original-report custody check.
+
 This is **prospective in-memory consistency**, not an atomic filesystem
 snapshot, thread-safe attestation, independent authentication of original
 treatment reports, reanalysis of frozen results, or a new human rating.

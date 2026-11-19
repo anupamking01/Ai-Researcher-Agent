@@ -6,6 +6,7 @@ import pytest
 from logic.evaluation import (
     RunTrace,
     MAX_DIAGNOSTIC_REFERENCE_TASKS,
+    MAX_DIAGNOSTIC_AGGREGATE_RUNS,
     MAX_DIAGNOSTIC_POSITIONAL_PAIRS,
     MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS,
     MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES,
@@ -367,6 +368,40 @@ def test_aggregate_runs_does_not_mix_successive_source_epochs():
     source = ChangingRuns(original)
     assert aggregate_runs(source) == aggregate_runs(tuple(original))
     assert source.passes == 1
+
+
+def test_aggregate_runs_rejects_infinite_one_pass_population_at_first_excess():
+    trace = RunTrace(run_id="repeated-synthetic", completed=False, source_count=0)
+    reads = 0
+
+    def endless_runs():
+        nonlocal reads
+        while True:
+            reads += 1
+            yield trace
+
+    with pytest.raises(ValueError, match="diagnostic limit"):
+        aggregate_runs(endless_runs())
+    assert reads == MAX_DIAGNOSTIC_AGGREGATE_RUNS + 1
+
+
+def test_aggregate_runs_rejects_finite_oversized_population():
+    trace = RunTrace(run_id="synthetic", completed=True, source_count=1)
+    with pytest.raises(ValueError, match="diagnostic limit"):
+        aggregate_runs([trace] * (MAX_DIAGNOSTIC_AGGREGATE_RUNS + 1))
+
+
+def test_aggregate_runs_accepts_inclusive_limit_without_changing_estimators():
+    trace = RunTrace(
+        run_id="synthetic", completed=True, source_count=1,
+        latency_seconds=2.5, estimated_cost_usd=0.25,
+    )
+    summary = aggregate_runs(trace for _ in range(MAX_DIAGNOSTIC_AGGREGATE_RUNS))
+    assert summary["n_runs"] == MAX_DIAGNOSTIC_AGGREGATE_RUNS
+    assert summary["completion_rate"] == 1.0
+    assert summary["avg_sources"] == 1.0
+    assert summary["avg_latency_seconds"] == 2.5
+    assert summary["avg_estimated_cost_usd"] == 0.25
 
 
 def test_empty_aggregate_is_defined():

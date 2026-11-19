@@ -17,6 +17,9 @@ from typing import Callable, Iterable, Sequence
 # Resource boundary for untrusted/one-pass independent diagnostic task manifests.
 # This does not apply to frozen automated results or source research archives.
 MAX_DIAGNOSTIC_REFERENCE_TASKS = 10_000
+# Generic diagnostic aggregation must not hang on infinite one-pass run streams.
+# This ceiling is separate from independently authenticated frozen artifacts.
+MAX_DIAGNOSTIC_AGGREGATE_RUNS = 10_000
 # The low-level positional comparison also needs a finite denominator even
 # for custom Sequences whose iterator is unending or misreports __len__.
 MAX_DIAGNOSTIC_POSITIONAL_PAIRS = 10_000
@@ -613,9 +616,19 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
     metric can combine different runs or denominators in a single receipt.
     Means remain available for backwards compatibility. Median latency/cost
     and dispersion expose run-to-run instability explicitly. This in-memory
-    snapshot does not authenticate original trace files.
+    snapshot does not authenticate original trace files. Its one-pass capture
+    is limited to 10,000 records so an endless or unexpectedly large producer
+    cannot prevent a diagnostic result from failing closed.
     """
-    runs = tuple(runs)
+    snapshot: list[RunTrace] = []
+    for run in runs:
+        if len(snapshot) >= MAX_DIAGNOSTIC_AGGREGATE_RUNS:
+            raise ValueError(
+                "aggregate_runs exceeds the "
+                f"{MAX_DIAGNOSTIC_AGGREGATE_RUNS}-run diagnostic limit"
+            )
+        snapshot.append(run)
+    runs = tuple(snapshot)
     if not runs:
         return {
             "n_runs": 0,
