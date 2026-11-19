@@ -1,3 +1,31 @@
+## Fast exact-head certification for early CI receipt regressions (19 November 2026)
+
+The early, dependency-free unittest receipt is replayed in the independent
+`diagnostic-evaluation-fast-ci` workflow. However, that workflow previously
+**did not execute** `tests/test_ci_early_gate_bounded_file_capture.py`, even
+when a change to `scripts/verify_ci_early_gate_evidence.py` triggered it.
+The new async-test rejection, no-follow receipt publication, bounded input
+reads, and source fingerprinting regressions were left dependent on a much
+larger sixteen-shard suite, which can finish cancelled and therefore cannot
+certify those tests.
+
+The fast lane now includes the complete early-receipt regression module in
+its trigger paths, pinned-source compilation and firewalled pytest invocation.
+The workflow's existing source checkout checks, exact-commit test receipt,
+independent replay and 90-day artifact retention cover those tests as part of
+one deterministic offline targeted result. A structural test verifies that
+this coverage is not silently dropped. It adds no live model, browser,
+treatment, evaluator, or human-scoring calls, and changes no scientific data.
+
+A successful targeted lane certifies **only its selected regression scope**.
+It does not replace sixteen-shard aggregate certification, authenticate the
+missing original treatment/report archive, establish prospectively
+precollection-registered inference, or validate human ratings. The earlier
+pilot remains diagnostic; frozen automated findings retain post-collection,
+fixed-order and historical evaluator-comparability limitations; retrospective
+sensitivity analysis remains exploratory; genuine blinded human validation
+still requires original-source custody and real annotators.
+
 ## Bind pre-install diagnostic receipt publication to the actual destination (19 November 2026)
 
 The dependency-free early unittest receipt used exclusive `Path.open("xb")`,

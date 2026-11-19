@@ -16,6 +16,7 @@ WORKFLOW = (
 SCOPE = (
     "bash scripts/run_offline_pytest_firewalled.sh "
     "tests/test_evaluation.py tests/test_evaluation_fast_ci_workflow.py "
+    "tests/test_ci_early_gate_bounded_file_capture.py "
     '2>&1 | tee "$RUNNER_TEMP/vera-diagnostic-evaluation-tests.log"'
 )
 
@@ -50,6 +51,7 @@ def test_fast_diagnostic_ci_uses_pinned_offline_scope_without_provider_calls():
         assert "logic/evaluation.py" in paths
         assert "tests/test_evaluation.py" in paths
         assert "tests/test_evaluation_fast_ci_workflow.py" in paths
+        assert "tests/test_ci_early_gate_bounded_file_capture.py" in paths
         assert ".github/workflows/diagnostic-evaluation-fast-ci.yml" in paths
 
 
@@ -165,3 +167,19 @@ def test_dependency_free_gate_runs_before_pip_and_retains_partial_test_evidence(
     filters = workflows[0]["on"]
     for trigger in ("push", "pull_request"):
         assert "tests/test_evaluation_stdlib_gate.py" in filters[trigger]["paths"]
+
+
+def test_early_receipt_regressions_are_compiled_and_executed_in_fast_lane():
+    """Source and receipt gate changes must receive targeted validation.
+
+    A cancelled full sixteen-shard suite cannot be the only route for tests
+    covering early evidence file capture and non-executing unittest cases.
+    """
+    steps = _load_workflow()["jobs"]["diagnostic-evaluation"]["steps"]
+    by_name = {step["name"]: step for step in steps}
+    compile_step = by_name["Compile only the diagnostic implementation and its tests"]
+    test_step = by_name["Run firewalled diagnostic evaluation regressions"]
+    target = "tests/test_ci_early_gate_bounded_file_capture.py"
+    assert target in compile_step["run"].split()
+    assert target in test_step["run"].split()
+    assert steps.index(compile_step) < steps.index(test_step)
