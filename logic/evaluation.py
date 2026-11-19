@@ -579,12 +579,15 @@ def paired_bootstrap_confidence_interval_by_task(
 
 
 def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
-    """Aggregate run-level traces into experiment-level summary metrics.
+    """Aggregate one stable run population into descriptive summary metrics.
 
+    Snapshot the input once. Reiterating a live/custom Sequence for every
+    metric can combine different runs or denominators in a single receipt.
     Means remain available for backwards compatibility. Median latency/cost
-    and dispersion metrics make comparisons less sensitive to occasional
-    network/model outliers and expose run-to-run instability explicitly.
+    and dispersion expose run-to-run instability explicitly. This in-memory
+    snapshot does not authenticate original trace files.
     """
+    runs = tuple(runs)
     if not runs:
         return {
             "n_runs": 0,

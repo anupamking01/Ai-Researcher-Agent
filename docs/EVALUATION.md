@@ -9,6 +9,27 @@ The project has progressed beyond the original proposed-study document. Pilot in
 Human quality ratings are **not yet results**. They remain pending and must be collected under `paper/HUMAN_EVAL_PROTOCOL.md` before any human-quality claim is made.
 
 
+### One-population diagnostic aggregation (prospective only)
+
+`logic.evaluation.aggregate_runs` now takes **one in-memory tuple snapshot**
+of its supplied run sequence before computing counts, means, medians and
+dispersion. Previously it iterated the input independently for latency,
+tokens, costs, completion and each other metric. A custom sequence that can
+only be traversed once could fail partway through, while a live/replacing
+sequence could silently combine metrics from different populations under
+one `n_runs` denominator. Two synthetic regressions exercise both cases,
+including source epochs with deliberately contradictory completion and
+cost/latency values. Ordinary fixed `RunTrace` collections keep the same
+descriptive estimates and failed-run denominators.
+
+This is **prospective in-memory consistency**, not an atomic filesystem
+snapshot, thread-safe attestation, independent authentication of original
+treatment reports, reanalysis of frozen results, or a new human rating.
+The five-task pilot remains diagnostic; designated-primary automated
+findings retain post-collection planning, fixed-order and evaluator-policy
+qualifications; retrospective sensitivities are exploratory and genuine
+blinded human validation is pending.
+
 ### Declared-budget telemetry consistency for prospective diagnostics
 
 `logic.evaluation.RunTrace` now rejects two internally impossible numeric

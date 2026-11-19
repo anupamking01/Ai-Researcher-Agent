@@ -317,6 +317,57 @@ def test_aggregate_runs():
     assert summary["median_estimated_cost_usd"] == pytest.approx(0.035)
 
 
+def test_aggregate_runs_snapshots_a_single_traversal_for_all_metrics():
+    first = RunTrace(
+        run_id="snapshot-a", completed=True, source_count=2,
+        latency_seconds=2.0, prompt_tokens=20, estimated_cost_usd=0.1,
+    )
+    second = RunTrace(
+        run_id="snapshot-b", completed=False, source_count=0,
+        latency_seconds=6.0, prompt_tokens=40, estimated_cost_usd=0.3,
+    )
+
+    class SingleTraversalRuns(list):
+        passes = 0
+
+        def __iter__(self):
+            self.passes += 1
+            if self.passes != 1:
+                raise AssertionError("diagnostic run population was reread")
+            return super().__iter__()
+
+    source = SingleTraversalRuns([first, second])
+    expected = aggregate_runs((first, second))
+    assert aggregate_runs(source) == expected
+    assert source.passes == 1
+
+
+def test_aggregate_runs_does_not_mix_successive_source_epochs():
+    original = [
+        RunTrace(run_id="original-complete", completed=True, source_count=2,
+                 latency_seconds=2.0, estimated_cost_usd=0.1),
+        RunTrace(run_id="original-failed", completed=False, source_count=0,
+                 latency_seconds=6.0, estimated_cost_usd=0.3),
+    ]
+    replacement = [
+        RunTrace(run_id="replacement-1", completed=False, source_count=9,
+                 latency_seconds=100.0, estimated_cost_usd=7.0),
+        RunTrace(run_id="replacement-2", completed=False, source_count=9,
+                 latency_seconds=100.0, estimated_cost_usd=7.0),
+    ]
+
+    class ChangingRuns(list):
+        passes = 0
+
+        def __iter__(self):
+            self.passes += 1
+            return iter(original if self.passes == 1 else replacement)
+
+    source = ChangingRuns(original)
+    assert aggregate_runs(source) == aggregate_runs(tuple(original))
+    assert source.passes == 1
+
+
 def test_empty_aggregate_is_defined():
     summary = aggregate_runs([])
     assert summary["n_runs"] == 0
