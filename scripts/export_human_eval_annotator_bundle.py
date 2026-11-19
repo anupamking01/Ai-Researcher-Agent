@@ -753,7 +753,7 @@ def _require_source_bound_originals_unchanged(
     paths: dict[str, Path],
     original_signatures: dict[str, tuple[int, ...]],
     original_bytes: dict[str, bytes],
-    output_root: Path,
+    output_root: Path | None,
 ) -> None:
     """Close the original-source window, not just the temporary snapshot window.
 
@@ -762,7 +762,8 @@ def _require_source_bound_originals_unchanged(
     compare identities again so later reads cannot silently mask replacements.
     """
     def check_identities() -> None:
-        _require_annotator_artifact_set(output_root)
+        if output_root is not None:
+            _require_annotator_artifact_set(output_root)
         for label, path in paths.items():
             try:
                 actual = _evidence_stat_signature(path)
@@ -875,7 +876,7 @@ def export_annotator_bundle(
     output_root = Path(output_root)
     task_manifest_path = Path(task_manifest_path)
     repo_root = Path(repo_root)
-    guide_bytes = _frozen_guide_bytes(Path(annotator_guide_path))
+    annotator_guide_path = Path(annotator_guide_path)
     if presentation_order not in PRESENTATION_ORDERS:
         raise ValueError(
             "presentation order must be one of "
@@ -890,10 +891,38 @@ def export_annotator_bundle(
             "choose a new, nonexistent output root"
         )
 
+    # Observe live evidence identities before snapshotting; verification of a
+    # temporary copy alone cannot certify the still-visible original sources.
+    source_paths = {
+        "coordinator root": packet_root,
+        "task manifest": task_manifest_path,
+        "frozen annotator guide": annotator_guide_path,
+        **{
+            f"coordinator {name}": packet_root / name
+            for name in COORDINATOR_ARTIFACTS
+        },
+    }
+    source_signatures = {
+        label: _evidence_stat_signature(path)
+        for label, path in source_paths.items()
+    }
+    task_manifest_bytes = _regular_bytes(
+        task_manifest_path, label="annotator export task manifest"
+    )
+    guide_bytes = _frozen_guide_bytes(annotator_guide_path)
+
     with tempfile.TemporaryDirectory(prefix="vera-annotator-export-") as tmp_name:
         snapshot_root = Path(tmp_name) / "packet"
         snapshot_root.mkdir(parents=True)
         captured = _snapshot_coordinator_bundle(packet_root, snapshot_root)
+        source_bytes = {
+            "task manifest": task_manifest_bytes,
+            "frozen annotator guide": guide_bytes,
+            **{
+                f"coordinator {name}": content
+                for name, content in captured.items()
+            },
+        }
 
         verify_packet(
             output_root=snapshot_root,
@@ -982,8 +1011,22 @@ def export_annotator_bundle(
                 expected_presentation_order=presentation_order,
             )
             _require_directory_binding(staging_root, output_fd)
+            _require_source_bound_originals_unchanged(
+                paths=source_paths,
+                original_signatures=source_signatures,
+                original_bytes=source_bytes,
+                output_root=None,
+            )
             _publish_directory_noreplace(staging_root, output_root)
             _require_directory_binding(output_root, output_fd)
+            # A late edit during atomic publication must not earn a source-
+            # bound success receipt for an obsolete live source generation.
+            _require_source_bound_originals_unchanged(
+                paths=source_paths,
+                original_signatures=source_signatures,
+                original_bytes=source_bytes,
+                output_root=None,
+            )
             return source_bound_receipt
         finally:
             # A failed staging directory is retained deliberately. Deleting by

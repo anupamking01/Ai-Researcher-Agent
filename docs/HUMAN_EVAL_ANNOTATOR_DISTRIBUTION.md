@@ -239,6 +239,27 @@ after the final check. Retain the verified bundle bytes or distribute them
 immediately through the controlled annotation workflow.
 
 
+## Export-time live-source continuity
+
+The annotator exporter now observes the live coordinator directory, all four
+coordinator files, the frozen task manifest, and the frozen annotator guide
+**before** taking its temporary verification snapshot. After staging and
+source-binding its annotator-safe output, it compares original file generations
+and recaptures exact original bytes before atomic publication and again before
+returning a success receipt. This reuses the existing bounded, no-follow
+original-source checker. Previously, an original coordinator packet modified
+after its snapshot could still yield a source-bound export receipt for an
+obsolete input generation; that is now rejected. Synthetic regressions exercise
+post-snapshot content drift, identical-byte inode replacement, task-manifest
+drift, and modification during atomic publication.
+
+An export that fails after atomic publication may leave a directory at the
+destination, but it has **not** earned a source-bound verification receipt and
+must not be distributed. These observations are not an external provenance
+escrow or a filesystem transaction; unobserved transient changes and changes
+after the last check remain possible. This safeguard neither restores missing
+original study artifacts nor constitutes completed human validation.
+
 ## Original-source verification-window custody
 
 The source-bound verification path previously validated temporary copies of the

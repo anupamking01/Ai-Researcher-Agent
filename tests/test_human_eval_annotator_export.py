@@ -378,25 +378,82 @@ def test_bundle_verifier_rejects_content_validator_environment_drift(
         exporter.verify_annotator_bundle(packet_case["export_root"])
 
 
-def test_exported_bytes_come_from_same_snapshot_that_was_verified(packet_case, monkeypatch):
+def test_export_rejects_live_coordinator_change_after_snapshot(packet_case, monkeypatch):
     live_packet = packet_case["packet_root"] / "packet.jsonl"
-    original = live_packet.read_bytes()
     real_verify = exporter.verify_packet
-    saw_snapshot = []
+    checked_snapshot = []
 
-    def verify_snapshot(**kwargs):
+    def drift_after_verification(**kwargs):
         assert Path(kwargs["output_root"]) != packet_case["packet_root"]
         receipt = real_verify(**kwargs)
         live_packet.write_text("post-verification live drift\n", encoding="utf-8")
-        saw_snapshot.append(True)
+        checked_snapshot.append(True)
         return receipt
 
-    monkeypatch.setattr(exporter, "verify_packet", verify_snapshot)
-    _export(packet_case)
+    monkeypatch.setattr(exporter, "verify_packet", drift_after_verification)
+    with pytest.raises(
+        ValueError, match="coordinator packet.jsonl changed during source-bound verification window"
+    ):
+        _export(packet_case)
 
-    assert saw_snapshot == [True]
-    assert (packet_case["export_root"] / "packet.jsonl").read_bytes() == original
-    assert live_packet.read_bytes() != original
+    assert checked_snapshot == [True]
+    assert not packet_case["export_root"].exists()
+
+
+def test_export_rejects_same_byte_coordinator_source_replacement(packet_case, monkeypatch):
+    live_packet = packet_case["packet_root"] / "packet.jsonl"
+    replacement = live_packet.with_name("same-byte-replacement.jsonl")
+    replacement.write_bytes(live_packet.read_bytes())
+    real_verify = exporter.verify_packet
+
+    def replace_after_verification(**kwargs):
+        receipt = real_verify(**kwargs)
+        replacement.replace(live_packet)
+        return receipt
+
+    monkeypatch.setattr(exporter, "verify_packet", replace_after_verification)
+    with pytest.raises(
+        ValueError, match="coordinator (root|packet.jsonl) changed during source-bound verification window"
+    ):
+        _export(packet_case)
+    assert not packet_case["export_root"].exists()
+
+
+def test_export_rejects_task_manifest_drift_after_snapshot(packet_case, monkeypatch):
+    task_manifest = packet_case["task_manifest"]
+    real_verify = exporter.verify_packet
+
+    def mutate_task_manifest_after_verification(**kwargs):
+        receipt = real_verify(**kwargs)
+        task_manifest.write_bytes(task_manifest.read_bytes() + b" ")
+        return receipt
+
+    monkeypatch.setattr(exporter, "verify_packet", mutate_task_manifest_after_verification)
+    with pytest.raises(
+        ValueError, match="task manifest changed during source-bound verification window"
+    ):
+        _export(packet_case)
+    assert not packet_case["export_root"].exists()
+
+
+def test_export_refuses_success_receipt_after_source_drift_during_publish(
+    packet_case, monkeypatch
+):
+    task_manifest = packet_case["task_manifest"]
+    real_publish = exporter._publish_directory_noreplace
+
+    def mutate_after_publish(staging_root, destination):
+        real_publish(staging_root, destination)
+        task_manifest.write_bytes(task_manifest.read_bytes() + b" ")
+
+    monkeypatch.setattr(exporter, "_publish_directory_noreplace", mutate_after_publish)
+    with pytest.raises(
+        ValueError, match="task manifest changed during source-bound verification window"
+    ):
+        _export(packet_case)
+    # Publication may have occurred; a failed custody check does not certify
+    # the bundle or authorize distribution.
+    assert packet_case["export_root"].is_dir()
 
 
 def test_export_rejects_coherently_rehashed_output_replacement(packet_case, monkeypatch):
