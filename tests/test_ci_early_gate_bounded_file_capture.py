@@ -211,3 +211,74 @@ def test_unrelated_class_assignment_and_annotation_only_do_not_hide_tests():
     assert early._declared_early_test_names(source) == [
         f"test_sync_{index}" for index in range(7)
     ]
+
+@pytest.mark.parametrize(
+    ("hook", "scope"),
+    [
+        ("setUp", "class"),
+        ("tearDown", "class"),
+        ("setUpClass", "class"),
+        ("tearDownClass", "class"),
+        ("setUpModule", "module"),
+        ("tearDownModule", "module"),
+    ],
+)
+def test_async_unittest_lifecycle_hook_cannot_receive_green_early_receipt(
+    tmp_path, hook, scope,
+):
+    """A coroutine fixture's failing assertion is not awaited by TestCase."""
+    if scope == "module":
+        module_hook = f"async def {hook}(): assert False\\n"
+        class_hook = ""
+    else:
+        module_hook = ""
+        decorator = "    @classmethod\\n" if hook.endswith("Class") else ""
+        parameter = "cls" if hook.endswith("Class") else "self"
+        class_hook = (
+            decorator + f"    async def {hook}({parameter}): assert False\\n"
+        )
+    source = (
+        "import unittest\\n"
+        + module_hook
+        + "class DependencyFreeEvaluationGate(unittest.TestCase):\\n"
+        + class_hook
+        + "".join(
+            f"    def test_sync_{index}(self): assert True\\n"
+            for index in range(7)
+        )
+    )
+    path = tmp_path / "test_evaluation_stdlib_gate.py"
+    path.write_text(source, encoding="utf-8")
+    observed = subprocess.run(
+        [
+            sys.executable, "-W", "ignore", "-m", "unittest", "discover",
+            "-s", str(tmp_path), "-p", path.name, "-v",
+        ],
+        capture_output=True, text=True, check=False, timeout=20,
+    )
+    assert observed.returncode == 0, observed.stderr
+    assert "Ran 7 tests" in observed.stderr
+    assert observed.stderr.rstrip().endswith("OK")
+    with pytest.raises(ValueError, match="async unittest lifecycle hooks"):
+        early._declared_early_test_names(path.read_bytes())
+
+
+def test_early_inventory_accepts_sync_lifecycle_and_nonhook_async_helpers():
+    source = (
+        "import unittest\\n"
+        "async def unrelated_module_helper(): return None\\n"
+        "def setUpModule(): pass\\n"
+        "class DependencyFreeEvaluationGate(unittest.TestCase):\\n"
+        "    @classmethod\\n"
+        "    def setUpClass(cls): pass\\n"
+        "    def setUp(self): pass\\n"
+        "    def tearDown(self): pass\\n"
+        "    async def unrelated_class_helper(self): return None\\n"
+        + "".join(
+            f"    def test_sync_{index}(self): assert True\\n"
+            for index in range(7)
+        )
+    ).encode("utf-8")
+    assert early._declared_early_test_names(source) == [
+        f"test_sync_{index}" for index in range(7)
+    ]

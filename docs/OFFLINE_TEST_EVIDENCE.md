@@ -1,3 +1,30 @@
+## Refuse unawaited unittest lifecycle hooks in early CI evidence (19 November 2026)
+
+The dependency-free receipt previously rejected `async def test_*` methods, but
+could still accept an `async def setUp`, `tearDown`, `setUpClass`,
+`tearDownClass`, `setUpModule`, or `tearDownModule` fixture. The fixed
+`unittest.TestCase` runner calls those hooks without awaiting their returned
+coroutines. With Python warnings suppressed, a failing assertion in such a
+fixture can go unexecuted while all seven synchronous tests are reported as
+passing. An exact-name and count-matched receipt therefore did not prove that
+these setup/teardown safety checks had executed.
+
+The early source-inventory gate now rejects coroutine definitions for these six
+recognized module/class lifecycle hooks before producing a successful receipt.
+Six synthetic subprocess regressions reproduce the false-green behavior and
+verify rejection; a positive case preserves synchronous lifecycle hooks and
+non-hook asynchronous helpers. The existing fast diagnostic CI lane already
+executes the changed regression module with exact-commit receipt replay.
+
+This is a narrowly scoped **CI test-execution integrity** safeguard, not
+independent runner attestation or general dynamic-source analysis. It does not
+replay treatments, regenerate evaluator outputs, change frozen automated
+findings, or supply human ratings. The pilot remains diagnostic; designated-
+primary findings retain post-collection-plan, fixed-order and evaluator-policy
+qualifications; retrospective sensitivities remain exploratory. Original
+report/trace authentication and independent blinded human validation remain
+outstanding.
+
 ## Fast, source-bound producer/replay receipt regression coverage (19 November 2026)
 
 The independent `diagnostic-evaluation-fast-ci` workflow already triggered on

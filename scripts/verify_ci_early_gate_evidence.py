@@ -73,6 +73,25 @@ def _declared_early_test_names(source: bytes) -> list[str]:
         raise ValueError(
             "async early diagnostic test methods are not supported by unittest.TestCase"
         )
+    # Ordinary unittest.TestCase invokes lifecycle hooks as synchronous
+    # callables, even when declared with async def. Such hooks return an
+    # unawaited coroutine; setup/teardown assertions and safety checks can be
+    # silently skipped while every test still prints "... ok".
+    class_hooks = {"setUp", "tearDown", "setUpClass", "tearDownClass"}
+    module_hooks = {"setUpModule", "tearDownModule"}
+    async_hooks = [
+        node.name for node in suites[0].body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name in class_hooks
+    ]
+    async_hooks.extend(
+        node.name for node in module.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name in module_hooks
+    )
+    if async_hooks:
+        raise ValueError(
+            "async unittest lifecycle hooks are not supported by unittest.TestCase: "
+            + ", ".join(sorted(async_hooks))
+        )
     names = [node.name for node in declared_tests]
     if len(names) < 7 or len(names) != len(set(names)):
         raise ValueError("incomplete or duplicated declared early test methods")
