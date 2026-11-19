@@ -13,6 +13,8 @@ on:
       - tests/test_evaluation_fast_ci_workflow.py
       - tests/test_evaluation_stdlib_gate.py
       - tests/test_ci_early_gate_bounded_file_capture.py
+      - tests/test_ci_test_evidence.py
+      - tests/test_retained_ci_test_evidence.py
       - scripts/run_offline_pytest_firewalled.sh
       - scripts/verify_ci_python_runtime.py
       - scripts/verify_ci_source_checkout.py
@@ -29,6 +31,8 @@ on:
       - tests/test_evaluation_fast_ci_workflow.py
       - tests/test_evaluation_stdlib_gate.py
       - tests/test_ci_early_gate_bounded_file_capture.py
+      - tests/test_ci_test_evidence.py
+      - tests/test_retained_ci_test_evidence.py
       - scripts/run_offline_pytest_firewalled.sh
       - scripts/verify_ci_python_runtime.py
       - scripts/verify_ci_source_checkout.py
@@ -128,7 +132,14 @@ jobs:
         run: python -m scripts.verify_ci_python_runtime --phase before-tests
 
       - name: Compile only the diagnostic implementation and its tests
-        run: python -m py_compile logic/evaluation.py tests/test_evaluation.py tests/test_evaluation_fast_ci_workflow.py tests/test_ci_early_gate_bounded_file_capture.py
+        run: |
+          python -m py_compile \
+            logic/evaluation.py \
+            tests/test_evaluation.py \
+            tests/test_evaluation_fast_ci_workflow.py \
+            tests/test_ci_early_gate_bounded_file_capture.py \
+            tests/test_ci_test_evidence.py \
+            tests/test_retained_ci_test_evidence.py
 
       - name: Verify source checkout before targeted tests
         run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
@@ -139,7 +150,7 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |
           set -euo pipefail
-          bash scripts/run_offline_pytest_firewalled.sh tests/test_evaluation.py tests/test_evaluation_fast_ci_workflow.py tests/test_ci_early_gate_bounded_file_capture.py 2>&1 | tee "$RUNNER_TEMP/vera-diagnostic-evaluation-tests.log"
+          bash scripts/run_offline_pytest_firewalled.sh tests/test_evaluation.py tests/test_evaluation_fast_ci_workflow.py tests/test_ci_early_gate_bounded_file_capture.py tests/test_ci_test_evidence.py tests/test_retained_ci_test_evidence.py 2>&1 | tee "$RUNNER_TEMP/vera-diagnostic-evaluation-tests.log"
 
       - name: Verify source checkout after targeted tests
         run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests

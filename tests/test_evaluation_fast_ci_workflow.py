@@ -17,6 +17,7 @@ SCOPE = (
     "bash scripts/run_offline_pytest_firewalled.sh "
     "tests/test_evaluation.py tests/test_evaluation_fast_ci_workflow.py "
     "tests/test_ci_early_gate_bounded_file_capture.py "
+    "tests/test_ci_test_evidence.py tests/test_retained_ci_test_evidence.py "
     '2>&1 | tee "$RUNNER_TEMP/vera-diagnostic-evaluation-tests.log"'
 )
 
@@ -183,3 +184,28 @@ def test_early_receipt_regressions_are_compiled_and_executed_in_fast_lane():
     assert target in compile_step["run"].split()
     assert target in test_step["run"].split()
     assert steps.index(compile_step) < steps.index(test_step)
+
+def test_receipt_producer_and_replay_regressions_have_direct_fast_ci_coverage():
+    """Core source-bound receipt checks must run even when full shards cancel."""
+    workflow = _load_workflow()
+    steps = workflow["jobs"]["diagnostic-evaluation"]["steps"]
+    by_name = {step["name"]: step for step in steps}
+    compile_step = by_name["Compile only the diagnostic implementation and its tests"]
+    test_step = by_name["Run firewalled diagnostic evaluation regressions"]
+    assert steps.index(compile_step) < steps.index(test_step)
+
+    for module in (
+        "tests/test_ci_test_evidence.py",
+        "tests/test_retained_ci_test_evidence.py",
+    ):
+        assert module in compile_step["run"].split()
+        assert module in test_step["run"].split()
+        for trigger in ("push", "pull_request"):
+            assert module in workflow["on"][trigger]["paths"]
+
+    for source in (
+        "scripts/verify_ci_test_evidence.py",
+        "scripts/verify_retained_ci_test_evidence.py",
+    ):
+        for trigger in ("push", "pull_request"):
+            assert source in workflow["on"][trigger]["paths"]

@@ -1,3 +1,27 @@
+## Fast, source-bound producer/replay receipt regression coverage (19 November 2026)
+
+The independent `diagnostic-evaluation-fast-ci` workflow already triggered on
+changes to both the offline pytest evidence producer and retained-receipt
+verifier, but it did **not** execute either module's dedicated synthetic
+regression tests. Those tests were dependent on the much larger sixteen-shard
+suite; a suite cancelled before completion cannot certify them. This gap is
+especially relevant because the receipt pair decides whether an apparently
+successful test transcript becomes preserved exact-commit evidence.
+
+The fast lane now compiles and runs `tests/test_ci_test_evidence.py` and
+`tests/test_retained_ci_test_evidence.py` together with its previously selected
+diagnostic and early-gate tests. They remain under the pinned, network-firewalled
+pytest invocation, source checkout checks, local evidence receipt, independent
+receipt replay, and 90-day retention. A structural regression checks both
+source/test path triggers and that the two modules are actually compiled and
+executed. This is direct regression coverage, **not** a new experiment or
+independent certification of the CI runner. It does not replace successful
+aggregate replay of all sixteen shards, nor restore missing original treatment
+artifacts. The diagnostic pilot, qualified post-collection automated analysis,
+retrospective exploratory sensitivity work and pending genuine two-annotator
+human validation retain their separate scopes; no research run, frozen result
+or human rating is created or changed.
+
 ## Reject shadowed early unittest test methods before certifying evidence (19 November 2026)
 
 The dependency-free early CI receipt inventories each `def test_*` method
