@@ -1,3 +1,26 @@
+## Reject shadowed early unittest test methods before certifying evidence (19 November 2026)
+
+The dependency-free early CI receipt inventories each `def test_*` method
+in its fixed `unittest.TestCase` suite, but unittest runs the **final class
+attribute**. A later class-body assignment such as
+`test_shadowed = lambda self: None` can replace a failing test method while
+unittest still reports that original test name as `... ok`. A source-bound,
+count-matched green receipt could thus certify a test whose assertion did not
+execute. This false-positive is reproduced with synthetic subprocess fixtures.
+
+The early AST inventory now rejects direct class-body assignments that rebind
+a declared test name, including annotated assignments and unpacked targets.
+Unrelated helper assignments and annotation-only hints remain valid. Three
+synthetic reproductions and one positive regression run in the pinned fast
+diagnostic lane. This is **not** a general proof against dynamic class
+modification, decorators or changes at runtime, and is not independent runner
+attestation. It does not alter treatment runs, evaluators, frozen automated
+results, retrospective exploratory analyses or human ratings. The pilot
+remains diagnostic; the historical designated-primary automated findings
+retain post-collection-plan, fixed-order and evaluator-comparability
+qualifications. Original report/trace custody and genuine blinded human
+validation remain unestablished.
+
 ## Fast exact-head certification for early CI receipt regressions (19 November 2026)
 
 The early, dependency-free unittest receipt is replayed in the independent

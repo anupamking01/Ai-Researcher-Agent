@@ -162,3 +162,52 @@ def test_early_inventory_preserves_synchronous_tests_with_async_helpers():
     assert early._declared_early_test_names(source) == [
         f"test_sync_{index}" for index in range(7)
     ]
+
+@pytest.mark.parametrize("replacement", [
+    "    test_shadowed = lambda self: None\\n",
+    "    test_shadowed: object = lambda self: None\\n",
+    "    test_shadowed, helper = (lambda self: None), 1\\n",
+])
+def test_class_body_rebinding_cannot_certify_unexecuted_unittest_assertion(
+    tmp_path, replacement,
+):
+    """unittest can pass an overwritten failing test under the original name."""
+    source = (
+        "import unittest\\n"
+        "class DependencyFreeEvaluationGate(unittest.TestCase):\\n"
+        + "".join(
+            f"    def test_sync_{index}(self): assert True\\n"
+            for index in range(6)
+        )
+        + "    def test_shadowed(self): assert False\\n"
+        + replacement
+    )
+    path = tmp_path / "test_evaluation_stdlib_gate.py"
+    path.write_text(source, encoding="utf-8")
+    observed = subprocess.run(
+        [sys.executable, "-m", "unittest", "discover", "-s", str(tmp_path),
+         "-p", path.name, "-v"],
+        capture_output=True, text=True, check=False, timeout=20,
+    )
+    assert observed.returncode == 0, observed.stderr
+    assert "test_shadowed (" in observed.stderr
+    assert "Ran 7 tests" in observed.stderr
+    assert observed.stderr.rstrip().endswith("OK")
+    with pytest.raises(ValueError, match="rebound by class-body assignment"):
+        early._declared_early_test_names(path.read_bytes())
+
+
+def test_unrelated_class_assignment_and_annotation_only_do_not_hide_tests():
+    source = (
+        "import unittest\\n"
+        "class DependencyFreeEvaluationGate(unittest.TestCase):\\n"
+        + "".join(
+            f"    def test_sync_{index}(self): assert True\\n"
+            for index in range(7)
+        )
+        + "    helper_alias = lambda self: None\\n"
+        + "    test_sync_0: object\\n"
+    ).encode("utf-8")
+    assert early._declared_early_test_names(source) == [
+        f"test_sync_{index}" for index in range(7)
+    ]

@@ -76,6 +76,34 @@ def _declared_early_test_names(source: bytes) -> list[str]:
     names = [node.name for node in declared_tests]
     if len(names) < 7 or len(names) != len(set(names)):
         raise ValueError("incomplete or duplicated declared early test methods")
+    # unittest resolves a test name from the final class attribute, not from
+    # its first 'def' statement. A later class-body assignment can replace a
+    # failing test with a no-op while keeping the same verbose '... ok' name.
+    # Reject direct assignments (including annotated and unpacked targets);
+    # leave unrelated class constants and annotation-only hints untouched.
+    def bound_names(target: ast.expr) -> set[str]:
+        if isinstance(target, ast.Name):
+            return {target.id}
+        if isinstance(target, (ast.Tuple, ast.List)):
+            result: set[str] = set()
+            for element in target.elts:
+                result.update(bound_names(element))
+            return result
+        if isinstance(target, ast.Starred):
+            return bound_names(target.value)
+        return set()
+
+    rebound: set[str] = set()
+    for statement in suites[0].body:
+        if isinstance(statement, ast.Assign):
+            for target in statement.targets:
+                rebound.update(bound_names(target))
+        elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+            rebound.update(bound_names(statement.target))
+        elif isinstance(statement, ast.AugAssign):
+            rebound.update(bound_names(statement.target))
+    if set(names) & rebound:
+        raise ValueError("early diagnostic test method rebound by class-body assignment")
     return sorted(names)
 
 
