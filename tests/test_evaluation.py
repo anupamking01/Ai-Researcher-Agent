@@ -2343,3 +2343,56 @@ def test_direct_descriptive_helpers_accept_inclusive_limit_without_estimator_cha
     # Exactly half the rows are 1.0 and half 3.0; no materialization by caller.
     data = (1.0 if i % 2 == 0 else 3.0 for i in range(MAX_DIAGNOSTIC_DESCRIPTIVE_VALUES))
     assert statistic(data) == expected
+
+
+@pytest.mark.parametrize("adapter", ["numeric_pairs", "run_traces"])
+def test_paired_bootstrap_rejects_infeasible_draw_budget_before_arm_reads(adapter):
+    """An invalid planned design cannot consume outcomes before rejection.
+
+    201 planned tasks x 100,000 resamples exceeds the independent 20-million
+    diagnostic draw ceiling. These are synthetic task labels, not study data.
+    """
+    count = MAX_DIAGNOSTIC_BOOTSTRAP_DRAWS // MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES + 1
+    task_ids = [f"synthetic-task-{index}" for index in range(count)]
+    reads = []
+
+    def forbidden_observations():
+        reads.append("consumed")
+        raise AssertionError("invalid bootstrap design read observed treatment data")
+        yield None
+
+    if adapter == "numeric_pairs":
+        operation = lambda: paired_bootstrap_confidence_interval_by_task(
+            forbidden_observations(), forbidden_observations(),
+            expected_task_ids=iter(task_ids),
+            n_resamples=MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES,
+        )
+    else:
+        questions = {task_id: f"Synthetic question {index}?" for index, task_id in enumerate(task_ids)}
+        operation = lambda: paired_run_trace_bootstrap_by_task(
+            forbidden_observations(), forbidden_observations(),
+            baseline_variant_id="D3", candidate_variant_id="D6",
+            task_set_id="synthetic-diagnostic",
+            expected_task_ids=iter(task_ids),
+            expected_questions_by_task=questions,
+            n_resamples=MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES,
+        )
+    with pytest.raises(ValueError, match="bootstrap work budget"):
+        operation()
+    assert reads == []
+
+
+def test_shared_bootstrap_draw_budget_accepts_exact_boundary_without_sampling():
+    """The resource check is inclusive; test the check, not a costly bootstrap."""
+    from logic.evaluation import _validate_bootstrap_draw_budget
+
+    observations = MAX_DIAGNOSTIC_BOOTSTRAP_DRAWS // MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES
+    assert (
+        _validate_bootstrap_draw_budget(
+            observations, MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES
+        ) is None
+    )
+    with pytest.raises(ValueError, match="bootstrap work budget"):
+        _validate_bootstrap_draw_budget(
+            observations + 1, MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES
+        )

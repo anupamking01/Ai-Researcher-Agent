@@ -311,6 +311,20 @@ def _validate_bootstrap_settings(
         raise ValueError("seed must be an integer")
 
 
+def _validate_bootstrap_draw_budget(n_observations: int, n_resamples: int) -> None:
+    """Reject an infeasible planned resampling design before observed-arm reads.
+
+    The task reference determines the paired sample size independently from
+    observed results. This is a prospective resource guard, not an estimator
+    change or an analysis of historical outcomes.
+    """
+    if n_observations * n_resamples > MAX_DIAGNOSTIC_BOOTSTRAP_DRAWS:
+        raise ValueError(
+            f"bootstrap work budget exceeds {MAX_DIAGNOSTIC_BOOTSTRAP_DRAWS} "
+            "resampled observations"
+        )
+
+
 def bootstrap_confidence_interval(
     values: Sequence[float],
     statistic: Callable[[Iterable[float]], float] = safe_mean,
@@ -334,11 +348,7 @@ def bootstrap_confidence_interval(
                 "diagnostic observations"
             )
         sample.append(_finite_float(value, label="bootstrap sample"))
-    if len(sample) * n_resamples > MAX_DIAGNOSTIC_BOOTSTRAP_DRAWS:
-        raise ValueError(
-            f"bootstrap work budget exceeds {MAX_DIAGNOSTIC_BOOTSTRAP_DRAWS} "
-            "resampled observations"
-        )
+    _validate_bootstrap_draw_budget(len(sample), n_resamples)
     if not sample:
         return {
             "estimate": 0.0,
@@ -589,6 +599,7 @@ def paired_bootstrap_confidence_interval_by_task(
     """
     _validate_bootstrap_settings(confidence, n_resamples, seed)
     task_ids, _ = _validated_reference_task_manifest(expected_task_ids)
+    _validate_bootstrap_draw_budget(len(task_ids), n_resamples)
 
     # Index one arm at a time against the independent reference. This
     # prevents unbounded list(...) reads and rejects a malformed baseline
@@ -934,6 +945,7 @@ def paired_run_trace_bootstrap_by_task(
     task_ids, questions = _validated_reference_task_manifest(
         expected_task_ids, expected_questions_by_task
     )
+    _validate_bootstrap_draw_budget(len(task_ids), n_resamples)
     # The independent reference bounds cardinality *before* we materialize
     # either one-pass arm. A never-ending or excessively repeated producer must
     # not exhaust memory while we are still checking the treatment matrix.

@@ -176,6 +176,25 @@ the designated-primary automated study retains its post-collection-plan and
 fixed-order qualifications, and original-report custody plus genuinely
 independent blinded human validation remain outstanding.
 
+### Outcome-blind paired bootstrap work-budget preflight (prospective only)
+
+A task-keyed paired bootstrap may declare a valid task manifest and valid
+resample count while their product exceeds the existing **20-million-draw**
+diagnostic work ceiling. Previously the numeric and RunTrace adapters consumed
+both observed treatment arms and calculated their descriptive comparison
+before the nested bootstrap rejected that infeasible plan. They now check
+the planned task count multiplied by resamples **after validating the
+independent task/question manifest and before reading either arm**.
+The generic bootstrap uses the same shared ceiling after its direct sample
+capture. No planned observation is silently dropped, and the boundary is
+inclusive. Synthetic tests require that an over-budget 201-task, 100,000-resample
+design read **zero** baseline or candidate observations in either adapter.
+
+The change does not alter the resampling algorithm, permitted seeded designs,
+frozen automated estimates, post-hoc exploratory analyses, diagnostic pilot
+or missing human-validation results. It also does not authenticate original
+treatment report/trace custody, which remains a separate research gate.
+
 ### Complete-task paired bootstrap for prospective diagnostics
 
 `logic.evaluation.paired_bootstrap_confidence_interval_by_task` is an opt-in
