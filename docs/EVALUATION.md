@@ -129,6 +129,29 @@ exploratory, and real blinded human ratings are not yet collected. Synthetic
 regression tests protect paired (not arm-independent) resampling, complete
 task coverage, deterministic ordering, and fail-closed configuration.
 
+### Direct diagnostic descriptive-statistic input validation (prospective only)
+
+The standalone `safe_mean`, `safe_median`, and `population_stddev`
+helpers now reject nonfinite, nonnumeric, Boolean, or unrepresentable integer
+observations with `ValueError` **before** computing a descriptive statistic.
+Previously a direct `safe_mean([1.0, float("nan")])` call returned a NaN;
+median ordering with NaN could conceal or propagate a bad observation, and
+standard deviation could emit a nonfinite result. Other paired and aggregate
+entry points already had their own input/output guards; this closes the
+**public helper** boundary for new, one-pass diagnostic data. Empty samples
+still return 0.0, and validated finite values retain their original mean,
+median, and population-standard-deviation estimators and overflow-avoidance
+logic.
+
+Synthetic regressions cover all three helpers with NaN, positive/negative
+infinity, Boolean and string inputs, null values, unrepresentable integers,
+and valid one-pass iterables. The safeguard neither validates historical
+source custody nor retroactively changes any five-task diagnostic pilot,
+frozen post-collection automated estimates, retrospective exploratory
+sensitivities, or as-yet-uncollected human ratings. The designated-primary
+automated inference remains historically qualified, not prospectively
+precollection-confirmatory.
+
 ### Diagnostic derived-summary finiteness (prospective only)
 
 The general `logic.evaluation.aggregate_runs` summary and its complete-task

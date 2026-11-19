@@ -327,6 +327,37 @@ def test_empty_aggregate_is_defined():
     assert summary["median_estimated_cost_usd"] == 0.0
 
 
+
+@pytest.mark.parametrize(
+    "statistic",
+    [safe_mean, safe_median, population_stddev],
+    ids=["mean", "median", "population-stddev"],
+)
+@pytest.mark.parametrize(
+    "invalid",
+    [float("nan"), float("inf"), float("-inf"), True, "1.0", None, 10**400],
+    ids=["nan", "positive-infinity", "negative-infinity", "bool",
+         "coercible-string", "none", "unrepresentable-integer"],
+)
+def test_descriptive_statistics_reject_invalid_one_pass_observations(statistic, invalid):
+    # A NaN in one run must not turn a descriptive summary into a silent
+    # nonfinite result or be hidden by a sort/median of the remaining runs.
+    observations = (value for value in [1.0, invalid, 3.0])
+    with pytest.raises(ValueError, match="descriptive observation must be finite"):
+        statistic(observations)
+
+
+@pytest.mark.parametrize(
+    ("statistic", "expected"),
+    [(safe_mean, 2.0), (safe_median, 2.0),
+     (population_stddev, (2.0 / 3.0) ** 0.5)],
+    ids=["mean", "median", "population-stddev"],
+)
+def test_descriptive_statistics_accept_finite_one_pass_observations(statistic, expected):
+    observations = (value for value in [1.0, 2.0, 3.0])
+    assert statistic(observations) == pytest.approx(expected)
+
+
 def test_robust_statistics_handle_odd_even_and_empty_inputs():
     assert safe_median([]) == 0.0
     assert safe_median([9.0]) == 9.0

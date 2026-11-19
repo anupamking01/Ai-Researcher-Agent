@@ -170,11 +170,12 @@ class RunTrace:
 def safe_mean(values: Iterable[float]) -> float:
     """Return a mean without overflowing an otherwise representable center.
 
+    Reject nonfinite/non-numeric observations before scoring.
     Prefer accurate full-scale summation (including tiny subnormal values).
     If that sum overflows, divide each term by the sample count before
     accumulating: a finite sample of finite floats has a finite mean.
     """
-    values = list(values)
+    values = _finite_values(values, label="descriptive observation")
     if not values:
         return 0.0
     count = len(values)
@@ -185,8 +186,8 @@ def safe_mean(values: Iterable[float]) -> float:
 
 
 def safe_median(values: Iterable[float]) -> float:
-    """Return the median, or 0.0 for an empty iterable."""
-    ordered = sorted(values)
+    """Return the median of finite numeric values, or 0.0 when empty."""
+    ordered = sorted(_finite_values(values, label="descriptive observation"))
     size = len(ordered)
     if size == 0:
         return 0.0
@@ -205,11 +206,12 @@ def safe_median(values: Iterable[float]) -> float:
 def population_stddev(values: Iterable[float]) -> float:
     """Return population stddev without overflowing squared finite deviations.
 
-    Center and square dimensionless observations, then restore their scale.
+    Reject nonfinite/non-numeric observations before scoring. Center and
+    square dimensionless observations, then restore their scale.
     For instance, [0, 1e200] has representable stddev 5e199 even though
     squaring an unscaled 5e199 deviation would overflow binary64.
     """
-    values = list(values)
+    values = _finite_values(values, label="descriptive observation")
     if not values:
         return 0.0
     scale = max(abs(value) for value in values)
