@@ -228,22 +228,22 @@ def test_async_unittest_lifecycle_hook_cannot_receive_green_early_receipt(
 ):
     """A coroutine fixture's failing assertion is not awaited by TestCase."""
     if scope == "module":
-        module_hook = f"async def {hook}(): assert False\\n"
+        module_hook = f"async def {hook}(): assert False\n"
         class_hook = ""
     else:
         module_hook = ""
-        decorator = "    @classmethod\\n" if hook.endswith("Class") else ""
+        decorator = "    @classmethod\n" if hook.endswith("Class") else ""
         parameter = "cls" if hook.endswith("Class") else "self"
         class_hook = (
-            decorator + f"    async def {hook}({parameter}): assert False\\n"
+            decorator + f"    async def {hook}({parameter}): assert False\n"
         )
     source = (
-        "import unittest\\n"
+        "import unittest\n"
         + module_hook
-        + "class DependencyFreeEvaluationGate(unittest.TestCase):\\n"
+        + "class DependencyFreeEvaluationGate(unittest.TestCase):\n"
         + class_hook
         + "".join(
-            f"    def test_sync_{index}(self): assert True\\n"
+            f"    def test_sync_{index}(self): assert True\n"
             for index in range(7)
         )
     )
@@ -265,17 +265,17 @@ def test_async_unittest_lifecycle_hook_cannot_receive_green_early_receipt(
 
 def test_early_inventory_accepts_sync_lifecycle_and_nonhook_async_helpers():
     source = (
-        "import unittest\\n"
-        "async def unrelated_module_helper(): return None\\n"
-        "def setUpModule(): pass\\n"
-        "class DependencyFreeEvaluationGate(unittest.TestCase):\\n"
-        "    @classmethod\\n"
-        "    def setUpClass(cls): pass\\n"
-        "    def setUp(self): pass\\n"
-        "    def tearDown(self): pass\\n"
-        "    async def unrelated_class_helper(self): return None\\n"
+        "import unittest\n"
+        "async def unrelated_module_helper(): return None\n"
+        "def setUpModule(): pass\n"
+        "class DependencyFreeEvaluationGate(unittest.TestCase):\n"
+        "    @classmethod\n"
+        "    def setUpClass(cls): pass\n"
+        "    def setUp(self): pass\n"
+        "    def tearDown(self): pass\n"
+        "    async def unrelated_class_helper(self): return None\n"
         + "".join(
-            f"    def test_sync_{index}(self): assert True\\n"
+            f"    def test_sync_{index}(self): assert True\n"
             for index in range(7)
         )
     ).encode("utf-8")
