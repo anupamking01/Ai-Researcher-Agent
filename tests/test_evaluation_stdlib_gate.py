@@ -11,6 +11,7 @@ import unittest
 from logic.evaluation import (
     RunTrace,
     MAX_DIAGNOSTIC_REFERENCE_TASKS,
+    paired_metric_comparison,
     MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS,
     MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES,
     bootstrap_confidence_interval,
@@ -98,6 +99,29 @@ class DependencyFreeEvaluationGate(unittest.TestCase):
                 baseline(), candidate(), expected_task_ids=TASKS,
             )
         self.assertEqual(reads, {"baseline": 1, "candidate": 0})
+
+    def test_unending_positional_pairing_is_bounded_by_declared_count(self):
+        class ClaimedTwo:
+            def __init__(self):
+                self.reads = 0
+
+            def __len__(self):
+                return 2
+
+            def __iter__(self):
+                while True:
+                    self.reads += 1
+                    if self.reads > 3:
+                        raise AssertionError("positional input read past N+1")
+                    yield 0.5
+
+            def __getitem__(self, index):
+                return 0.5
+
+        baseline = ClaimedTwo()
+        with self.assertRaisesRegex(ValueError, "declared counts"):
+            paired_metric_comparison(baseline, [0.5, 0.5])
+        self.assertEqual(baseline.reads, 3)
 
     def test_failed_zero_source_task_remains_in_denominator(self):
         records = [make_trace("D3", "task-a", completed=False),

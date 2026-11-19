@@ -30,6 +30,18 @@ cases reject both kinds of shared drift, including a falsely empty
 declaration; ordinary equal-length input and one traversal per arm retain
 the existing estimator and output schema.
 
+The same low-level helper now also **bounds input capture**. A live
+`Sequence` could declare two tasks but yield forever; counting its rows
+with an unbounded list conversion hung rather than reaching the count
+mismatch gate. Each arm now stops at its declared count plus one, and the
+caller must declare at most **10,000 positional pairs** before either arm
+is read. An invalid baseline is rejected before candidate traversal;
+short, extra, and unending rows fail closed. Valid aligned inputs up to
+the inclusive limit retain the same descriptive estimator and output
+schema. This does not establish task identity or change frozen paired
+inference; prospective studies exceeding the diagnostic resource limit
+need an explicit reviewed adjustment.
+
 This does not identify tasks or authenticate the underlying reference:
 callers still must align positional rows by task or use the stricter
 `paired_metric_comparison_by_task` with an independently supplied task manifest.

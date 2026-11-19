@@ -6,6 +6,7 @@ import pytest
 from logic.evaluation import (
     RunTrace,
     MAX_DIAGNOSTIC_REFERENCE_TASKS,
+    MAX_DIAGNOSTIC_POSITIONAL_PAIRS,
     MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS,
     MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES,
     MAX_DIAGNOSTIC_BOOTSTRAP_DRAWS,
@@ -775,6 +776,93 @@ def test_paired_metric_comparison_accepts_equal_snapshot_sizes():
     assert result["n_pairs"] == 2
     assert (result["wins"], result["ties"], result["losses"]) == (1, 0, 1)
     assert baseline.iterations == candidate.iterations == 1
+
+
+@pytest.mark.parametrize("invalid_arm", ["baseline", "candidate"])
+@pytest.mark.parametrize("declared_count", [0, 2])
+def test_positional_pairing_stops_unending_sequence_after_declared_count(
+    invalid_arm, declared_count
+):
+    # With the earlier unbounded list conversion, even a Sequence claiming
+    # zero or two tasks could hang forever instead of failing closed.
+    class UnendingSequence:
+        def __init__(self):
+            self.reads = 0
+
+        def __len__(self):
+            return declared_count
+
+        def __iter__(self):
+            while True:
+                self.reads += 1
+                if self.reads > declared_count + 1:
+                    raise AssertionError("read beyond the declared count plus one")
+                yield 0.5
+
+        def __getitem__(self, index):
+            return 0.5
+
+    unending = UnendingSequence()
+    valid = [0.25] * declared_count
+    baseline, candidate = (
+        (unending, valid) if invalid_arm == "baseline" else (valid, unending)
+    )
+    with pytest.raises(ValueError, match="declared counts"):
+        paired_metric_comparison(baseline, candidate)
+    assert unending.reads == declared_count + 1
+
+
+def test_positional_pairing_invalid_baseline_does_not_read_candidate():
+    class BadBaseline:
+        def __len__(self):
+            return 1
+
+        def __iter__(self):
+            yield 0.5
+            yield 0.5
+            raise AssertionError("baseline read beyond first unexpected row")
+
+        def __getitem__(self, index):
+            return 0.5
+
+    class UnreadCandidate:
+        def __len__(self):
+            return 1
+
+        def __iter__(self):
+            raise AssertionError("candidate must not be consumed")
+            yield 0.5
+
+        def __getitem__(self, index):
+            raise AssertionError("candidate must not be indexed")
+
+    with pytest.raises(ValueError, match="declared counts"):
+        paired_metric_comparison(BadBaseline(), UnreadCandidate())
+
+
+def test_positional_pairing_rejects_overlarge_declared_population_before_reads():
+    class NoReadSequence:
+        def __len__(self):
+            return MAX_DIAGNOSTIC_POSITIONAL_PAIRS + 1
+
+        def __iter__(self):
+            raise AssertionError("oversized declaration must fail before reads")
+            yield 0.5
+
+        def __getitem__(self, index):
+            raise AssertionError("oversized declaration must fail before indexing")
+
+    with pytest.raises(ValueError, match="diagnostic positional limit"):
+        paired_metric_comparison(NoReadSequence(), NoReadSequence())
+
+
+def test_positional_pairing_accepts_exact_resource_boundary():
+    baseline = [0.0] * MAX_DIAGNOSTIC_POSITIONAL_PAIRS
+    candidate = [0.5] * MAX_DIAGNOSTIC_POSITIONAL_PAIRS
+    result = paired_metric_comparison(baseline, candidate)
+    assert result["n_pairs"] == MAX_DIAGNOSTIC_POSITIONAL_PAIRS
+    assert result["mean_delta"] == 0.5
+    assert result["wins"] == MAX_DIAGNOSTIC_POSITIONAL_PAIRS
 
 
 def test_paired_metric_comparison_handles_empty_and_rejects_misalignment():

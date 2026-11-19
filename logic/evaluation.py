@@ -17,6 +17,9 @@ from typing import Callable, Iterable, Sequence
 # Resource boundary for untrusted/one-pass independent diagnostic task manifests.
 # This does not apply to frozen automated results or source research archives.
 MAX_DIAGNOSTIC_REFERENCE_TASKS = 10_000
+# The low-level positional comparison also needs a finite denominator even
+# for custom Sequences whose iterator is unending or misreports __len__.
+MAX_DIAGNOSTIC_POSITIONAL_PAIRS = 10_000
 
 # In-memory diagnostic bootstrap ceilings, not limits on frozen historical
 # inference or an invitation to change its archived data or estimators.
@@ -364,19 +367,33 @@ def paired_metric_comparison(
     expected_pairs = len(baseline)
     if len(candidate) != expected_pairs:
         raise ValueError("paired comparisons require equal-length sequences")
-
-    baseline_values = _finite_values(baseline, label="baseline values")
-    candidate_values = _finite_values(candidate, label="candidate values")
-    # A live/custom Sequence can yield fewer or more rows than advertised.
-    # Even if *both* arms drift by the same count, equal observed lengths
-    # would silently shrink/expand the task denominator. Preserve the
-    # initially declared cardinality as well as exact arm alignment.
-    if (len(baseline_values) != expected_pairs
-            or len(candidate_values) != expected_pairs):
+    if expected_pairs > MAX_DIAGNOSTIC_POSITIONAL_PAIRS:
         raise ValueError(
-            "paired comparisons require equal-length sequences "
-            "matching declared counts"
+            "paired comparisons exceed the "
+            f"{MAX_DIAGNOSTIC_POSITIONAL_PAIRS}-pair diagnostic positional limit"
         )
+
+    def snapshot_arm(values: Sequence[float], label: str) -> list[float]:
+        # A Sequence may advertise N entries yet yield forever, or change
+        # cardinality during traversal. Stop at N+1, *before* reading the
+        # opposite arm when baseline is invalid, instead of list(infinite).
+        observed: list[float] = []
+        for value in values:
+            if len(observed) >= expected_pairs:
+                raise ValueError(
+                    "paired comparisons require equal-length sequences "
+                    "matching declared counts"
+                )
+            observed.append(_finite_float(value, label=f"{label} values"))
+        if len(observed) != expected_pairs:
+            raise ValueError(
+                "paired comparisons require equal-length sequences "
+                "matching declared counts"
+            )
+        return observed
+
+    baseline_values = snapshot_arm(baseline, "baseline")
+    candidate_values = snapshot_arm(candidate, "candidate")
     deltas = [
         _finite_float(new - old, label="paired deltas")
         for old, new in zip(baseline_values, candidate_values)
