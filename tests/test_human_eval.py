@@ -825,6 +825,56 @@ def _packet_output_snapshot(output_root: Path) -> dict[str, bytes]:
     }
 
 
+@pytest.mark.parametrize("indirect", [False, True])
+def test_packet_output_rejects_symlinked_ancestor_before_publishing_blinding_key(
+    tmp_path, indirect,
+):
+    trace_root = _write_complete_matrix(tmp_path)
+    actual = tmp_path / "outside"
+    actual.mkdir()
+    parent = tmp_path / "safe"
+    if indirect:
+        parent.mkdir()
+    alias = parent / "redirect" if indirect else tmp_path / "redirect"
+    alias.symlink_to(actual, target_is_directory=True)
+    output_root = alias / "human-eval"
+
+    with pytest.raises(ValueError, match="non-symlink directory"):
+        _build_packet(trace_root, output_root, tmp_path)
+
+    assert not any((actual / "human-eval" / name).exists()
+                   for name in packet_builder.PACKET_ARTIFACTS)
+
+
+def test_packet_key_write_stays_in_pinned_output_root_after_parent_swap(
+    tmp_path, monkeypatch,
+):
+    trace_root = _write_complete_matrix(tmp_path)
+    output_root = tmp_path / "human-eval"
+    moved = tmp_path / "retained-original"
+    attacker = tmp_path / "redirected-output"
+    attacker.mkdir()
+    original = packet_builder._write_csv
+    raced = []
+
+    def swap_at_key_publication(path, fieldnames, rows, **kwargs):
+        if path.name == "blinding_key.csv" and not raced:
+            output_root.rename(moved)
+            output_root.symlink_to(attacker, target_is_directory=True)
+            raced.append(True)
+        return original(path, fieldnames, rows, **kwargs)
+
+    monkeypatch.setattr(packet_builder, "_write_csv", swap_at_key_publication)
+    with pytest.raises(ValueError, match="ancestor directory changed"):
+        _build_packet(trace_root, output_root, tmp_path)
+
+    assert raced == [True]
+    assert (moved / "blinding_key.csv").is_file()
+    assert stat.S_IMODE((moved / "blinding_key.csv").stat().st_mode) == 0o600
+    assert not any((attacker / name).exists()
+                   for name in packet_builder.PACKET_ARTIFACTS)
+
+
 def test_build_packet_refuses_to_reblind_or_overwrite_published_bundle(tmp_path):
     trace_root = _write_complete_matrix(tmp_path)
     output_root = tmp_path / "human-eval"
@@ -865,11 +915,11 @@ def test_competing_packet_creation_after_preflight_cannot_be_overwritten(
     original = packet_builder._write_text_exclusive
     raced = []
 
-    def create_competing_packet(path, content):
+    def create_competing_packet(path, content, **kwargs):
         if path.name == "packet.jsonl" and not raced:
             path.write_text("competing packet\n", encoding="utf-8")
             raced.append(True)
-        return original(path, content)
+        return original(path, content, **kwargs)
 
     monkeypatch.setattr(packet_builder, "_write_text_exclusive", create_competing_packet)
     with pytest.raises(ValueError, match="refusing to overwrite"):

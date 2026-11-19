@@ -974,7 +974,7 @@ def _refuse_overwrite(path: Path) -> ValueError:
     )
 
 
-def _open_packet_artifact_exclusive(path: Path):
+def _open_packet_artifact_exclusive(path: Path, *, directory_fd: int | None = None):
     """Create each packet file once, with private modes for coordinator secrets.
 
     Apply the mode at O_EXCL creation time: chmod after writing would expose a
@@ -983,7 +983,10 @@ def _open_packet_artifact_exclusive(path: Path):
     mode = 0o600 if path.name in COORDINATOR_PRIVATE_ARTIFACTS else 0o666
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     try:
-        fd = os.open(path, flags, mode)
+        fd = os.open(
+            path.name if directory_fd is not None else path,
+            flags, mode, dir_fd=directory_fd,
+        )
     except FileExistsError as exc:
         raise _refuse_overwrite(path) from exc
     try:
@@ -993,22 +996,55 @@ def _open_packet_artifact_exclusive(path: Path):
         raise
 
 
-def _write_text_exclusive(path: Path, content: str) -> None:
-    with _open_packet_artifact_exclusive(path) as handle:
+def _write_text_exclusive(
+    path: Path, content: str, *, directory_fd: int | None = None
+) -> None:
+    with _open_packet_artifact_exclusive(path, directory_fd=directory_fd) as handle:
         handle.write(content)
 
 
-def _write_csv(path: Path, fieldnames: tuple[str, ...] | list[str], rows: list[dict]) -> None:
-    with _open_packet_artifact_exclusive(path) as handle:
+def _write_csv(
+    path: Path, fieldnames: tuple[str, ...] | list[str], rows: list[dict],
+    *, directory_fd: int | None = None,
+) -> None:
+    with _open_packet_artifact_exclusive(path, directory_fd=directory_fd) as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
 
 
-def _artifact_fingerprint(path: Path) -> dict:
-    content = _read_regular_file_captured(
-        path, label=f"human-evaluation packet artifact {path.name}"
-    )
+def _artifact_fingerprint(path: Path, *, directory_fd: int | None = None) -> dict:
+    label = f"human-evaluation packet artifact {path.name}"
+    if directory_fd is None:
+        content = _read_regular_file_captured(path, label=label)
+    else:
+        # Hash the same pinned directory used for publication, never an alias
+        # that may have replaced the visible output pathname mid-operation.
+        flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(path.name, flags, dir_fd=directory_fd)
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                raise ValueError(f"{label} must be a single-link regular file")
+            _require_packet_byte_limit(before.st_size, label=label)
+            chunks = []
+            remaining = before.st_size
+            while remaining:
+                chunk = os.read(fd, min(1024 * 1024, remaining))
+                if not chunk:
+                    raise ValueError(f"{label} changed during fingerprinting")
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            if os.read(fd, 1):
+                raise ValueError(f"{label} grew during fingerprinting")
+            after = os.fstat(fd)
+            visible = os.stat(path.name, dir_fd=directory_fd, follow_symlinks=False)
+            if (_stat_contract(before) != _stat_contract(after)
+                    or _stat_contract(after) != _stat_contract(visible)):
+                raise ValueError(f"{label} changed during fingerprinting")
+            content = b"".join(chunks)
+        finally:
+            os.close(fd)
     return {"path": path.name, **_byte_fingerprint(content)}
 
 
@@ -1220,67 +1256,104 @@ def build_packet(
             raise ValueError("Production packet is missing original evaluator-source custody")
         _recheck_published_evaluator_source(original_evaluator_capture)
 
+    # The leaf alone is not enough: an output parent symlink can redirect a
+    # coordinator-private blinding key to a different directory. After making
+    # the target root, pin its *entire* visible ancestry and publish each file
+    # relative to the held directory descriptor, not through a mutable path.
     if output_root.is_symlink():
         raise ValueError(f"human-evaluation output root must not be a symbolic link: {output_root}")
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise ValueError("human-evaluation output requires no-follow directory support")
     output_root.mkdir(parents=True, exist_ok=True)
-    existing = [
-        output_root / name
-        for name in PACKET_ARTIFACTS
-        if (output_root / name).exists() or (output_root / name).is_symlink()
-    ]
-    if existing:
-        raise ValueError(
-            "refusing to overwrite existing human-evaluation packet artifacts: "
-            + ", ".join(path.name for path in existing)
-            + "; preserve the published bundle or choose a new output root"
+    from scripts import freeze_human_eval_ratings as ratings_freeze
+
+    chain = ratings_freeze._open_nofollow_directory_chain(
+        output_root, label="human-evaluation packet output",
+    )
+    try:
+        directory_fd = chain[-1]
+        ratings_freeze._recheck_nofollow_directory_chain(
+            output_root, chain, label="human-evaluation packet output",
         )
+        existing = []
+        for name in PACKET_ARTIFACTS:
+            try:
+                os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            existing.append(output_root / name)
+        if existing:
+            raise ValueError(
+                "refusing to overwrite existing human-evaluation packet artifacts: "
+                + ", ".join(path.name for path in existing)
+                + "; preserve the published bundle or choose a new output root"
+            )
 
-    packet_path = output_root / "packet.jsonl"
-    key_path = output_root / "blinding_key.csv"
-    ratings_template_path = output_root / "ratings_template.csv"
-    # packet.jsonl is the reservation point. Exclusive creation is the decisive
-    # guard against two builders passing the preflight check concurrently.
-    _write_text_exclusive(packet_path, packet_text)
-
-    _write_csv(
-        key_path,
-        ["blind_id", "variant_id", "task_id", "run_id", "trace_path", "report_path"],
-        key_rows,
-    )
-    _write_csv(ratings_template_path, list(RATING_FIELDS), ratings_rows)
-
-    manifest = {
-        "schema_version": 2,
-        "study_id": "budget-main-v1",
-        "task_set_id": task_manifest["task_set_id"],
-        "task_manifest": {
-            "name": task_manifest_path.name,
-            "bytes": task_manifest["bytes"],
-            "sha256": task_manifest["sha256"],
-            "n_tasks": len(task_manifest["tasks"]),
-        },
-        "blind_seed": seed,
-        "n_reports": len(packet_rows),
-        "n_tasks": len({row["task_id"] for row in packet_rows}),
-        "variants": list(EXPECTED_VARIANTS),
-        "artifacts": {
-            "packet": _artifact_fingerprint(packet_path),
-            "ratings_template": _artifact_fingerprint(ratings_template_path),
-            "blinding_key": _artifact_fingerprint(key_path),
-        },
-        "source_artifacts": source_artifacts,
-        "packet": "packet.jsonl",
-        "ratings_template": "ratings_template.csv",
-        "blinding_key": "blinding_key.csv",
-        "blinding_note": BLINDING_NOTE,
-        "content_validator": content_validator_source_contract(),
-        "content_validator_runtime": content_validator_runtime_contract(),
-    }
-    _write_text_exclusive(
-        output_root / "manifest.json",
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-    )
-    return manifest
+        packet_path = output_root / "packet.jsonl"
+        key_path = output_root / "blinding_key.csv"
+        ratings_template_path = output_root / "ratings_template.csv"
+        # A concurrent builder still loses at O_EXCL, even after preflight.
+        # A renamed or redirected root cannot move these writes to an alias.
+        _write_text_exclusive(packet_path, packet_text, directory_fd=directory_fd)
+        ratings_freeze._recheck_nofollow_directory_chain(
+            output_root, chain, label="human-evaluation packet output",
+        )
+        _write_csv(
+            key_path,
+            ["blind_id", "variant_id", "task_id", "run_id", "trace_path", "report_path"],
+            key_rows, directory_fd=directory_fd,
+        )
+        ratings_freeze._recheck_nofollow_directory_chain(
+            output_root, chain, label="human-evaluation packet output",
+        )
+        _write_csv(
+            ratings_template_path, list(RATING_FIELDS), ratings_rows,
+            directory_fd=directory_fd,
+        )
+        ratings_freeze._recheck_nofollow_directory_chain(
+            output_root, chain, label="human-evaluation packet output",
+        )
+        manifest = {
+            "schema_version": 2,
+            "study_id": "budget-main-v1",
+            "task_set_id": task_manifest["task_set_id"],
+            "task_manifest": {
+                "name": task_manifest_path.name,
+                "bytes": task_manifest["bytes"],
+                "sha256": task_manifest["sha256"],
+                "n_tasks": len(task_manifest["tasks"]),
+            },
+            "blind_seed": seed,
+            "n_reports": len(packet_rows),
+            "n_tasks": len({row["task_id"] for row in packet_rows}),
+            "variants": list(EXPECTED_VARIANTS),
+            "artifacts": {
+                "packet": _artifact_fingerprint(packet_path, directory_fd=directory_fd),
+                "ratings_template": _artifact_fingerprint(
+                    ratings_template_path, directory_fd=directory_fd
+                ),
+                "blinding_key": _artifact_fingerprint(key_path, directory_fd=directory_fd),
+            },
+            "source_artifacts": source_artifacts,
+            "packet": "packet.jsonl",
+            "ratings_template": "ratings_template.csv",
+            "blinding_key": "blinding_key.csv",
+            "blinding_note": BLINDING_NOTE,
+            "content_validator": content_validator_source_contract(),
+            "content_validator_runtime": content_validator_runtime_contract(),
+        }
+        _write_text_exclusive(
+            output_root / "manifest.json",
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            directory_fd=directory_fd,
+        )
+        ratings_freeze._recheck_nofollow_directory_chain(
+            output_root, chain, label="human-evaluation packet output",
+        )
+        return manifest
+    finally:
+        for directory_fd in reversed(chain):
+            os.close(directory_fd)
 
 
 def main() -> int:

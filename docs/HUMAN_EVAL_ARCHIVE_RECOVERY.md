@@ -1,3 +1,28 @@
+## Coordinator packet output directory custody (19 November 2026)
+
+The offline human packet builder previously rejected a symlink at its output
+*leaf* but used ambient pathnames for four publications. A symlinked parent
+could silently redirect the coordinator-private blinding key and seed-bearing
+manifest. Publication now requires no-follow directory support, pins the entire
+visible output ancestry, creates each artifact exclusively relative to the held
+output-directory descriptor, and hashes the same pinned files. It rechecks the
+ancestor chain after each publication, including the private key, and refuses
+an initial symlink ancestor. Synthetic tests cover direct and intermediate
+ancestor aliases and replacement of the visible output root with an external
+symlink immediately before publishing the private key. The write remains in
+the originally opened directory, and the operation fails closed rather than
+publishing under the replacement pathname. Interrupted partial outputs remain
+create-only and must never be reused.
+
+This is local output-path/secret custody, not independent historical source
+attestation, protection against an attacker already controlling the original
+directory, authorization to distribute any blinded reports, or proof of
+human scores. The original report/trace sources remain unavailable; the pilot
+is diagnostic, historical automated findings remain post-collection/fixed-order
+and evaluator-qualified, retrospective work is exploratory, and genuine human
+validation is pending. No treatment, evaluator, frozen result or human rating
+was regenerated.
+
 # Recover the original automated-to-human VERA evidence (no outcome reruns)
 
 
