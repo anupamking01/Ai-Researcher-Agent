@@ -164,22 +164,22 @@ def test_early_inventory_preserves_synchronous_tests_with_async_helpers():
     ]
 
 @pytest.mark.parametrize("replacement", [
-    "    test_shadowed = lambda self: None\\n",
-    "    test_shadowed: object = lambda self: None\\n",
-    "    test_shadowed, helper = (lambda self: None), 1\\n",
+    "    test_shadowed = lambda self: None\n",
+    "    test_shadowed: object = lambda self: None\n",
+    "    test_shadowed, helper = (lambda self: None), 1\n",
 ])
 def test_class_body_rebinding_cannot_certify_unexecuted_unittest_assertion(
     tmp_path, replacement,
 ):
     """unittest can pass an overwritten failing test under the original name."""
     source = (
-        "import unittest\\n"
-        "class DependencyFreeEvaluationGate(unittest.TestCase):\\n"
+        "import unittest\n"
+        "class DependencyFreeEvaluationGate(unittest.TestCase):\n"
         + "".join(
-            f"    def test_sync_{index}(self): assert True\\n"
+            f"    def test_sync_{index}(self): assert True\n"
             for index in range(6)
         )
-        + "    def test_shadowed(self): assert False\\n"
+        + "    def test_shadowed(self): assert False\n"
         + replacement
     )
     path = tmp_path / "test_evaluation_stdlib_gate.py"
@@ -199,14 +199,14 @@ def test_class_body_rebinding_cannot_certify_unexecuted_unittest_assertion(
 
 def test_unrelated_class_assignment_and_annotation_only_do_not_hide_tests():
     source = (
-        "import unittest\\n"
-        "class DependencyFreeEvaluationGate(unittest.TestCase):\\n"
+        "import unittest\n"
+        "class DependencyFreeEvaluationGate(unittest.TestCase):\n"
         + "".join(
-            f"    def test_sync_{index}(self): assert True\\n"
+            f"    def test_sync_{index}(self): assert True\n"
             for index in range(7)
         )
-        + "    helper_alias = lambda self: None\\n"
-        + "    test_sync_0: object\\n"
+        + "    helper_alias = lambda self: None\n"
+        + "    test_sync_0: object\n"
     ).encode("utf-8")
     assert early._declared_early_test_names(source) == [
         f"test_sync_{index}" for index in range(7)
