@@ -112,17 +112,39 @@ def _declared_early_test_names(source: bytes) -> list[str]:
             return bound_names(target.value)
         return set()
 
-    rebound: set[str] = set()
-    for statement in suites[0].body:
-        if isinstance(statement, ast.Assign):
-            for target in statement.targets:
-                rebound.update(bound_names(target))
-        elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
-            rebound.update(bound_names(statement.target))
-        elif isinstance(statement, ast.AugAssign):
-            rebound.update(bound_names(statement.target))
-    if set(names) & rebound:
+    def assigned_names(statements: list[ast.stmt]) -> set[str]:
+        rebound: set[str] = set()
+        for statement in statements:
+            if isinstance(statement, ast.Assign):
+                for target in statement.targets:
+                    rebound.update(bound_names(target))
+            elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+                rebound.update(bound_names(statement.target))
+            elif isinstance(statement, ast.AugAssign):
+                rebound.update(bound_names(statement.target))
+        return rebound
+
+    class_rebound = assigned_names(suites[0].body)
+    if set(names) & class_rebound:
         raise ValueError("early diagnostic test method rebound by class-body assignment")
+    # unittest resolves lifecycle hooks through final module/class attributes.
+    # Assignments can silently replace a failing synchronous setup/teardown
+    # hook with a no-op, leaving every test green while skipping fixture checks.
+    declared_class_hooks = {
+        node.name for node in suites[0].body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name in class_hooks
+    }
+    declared_module_hooks = {
+        node.name for node in module.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name in module_hooks
+    }
+    if (declared_class_hooks & class_rebound
+            or declared_module_hooks & assigned_names(module.body)):
+        raise ValueError(
+            "early diagnostic unittest lifecycle hook rebound by assignment"
+        )
     return sorted(names)
 
 

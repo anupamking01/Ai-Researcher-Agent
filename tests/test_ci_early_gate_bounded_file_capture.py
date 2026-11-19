@@ -282,3 +282,77 @@ def test_early_inventory_accepts_sync_lifecycle_and_nonhook_async_helpers():
     assert early._declared_early_test_names(source) == [
         f"test_sync_{index}" for index in range(7)
     ]
+
+
+@pytest.mark.parametrize(
+    ("hook", "scope"),
+    [
+        ("setUp", "class"),
+        ("tearDown", "class"),
+        ("setUpClass", "class"),
+        ("tearDownClass", "class"),
+        ("setUpModule", "module"),
+        ("tearDownModule", "module"),
+    ],
+)
+def test_rebound_sync_lifecycle_hook_cannot_hide_failing_fixture_assertion(
+    tmp_path, hook, scope,
+):
+    """Unittest reports green when a declared failing hook is replaced by a no-op."""
+    if scope == "module":
+        module_hook = f"def {hook}(): assert False\\n{hook} = lambda: None\\n"
+        class_hook = ""
+    else:
+        module_hook = ""
+        decorator = "    @classmethod\\n" if hook.endswith("Class") else ""
+        replacement = (
+            "classmethod(lambda cls: None)" if hook.endswith("Class")
+            else "lambda self: None"
+        )
+        class_hook = (
+            decorator
+            + f"    def {hook}(self): assert False\\n"
+            + f"    {hook} = {replacement}\\n"
+        )
+    source = (
+        "import unittest\\n"
+        + module_hook
+        + "class DependencyFreeEvaluationGate(unittest.TestCase):\\n"
+        + class_hook
+        + "".join(
+            f"    def test_sync_{index}(self): assert True\\n"
+            for index in range(7)
+        )
+    )
+    path = tmp_path / "test_evaluation_stdlib_gate.py"
+    path.write_text(source, encoding="utf-8")
+    observed = subprocess.run(
+        [sys.executable, "-m", "unittest", "discover", "-s", str(tmp_path),
+         "-p", path.name, "-v"],
+        capture_output=True, text=True, check=False, timeout=20,
+    )
+    assert observed.returncode == 0, observed.stderr
+    assert "Ran 7 tests" in observed.stderr
+    assert observed.stderr.rstrip().endswith("OK")
+    with pytest.raises(ValueError, match="lifecycle hook rebound by assignment"):
+        early._declared_early_test_names(path.read_bytes())
+
+
+def test_unrelated_bindings_and_annotation_only_hints_preserve_sync_hooks():
+    source = (
+        "import unittest\\n"
+        "def setUpModule(): pass\\n"
+        "setUpModule: object\\n"
+        "module_helper = lambda: None\\n"
+        "class DependencyFreeEvaluationGate(unittest.TestCase):\\n"
+        "    def setUp(self): pass\\n"
+        "    setUp: object\\n"
+        "    unrelated_helper = lambda self: None\\n"
+        + "".join(
+            f"    def test_sync_{index}(self): assert True\\n"
+            for index in range(7)
+        )
+    ).encode("utf-8")
+    assert early._declared_early_test_names(source) == [
+        f"test_sync_{index}" for index in range(7)
+    ]

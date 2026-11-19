@@ -1,3 +1,27 @@
+## Refuse shadowed unittest lifecycle checks in pre-install CI (19 November 2026)
+
+The dependency-free CI verifier already protects declared test methods against
+class-body assignments and rejects unawaited asynchronous lifecycle hooks.
+However, a **synchronous** `setUp`, `tearDown`, `setUpClass`,
+`tearDownClass`, `setUpModule`, or `tearDownModule` can itself contain
+critical assertions and then be overwritten by a class/module assignment.
+Ordinary `unittest` can report all tests green after executing only the
+replacement no-op fixture. A source inventory limited to test-method names
+would still accept that transcript.
+
+The early receipt now refuses direct assignments that rebind **declared**
+synchronous lifecycle hooks in the fixed test module/suite, including
+annotated assignments and unpacked targets, while allowing unrelated
+bindings and annotation-only hints. Six synthetic regressions first
+reproduce false-green fixture replacement with actual `unittest` and then
+require source-inventory rejection; one positive case checks compatible
+synchronous hooks. This does not detect arbitrary runtime monkeypatching,
+independently attest a GitHub runner, or change any scientific evidence.
+The pilot remains diagnostic, the frozen designated-primary automated
+analysis remains post-collection and qualified, exploratory sensitivities
+remain exploratory, and genuine human ratings and original-artifact
+authentication are still outstanding.
+
 ## Refuse unawaited unittest lifecycle hooks in early CI evidence (19 November 2026)
 
 The dependency-free receipt previously rejected `async def test_*` methods, but
