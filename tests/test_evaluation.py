@@ -1976,3 +1976,36 @@ def test_valid_one_pass_planned_mappings_preserve_seeded_paired_result():
         expected_treatment_settings_by_variant=OnePassMapping(nested),
     )
     assert actual == control
+
+
+@pytest.mark.parametrize(
+    ("settings", "reason"),
+    [
+        ({"source_count": 4, "source_budget": 3}, "source_count exceeds"),
+        ({"source_count": 0, "query_count": 1, "search_call_count": 2}, "search_call_count exceeds"),
+        ({"source_count": 7, "source_budget": 1, "query_count": 1, "search_call_count": 2}, "source_count exceeds"),
+    ],
+)
+def test_diagnostic_trace_rejects_overspent_declared_source_or_query_allocation(
+    settings, reason,
+):
+    # An internally contradictory diagnostic trace must not enter aggregates.
+    with pytest.raises(ValueError, match=reason):
+        RunTrace(run_id="synthetic-inconsistent", completed=True, **settings)
+
+
+def test_diagnostic_trace_allows_within_budget_and_legacy_unspecified_allocations():
+    exact = RunTrace(
+        run_id="synthetic-exact", completed=True,
+        source_count=3, source_budget=3, query_count=2, search_call_count=2,
+    )
+    partial = RunTrace(
+        run_id="synthetic-partial", completed=False,
+        source_count=1, source_budget=3, query_count=3, search_call_count=1,
+    )
+    legacy = RunTrace(
+        run_id="synthetic-legacy", completed=True,
+        source_count=3, search_call_count=2,  # zero defaults mean unspecified
+    )
+    assert [t.source_count for t in (exact, partial, legacy)] == [3, 1, 3]
+    assert aggregate_runs([exact, partial, legacy])["n_runs"] == 3

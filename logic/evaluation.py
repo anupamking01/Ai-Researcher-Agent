@@ -98,6 +98,13 @@ class RunTrace:
             raise ValueError(
                 "unavailable_usage_call_count cannot exceed model_call_count"
             )
+        # A declared positive source/query allocation is an upper bound on
+        # attempted source and search counts. Zero is a legacy "unspecified"
+        # default, so do not reinterpret old traces as zero-budget runs.
+        if self.source_budget > 0 and self.source_count > self.source_budget:
+            raise ValueError("source_count exceeds declared positive source_budget")
+        if self.query_count > 0 and self.search_call_count > self.query_count:
+            raise ValueError("search_call_count exceeds declared positive query_count")
         for field in ("latency_seconds", "estimated_cost_usd", "temperature"):
             value = getattr(self, field)
             if type(value) not in (int, float):

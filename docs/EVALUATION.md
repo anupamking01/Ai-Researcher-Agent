@@ -9,6 +9,27 @@ The project has progressed beyond the original proposed-study document. Pilot in
 Human quality ratings are **not yet results**. They remain pending and must be collected under `paper/HUMAN_EVAL_PROTOCOL.md` before any human-quality claim is made.
 
 
+### Declared-budget telemetry consistency for prospective diagnostics
+
+`logic.evaluation.RunTrace` now rejects two internally impossible numeric
+ledgers **at construction**, before they can affect a diagnostic aggregate:
+when `source_budget > 0`, the recorded `source_count` may not exceed that
+explicit source allocation; when `query_count > 0`, the recorded
+`search_call_count` may not exceed the declared query allocation. Existing
+nonnegative-integer and failed-source/usage-call checks remain unchanged.
+Synthetic regressions cover both false ledgers, a double-invalid record,
+valid exact/partial allocations, and the legacy default-zero cases.
+
+The zero-valued budget/count defaults in old `RunTrace` objects can mean
+*unspecified*, not an independently authenticated zero allocation. For
+backward compatibility this guard intentionally does **not** infer an
+overspend when `source_budget == 0` or `query_count == 0`. It is a
+prospective in-memory consistency check, **not** proof of actual provider
+usage or original-archive custody. It neither reruns treatments/evaluators,
+changes the frozen post-collection automated results, promotes the diagnostic
+pilot or retrospective sensitivities into confirmatory evidence, nor supplies
+the pending blinded independent human validation.
+
 ### Bounded one-pass task-keyed numeric comparisons (prospective only)
 
 Both `paired_metric_comparison_by_task` and
