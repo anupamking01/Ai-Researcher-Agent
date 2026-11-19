@@ -6,6 +6,7 @@ import pytest
 from logic.evaluation import (
     RunTrace,
     MAX_DIAGNOSTIC_REFERENCE_TASKS,
+    MAX_DIAGNOSTIC_DESCRIPTIVE_VALUES,
     MAX_DIAGNOSTIC_AGGREGATE_RUNS,
     MAX_DIAGNOSTIC_POSITIONAL_PAIRS,
     MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS,
@@ -2312,3 +2313,33 @@ def test_diagnostic_trace_allows_within_budget_and_legacy_unspecified_allocation
     )
     assert [t.source_count for t in (exact, partial, legacy)] == [3, 1, 3]
     assert aggregate_runs([exact, partial, legacy])["n_runs"] == 3
+
+
+@pytest.mark.parametrize("statistic", [safe_mean, safe_median, population_stddev])
+def test_direct_descriptive_helpers_bound_infinite_one_pass_sources(statistic):
+    """The first excess datum must fail, not turn a prefix into an estimate."""
+    reads = 0
+
+    def unending():
+        nonlocal reads
+        while True:
+            reads += 1
+            if reads > MAX_DIAGNOSTIC_DESCRIPTIVE_VALUES + 1:
+                raise AssertionError("unbounded descriptive sample read")
+            yield 2.0
+
+    with pytest.raises(ValueError, match="descriptive observations exceed"):
+        statistic(unending())
+    assert reads == MAX_DIAGNOSTIC_DESCRIPTIVE_VALUES + 1
+
+
+@pytest.mark.parametrize(
+    ("statistic", "expected"),
+    [(safe_mean, 2.0), (safe_median, 2.0), (population_stddev, 1.0)],
+)
+def test_direct_descriptive_helpers_accept_inclusive_limit_without_estimator_change(
+    statistic, expected
+):
+    # Exactly half the rows are 1.0 and half 3.0; no materialization by caller.
+    data = (1.0 if i % 2 == 0 else 3.0 for i in range(MAX_DIAGNOSTIC_DESCRIPTIVE_VALUES))
+    assert statistic(data) == expected

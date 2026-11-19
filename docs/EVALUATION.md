@@ -223,6 +223,24 @@ sensitivities, or as-yet-uncollected human ratings. The designated-primary
 automated inference remains historically qualified, not prospectively
 precollection-confirmatory.
 
+### Bounded direct descriptive samples (prospective only)
+
+The public `safe_mean`, `safe_median`, and `population_stddev` helpers
+accept arbitrary one-pass iterables. Previously the common numeric validator
+materialized those iterables without a size limit. A mistaken infinite
+producer or unexpectedly large stream could hang or exhaust memory before
+returning any statistic. Direct calls now require **at most 10,000 finite
+observations**; the first excess observation raises `ValueError` rather
+than silently publishing a truncated estimate. Empty inputs and complete
+finite inputs through the inclusive limit retain the exact same estimators.
+Six synthetic cases cover all three helpers with infinite producers and
+exactly-limit alternating values, including the population dispersion.
+This cap is separate from run aggregation and bootstrap limits. It protects
+prospective in-memory diagnostics only; it neither changes the preserved
+September automated estimates nor authenticates historical reports/traces.
+The diagnostic pilot, retrospective exploratory analyses, qualified automated
+primary findings, and uncollected blinded human ratings remain distinct.
+
 ### Diagnostic derived-summary finiteness (prospective only)
 
 The general `logic.evaluation.aggregate_runs` summary and its complete-task

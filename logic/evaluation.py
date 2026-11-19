@@ -17,6 +17,10 @@ from typing import Callable, Iterable, Sequence
 # Resource boundary for untrusted/one-pass independent diagnostic task manifests.
 # This does not apply to frozen automated results or source research archives.
 MAX_DIAGNOSTIC_REFERENCE_TASKS = 10_000
+# Standalone descriptive statistics also accept one-pass iterables; cap them
+# independently so a misconfigured/infinite producer cannot exhaust memory.
+# This boundary concerns prospective in-memory diagnostics, not frozen archives.
+MAX_DIAGNOSTIC_DESCRIPTIVE_VALUES = 10_000
 # Generic diagnostic aggregation must not hang on infinite one-pass run streams.
 # This ceiling is separate from independently authenticated frozen artifacts.
 MAX_DIAGNOSTIC_AGGREGATE_RUNS = 10_000
@@ -249,7 +253,20 @@ def _finite_float(value: float, *, label: str) -> float:
 
 
 def _finite_values(values: Iterable[float], *, label: str) -> list[float]:
-    return [_finite_float(value, label=label) for value in values]
+    """Validate a bounded one-pass descriptive sample without truncating it.
+
+    Reject the first excess observation before conversion; a malformed or
+    infinite source must not produce a credible summary of only its prefix.
+    """
+    observed: list[float] = []
+    for value in values:
+        if len(observed) >= MAX_DIAGNOSTIC_DESCRIPTIVE_VALUES:
+            raise ValueError(
+                "descriptive observations exceed the "
+                f"{MAX_DIAGNOSTIC_DESCRIPTIVE_VALUES}-value diagnostic limit"
+            )
+        observed.append(_finite_float(value, label=label))
+    return observed
 
 
 def _linear_quantile(ordered: Sequence[float], probability: float) -> float:
