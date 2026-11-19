@@ -300,27 +300,27 @@ def test_rebound_sync_lifecycle_hook_cannot_hide_failing_fixture_assertion(
 ):
     """Unittest reports green when a declared failing hook is replaced by a no-op."""
     if scope == "module":
-        module_hook = f"def {hook}(): assert False\\n{hook} = lambda: None\\n"
+        module_hook = f"def {hook}(): assert False\n{hook} = lambda: None\n"
         class_hook = ""
     else:
         module_hook = ""
-        decorator = "    @classmethod\\n" if hook.endswith("Class") else ""
+        decorator = "    @classmethod\n" if hook.endswith("Class") else ""
         replacement = (
             "classmethod(lambda cls: None)" if hook.endswith("Class")
             else "lambda self: None"
         )
         class_hook = (
             decorator
-            + f"    def {hook}(self): assert False\\n"
-            + f"    {hook} = {replacement}\\n"
+            + f"    def {hook}(self): assert False\n"
+            + f"    {hook} = {replacement}\n"
         )
     source = (
-        "import unittest\\n"
+        "import unittest\n"
         + module_hook
-        + "class DependencyFreeEvaluationGate(unittest.TestCase):\\n"
+        + "class DependencyFreeEvaluationGate(unittest.TestCase):\n"
         + class_hook
         + "".join(
-            f"    def test_sync_{index}(self): assert True\\n"
+            f"    def test_sync_{index}(self): assert True\n"
             for index in range(7)
         )
     )
@@ -340,16 +340,16 @@ def test_rebound_sync_lifecycle_hook_cannot_hide_failing_fixture_assertion(
 
 def test_unrelated_bindings_and_annotation_only_hints_preserve_sync_hooks():
     source = (
-        "import unittest\\n"
-        "def setUpModule(): pass\\n"
-        "setUpModule: object\\n"
-        "module_helper = lambda: None\\n"
-        "class DependencyFreeEvaluationGate(unittest.TestCase):\\n"
-        "    def setUp(self): pass\\n"
-        "    setUp: object\\n"
-        "    unrelated_helper = lambda self: None\\n"
+        "import unittest\n"
+        "def setUpModule(): pass\n"
+        "setUpModule: object\n"
+        "module_helper = lambda: None\n"
+        "class DependencyFreeEvaluationGate(unittest.TestCase):\n"
+        "    def setUp(self): pass\n"
+        "    setUp: object\n"
+        "    unrelated_helper = lambda self: None\n"
         + "".join(
-            f"    def test_sync_{index}(self): assert True\\n"
+            f"    def test_sync_{index}(self): assert True\n"
             for index in range(7)
         )
     ).encode("utf-8")
