@@ -9,6 +9,7 @@ from logic.evaluation import (
     MAX_DIAGNOSTIC_DESCRIPTIVE_VALUES,
     MAX_DIAGNOSTIC_AGGREGATE_RUNS,
     MAX_DIAGNOSTIC_POSITIONAL_PAIRS,
+    MAX_DIAGNOSTIC_SOURCE_URL_OBSERVATIONS,
     MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS,
     MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES,
     MAX_DIAGNOSTIC_BOOTSTRAP_DRAWS,
@@ -1462,6 +1463,49 @@ def test_task_keyed_aggregate_preserves_finite_extreme_latency_dispersion():
 def test_deduplicate_sources_preserves_order():
     urls = [" https://example.com/a ", "https://example.com/b", "https://example.com/a", "", "https://example.com/c"]
     assert deduplicate_sources(urls) == ["https://example.com/a", "https://example.com/b", "https://example.com/c"]
+
+
+@pytest.mark.parametrize("scalar", ["https://example.com/a", b"https://example.com/a"])
+def test_source_dedup_rejects_scalar_url_text(scalar):
+    # Iterating a bare URL string would otherwise treat individual characters
+    # as separate sources without raising an error.
+    with pytest.raises(ValueError, match="collection, not scalar text"):
+        deduplicate_sources(scalar)
+
+
+@pytest.mark.parametrize("bad_entry", [None, False, 7, b"https://example.com/b"])
+def test_source_dedup_rejects_invalid_rows_instead_of_silently_dropping_them(bad_entry):
+    with pytest.raises(ValueError, match="source URL entries must be strings"):
+        deduplicate_sources(iter(["https://example.com/a", bad_entry]))
+
+
+def test_source_dedup_bounds_unending_repeated_raw_observations():
+    count = 0
+
+    def repeating_urls():
+        nonlocal count
+        while True:
+            count += 1
+            yield " https://example.com/a "
+
+    with pytest.raises(ValueError, match="source URL observations exceed"):
+        deduplicate_sources(repeating_urls())
+    assert count == MAX_DIAGNOSTIC_SOURCE_URL_OBSERVATIONS + 1
+
+
+def test_source_dedup_rejects_finite_oversized_population_without_truncating():
+    with pytest.raises(ValueError, match="source URL observations exceed"):
+        deduplicate_sources(["https://example.com/a"] * (
+            MAX_DIAGNOSTIC_SOURCE_URL_OBSERVATIONS + 1
+        ))
+
+
+def test_source_dedup_accepts_inclusive_raw_observation_limit():
+    urls = (" https://example.com/a " if i % 2 else "https://example.com/b"
+            for i in range(MAX_DIAGNOSTIC_SOURCE_URL_OBSERVATIONS))
+    assert deduplicate_sources(urls) == [
+        "https://example.com/b", "https://example.com/a"
+    ]
 
 def test_task_keyed_bootstrap_resamples_complete_paired_differences():
     # Exact dyadic deltas make the paired effect and its constant interval

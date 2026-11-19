@@ -27,6 +27,9 @@ MAX_DIAGNOSTIC_AGGREGATE_RUNS = 10_000
 # The low-level positional comparison also needs a finite denominator even
 # for custom Sequences whose iterator is unending or misreports __len__.
 MAX_DIAGNOSTIC_POSITIONAL_PAIRS = 10_000
+# Source URL capture is bounded by *raw observations*, including repeats,
+# so an unending duplicate stream cannot stall prospective diagnostics.
+MAX_DIAGNOSTIC_SOURCE_URL_OBSERVATIONS = 10_000
 
 # In-memory diagnostic bootstrap ceilings, not limits on frozen historical
 # inference or an invitation to change its archived data or estimators.
@@ -1011,12 +1014,28 @@ def paired_run_trace_bootstrap_by_task(
 
 
 def deduplicate_sources(urls: Iterable[str]) -> list[str]:
-    """Return normalized, order-preserving unique source URLs."""
+    """Deduplicate a bounded URL population without silently dropping bad records.
+
+    Consume at most 10,001 raw entries, counting repeats and blanks, so an
+    unbounded producer cannot masquerade as a small set of unique sources.
+    Text scalar input is not a URL collection. Preserve existing whitespace
+    trimming and case-sensitive identity for valid strings; this helper does
+    not authenticate URLs or canonicalize distinct sources.
+    """
+    if isinstance(urls, (str, bytes)):
+        raise ValueError("source URLs must be a collection, not scalar text")
     seen: set[str] = set()
     unique: list[str] = []
 
-    for raw_url in urls:
-        url = (raw_url or "").strip()
+    for index, raw_url in enumerate(urls):
+        if index >= MAX_DIAGNOSTIC_SOURCE_URL_OBSERVATIONS:
+            raise ValueError(
+                "source URL observations exceed the "
+                f"{MAX_DIAGNOSTIC_SOURCE_URL_OBSERVATIONS}-entry diagnostic limit"
+            )
+        if type(raw_url) is not str:
+            raise ValueError("source URL entries must be strings")
+        url = raw_url.strip()
         if not url or url in seen:
             continue
         seen.add(url)

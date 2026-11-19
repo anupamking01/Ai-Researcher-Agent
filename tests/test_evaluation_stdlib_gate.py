@@ -11,6 +11,8 @@ import unittest
 from logic.evaluation import (
     RunTrace,
     MAX_DIAGNOSTIC_REFERENCE_TASKS,
+    MAX_DIAGNOSTIC_SOURCE_URL_OBSERVATIONS,
+    deduplicate_sources,
     paired_metric_comparison,
     MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS,
     MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES,
@@ -55,6 +57,22 @@ def compare(baseline, candidate, **extra):
 
 
 class DependencyFreeEvaluationGate(unittest.TestCase):
+    def test_source_dedup_cannot_count_characters_or_hang_on_repeated_source(self):
+        with self.assertRaisesRegex(ValueError, "collection, not scalar text"):
+            deduplicate_sources("https://example.com/a")
+
+        reads = 0
+
+        def repeated_source():
+            nonlocal reads
+            while True:
+                reads += 1
+                yield "https://example.com/a"
+
+        with self.assertRaisesRegex(ValueError, "source URL observations exceed"):
+            deduplicate_sources(repeated_source())
+        self.assertEqual(reads, MAX_DIAGNOSTIC_SOURCE_URL_OBSERVATIONS + 1)
+
     def test_complete_pairing_is_seeded_and_order_invariant(self):
         baseline = [make_trace("D3", "task-a"), make_trace("D3", "task-b", supported=1)]
         candidate = [make_trace("D6", "task-a", supported=1),

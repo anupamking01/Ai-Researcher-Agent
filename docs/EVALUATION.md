@@ -1437,3 +1437,30 @@ The pilot remains diagnostic; designated-primary automated comparisons retain
 post-collection analysis-plan, fixed-order and evaluator-comparability
 limitations; retrospective sensitivity remains exploratory and genuine
 blinded human validation remains pending.
+
+
+## Bounded source URL diagnostic intake (20 November 2026)
+
+The standalone `deduplicate_sources` helper now validates its input as a
+**collection of text URL entries**, rather than treating a single URL string
+as a sequence of one-character "sources". A malformed nontext entry (including
+`None`) fails explicitly instead of disappearing from provenance. Empty or
+whitespace-only text entries remain ignored; valid text URLs preserve the
+existing whitespace-trimmed, case-sensitive first-seen ordering, without
+speculative URL canonicalization.
+
+Prospective in-memory source URL diagnostics reject the **10,001st raw entry**
+(including duplicates and blanks) instead of waiting forever on a repeated
+infinite producer or reporting a seemingly complete, silently truncated set.
+The inclusive limit is 10,000 input entries, **not** 10,000 unique sources.
+Synthetic regressions include scalar and nontext inputs, an unending duplicate
+producer, oversized finite input, and the exact inclusive boundary; a
+dependency-free early gate checks the critical scalar and unbounded cases.
+
+This validates only the **shape and finite capture** of caller-provided source
+identifiers. It does not verify that any URL resolves, authenticate original
+source snapshots, prove report/trace custody, change the frozen evaluator or
+its results, or recover missing historical artifact archives. The pilot remains
+diagnostic, the frozen designated-primary automated analysis has post-collection
+plan and fixed-order/evaluator-comparability limitations, retrospective
+sensitivity is exploratory, and blinded human validation is pending.
