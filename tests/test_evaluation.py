@@ -13,6 +13,7 @@ from logic.evaluation import (
     MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS,
     MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES,
     MAX_DIAGNOSTIC_BOOTSTRAP_DRAWS,
+    MAX_DIAGNOSTIC_BOOTSTRAP_SEED_BITS,
     _validated_reference_task_manifest,
     aggregate_runs,
     aggregate_runs_by_task,
@@ -570,6 +571,40 @@ def test_generic_bootstrap_requires_explicit_multiple_integer_draws(invalid):
 def test_generic_bootstrap_requires_explicit_integer_seed(invalid):
     with pytest.raises(ValueError, match="seed"):
         bootstrap_confidence_interval([0.25, 0.75], seed=invalid)
+
+
+@pytest.mark.parametrize("sign", [1, -1])
+def test_bootstrap_oversized_seed_fails_before_reading_observations(sign):
+    # Invalid seed setup must not consume even one untrusted input record.
+    reads = {"generic": 0, "baseline": 0, "candidate": 0}
+
+    def forbidden(name):
+        reads[name] += 1
+        raise AssertionError("invalid seed consumed observations")
+        yield ("task-a", 0.5)
+
+    oversized = sign * (1 << MAX_DIAGNOSTIC_BOOTSTRAP_SEED_BITS)
+    with pytest.raises(ValueError, match="seed exceeds"):
+        bootstrap_confidence_interval(forbidden("generic"), seed=oversized)
+    with pytest.raises(ValueError, match="seed exceeds"):
+        paired_bootstrap_confidence_interval_by_task(
+            forbidden("baseline"), forbidden("candidate"),
+            expected_task_ids=("task-a",), seed=oversized,
+        )
+    assert reads == {"generic": 0, "baseline": 0, "candidate": 0}
+
+
+@pytest.mark.parametrize("sign", [1, -1])
+def test_bootstrap_seed_inclusive_bit_boundary_is_repeatable(sign):
+    boundary = sign * ((1 << MAX_DIAGNOSTIC_BOOTSTRAP_SEED_BITS) - 1)
+    first = bootstrap_confidence_interval(
+        [0.0, 1.0], n_resamples=4, seed=boundary,
+    )
+    second = bootstrap_confidence_interval(
+        [0.0, 1.0], n_resamples=4, seed=boundary,
+    )
+    assert first == second
+    assert first["estimate"] == 0.5
 
 
 @pytest.mark.parametrize(

@@ -16,6 +16,7 @@ from logic.evaluation import (
     paired_metric_comparison,
     MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS,
     MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES,
+    MAX_DIAGNOSTIC_BOOTSTRAP_SEED_BITS,
     bootstrap_confidence_interval,
     aggregate_runs_by_task,
     paired_bootstrap_confidence_interval_by_task,
@@ -202,6 +203,21 @@ class DependencyFreeEvaluationGate(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "bootstrap sample exceeds"):
             bootstrap_confidence_interval(unending(), n_resamples=2)
         self.assertEqual(reads, MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS + 1)
+
+    def test_oversized_bootstrap_seed_fails_before_observations(self):
+        reads = 0
+
+        def forbidden():
+            nonlocal reads
+            reads += 1
+            raise AssertionError("oversized seed consumed observations")
+            yield 0.0
+
+        with self.assertRaisesRegex(ValueError, "seed exceeds"):
+            bootstrap_confidence_interval(
+                forbidden(), seed=1 << MAX_DIAGNOSTIC_BOOTSTRAP_SEED_BITS,
+            )
+        self.assertEqual(reads, 0)
 
     def test_overlarge_bootstrap_plan_fails_before_producer_access(self):
         class NoObservations:

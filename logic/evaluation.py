@@ -38,6 +38,10 @@ MAX_DIAGNOSTIC_SOURCE_URL_OBSERVATIONS = 10_000
 MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS = 10_000
 MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES = 100_000
 MAX_DIAGNOSTIC_BOOTSTRAP_DRAWS = 20_000_000
+# Bound integer seed magnitude before reading either observation arm. Python's
+# Random.seed accepts arbitrarily large integers and its setup cost scales
+# with their size, even when the planned draw count is tiny.
+MAX_DIAGNOSTIC_BOOTSTRAP_SEED_BITS = 256
 
 
 @dataclass(frozen=True)
@@ -312,6 +316,11 @@ def _validate_bootstrap_settings(
         )
     if type(seed) is not int:
         raise ValueError("seed must be an integer")
+    if seed.bit_length() > MAX_DIAGNOSTIC_BOOTSTRAP_SEED_BITS:
+        raise ValueError(
+            f"seed exceeds {MAX_DIAGNOSTIC_BOOTSTRAP_SEED_BITS}-bit "
+            "diagnostic bootstrap limit"
+        )
 
 
 def _validate_bootstrap_draw_budget(n_observations: int, n_resamples: int) -> None:

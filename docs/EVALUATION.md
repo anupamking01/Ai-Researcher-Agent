@@ -1464,3 +1464,28 @@ its results, or recover missing historical artifact archives. The pilot remains
 diagnostic, the frozen designated-primary automated analysis has post-collection
 plan and fixed-order/evaluator-comparability limitations, retrospective
 sensitivity is exploratory, and blinded human validation is pending.
+
+## Bounded diagnostic bootstrap RNG seed magnitude (20 November 2026)
+
+Prospective in-memory bootstrap helpers require an explicit integer seed, but
+the previous configuration preflight allowed integers of arbitrary bit length.
+Python's seeded `random.Random` accepts such values; preparing a very large
+seed consumes CPU and memory unrelated to the task count or resampling budget.
+A small, otherwise valid diagnostic design could therefore spend unbounded
+resources just initializing its RNG.
+
+The shared bootstrap-settings preflight now rejects seeds with **more than
+256 bits of absolute magnitude** before reading observations or constructing
+an RNG. Both positive and negative integers at the inclusive 256-bit boundary
+remain supported, preserving their existing seeded streams and output
+estimators. The limit is a prospective resource constraint, not a change to
+historical analysis seeds. Synthetic tests check both signs, rejection before
+generic and task-keyed treatment observations are consumed, and repeatable
+boundary behavior; the pre-install CI gate independently tests early rejection.
+
+This does not establish experimental reproducibility outside the pinned runtime,
+authenticate original reports/traces, or revise frozen evidence. The pilot
+remains diagnostic, designated-primary automated findings retain post-collection
+analysis-planning and fixed-order/evaluator-comparability qualifications,
+retrospective sensitivity work remains exploratory, and independent human
+validation is still pending.
