@@ -1,3 +1,26 @@
+# Fail closed on pytest collection warnings — 19 November 2026
+
+The ordinary firewalled pytest entrypoint now treats
+`pytest.PytestCollectionWarning` as an error. Before this change,
+a selected module containing both a passing test and a test class
+pytest could not collect (for example, a class with a constructor)
+could produce a green result with a warning. The existing source-to-test
+receipt requires **at least one completed test per module**, but that
+does not prove every intended test inside a module was collected.
+Treating these specific warnings as failures reduces that silent-
+omission risk while leaving other warnings under their existing policy.
+
+Two synthetic regressions assert the exact firewalled runner invocation
+and exercise a source file that passes with a collection warning in
+ordinary pytest but fails when the warning is promoted to an error.
+This does not prove every intended test is discovered: tests never named
+or surfaced by pytest may still be omitted, and neither a green job
+nor a warning policy independently attests runner integrity. No
+treatment, evaluator, pilot, frozen automated result, retrospective
+sensitivity, or human rating is changed. Historical original-artifact
+custody, prospective confirmation and genuine blinded human validation
+remain separate unresolved research gates.
+
 # Pytest verbose progress must agree with collection — 19 November 2026
 
 The full-suite evidence receipt binds unique selected-module test nodes to

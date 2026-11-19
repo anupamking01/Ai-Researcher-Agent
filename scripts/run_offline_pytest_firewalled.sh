@@ -170,4 +170,8 @@ verify_family_policy() {
 verify_family_policy iptables
 verify_family_policy ip6tables
 echo "Offline pytest egress isolation active (IPv4 + IPv6; loopback allowed; policy inspected)."
-python -m pytest -vv --durations=10 --strict-markers --strict-config "$@"
+# Collection warnings can mean a selected source module still produces at least
+# one passing test while a class/function silently fails pytest discovery.
+# Treat those specific warnings as errors without promoting unrelated benign
+# warnings to test failures. Preserve explicit selected modules and other flags.
+python -m pytest -vv --durations=10 --strict-markers --strict-config -W error::pytest.PytestCollectionWarning "$@"

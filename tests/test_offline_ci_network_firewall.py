@@ -380,7 +380,7 @@ def test_verbose_pytest_progress_exposes_interrupted_test_context(tmp_path):
 def test_firewalled_pytest_requires_strict_collection_and_configuration():
     """The shared entrypoint must never certify unknown markers/config as green."""
     command = WRAPPER.read_text(encoding="utf-8").rstrip().splitlines()[-1]
-    assert command == 'python -m pytest -vv --durations=10 --strict-markers --strict-config "$@"'
+    assert command == 'python -m pytest -vv --durations=10 --strict-markers --strict-config -W error::pytest.PytestCollectionWarning "$@"'
 
 
 @pytest.mark.parametrize(
@@ -557,4 +557,44 @@ def test_firewalled_runner_keeps_explicit_test_arguments_with_empty_pytest_env()
     """Existing wrapper contract keeps the call sites' explicit selection."""
     source = WRAPPER.read_text(encoding="utf-8")
     assert '[[ -n "${PYTEST_ADDOPTS:-}" || -n "${PYTEST_PLUGINS:-}" ]]' in source
-    assert 'python -m pytest -vv --durations=10 --strict-markers --strict-config "$@"' in source
+    assert 'python -m pytest -vv --durations=10 --strict-markers --strict-config -W error::pytest.PytestCollectionWarning "$@"' in source
+
+def test_collection_warning_fails_offline_validation_even_with_a_passing_test(tmp_path):
+    """One passing test must not conceal another silently uncollected test class."""
+    source = tmp_path / "test_missed_collection.py"
+    source.write_text(
+        "class TestNotCollected:\\n"
+        "    def __init__(self): pass\\n"
+        "    def test_missing(self): assert False\\n"
+        "def test_present(): assert True\\n",
+        encoding="utf-8",
+    )
+    command = [
+        sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+        "--strict-markers", "--strict-config",
+    ]
+    env = {**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}
+    normal = subprocess.run(
+        [*command, str(source)], cwd=tmp_path, env=env,
+        text=True, capture_output=True, timeout=20, check=False,
+    )
+    assert normal.returncode == 0, normal.stdout + normal.stderr
+    assert "PytestCollectionWarning" in normal.stdout + normal.stderr
+    assert "1 passed" in normal.stdout
+
+    protected = subprocess.run(
+        [*command, "-W", "error::pytest.PytestCollectionWarning", str(source)],
+        cwd=tmp_path, env=env, text=True, capture_output=True,
+        timeout=20, check=False,
+    )
+    assert protected.returncode != 0, protected.stdout + protected.stderr
+    assert "PytestCollectionWarning" in protected.stdout + protected.stderr
+    assert "test_missing" in source.read_text(encoding="utf-8")
+
+
+def test_shared_offline_runner_fails_on_pytest_collection_warnings():
+    """The hardening must be present on the actual firewalled CI entrypoint."""
+    assert WRAPPER.read_text(encoding="utf-8").rstrip().splitlines()[-1] == (
+        'python -m pytest -vv --durations=10 --strict-markers --strict-config '
+        '-W error::pytest.PytestCollectionWarning "$@"'
+    )
