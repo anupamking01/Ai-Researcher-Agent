@@ -2486,7 +2486,18 @@ def test_treatment_fidelity_preserves_failed_cells_and_seeded_pairing():
         reversed(baseline), reversed(candidate),
         expected_treatment_settings_by_variant=_PLANNED,
     )
-    assert old == bound == reverse
+    # A validated independent treatment plan is part of v3 custody even when
+    # the observed traces and all paired numerical estimates are unchanged.
+    assert bound == reverse
+    assert old["paired_input_fingerprint_schema"] == "length-prefixed-json-v3"
+    assert old["paired_input_fingerprint_sha256"] != bound["paired_input_fingerprint_sha256"]
+    assert {
+        key: value for key, value in old.items()
+        if key != "paired_input_fingerprint_sha256"
+    } == {
+        key: value for key, value in bound.items()
+        if key != "paired_input_fingerprint_sha256"
+    }
     assert bound["task_ids"] == ["a", "b"]
     assert bound["n_pairs"] == 2
 
