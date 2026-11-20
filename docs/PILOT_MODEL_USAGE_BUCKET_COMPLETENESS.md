@@ -59,3 +59,22 @@ The standalone summarizer continues to reject incomplete *present* model
 buckets under its separate fail-closed provenance contract. Synthetic
 capture-boundary regressions run in `tests/test_evaluation.py` under the
 offline diagnostic-evaluation fast CI lane.
+
+## Capture-time model identity and atomic ledger updates
+
+Per-model usage buckets are keyed by the literal model label. If a caller passes a
+non-string or a string subclass with nonstandard hashing, an insertion could
+previously raise *after* advancing global model-call/token counts, leaving a
+partially committed measurement ledger that cannot reconcile by model.
+
+The capture boundary now requires an **exact string** label before inspecting a
+provider response or mutating any counters, for both recorded responses and
+explicit usage-unavailable calls. Valid string labels (including legacy empty
+labels) are not modified. Invalid identities raise a clear validation error
+without changing the prior snapshot. Synthetic regressions test both ingress
+paths, failed inputs followed by valid calls, and a provider object that must
+not be read after an invalid model label.
+
+This is an in-memory prospective diagnostic consistency guard. It does not
+authenticate provider identities, infer missing tokens or prices, alter frozen
+analysis artifacts, rerun experimental treatments or produce human ratings.

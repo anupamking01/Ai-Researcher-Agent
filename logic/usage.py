@@ -31,6 +31,17 @@ class UsageTracker:
             value = getattr(usage, key, None)
         return value if type(value) is int and value >= 0 else None
 
+    @staticmethod
+    def _require_model_label(model: str) -> None:
+        """Reject keys that cannot be faithfully represented in usage ledgers.
+
+        A non-string (or a string subclass with nonstandard hashing) can make
+        per-model insertion fail after global counters have already advanced.
+        Preserve exact valid string labels, including legacy empty labels.
+        """
+        if type(model) is not str:
+            raise ValueError("model must be an exact string")
+
     def _model_bucket(self, model: str) -> dict[str, int]:
         return self._by_model.setdefault(
             model,
@@ -44,6 +55,7 @@ class UsageTracker:
         )
 
     def record_response(self, model: str, response: Any) -> None:
+        self._require_model_label(model)
         try:
             usage = response.get("usage")
         except AttributeError:
@@ -85,6 +97,7 @@ class UsageTracker:
             bucket["total_tokens"] += expected_total
 
     def record_unavailable(self, model: str) -> None:
+        self._require_model_label(model)
         with self._lock:
             self._model_calls += 1
             self._unavailable_calls += 1

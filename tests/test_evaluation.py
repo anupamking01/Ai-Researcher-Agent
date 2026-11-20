@@ -3510,3 +3510,64 @@ def test_diagnostic_provider_usage_mixed_call_ledger_preserves_unavailable_calls
         "model_calls": 1, "unavailable_calls": 1,
         "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
     }
+class _NoncanonicalHashModel(str):
+    def __hash__(self):
+        raise AssertionError("noncanonical model keys must be rejected before hashing")
+
+
+@pytest.mark.parametrize(
+    "invalid_model",
+    [
+        None, 0, True, [], {}, ("provider",), b"provider",
+        _NoncanonicalHashModel("provider"),
+    ],
+)
+def test_diagnostic_provider_usage_model_key_is_validated_before_ledger_mutation(
+    invalid_model,
+):
+    tracker = UsageTracker()
+    tracker.record_response(
+        "known-model",
+        {"usage": {"prompt_tokens": 4, "completion_tokens": 1}},
+    )
+    prior = tracker.snapshot()
+
+    # Neither valid provider usage nor explicit missingness may advance only
+    # the global ledger while failing to create a matching per-model bucket.
+    with pytest.raises(ValueError, match="model must be an exact string"):
+        tracker.record_response(
+            invalid_model,
+            {"usage": {"prompt_tokens": 2, "completion_tokens": 3}},
+        )
+    assert tracker.snapshot() == prior
+
+    with pytest.raises(ValueError, match="model must be an exact string"):
+        tracker.record_unavailable(invalid_model)
+    assert tracker.snapshot() == prior
+
+    # Later legitimate calls must still reconcile to the unchanged buckets.
+    tracker.record_unavailable("known-model")
+    receipt = tracker.snapshot()
+    assert (receipt["model_calls"], receipt["unavailable_calls"]) == (2, 1)
+    assert (receipt["prompt_tokens"], receipt["completion_tokens"]) == (4, 1)
+    assert sum(v["model_calls"] for v in receipt["by_model"].values()) == 2
+    assert sum(v["unavailable_calls"] for v in receipt["by_model"].values()) == 1
+
+
+def test_diagnostic_provider_usage_rejects_bad_model_before_provider_read():
+    class ResponseWhoseUsageMustNotBeRead:
+        @property
+        def usage(self):
+            raise AssertionError("invalid model must fail before provider parsing")
+
+    tracker = UsageTracker()
+    with pytest.raises(ValueError, match="model must be an exact string"):
+        tracker.record_response([], ResponseWhoseUsageMustNotBeRead())
+    assert tracker.snapshot() == {
+        "model_calls": 0,
+        "unavailable_calls": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "by_model": {},
+    }
