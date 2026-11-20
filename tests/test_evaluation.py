@@ -511,6 +511,86 @@ def test_aggregate_runs_accepts_valid_runtrace_subclass_in_one_pass():
     assert result["avg_sources"] == 0.5
 
 
+@pytest.mark.parametrize(
+    "metric", (
+        "total_tokens", "successful_source_count", "source_success_rate",
+        "verified_claim_count", "claim_support_rate", "citation_precision_proxy",
+    )
+)
+def test_diagnostic_aggregation_rejects_overridden_subclass_scores(metric):
+    # A frozen dataclass subclass may redefine properties even with ordinary,
+    # apparently valid raw counters. Never let those outputs enter research means.
+    class SpoofedMetric(RunTrace):
+        pass
+
+    setattr(SpoofedMetric, metric, property(lambda self: 1.0))
+    record = SpoofedMetric(
+        run_id="spoofed", completed=True, source_count=1,
+        variant_id="D3", task_set_id="s", task_id="t", question="Q",
+    )
+    with pytest.raises(ValueError, match=f"derived metric {metric}"):
+        aggregate_runs(iter([record]))
+    with pytest.raises(ValueError, match=f"derived metric {metric}"):
+        aggregate_runs_by_task(
+            iter([record]), variant_id="D3", task_set_id="s",
+            expected_task_ids=["t"], expected_questions_by_task={"t": "Q"},
+        )
+
+
+@pytest.mark.parametrize("bad_field,bad_value", [
+    ("completed", "False"), ("source_count", -1),
+    ("estimated_cost_usd", float("nan")),
+])
+def test_diagnostic_aggregation_rechecks_subclass_bypassed_post_init(
+    bad_field, bad_value,
+):
+    class SkippedValidation(RunTrace):
+        def __post_init__(self):
+            pass
+
+    values = dict(
+        run_id="unvalidated", completed=True, source_count=1,
+        variant_id="D3", task_set_id="s", task_id="t", question="Q",
+    )
+    values[bad_field] = bad_value
+    record = SkippedValidation(**values)
+    with pytest.raises(ValueError, match=bad_field):
+        aggregate_runs([record])
+    with pytest.raises(ValueError, match=bad_field):
+        aggregate_runs_by_task(
+            [record], variant_id="D3", task_set_id="s",
+            expected_task_ids=["t"], expected_questions_by_task={"t": "Q"},
+        )
+
+
+def test_paired_trace_adapter_rejects_spoofed_baseline_before_candidate_read():
+    class SpoofedRate(RunTrace):
+        @property
+        def claim_support_rate(self):
+            return 1.0
+
+    baseline = SpoofedRate(
+        run_id="bad", completed=True, source_count=1,
+        variant_id="D3", task_set_id="s", task_id="t", question="Q",
+        unsupported_claim_count=1,
+    )
+    reads = []
+    def candidate():
+        reads.append("candidate")
+        yield RunTrace(
+            run_id="good", completed=True, source_count=1,
+            variant_id="D6", task_set_id="s", task_id="t", question="Q",
+        )
+    with pytest.raises(ValueError, match="derived metric claim_support_rate"):
+        paired_run_trace_bootstrap_by_task(
+            iter([baseline]), candidate(),
+            baseline_variant_id="D3", candidate_variant_id="D6",
+            task_set_id="s", expected_task_ids=["t"],
+            expected_questions_by_task={"t": "Q"}, n_resamples=2,
+        )
+    assert reads == []
+
+
 def test_aggregate_runs_snapshots_a_single_traversal_for_all_metrics():
     first = RunTrace(
         run_id="snapshot-a", completed=True, source_count=2,

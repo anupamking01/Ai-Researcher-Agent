@@ -186,6 +186,29 @@ class RunTrace:
         return data
 
 
+def _require_canonical_run_trace(trace: RunTrace) -> None:
+    """Revalidate actual telemetry semantics, including accepted subclasses.
+
+    Frozen dataclass construction is not proof of validation for a subclass:
+    it may skip __post_init__ or replace a derived metric property. Accept
+    harmless RunTrace subclasses, but never aggregate alternate score formulas
+    or a record whose base count/finite invariants were bypassed.
+    """
+    if not isinstance(trace, RunTrace):
+        raise ValueError("aggregate_runs requires validated RunTrace records")
+    if type(trace).__getattribute__ is not object.__getattribute__:
+        raise ValueError("RunTrace attribute access must be canonical")
+    for name in (
+        "total_tokens", "successful_source_count", "source_success_rate",
+        "verified_claim_count", "claim_support_rate", "citation_precision_proxy",
+    ):
+        if getattr(type(trace), name, None) is not getattr(RunTrace, name):
+            raise ValueError(f"RunTrace derived metric {name} must be canonical")
+    # A subclass can override its post-init hook; invoke the base invariants
+    # again at ingestion before any task-keyed or generic estimates are made.
+    RunTrace.__post_init__(trace)
+
+
 def safe_mean(values: Iterable[float]) -> float:
     """Return a mean without overflowing an otherwise representable center.
 
@@ -687,8 +710,7 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
     """
     snapshot: list[RunTrace] = []
     for run in runs:
-        if not isinstance(run, RunTrace):
-            raise ValueError("aggregate_runs requires validated RunTrace records")
+        _require_canonical_run_trace(run)
         if len(snapshot) >= MAX_DIAGNOSTIC_AGGREGATE_RUNS:
             raise ValueError(
                 "aggregate_runs exceeds the "
@@ -915,6 +937,7 @@ def aggregate_runs_by_task(
     for trace in runs:
         if not isinstance(trace, RunTrace):
             raise ValueError("runs must contain RunTrace records")
+        _require_canonical_run_trace(trace)
         task_id = valid_identifier(trace.task_id, "observed task_id")
         run_id = valid_identifier(trace.run_id, "run_id")
         if type(trace.completed) is not bool:

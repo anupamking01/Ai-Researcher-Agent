@@ -8,6 +8,25 @@ The project has progressed beyond the original proposed-study document. Pilot in
 
 Human quality ratings are **not yet results**. They remain pending and must be collected under `paper/HUMAN_EVAL_PROTOCOL.md` before any human-quality claim is made.
 
+### Canonical trace semantics for prospective diagnostic aggregation (21 November 2026)
+
+A frozen `RunTrace` dataclass does not by itself authenticate the metrics of a
+subclass: subclass constructors can bypass base `__post_init__` checks, or
+override a derived rate while retaining plausible raw claim/source counters.
+Both generic and complete-task diagnostic aggregation now reapply the base
+count/finite invariants at ingestion and require the original derived-metric
+properties and ordinary attribute access. Benign subclasses inheriting the
+canonical properties remain supported. Invalid baseline traces are rejected
+before a paired adapter consumes any candidate records.
+
+Synthetic tests cover six score/property substitutions, three bypassed base
+validation cases, harmless subclass compatibility, and baseline-before-candidate
+failure. This preserves the previously defined estimators and frozen evidence;
+it does not authenticate historical report custody or attest provider telemetry.
+The pilot remains diagnostic, the historical automated analysis retains
+post-collection design/evaluator limitations, retrospective sensitivity remains
+exploratory, and human ratings remain uncollected.
+
 ### Early paired fingerprint-identity validation (21 November 2026)
 
 The prospective task-keyed RunTrace adapter now validates the four text-valued
