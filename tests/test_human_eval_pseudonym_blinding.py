@@ -100,7 +100,13 @@ def test_international_noncontact_pseudonym_remains_allowed(tmp_path):
     attest_rows, _, _ = freeze._load_annotator_attestations(attestations)
     assert rows[0]["annotator_id"] == pseudonym
     assert attest_rows[0]["annotator_id"] == pseudonym
-    assert freeze.build_agreement(rows)["n_annotators"] == 1
+    # A valid international pseudonym is accepted as part of a genuine
+    # two-identity diagnostic. A lone identity no longer generates a
+    # misleading successful inter-annotator agreement receipt.
+    second = dict(rows[0], annotator_id="independent-rater")
+    agreement = freeze.build_agreement([rows[0], second])
+    assert agreement["n_annotators"] == 2
+    assert len(agreement["pairwise"]) == 1
 
 def test_direct_agreement_and_coverage_reject_spreadsheet_formula_pseudonym():
     rows = [
