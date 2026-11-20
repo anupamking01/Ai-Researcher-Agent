@@ -2071,13 +2071,14 @@ def test_paired_trace_fingerprint_independently_replays_exact_input_rows():
                                    unsupported_claim_count=0),
                  _paired_run_trace("b", "D6", completed=False)]
     result = _compare_paired_traces(iter(baseline), iter(candidate))
-    assert result["paired_input_fingerprint_schema"] == "length-prefixed-json-v2"
+    assert result["paired_input_fingerprint_schema"] == "length-prefixed-json-v3"
     left_rows = {row.task_id: row for row in baseline}
     right_rows = {row.task_id: row for row in candidate}
     records = [{
-        "schema_version": 2, "metric": "claim_support_rate",
+        "schema_version": 3, "metric": "claim_support_rate",
         "task_set_id": "prospective-paired",
         "baseline_variant_id": "D3", "candidate_variant_id": "D6",
+        "expected_treatment_settings_by_variant": None,
     }]
     for task_id in ("a", "b"):
         left, right = left_rows[task_id], right_rows[task_id]
@@ -2105,6 +2106,22 @@ def test_paired_trace_fingerprint_independently_replays_exact_input_rows():
                 "partially_supported_claim_count": right.partially_supported_claim_count,
                 "unsupported_claim_count": right.unsupported_claim_count,
                 "contradicted_claim_count": right.contradicted_claim_count,
+            },
+            "baseline_treatment_settings": {
+                "planning_mode": left.planning_mode,
+                "verification_mode": left.verification_mode,
+                "source_budget": left.source_budget,
+                "smart_model": left.smart_model,
+                "fast_model": left.fast_model,
+                "temperature": left.temperature,
+            },
+            "candidate_treatment_settings": {
+                "planning_mode": right.planning_mode,
+                "verification_mode": right.verification_mode,
+                "source_budget": right.source_budget,
+                "smart_model": right.smart_model,
+                "fast_model": right.fast_model,
+                "temperature": right.temperature,
             },
         })
     digest = hashlib.sha256()
@@ -2208,6 +2225,68 @@ def test_paired_trace_fingerprint_binds_unclamped_legacy_proxy_input():
     assert original["bootstrap_confidence_interval"] == updated["bootstrap_confidence_interval"]
     assert original["rate_denominator_coverage"] == updated["rate_denominator_coverage"]
     assert original["paired_input_fingerprint_sha256"] != updated["paired_input_fingerprint_sha256"]
+
+
+@pytest.mark.parametrize(
+    ("factor", "changed_value"),
+    [
+        ("planning_mode", "decomposed"),
+        ("verification_mode", "on"),
+        ("source_budget", 4),
+        ("smart_model", "alternate-synthetic-model"),
+        ("fast_model", "alternate-synthetic-fast-model"),
+        ("temperature", 0.2),
+    ],
+)
+def test_paired_trace_fingerprint_binds_observed_treatment_factors(
+    factor, changed_value,
+):
+    """Numerically equal observations need not represent the same treatment."""
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")]
+    original = _compare_paired_traces(baseline, candidate)
+    changed = list(candidate)
+    changed[0] = replace(candidate[0], **{factor: changed_value})
+    updated = _compare_paired_traces(reversed(baseline), reversed(changed))
+    assert original["mean_delta"] == updated["mean_delta"]
+    assert original["bootstrap_confidence_interval"] == updated["bootstrap_confidence_interval"]
+    assert original["rate_denominator_coverage"] == updated["rate_denominator_coverage"]
+    assert original["paired_input_fingerprint_sha256"] != updated["paired_input_fingerprint_sha256"]
+
+
+def test_paired_trace_fingerprint_marks_independent_treatment_plan_custody():
+    """Identical observed traces must not conceal whether a plan was supplied."""
+    factor_fields = (
+        "planning_mode", "verification_mode", "source_budget",
+        "smart_model", "fast_model", "temperature",
+    )
+    factors = {
+        "planning_mode": "direct", "verification_mode": "off",
+        "source_budget": 4, "smart_model": "frozen-synthetic-main",
+        "fast_model": "frozen-synthetic-fast", "temperature": 0.2,
+    }
+    baseline = [_paired_run_trace(task, "D3", **factors) for task in "ab"]
+    candidate = [_paired_run_trace(task, "D6", **factors) for task in "ab"]
+    observed_only = _compare_paired_traces(baseline, candidate)
+    independent_plans = {
+        variant: {field: getattr(rows[0], field) for field in factor_fields}
+        for variant, rows in (("D3", baseline), ("D6", candidate))
+    }
+    checked = _compare_paired_traces(
+        reversed(baseline), reversed(candidate),
+        expected_treatment_settings_by_variant=independent_plans,
+    )
+    assert observed_only["mean_delta"] == checked["mean_delta"]
+    assert observed_only["bootstrap_confidence_interval"] == checked["bootstrap_confidence_interval"]
+    assert observed_only["paired_input_fingerprint_sha256"] != checked["paired_input_fingerprint_sha256"]
+
+
+def test_paired_trace_fingerprint_rejects_nontext_treatment_factor():
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")]
+    candidate[0] = replace(candidate[0], smart_model=object())
+    with pytest.raises(ValueError, match="treatment metadata smart_model must be text"):
+        _compare_paired_traces(baseline, candidate)
 
 
 @pytest.mark.parametrize("bad_metric", ["estimated_cost_usd", "question", "", None, True])

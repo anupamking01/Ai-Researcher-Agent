@@ -1117,11 +1117,13 @@ def paired_run_trace_bootstrap_by_task(
         fingerprint.update(serialized)
 
     feed_fingerprint({
-        "schema_version": 2,
+        "schema_version": 3,
         "metric": metric,
         "task_set_id": task_set_id,
         "baseline_variant_id": baseline_variant_id,
         "candidate_variant_id": candidate_variant_id,
+        # None explicitly means no independently declared factor plan was checked.
+        "expected_treatment_settings_by_variant": configs,
     })
 
     def numerator(trace: RunTrace) -> int:
@@ -1157,6 +1159,19 @@ def paired_run_trace_bootstrap_by_task(
             "unsupported_claim_count": trace.unsupported_claim_count,
         }
 
+    def treatment_identity(trace: RunTrace) -> dict[str, object]:
+        """Bind observed treatment factors even when no independent plan exists.
+
+        Legacy empty strings remain representable, but nontext factor values
+        cannot acquire a credible or ambiguously serialized provenance digest.
+        This captures metadata, not independent verification of the treatment.
+        """
+        identity = {field: getattr(trace, field) for field in _TREATMENT_FIELDS}
+        for field in ("planning_mode", "verification_mode", "smart_model", "fast_model"):
+            if type(identity[field]) is not str:
+                raise ValueError(f"treatment metadata {field} must be text")
+        return identity
+
     baseline_metrics: list[tuple[str, float]] = []
     candidate_metrics: list[tuple[str, float]] = []
     for task_id in task_ids:
@@ -1185,6 +1200,8 @@ def paired_run_trace_bootstrap_by_task(
             "candidate_denominator": getattr(right, denominator_field),
             "baseline_metric_input_counts": metric_input_counts(left),
             "candidate_metric_input_counts": metric_input_counts(right),
+            "baseline_treatment_settings": treatment_identity(left),
+            "candidate_treatment_settings": treatment_identity(right),
         })
 
     # The numeric adapter consumes the same captured values as the fingerprint;
@@ -1197,7 +1214,7 @@ def paired_run_trace_bootstrap_by_task(
         seed=seed,
     )
     return {
-        "paired_input_fingerprint_schema": "length-prefixed-json-v2",
+        "paired_input_fingerprint_schema": "length-prefixed-json-v3",
         "paired_input_fingerprint_sha256": fingerprint.hexdigest(),
         "baseline_variant_id": baseline_variant_id,
         "candidate_variant_id": candidate_variant_id,

@@ -1726,7 +1726,7 @@ untouched.
 ## Paired diagnostic input fingerprint and metric telemetry custody (20 November 2026)
 
 The prospective `paired_run_trace_bootstrap_by_task` diagnostic receipt
-includes `paired_input_fingerprint_schema: length-prefixed-json-v2` and
+historically included `paired_input_fingerprint_schema: length-prefixed-json-v2` and
 `paired_input_fingerprint_sha256`. A second analyst can reconstruct this
 digest from the **same independently verified task manifest and run traces**,
 rather than treating matching seeded estimates as evidence of matching inputs.
@@ -1777,3 +1777,30 @@ constitute human judgments. The five-task pilot remains diagnostic;
 historical designated-primary automated findings remain post-collection
 qualified; retrospective sensitivities remain exploratory; genuine blinded
 human validation remains pending.
+
+## Treatment-factor custody in current paired diagnostic fingerprint v3 (20 November 2026)
+
+Current prospective `paired_run_trace_bootstrap_by_task` receipts use
+`length-prefixed-json-v3`. They retain the v2 metric-relevant input fields and
+length-prefixed canonical JSON algorithm above, but use `schema_version=3`.
+The header also binds `expected_treatment_settings_by_variant`: either the
+**validated, independently supplied** two-variant plan (six factors for each
+variant) or explicit JSON `null` when no such plan was provided. Per-task rows
+add `baseline_treatment_settings` and `candidate_treatment_settings`, each
+recording observed `planning_mode`, `verification_mode`, `source_budget`,
+`smart_model`, `fast_model`, and `temperature`. Legacy empty-text values
+remain representable; nontext model/planning/verification fields fail closed.
+
+This prevents identical rate telemetry under different treatment factor
+settings, or checked-versus-unchecked independent plans, from receiving the
+same current fingerprint. It does **not** mean the plan was independently
+verified when null, that observed trace metadata describes what was physically
+executed, or that a hash authenticates absent historical source archives.
+Historical v1 and v2 receipts must be replayed with their respective original
+schemas, not silently relabeled as v3. Synthetic tests cover all six factors,
+explicit plan presence, invalid nontext metadata, and an independent v3 digest
+oracle. No numeric comparisons, bootstrap RNG draws, frozen results, or human
+ratings are changed. Pilot evidence remains diagnostic, designated-primary
+frozen automated inference retains post-collection/fixed-order/evaluator-policy
+qualifications, retrospective sensitivity remains exploratory, and blinded
+human validation is still pending.
