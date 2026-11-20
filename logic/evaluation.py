@@ -886,6 +886,14 @@ def aggregate_runs_by_task(
             raise ValueError(
                 f"task coverage mismatch: unexpected observed task_id {task_id!r}"
             )
+        # Reject the first substituted prompt before reading later observations.
+        if questions_by_task is not None:
+            observed_question = trace.question
+            if (
+                type(observed_question) is not str
+                or observed_question != questions_by_task[task_id]
+            ):
+                raise ValueError(f"task question mismatch for task {task_id!r}")
         if expected_config is not None:
             for field, planned_value in expected_config.items():
                 if getattr(trace, field) != planned_value:
@@ -906,16 +914,6 @@ def aggregate_runs_by_task(
             f"task coverage mismatch: missing={missing!r}, unexpected={unexpected!r}"
         )
 
-    if questions_by_task is not None:
-        for task_id in task_ids:
-            observed_question = by_task[task_id].question
-            if (
-                type(observed_question) is not str
-                or observed_question != questions_by_task[task_id]
-            ):
-                raise ValueError(
-                    f"task question mismatch for task {task_id!r}"
-                )
     summary = aggregate_runs([by_task[task_id] for task_id in task_ids])
     return {
         "variant_id": variant_id,

@@ -1477,6 +1477,41 @@ def test_task_aggregate_question_manifest_rejects_swapped_questions():
         )
 
 
+@pytest.mark.parametrize("wrong_position", [0, 1, 2])
+def test_task_aggregate_question_substitution_fails_on_first_offending_row(
+    wrong_position,
+):
+    """A later producer failure cannot mask the first wrong research question."""
+    task_ids = ["a", "b", "c"]
+    questions = {
+        "a": "Question for A?",
+        "b": "Question for B?",
+        "c": "Question for C?",
+    }
+    reads = []
+
+    def observed_runs():
+        for index, task_id in enumerate(task_ids):
+            if index > wrong_position:
+                raise AssertionError("question mismatch read past offending trace")
+            reads.append(task_id)
+            question = (
+                questions[task_id] if index != wrong_position
+                else questions[task_ids[(index + 1) % len(task_ids)]]
+            )
+            yield _task_aggregate_trace(task_id, question=question)
+
+    with pytest.raises(ValueError, match="task question mismatch"):
+        aggregate_runs_by_task(
+            observed_runs(),
+            variant_id="D3",
+            task_set_id="frozen-diagnostic",
+            expected_task_ids=task_ids,
+            expected_questions_by_task=questions,
+        )
+    assert reads == task_ids[:wrong_position + 1]
+
+
 def test_task_aggregate_question_manifest_accepts_exact_text_and_failed_runs():
     questions = {"a": "What is evidence A?", "b": "Why is B different?"}
     rows = [

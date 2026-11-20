@@ -9,6 +9,25 @@ The project has progressed beyond the original proposed-study document. Pilot in
 Human quality ratings are **not yet results**. They remain pending and must be collected under `paper/HUMAN_EVAL_PROTOCOL.md` before any human-quality claim is made.
 
 
+### Fail-fast task-question provenance in complete-arm diagnostics (20 November 2026)
+
+The opt-in task-keyed aggregate now compares each observed question to its
+independent expected task-to-question mapping immediately after checking the
+task ID. Previously it checked question identity only after reading every
+record, so an early substituted or nontext prompt could consume unnecessary
+single-use traces or be hidden by a later producer error. The first offending
+record now fails closed without advancing the stream. Three synthetic cases
+cover mismatches in the first, middle, and final observed positions.
+
+Valid complete-task and failed-run inclusion, original mean denominators,
+exact-text checks, deterministic task order and optional legacy calls without
+an independent question mapping remain unchanged. This checks caller-declared
+in-memory provenance, not original treatment artifact custody. No frozen
+automated findings, pilot outputs, exploratory bounds, treatment/evaluator
+runs or pending human ratings are changed. Designated-primary automated
+findings retain post-collection analysis-plan timing, fixed-order and
+evaluator-policy comparability qualifications; human validation remains pending.
+
 ### Caller identity preflight for prospective paired RunTrace comparisons
 
 The high-level `paired_run_trace_bootstrap_by_task` adapter now validates
