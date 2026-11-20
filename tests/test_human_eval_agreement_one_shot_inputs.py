@@ -90,7 +90,7 @@ def test_single_annotator_cannot_produce_pairwise_agreement_receipt(
 ):
     # Both list and one-pass direct callers must not turn one human rater into
     # an apparently successful pre-unblinding inter-annotator analysis.
-    ratings = [row("rater-a", f"H{index:03d}", "3") for index in range(n_items)]
+    ratings = [row("rater-a", f"H{index:03d}", "3") for index in range(1, n_items + 1)]
     source = (item for item in ratings) if use_generator else ratings
     with pytest.raises(ValueError, match="at least two independent annotators"):
         freeze.build_agreement(source)
@@ -141,14 +141,26 @@ def test_unbounded_iterator_is_rejected_without_exhaustion():
 
 
 def test_exact_bound_does_not_trigger_safety_limit():
+    # The generated H001-H999 namespace has fewer than 4,096 unique labels.
+    # Spread the exact-bound stream across synthetic raters while retaining
+    # unique (annotator, report) pairs and valid generated identifiers.
+    identifiers_per_rater = 999
     rows = (
         row(
-            "rater-a" if index % 2 == 0 else "rater-b",
-            f"H{index // 2:04d}",
+            f"rater-{index // identifiers_per_rater + 1:02d}",
+            f"H{index % identifiers_per_rater + 1:03d}",
         )
         for index in range(freeze.MAX_DIRECT_AGREEMENT_ROWS)
     )
     result = freeze.build_agreement(rows)
-    assert result["n_annotators"] == 2
-    assert result["pairwise"][0]["n_shared_items"] == freeze.MAX_DIRECT_AGREEMENT_ROWS // 2
-    assert result["requires_predeclared_multi_rater_statistic"] is False
+    expected_raters = (
+        freeze.MAX_DIRECT_AGREEMENT_ROWS + identifiers_per_rater - 1
+    ) // identifiers_per_rater
+    assert result["n_annotators"] == expected_raters
+    assert len(result["pairwise"]) == expected_raters * (expected_raters - 1) // 2
+    assert result["pairwise"][0]["n_shared_items"] == identifiers_per_rater
+    assert result["pairwise"][-1]["n_shared_items"] == (
+        freeze.MAX_DIRECT_AGREEMENT_ROWS % identifiers_per_rater
+    )
+    # The resource-bound fixture is NOT a two-rater reliability claim.
+    assert result["requires_predeclared_multi_rater_statistic"] is True

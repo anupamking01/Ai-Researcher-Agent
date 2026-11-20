@@ -36,3 +36,23 @@ that ratings are frozen, or that unblinding is permitted.
 
 No treatments, post-hoc evaluation, paired confirmatory analysis, rubric, or
 historical observations are changed by this engineering safeguard.
+
+## Generated-ID compatibility of synthetic agreement regression fixtures (20 November 2026)
+
+The direct agreement and independent missingness-oracle regressions now use the
+producer's legal opaque `H001`–`H999` namespace. In particular, the
+single-rater diagnostic starts at `H001` rather than the invalid `H000`,
+and the four missingness cases use valid IDs without altering score or
+missingness expectations. The exact 4,096-row input-boundary regression uses
+multiple synthetic rater pseudonyms because two raters cannot supply 4,096
+distinct (rater, item) observations with at most 999 legal item IDs. Its
+expected pairwise overlap and multi-rater-only diagnostic flag are checked
+explicitly; it is **not** treated as a two-rater human-validity result.
+
+These fixture repairs restore independent coverage of two preexisting
+safeguards without relaxing the newer opaque-ID gate or changing the
+estimator, frozen automated measurements, rubric, treatment assignments,
+or human-evaluation evidence. All observations in these tests are synthetic.
+The main-study automated analysis retains its post-collection-plan,
+fixed-order, and evaluator-comparability limitations; pilot results remain
+diagnostic and retrospective sensitivity work remains exploratory.

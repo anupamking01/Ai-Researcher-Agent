@@ -73,14 +73,14 @@ def _row(annotator, blind_id, correctness):
 
 def test_blinded_agreement_keeps_all_missingness_denominators_separate():
     rows = [
-        _row("rater_a", "blind-01", "4"),
-        _row("rater_b", "blind-01", "4"),
-        _row("rater_a", "blind-02", "3"),
-        _row("rater_b", "blind-02", ""),
-        _row("rater_a", "blind-03", ""),
-        _row("rater_b", "blind-03", "2"),
-        _row("rater_a", "blind-04", ""),
-        _row("rater_b", "blind-04", ""),
+        _row("rater_a", "H001", "4"),
+        _row("rater_b", "H001", "4"),
+        _row("rater_a", "H002", "3"),
+        _row("rater_b", "H002", ""),
+        _row("rater_a", "H003", ""),
+        _row("rater_b", "H003", "2"),
+        _row("rater_a", "H004", ""),
+        _row("rater_b", "H004", ""),
     ]
     result = build_agreement(rows)
     assert result["status"] == "pre-unblinding_pairwise_agreement"
