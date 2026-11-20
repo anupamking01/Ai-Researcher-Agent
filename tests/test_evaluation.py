@@ -3602,6 +3602,45 @@ def _isolated_chat_adapter_for_usage_test(monkeypatch, create_call):
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+@pytest.mark.parametrize(
+    "yield_first", [False, True], ids=["failure-before-first", "partial-messages"]
+)
+def test_local_message_producer_failure_is_not_a_provider_attempt(
+    monkeypatch, stream, yield_first
+):
+    """A failing one-pass input producer must not imply a provider invocation."""
+    import asyncio
+
+    attempted = []
+
+    def provider_create(**kwargs):
+        attempted.append(kwargs)
+        raise AssertionError("provider should never receive incomplete local input")
+
+    def malformed_messages():
+        if yield_first:
+            yield {"role": "user", "content": "partial synthetic message"}
+        raise RuntimeError("synthetic local message preparation failure")
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    tracker.record_response(
+        "prior-model", {"usage": {"prompt_tokens": 4, "completion_tokens": 2}}
+    )
+    before = tracker.snapshot()
+    with pytest.raises(RuntimeError, match="local message preparation failure"):
+        call = adapter.create_chat_completion(
+            model="unattempted-model", messages=malformed_messages(),
+            stream=stream, usage_tracker=tracker,
+        )
+        if stream:
+            asyncio.run(call)
+
+    assert attempted == []
+    assert tracker.snapshot() == before
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
 def test_failed_provider_invocation_is_counted_with_unavailable_usage(
     monkeypatch, stream
 ):

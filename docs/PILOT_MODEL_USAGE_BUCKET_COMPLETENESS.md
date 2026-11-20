@@ -100,3 +100,20 @@ tokens, or incurred a charge; this is conservative *invocation-attempt*
 coverage, not provider billing attestation. Missing tokens are never imputed.
 Synthetic offline adapter tests use a stubbed provider and no live requests.
 Existing historical/frozen treatments and analysis are left unchanged.
+
+## Local message preparation versus provider attempts (21 November 2026)
+
+Both streaming and non-streaming adapters first materialize the supplied
+one-pass `messages` iterable **before** entering the
+`ChatCompletion.create` invocation boundary. Previously, an exception from
+the local iterable while evaluating `messages=list(messages)` was caught as
+if the provider call had raised, inflating the unavailable model-call count
+even though `ChatCompletion.create` was never entered.
+
+Local message preparation failures now propagate without changing usage
+counters. A subsequent failure **inside the invoked provider method** still
+counts one usage-unavailable attempted call, as separately regression-tested.
+Synthetic tests cover both paths and producer failures before and after a
+partial input yield; they never access a real provider. This prospective
+measurement-accounting correction does not change frozen treatment outputs,
+paired estimates, exploratory analyses, or pending human-evaluation claims.

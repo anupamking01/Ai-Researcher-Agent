@@ -42,10 +42,13 @@ async def _stream_completion(
     usage_tracker: UsageTracker | None = None,
     request_timeout_seconds: float = OPENAI_REQUEST_TIMEOUT_SECONDS,
 ) -> str:
+    # A one-pass local message producer can fail before the provider is called.
+    # Prepare the payload outside the provider-attempt accounting boundary.
+    prepared_messages = list(messages)
     try:
         response = openai.ChatCompletion.create(
             model=model,
-            messages=list(messages),
+            messages=prepared_messages,
             temperature=temperature,
             stream=True,
             request_timeout=request_timeout_seconds,
@@ -112,10 +115,13 @@ def create_chat_completion(
             request_timeout_seconds=resolved_timeout,
         )
 
+    # Materialization failures are local preparation errors, not attempts to
+    # invoke the provider; do not inflate the prospective model-call ledger.
+    prepared_messages = list(messages)
     try:
         response = openai.ChatCompletion.create(
             model=model,
-            messages=list(messages),
+            messages=prepared_messages,
             temperature=resolved_temperature,
             request_timeout=resolved_timeout,
         )
