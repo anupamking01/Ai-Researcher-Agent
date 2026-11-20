@@ -18,6 +18,7 @@ FREEZE_SCRIPTS = (
 )
 FREEZE_MODULES = (
     "tests/test_human_eval_freeze.py",
+    "tests/test_human_eval_agreement_one_shot_inputs.py",
     "tests/test_human_eval_freeze_capture_bounds.py",
     "tests/test_human_eval_freeze_destination.py",
     "tests/test_human_eval_freeze_inventory_bounds.py",
