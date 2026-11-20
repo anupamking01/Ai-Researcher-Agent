@@ -94,3 +94,33 @@ These are additive diagnostic receipt fields, not a declaration of
 human-evaluation readiness: only the verified blinded freeze and assignment
 coverage gate can certify protocol-complete annotation. In particular,
 no genuine human rating or report/trace provenance is supplied or inferred.
+
+## Independently supplied blind-item reference for direct agreement (20 November 2026)
+
+A direct notebook call with only submitted ratings can measure overlap of
+**submitted** report IDs, but cannot detect a report absent from **both**
+raters' submissions. That gap matters when a high observed agreement is
+calculated on a small, incomplete portion of the intended blinded packet.
+
+The optional `build_agreement(rows, expected_blind_ids=...)` reference now
+accepts an independently obtained, one-pass collection of opaque `H001`–
+`H999` IDs. It validates the manifest **before consuming any ratings**:
+empty, scalar, malformed, duplicate, and over-999-item inputs fail closed.
+An observed rating for an undeclared ID is rejected before pairwise
+computation. When supplied, each pairwise receipt additionally reports
+`n_expected_items` and `n_items_missing_from_both`. The latter is the
+expected set minus the union of that pair's submitted IDs; it is not a
+missing score or an imputation. Existing union/exclusive counters and
+rubric/kappa estimators remain unchanged. Without the optional reference,
+the legacy receipt shape is preserved and **absence from both is unknown**.
+
+These are diagnostics for independently supplied IDs, **not** cryptographic
+authentication of their source. Deriving the reference from submitted rows
+would defeat the check. For authoritative human-evaluation readiness, use
+the source-verified coordinator packet and canonical blinded freeze,
+eligibility/assignment attestations, independent human ratings, and
+pre-unblinding protocol gates; no such ratings or original artifact custody
+are established here. The pilot remains diagnostic, designated-primary
+automated results remain post-collection-plan with fixed-order and
+evaluator-policy comparability limitations, and retrospective sensitivity
+analysis remains exploratory rather than prospectively confirmatory.

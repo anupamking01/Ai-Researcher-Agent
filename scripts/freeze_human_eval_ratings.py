@@ -55,6 +55,9 @@ MAX_DIRECT_AGREEMENT_ROWS = 4096
 # This is a direct-helper resource safeguard, NOT a change to the two-rater
 # human-evaluation protocol or the interpretation of >2-rater diagnostics.
 MAX_DIRECT_AGREEMENT_RATERS = 64
+# The generated opaque H001-H999 namespace bounds independent notebook
+# report-manifest capture. This is not the human-study report count.
+MAX_DIRECT_AGREEMENT_MANIFEST_ITEMS = 999
 # Bound every externally supplied or retained freeze input before allocation.
 # The packet builder permits up to 64 MiB per capture; use the same ceiling
 # for packet, ratings, attestations, provenance, and independent verification.
@@ -1252,14 +1255,45 @@ def _validate_direct_agreement_row(row: dict) -> None:
         )
 
 
-def build_agreement(rows) -> dict:
+def build_agreement(
+    rows, *, expected_blind_ids: Iterable[str] | None = None
+) -> dict:
     """Compute blinded diagnostics without exhausting single-use row sources.
 
     The production freeze imports normalized CSV rows, but independent
     notebook users may supply iterators. Capture the iterable exactly once
     before separate schema, identity, and aggregation scans. The generous
     resource ceiling is an API safety bound, not an analysis inclusion rule.
+
+    An optional independently supplied opaque-ID manifest exposes reports
+    missing from *both* members of a rater pair. Its shape is validated before
+    reading any rating rows. It does not authenticate report custody or
+    substitute for the canonical packet/freeze/assignment checks.
     """
+    expected_items: set[str] | None = None
+    if expected_blind_ids is not None:
+        if isinstance(expected_blind_ids, (str, bytes)):
+            raise ValueError("expected agreement blind IDs must be an iterable, not scalar text")
+        try:
+            expected_iterator = iter(expected_blind_ids)
+        except TypeError as exc:
+            raise ValueError("expected agreement blind IDs must be iterable") from exc
+        expected_items = set()
+        for index, blind_id in enumerate(expected_iterator):
+            if index >= MAX_DIRECT_AGREEMENT_MANIFEST_ITEMS:
+                raise ValueError(
+                    "expected agreement blind IDs exceed the "
+                    f"{MAX_DIRECT_AGREEMENT_MANIFEST_ITEMS}-item safety limit"
+                )
+            _require_generated_opaque_blind_id(
+                blind_id, context="expected agreement manifest"
+            )
+            if blind_id in expected_items:
+                raise ValueError("duplicate expected agreement blind_id")
+            expected_items.add(blind_id)
+        if not expected_items:
+            raise ValueError("expected agreement blind IDs must not be empty")
+
     try:
         iterator = iter(rows)
     except TypeError as exc:
@@ -1302,6 +1336,17 @@ def build_agreement(rows) -> dict:
         ratings_by_item[blind_id] = row
 
     annotators = sorted(by_annotator)
+    if expected_items is not None:
+        observed_items = {
+            blind_id for rated_items in by_annotator.values()
+            for blind_id in rated_items
+        }
+        unexpected_items = sorted(observed_items - expected_items)
+        if unexpected_items:
+            raise ValueError(
+                "direct agreement contains blind IDs outside the expected manifest: "
+                f"{unexpected_items!r}"
+            )
     # A lone annotator has no independent rater pair. Returning a successful
     # agreement receipt with an empty pairwise array would invite a false
     # reliability claim by direct/notebook callers bypassing the freeze gate.
@@ -1370,17 +1415,23 @@ def build_agreement(rows) -> dict:
                 "quadratic_weighted_cohen_kappa": quadratic_weighted_kappa(pairs),
             }
 
-        pairwise.append(
-            {
-                "annotator_a": left_id,
-                "annotator_b": right_id,
-                "n_shared_items": len(common),
-                "n_union_items": len(common) + only_left_items + only_right_items,
-                "n_items_only_annotator_a": only_left_items,
-                "n_items_only_annotator_b": only_right_items,
-                "dimensions": dimensions,
-            }
-        )
+        pair_receipt = {
+            "annotator_a": left_id,
+            "annotator_b": right_id,
+            "n_shared_items": len(common),
+            "n_union_items": len(common) + only_left_items + only_right_items,
+            "n_items_only_annotator_a": only_left_items,
+            "n_items_only_annotator_b": only_right_items,
+            "dimensions": dimensions,
+        }
+        if expected_items is not None:
+            # The submitted union alone cannot disclose absent-by-both reports.
+            # Only an independent blinded item reference supplies that denominator.
+            pair_receipt["n_expected_items"] = len(expected_items)
+            pair_receipt["n_items_missing_from_both"] = len(
+                expected_items - (left_items | right_items)
+            )
+        pairwise.append(pair_receipt)
 
     return {
         "schema_version": 1,

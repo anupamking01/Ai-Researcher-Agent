@@ -239,3 +239,94 @@ def test_item_coverage_distinguishes_complete_from_disjoint_rater_assignments():
         value["n_double_rated"] == 0
         for value in disjoint["dimensions"].values()
     )
+
+
+def test_independent_blinded_manifest_exposes_reports_missing_from_both_raters():
+    # The submitted-row union (one report) cannot reveal an entirely absent
+    # report. No scores are imputed, and estimator denominators stay unchanged.
+    result = freeze.build_agreement(
+        iter(pair()), expected_blind_ids=iter(("H001", "H002"))
+    )
+    summary = result["pairwise"][0]
+    assert summary["n_shared_items"] == summary["n_union_items"] == 1
+    assert summary["n_expected_items"] == 2
+    assert summary["n_items_missing_from_both"] == 1
+    assert summary["dimensions"]["correctness_1_5"]["n_double_rated"] == 1
+    # Existing notebook and canonical freeze calls without this optional
+    # independent reference keep their historical receipt shape.
+    legacy = freeze.build_agreement(pair())["pairwise"][0]
+    assert "n_expected_items" not in legacy
+    assert "n_items_missing_from_both" not in legacy
+
+
+def test_independent_blinded_manifest_reports_complete_coverage_without_changing_scores():
+    result = freeze.build_agreement(pair(), expected_blind_ids=("H001",))
+    summary = result["pairwise"][0]
+    assert summary["n_expected_items"] == summary["n_union_items"] == 1
+    assert summary["n_items_missing_from_both"] == 0
+    assert summary["dimensions"] == freeze.build_agreement(pair())["pairwise"][0]["dimensions"]
+
+
+def test_independent_blinded_manifest_rejects_unplanned_observed_report_before_pairwise_work(
+    monkeypatch,
+):
+    def forbidden_pairs(*_args, **_kwargs):
+        raise AssertionError("agreement computed on a report absent from manifest")
+
+    monkeypatch.setattr(freeze, "combinations", forbidden_pairs)
+    with pytest.raises(ValueError, match="outside the expected manifest"):
+        freeze.build_agreement(
+            [row("rater-a", "H001"), row("rater-b", "H002")],
+            expected_blind_ids=("H001",),
+        )
+
+
+@pytest.mark.parametrize(
+    ("manifest", "message"),
+    [
+        ("H001", "not scalar text"),
+        (b"H001", "not scalar text"),
+        (42, "must be iterable"),
+        ((), "must not be empty"),
+        (("H001", "H001"), "duplicate expected agreement"),
+        (("H000",), "generated opaque"),
+        (("P6V",), "generated opaque"),
+    ],
+)
+def test_invalid_independent_blinded_manifest_fails_before_rating_reads(manifest, message):
+    def forbidden_ratings():
+        raise AssertionError("malformed independent manifest consumed rating rows")
+        yield row()
+
+    with pytest.raises(ValueError, match=message):
+        freeze.build_agreement(
+            forbidden_ratings(), expected_blind_ids=manifest
+        )
+
+
+def test_independent_blinded_manifest_bounds_one_pass_oversized_producer():
+    observed = 0
+
+    def source():
+        nonlocal observed
+        for number in range(1, 1001):
+            observed += 1
+            yield f"H{number:03d}"
+
+    # At the first excess item, reject before reading any rating rows.
+    with pytest.raises(ValueError, match="999-item safety limit"):
+        freeze.build_agreement(
+            iter(pair()), expected_blind_ids=source()
+        )
+    assert observed == 1000
+
+
+def test_independent_blinded_manifest_accepts_inclusive_999_item_boundary():
+    report_ids = (f"H{i:03d}" for i in range(1, 1000))
+    result = freeze.build_agreement(
+        pair(), expected_blind_ids=report_ids
+    )
+    summary = result["pairwise"][0]
+    assert summary["n_expected_items"] == 999
+    assert summary["n_items_missing_from_both"] == 998
+    assert summary["n_union_items"] == 1
