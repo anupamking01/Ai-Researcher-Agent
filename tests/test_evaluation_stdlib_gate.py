@@ -110,9 +110,28 @@ class DependencyFreeEvaluationGate(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "task question mismatch"):
             compare(iter(baseline), forbidden_candidate())
 
-    def test_unending_trace_stream_is_bounded_by_task_manifest(self):
+    def test_unending_trace_stream_rejects_first_duplicate_before_overread(self):
+        reads = 0
+
+        def repeated():
+            nonlocal reads
+            while True:
+                reads += 1
+                yield make_trace("D3", "task-a")
+
+        with self.assertRaisesRegex(ValueError, "duplicate observed task_id"):
+            compare(repeated(), iter(()))
+        self.assertEqual(reads, 2)
+
+    def test_unending_trace_stream_still_enforces_independent_cardinality(self):
+        def alternating():
+            while True:
+                yield make_trace("D3", "task-a")
+                yield make_trace("D3", "task-b")
+
+        # Two unique expected tasks are valid; a third is over budget.
         with self.assertRaisesRegex(ValueError, "more records"):
-            compare(repeat(make_trace("D3", "task-a")), iter(()))
+            compare(alternating(), iter(()))
 
     def test_numeric_pairing_rejects_first_unplanned_task_before_other_arm(self):
         reads = {"baseline": 0, "candidate": 0}
