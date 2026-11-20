@@ -56,3 +56,21 @@ or human-evaluation evidence. All observations in these tests are synthetic.
 The main-study automated analysis retains its post-collection-plan,
 fixed-order, and evaluator-comparability limitations; pilot results remain
 diagnostic and retrospective sensitivity work remains exploratory.
+
+## Pairwise output fanout guard (20 November 2026)
+
+The 4,096-row intake guard alone does not bound the work or size of the
+pairwise result: 4,096 distinct one-item raters could cause 8,386,560
+pairwise comparisons, each with five dimension summaries, despite valid
+input cardinality. Direct `build_agreement` now rejects more than **64
+distinct annotators** before generating any pairwise combinations (64 is
+accepted, yielding at most 2,016 unordered pairs). This check is independent
+of the existing row cap; exceeding it is an explicit error, never an
+implicit subsample. Synthetic boundary tests exercise 64-rater success and
+65-rater rejection before pairwise enumeration.
+
+This is a resource/receipt-integrity limit for exploratory direct-helper
+usage. It does **not** alter the frozen protocol's two-independent-rater
+expectation, define an eligible multi-rater study, validate participant
+eligibility, or establish any inter-annotator reliability from real humans.
+Human ratings and original report/trace provenance remain outstanding.

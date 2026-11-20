@@ -50,6 +50,11 @@ MIN_RATERS_PER_ITEM = 2
 # requires a verified blinded freeze; direct helpers cannot establish readiness
 # or authenticity.
 MAX_DIRECT_AGREEMENT_ROWS = 4096
+# Pairwise diagnostics scale quadratically in distinct annotators, even when
+# the 4,096-row intake bound holds. Bound emitted summaries independently.
+# This is a direct-helper resource safeguard, NOT a change to the two-rater
+# human-evaluation protocol or the interpretation of >2-rater diagnostics.
+MAX_DIRECT_AGREEMENT_RATERS = 64
 # Bound every externally supplied or retained freeze input before allocation.
 # The packet builder permits up to 64 MiB per capture; use the same ceiling
 # for packet, ratings, attestations, provenance, and independent verification.
@@ -1305,6 +1310,14 @@ def build_agreement(rows) -> dict:
     if len(annotators) < 2:
         raise ValueError(
             "pre-unblinding agreement requires at least two independent annotators"
+        )
+    # An input can be below MAX_DIRECT_AGREEMENT_ROWS yet contain thousands
+    # of one-item raters. Enumerating every rater pair would then allocate
+    # millions of five-dimension summaries. Fail before constructing any pair.
+    if len(annotators) > MAX_DIRECT_AGREEMENT_RATERS:
+        raise ValueError(
+            "direct agreement annotators exceed the "
+            f"{MAX_DIRECT_AGREEMENT_RATERS}-rater pairwise safety limit"
         )
     pairwise: list[dict] = []
 

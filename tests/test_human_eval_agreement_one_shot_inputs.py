@@ -164,3 +164,30 @@ def test_exact_bound_does_not_trigger_safety_limit():
     )
     # The resource-bound fixture is NOT a two-rater reliability claim.
     assert result["requires_predeclared_multi_rater_statistic"] is True
+
+
+def test_exact_rater_fanout_bound_preserves_exploratory_pairwise_diagnostics():
+    # Every row is independently identified but the 64-rater ceiling is an
+    # engineering resource limit, not a valid human-study design or finding.
+    limit = freeze.MAX_DIRECT_AGREEMENT_RATERS
+    result = freeze.build_agreement(
+        row(f"rater-{index:03d}") for index in range(limit)
+    )
+    assert result["n_annotators"] == limit
+    assert len(result["pairwise"]) == limit * (limit - 1) // 2
+    assert result["requires_predeclared_multi_rater_statistic"] is True
+
+
+def test_excess_distinct_raters_fail_before_pairwise_enumeration(monkeypatch):
+    # The raw input is far below the 4,096-row ceiling; this exercises the
+    # separate O(raters**2) output-growth guard. No pairwise work may begin.
+    def forbidden_pairs(*args, **kwargs):
+        raise AssertionError("pairwise enumeration started on oversized input")
+
+    monkeypatch.setattr(freeze, "combinations", forbidden_pairs)
+    rows = (
+        row(f"rater-{index:03d}")
+        for index in range(freeze.MAX_DIRECT_AGREEMENT_RATERS + 1)
+    )
+    with pytest.raises(ValueError, match="rater pairwise safety limit"):
+        freeze.build_agreement(rows)
