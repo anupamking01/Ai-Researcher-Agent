@@ -1933,7 +1933,7 @@ def test_paired_trace_discloses_task_matched_rate_denominator_coverage(metric):
         values = {
             "run_id": f"{variant}-{task}",
             "completed": positive,
-            "source_count": 0,
+            "source_count": 1 if positive else 0,
             "variant_id": variant,
             "task_set_id": "prospective-paired",
             "task_id": task,
@@ -1972,7 +1972,7 @@ def test_paired_trace_discloses_task_matched_rate_denominator_coverage(metric):
     direct = paired_bootstrap_confidence_interval_by_task(
         ((trace.task_id, getattr(trace, metric)) for trace in baseline),
         ((trace.task_id, getattr(trace, metric)) for trace in candidate),
-        expected_task_ids="abcd", n_resamples=101, seed=23,
+        expected_task_ids=list("abcd"), n_resamples=101, seed=23,
     )
     # The new reporting-only metadata must not change the numeric estimand,
     # bootstrap draws, pairing or task denominator.
