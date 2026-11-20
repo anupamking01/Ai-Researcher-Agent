@@ -548,6 +548,20 @@ def test_bootstrap_receipt_discloses_seed_and_observation_count_on_one_pass_samp
     )
 
 
+def test_bootstrap_receipt_keeps_original_denominator_for_mutating_statistic():
+    def consuming_mean(values):
+        count = len(values)
+        result = sum(values) / count
+        values.clear()
+        return result
+
+    result = bootstrap_confidence_interval(
+        [1.0, 3.0, 5.0], statistic=consuming_mean, n_resamples=4, seed=31
+    )
+    assert result["n_observations"] == 3
+    assert result["estimate"] == 3.0
+
+
 def test_bootstrap_empty_receipt_has_explicit_zero_observations_not_measured_zero_effect():
     interval = bootstrap_confidence_interval(
         iter(()), n_resamples=7, confidence=0.9, seed=41

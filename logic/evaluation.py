@@ -367,7 +367,10 @@ def bootstrap_confidence_interval(
                 "diagnostic observations"
             )
         sample.append(_finite_float(value, label="bootstrap sample"))
-    _validate_bootstrap_draw_budget(len(sample), n_resamples)
+    # A caller-supplied statistic may mutate its input list. Preserve the
+    # original observed denominator before invoking that statistic.
+    n_observations = len(sample)
+    _validate_bootstrap_draw_budget(n_observations, n_resamples)
     if not sample:
         return {
             "estimate": 0.0,
@@ -402,7 +405,7 @@ def bootstrap_confidence_interval(
         "confidence": confidence,
         "n_resamples": n_resamples,
         "seed": seed,
-        "n_observations": len(sample),
+        "n_observations": n_observations,
     }
 
 
