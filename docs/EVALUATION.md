@@ -1112,6 +1112,20 @@ retains the exact attestation bytes and the independent verifier reparses them;
 the declaration is auditable provenance, not independent proof of identity or
 conduct.
 
+Direct calls to `freeze_human_eval_ratings.build_agreement` now require at
+least **two distinct validated annotator identities** before returning a
+pre-unblinding pairwise-agreement receipt. Previously, a single valid rater
+could yield `status=pre-unblinding_pairwise_agreement` with an empty `pairwise`
+array, which could be misread as successful inter-annotator reliability despite
+there being no independent rater pair. Synthetic list and one-pass tests
+exercise the one- and two-item boundaries. For two distinct raters with no
+shared report, the existing zero-overlap/undefined-agreement diagnostics remain
+explicit; three-or-more-rater pairwise output still requires a separately
+predeclared multi-rater statistic. Identity validation alone does **not**
+prove human independence, report access, authenticated source custody or
+collected ratings. The production freeze's independent assignment, attestation
+and source verification requirements remain mandatory and unchanged.
+
 For independent **pre-unblinding agreement diagnostics**, the direct
 `quadratic_weighted_kappa` helper now consumes a one-pass paired-score
 iterator exactly once and fails on the first item above 4,096 observations.

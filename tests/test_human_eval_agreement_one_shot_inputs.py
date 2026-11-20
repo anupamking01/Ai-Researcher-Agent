@@ -83,6 +83,35 @@ def test_generator_duplicate_rating_still_fails_closed():
         freeze.build_agreement(stream())
 
 
+@pytest.mark.parametrize("use_generator", [False, True])
+@pytest.mark.parametrize("n_items", [1, 2])
+def test_single_annotator_cannot_produce_pairwise_agreement_receipt(
+    use_generator, n_items
+):
+    # Both list and one-pass direct callers must not turn one human rater into
+    # an apparently successful pre-unblinding inter-annotator analysis.
+    ratings = [row("rater-a", f"H{index:03d}", "3") for index in range(n_items)]
+    source = (item for item in ratings) if use_generator else ratings
+    with pytest.raises(ValueError, match="at least two independent annotators"):
+        freeze.build_agreement(source)
+
+
+def test_two_distinct_annotators_preserve_missing_overlap_diagnostics():
+    # Zero overlapping reports must remain explicitly visible as zero shared
+    # items, rather than being mistaken for the forbidden single-rater case.
+    result = freeze.build_agreement(
+        [row("rater-a", "H001", "3"), row("rater-b", "H002", "3")]
+    )
+    assert result["n_annotators"] == 2
+    assert len(result["pairwise"]) == 1
+    pair = result["pairwise"][0]
+    assert pair["n_shared_items"] == 0
+    assert all(
+        summary["quadratic_weighted_cohen_kappa"] is None
+        for summary in pair["dimensions"].values()
+    )
+
+
 def test_multi_rater_diagnostic_preserves_all_pairs():
     outcome = freeze.build_agreement(
         (row(identity) for identity in ("rater-a", "rater-b", "rater-c"))

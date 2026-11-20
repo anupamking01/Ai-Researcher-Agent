@@ -1266,6 +1266,15 @@ def build_agreement(rows) -> dict:
         ratings_by_item[blind_id] = row
 
     annotators = sorted(by_annotator)
+    # A lone annotator has no independent rater pair. Returning a successful
+    # agreement receipt with an empty pairwise array would invite a false
+    # reliability claim by direct/notebook callers bypassing the freeze gate.
+    # Preserve two-rater missingness diagnostics (including zero shared items)
+    # and the existing >2-rater exploratory pairwise behavior.
+    if len(annotators) < 2:
+        raise ValueError(
+            "pre-unblinding agreement requires at least two independent annotators"
+        )
     pairwise: list[dict] = []
 
     for left_id, right_id in combinations(annotators, 2):
