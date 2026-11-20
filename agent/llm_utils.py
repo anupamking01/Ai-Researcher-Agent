@@ -42,13 +42,20 @@ async def _stream_completion(
     usage_tracker: UsageTracker | None = None,
     request_timeout_seconds: float = OPENAI_REQUEST_TIMEOUT_SECONDS,
 ) -> str:
-    response = openai.ChatCompletion.create(
-        model=model,
-        messages=list(messages),
-        temperature=temperature,
-        stream=True,
-        request_timeout=request_timeout_seconds,
-    )
+    try:
+        response = openai.ChatCompletion.create(
+            model=model,
+            messages=list(messages),
+            temperature=temperature,
+            stream=True,
+            request_timeout=request_timeout_seconds,
+        )
+    except Exception:
+        # Invocation was attempted, but no usage receipt was returned.
+        # Its provider billing/processing status is unknown, not zero.
+        if usage_tracker is not None:
+            usage_tracker.record_unavailable(model)
+        raise
 
     # openai==0.27.10 streaming responses do not reliably expose a final usage
     # object. Mark the call unavailable rather than manufacturing token counts.
@@ -105,12 +112,19 @@ def create_chat_completion(
             request_timeout_seconds=resolved_timeout,
         )
 
-    response = openai.ChatCompletion.create(
-        model=model,
-        messages=list(messages),
-        temperature=resolved_temperature,
-        request_timeout=resolved_timeout,
-    )
+    try:
+        response = openai.ChatCompletion.create(
+            model=model,
+            messages=list(messages),
+            temperature=resolved_temperature,
+            request_timeout=resolved_timeout,
+        )
+    except Exception:
+        # A failed provider invocation is still an attempted model call.
+        # Preserve missing-usage exposure instead of silently dropping it.
+        if usage_tracker is not None:
+            usage_tracker.record_unavailable(model)
+        raise
     if usage_tracker is not None:
         usage_tracker.record_response(model, response)
     return _choice_content(response)

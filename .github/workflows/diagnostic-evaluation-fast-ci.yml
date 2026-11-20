@@ -10,6 +10,7 @@ on:
       - .github/workflows/diagnostic-evaluation-fast-ci.yml
       - logic/evaluation.py
       - logic/usage.py
+      - agent/llm_utils.py
       - tests/test_evaluation.py
       - tests/test_evaluation_fast_ci_workflow.py
       - tests/test_evaluation_stdlib_gate.py
@@ -29,6 +30,7 @@ on:
       - .github/workflows/diagnostic-evaluation-fast-ci.yml
       - logic/evaluation.py
       - logic/usage.py
+      - agent/llm_utils.py
       - tests/test_evaluation.py
       - tests/test_evaluation_fast_ci_workflow.py
       - tests/test_evaluation_stdlib_gate.py
@@ -138,6 +140,7 @@ jobs:
           python -m py_compile \
             logic/evaluation.py \
             logic/usage.py \
+            agent/llm_utils.py \
             tests/test_evaluation.py \
             tests/test_evaluation_fast_ci_workflow.py \
             tests/test_ci_early_gate_bounded_file_capture.py \

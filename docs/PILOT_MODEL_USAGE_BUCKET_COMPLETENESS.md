@@ -78,3 +78,25 @@ not be read after an invalid model label.
 This is an in-memory prospective diagnostic consistency guard. It does not
 authenticate provider identities, infer missing tokens or prices, alter frozen
 analysis artifacts, rerun experimental treatments or produce human ratings.
+
+
+## Unsuccessful model invocation accounting (21 November 2026)
+
+The pinned OpenAI 0.x adapter previously recorded token usage only when a
+non-streaming request returned a response, and marked a streaming request
+unavailable only *after* its iterator was created. A provider invocation that
+raised before returning a response therefore disappeared from the model-call
+denominator, even when the containing research run was persisted as failed.
+
+Both adapter paths now record exactly **one attempted model call with
+unavailable usage** when `ChatCompletion.create` raises, and re-raise the
+original error. Streaming calls that successfully return an iterator remain
+usage-unavailable exactly once, even if iteration later fails; successful
+non-streaming calls still use the provider-reported counters. Local input
+validation before the attempted invocation is not counted.
+
+An exception does **not** prove that a request reached the provider, consumed
+tokens, or incurred a charge; this is conservative *invocation-attempt*
+coverage, not provider billing attestation. Missing tokens are never imputed.
+Synthetic offline adapter tests use a stubbed provider and no live requests.
+Existing historical/frozen treatments and analysis are left unchanged.

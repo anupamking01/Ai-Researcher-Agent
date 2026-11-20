@@ -3571,3 +3571,124 @@ def test_diagnostic_provider_usage_rejects_bad_model_before_provider_read():
         "total_tokens": 0,
         "by_model": {},
     }
+
+
+def _isolated_chat_adapter_for_usage_test(monkeypatch, create_call):
+    """Load the real legacy adapter with offline OpenAI/settings stubs.
+
+    The diagnostic CI intentionally does not install provider or app packages.
+    These synthetic regressions exercise actual adapter control flow without
+    importing, contacting, or billing an external model provider.
+    """
+    import importlib.util
+    from pathlib import Path
+    import sys
+    from types import ModuleType, SimpleNamespace
+
+    fake_openai = ModuleType("openai")
+    fake_openai.ChatCompletion = SimpleNamespace(create=create_call)
+    fake_settings = ModuleType("settings")
+    fake_settings.Config = lambda: SimpleNamespace(temperature=0.0)
+    monkeypatch.setitem(sys.modules, "openai", fake_openai)
+    monkeypatch.setitem(sys.modules, "settings", fake_settings)
+
+    adapter_path = Path(__file__).resolve().parents[1] / "agent" / "llm_utils.py"
+    spec = importlib.util.spec_from_file_location(
+        "_vera_offline_chat_usage_adapter", adapter_path
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+def test_failed_provider_invocation_is_counted_with_unavailable_usage(
+    monkeypatch, stream
+):
+    import asyncio
+
+    attempted = []
+
+    def failed_create(**kwargs):
+        attempted.append(kwargs)
+        raise RuntimeError("synthetic provider invocation failure")
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, failed_create)
+    tracker = UsageTracker()
+    tracker.record_response(
+        "prior-model", {"usage": {"prompt_tokens": 4, "completion_tokens": 2}}
+    )
+    with pytest.raises(RuntimeError, match="synthetic provider invocation failure"):
+        result = adapter.create_chat_completion(
+            model="attempted-model", messages=[{"role": "user", "content": "test"}],
+            stream=stream, usage_tracker=tracker,
+        )
+        if stream:
+            asyncio.run(result)
+
+    assert len(attempted) == 1
+    assert attempted[0].get("stream", False) is stream
+    snapshot = tracker.snapshot()
+    assert snapshot["model_calls"] == 2
+    assert snapshot["unavailable_calls"] == 1
+    assert snapshot["total_tokens"] == 6
+    assert snapshot["by_model"]["prior-model"]["model_calls"] == 1
+    assert snapshot["by_model"]["attempted-model"] == {
+        "model_calls": 1, "unavailable_calls": 1,
+        "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+    }
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+def test_successful_chat_adapter_invocation_is_not_double_counted(
+    monkeypatch, stream
+):
+    import asyncio
+
+    if stream:
+        response = iter([
+            {"choices": [{"delta": {"content": "synthetic "}}]},
+            {"choices": [{"delta": {"content": "result"}}]},
+        ])
+    else:
+        response = {
+            "choices": [{"message": {"content": "synthetic result"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2,
+                      "total_tokens": 5},
+        }
+
+    adapter = _isolated_chat_adapter_for_usage_test(
+        monkeypatch, lambda **kwargs: response
+    )
+    tracker = UsageTracker()
+    call = adapter.create_chat_completion(
+        model="test-model", messages=[{"role": "user", "content": "test"}],
+        stream=stream, usage_tracker=tracker,
+    )
+    assert (asyncio.run(call) if stream else call) == "synthetic result"
+    snapshot = tracker.snapshot()
+    assert snapshot["model_calls"] == 1
+    assert snapshot["unavailable_calls"] == (1 if stream else 0)
+    assert snapshot["total_tokens"] == (0 if stream else 5)
+    assert snapshot["by_model"]["test-model"]["model_calls"] == 1
+
+
+def test_midstream_provider_failure_has_only_one_unavailable_call(
+    monkeypatch,
+):
+    import asyncio
+
+    def interrupted_chunks():
+        yield {"choices": [{"delta": {"content": "partial"}}]}
+        raise RuntimeError("synthetic stream interruption")
+
+    adapter = _isolated_chat_adapter_for_usage_test(
+        monkeypatch, lambda **kwargs: interrupted_chunks()
+    )
+    tracker = UsageTracker()
+    with pytest.raises(RuntimeError, match="synthetic stream interruption"):
+        asyncio.run(adapter.create_chat_completion(
+            model="test-model", messages=[], stream=True, usage_tracker=tracker
+        ))
+    assert tracker.snapshot()["model_calls"] == 1
+    assert tracker.snapshot()["unavailable_calls"] == 1
