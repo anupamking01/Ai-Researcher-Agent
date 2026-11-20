@@ -39,3 +39,23 @@ analysis-chronology qualifications; retrospective robustness remains
 **exploratory**; authentic original reports and traces remain unavailable
 for the source-verified blinded handoff; and **human validation is pending**.
 No treatment, automated evaluation, or human annotation is rerun or invented.
+
+## Prospective capture-time usage integrity (21 November 2026)
+
+The live, non-streaming provider adapter uses `logic.usage.UsageTracker` to
+capture token use before a trace reaches the standalone summarizer. The capture
+boundary now treats a missing, partial, non-integer, Boolean, negative, or
+internally contradictory provider usage record as **usage unavailable**, rather
+than coercing missing/malformed counters to recorded zeros or silently replacing
+an inconsistent reported `total_tokens`. Each such call still increments both
+the global and per-model call/unavailable counters. A valid **reported zero**
+remains valid, and a legacy usage object lacking only `total_tokens` can
+still use the exact sum of its present, valid prompt/completion counts.
+
+This makes prospective missingness visible at capture rather than falsely
+reporting a complete model-consumption ledger. It does **not** recover unknown
+usage, authenticate provider billing, or change historical/frozen study outputs.
+The standalone summarizer continues to reject incomplete *present* model
+buckets under its separate fail-closed provenance contract. Synthetic
+capture-boundary regressions run in `tests/test_evaluation.py` under the
+offline diagnostic-evaluation fast CI lane.

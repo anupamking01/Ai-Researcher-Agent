@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from logic.usage import UsageTracker
 from logic.evaluation import (
     RunTrace,
     MAX_DIAGNOSTIC_REFERENCE_TASKS,
@@ -3437,3 +3438,75 @@ def test_shared_bootstrap_draw_budget_accepts_exact_boundary_without_sampling():
         _validate_bootstrap_draw_budget(
             observations + 1, MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES
         )
+
+# Prospective provider capture is a measurement-validity boundary: incomplete
+# usage must not silently become zero consumption in diagnostic cost ledgers.
+@pytest.mark.parametrize(
+    "bad_usage",
+    [
+        None,
+        {},
+        {"prompt_tokens": 3},
+        {"completion_tokens": 2},
+        {"prompt_tokens": 3, "completion_tokens": "2"},
+        {"prompt_tokens": True, "completion_tokens": 2},
+        {"prompt_tokens": 3.0, "completion_tokens": 2},
+        {"prompt_tokens": -3, "completion_tokens": 2},
+        {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 7},
+        {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": "5"},
+        {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": None},
+        {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": True},
+    ],
+)
+def test_diagnostic_provider_usage_missing_or_malformed_is_unavailable(bad_usage):
+    tracker = UsageTracker()
+    tracker.record_response("test-model", {"usage": bad_usage})
+    receipt = tracker.snapshot()
+    assert receipt["model_calls"] == 1
+    assert receipt["unavailable_calls"] == 1
+    assert (receipt["prompt_tokens"], receipt["completion_tokens"], receipt["total_tokens"]) == (0, 0, 0)
+    assert receipt["by_model"]["test-model"] == {
+        "model_calls": 1, "unavailable_calls": 1,
+        "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("provider_usage", "expected_tokens"),
+    [
+        ({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}, (0, 0)),
+        ({"prompt_tokens": 3, "completion_tokens": 2}, (3, 2)),
+        (SimpleNamespace(prompt_tokens=3, completion_tokens=2, total_tokens=5), (3, 2)),
+    ],
+)
+def test_diagnostic_provider_usage_accepts_complete_counts_and_recorded_zeros(
+    provider_usage, expected_tokens
+):
+    tracker = UsageTracker()
+    tracker.record_response("test-model", SimpleNamespace(usage=provider_usage))
+    receipt = tracker.snapshot()
+    assert receipt["model_calls"] == 1
+    assert receipt["unavailable_calls"] == 0
+    assert (receipt["prompt_tokens"], receipt["completion_tokens"]) == expected_tokens
+    assert receipt["total_tokens"] == sum(expected_tokens)
+
+
+def test_diagnostic_provider_usage_mixed_call_ledger_preserves_unavailable_calls():
+    tracker = UsageTracker()
+    tracker.record_response(
+        "model-a",
+        {"usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}},
+    )
+    tracker.record_response("model-a", {"usage": {"prompt_tokens": 3}})
+    tracker.record_unavailable("model-b")
+    receipt = tracker.snapshot()
+    assert (receipt["model_calls"], receipt["unavailable_calls"]) == (3, 2)
+    assert (receipt["prompt_tokens"], receipt["completion_tokens"], receipt["total_tokens"]) == (3, 2, 5)
+    assert receipt["by_model"]["model-a"] == {
+        "model_calls": 2, "unavailable_calls": 1,
+        "prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5,
+    }
+    assert receipt["by_model"]["model-b"] == {
+        "model_calls": 1, "unavailable_calls": 1,
+        "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+    }

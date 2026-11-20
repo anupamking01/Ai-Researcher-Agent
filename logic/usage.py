@@ -10,8 +10,8 @@ class UsageTracker:
     """Thread-safe accumulator for provider-reported model usage.
 
     Source summarization can run in a thread pool, so recording must be safe
-    across concurrent completions. Missing provider usage is never estimated;
-    such calls are counted separately as unavailable.
+    across concurrent completions. Missing or invalid provider token usage is
+    never estimated; such calls are counted separately as unavailable.
     """
 
     def __init__(self) -> None:
@@ -23,17 +23,13 @@ class UsageTracker:
         self._by_model: dict[str, dict[str, int]] = {}
 
     @staticmethod
-    def _usage_value(usage: Any, key: str) -> int:
-        if usage is None:
-            return 0
+    def _usage_value(usage: Any, key: str) -> int | None:
+        """Distinguish a reported zero from missing or malformed token counts."""
         try:
-            value = usage.get(key, 0)
+            value = usage.get(key, None)
         except AttributeError:
-            value = getattr(usage, key, 0)
-        try:
-            return max(int(value or 0), 0)
-        except (TypeError, ValueError):
-            return 0
+            value = getattr(usage, key, None)
+        return value if type(value) is int and value >= 0 else None
 
     def _model_bucket(self, model: str) -> dict[str, int]:
         return self._by_model.setdefault(
@@ -53,15 +49,30 @@ class UsageTracker:
         except AttributeError:
             usage = getattr(response, "usage", None)
 
-        if not usage:
+        if usage is None:
             self.record_unavailable(model)
             return
 
         prompt_tokens = self._usage_value(usage, "prompt_tokens")
         completion_tokens = self._usage_value(usage, "completion_tokens")
-        total_tokens = self._usage_value(usage, "total_tokens")
-        if total_tokens <= 0:
-            total_tokens = prompt_tokens + completion_tokens
+        # Both category counts are necessary for per-model cost attribution.
+        # Treat an incomplete or malformed record as unavailable, never zero.
+        if prompt_tokens is None or completion_tokens is None:
+            self.record_unavailable(model)
+            return
+        # Legacy providers may omit the total, but a *present* total must be
+        # an exact, nonnegative integer matching the category sum.
+        missing = object()
+        try:
+            reported_total = usage.get("total_tokens", missing)
+        except AttributeError:
+            reported_total = getattr(usage, "total_tokens", missing)
+        expected_total = prompt_tokens + completion_tokens
+        if reported_total is not missing and (
+            type(reported_total) is not int or reported_total != expected_total
+        ):
+            self.record_unavailable(model)
+            return
 
         with self._lock:
             self._model_calls += 1
@@ -71,7 +82,7 @@ class UsageTracker:
             bucket["model_calls"] += 1
             bucket["prompt_tokens"] += prompt_tokens
             bucket["completion_tokens"] += completion_tokens
-            bucket["total_tokens"] += total_tokens
+            bucket["total_tokens"] += expected_total
 
     def record_unavailable(self, model: str) -> None:
         with self._lock:
