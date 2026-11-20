@@ -167,6 +167,16 @@ class DependencyFreeEvaluationGate(unittest.TestCase):
         self.assertEqual(summary["completion_rate"], 0.5)
         self.assertEqual(summary["avg_claim_support_rate"], 0.5)
 
+    def test_bootstrap_evidence_receipt_discloses_sample_size_and_seed(self):
+        interval = bootstrap_confidence_interval(
+            iter([0.25, 0.75]), n_resamples=4, seed=-17
+        )
+        self.assertEqual(interval["seed"], -17)
+        self.assertEqual(interval["n_observations"], 2)
+        empty = bootstrap_confidence_interval([], n_resamples=4, seed=17)
+        self.assertEqual(empty["seed"], 17)
+        self.assertEqual(empty["n_observations"], 0)
+
     def test_numeric_bootstrap_keeps_paired_differences_seeded(self):
         kwargs = {"expected_task_ids": TASKS, "n_resamples": 12, "seed": 7}
         first = paired_bootstrap_confidence_interval_by_task(

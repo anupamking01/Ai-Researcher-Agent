@@ -347,8 +347,10 @@ def bootstrap_confidence_interval(
     """Return a reproducible percentile-bootstrap interval for a statistic.
 
     A local seeded RNG keeps reports reproducible without mutating global random
-    state. The returned interval is descriptive uncertainty and does not imply
-    statistical significance.
+    state. Every result records the exact seed and observed sample cardinality,
+    including the legacy zero-valued empty-sample convention; the latter is
+    not a measured zero effect. The returned interval is descriptive uncertainty
+    and does not imply statistical significance.
     """
     _validate_bootstrap_settings(confidence, n_resamples, seed)
     # Reject an invalid estimand before touching a one-shot observation source.
@@ -373,6 +375,8 @@ def bootstrap_confidence_interval(
             "upper": 0.0,
             "confidence": confidence,
             "n_resamples": n_resamples,
+            "seed": seed,
+            "n_observations": 0,
         }
 
     rng = Random(seed)
@@ -397,6 +401,8 @@ def bootstrap_confidence_interval(
         "upper": upper,
         "confidence": confidence,
         "n_resamples": n_resamples,
+        "seed": seed,
+        "n_observations": len(sample),
     }
 
 

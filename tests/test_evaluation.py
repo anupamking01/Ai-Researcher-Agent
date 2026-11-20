@@ -538,6 +538,45 @@ def test_bootstrap_confidence_interval_is_reproducible_and_bounded():
 
 
 
+def test_bootstrap_receipt_discloses_seed_and_observation_count_on_one_pass_sample():
+    values = (value for value in (0.0, 1.0, 2.0))
+    interval = bootstrap_confidence_interval(values, n_resamples=19, seed=-23)
+    assert interval["seed"] == -23
+    assert interval["n_observations"] == 3
+    assert interval == bootstrap_confidence_interval(
+        [0.0, 1.0, 2.0], n_resamples=19, seed=-23
+    )
+
+
+def test_bootstrap_empty_receipt_has_explicit_zero_observations_not_measured_zero_effect():
+    interval = bootstrap_confidence_interval(
+        iter(()), n_resamples=7, confidence=0.9, seed=41
+    )
+    assert interval == {
+        "estimate": 0.0,
+        "lower": 0.0,
+        "upper": 0.0,
+        "confidence": 0.9,
+        "n_resamples": 7,
+        "seed": 41,
+        "n_observations": 0,
+    }
+
+
+def test_paired_bootstrap_receipt_binds_seed_and_task_pair_cardinality():
+    result = paired_bootstrap_confidence_interval_by_task(
+        iter([("task-b", 0.25), ("task-a", 0.0)]),
+        iter([("task-a", 0.5), ("task-b", 0.75)]),
+        expected_task_ids=iter(["task-b", "task-a"]),
+        n_resamples=9,
+        seed=47,
+    )
+    assert result["n_pairs"] == 2
+    assert result["bootstrap_confidence_interval"]["seed"] == 47
+    assert result["bootstrap_confidence_interval"]["n_observations"] == 2
+    assert result["bootstrap_confidence_interval"]["estimate"] == result["mean_delta"]
+
+
 def test_bootstrap_rejects_excessive_resamples_before_reading_any_observations():
     class MustNotRead:
         def __iter__(self):
@@ -1634,6 +1673,8 @@ def test_task_keyed_bootstrap_resamples_complete_paired_differences():
         "upper": 0.25,
         "confidence": 0.95,
         "n_resamples": 101,
+        "seed": 31,
+        "n_observations": 2,
     }
 
 

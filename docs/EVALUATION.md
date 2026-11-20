@@ -1570,3 +1570,24 @@ remains diagnostic, designated-primary automated findings retain post-collection
 analysis-planning and fixed-order/evaluator-comparability qualifications,
 retrospective sensitivity work remains exploratory, and independent human
 validation is still pending.
+
+## Diagnostic bootstrap receipt parameter provenance (20 November 2026)
+
+The reusable in-memory percentile bootstrap now records `seed` and
+`n_observations` in each returned confidence-interval dictionary in addition
+to the existing confidence, number of resamples, point estimate, and bounds.
+Both task-keyed and RunTrace-keyed diagnostic paired-bootstrap adapters
+inherit these fields inside `bootstrap_confidence_interval` without changing
+pairing, resampling, ordering, random-number generation, or estimates.
+
+The legacy empty-sample result continues to return zero-valued numeric fields
+for compatibility, **but explicitly reports `n_observations: 0`**. It is
+not an observed zero effect and its interval is not measured uncertainty.
+For task-keyed complete pairs, `n_observations` should equal `n_pairs`.
+The seed identifies the random stream; full reproduction also requires the
+original ordered inputs (or independently pinned task manifest and arm data),
+the requested statistic, and a compatible runtime. These fields do not
+authenticate source artifacts or upgrade diagnostic analysis to
+prospective confirmatory evidence. The frozen historical automated inference,
+pilot, exploratory sensitivities, and pending genuine human validation are
+untouched.
