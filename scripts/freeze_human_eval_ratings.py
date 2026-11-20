@@ -1324,7 +1324,15 @@ def build_agreement(rows) -> dict:
     for left_id, right_id in combinations(annotators, 2):
         left = by_annotator[left_id]
         right = by_annotator[right_id]
-        common = sorted(set(left) & set(right))
+        # Item-level coverage is separate from dimension-level missingness:
+        # dimension counters below cover only jointly assigned items. Without
+        # the union denominator, a high statistic on a tiny shared subset can
+        # conceal large asymmetries in annotator report coverage.
+        left_items = set(left)
+        right_items = set(right)
+        common = sorted(left_items & right_items)
+        only_left_items = len(left_items - right_items)
+        only_right_items = len(right_items - left_items)
         dimensions: dict[str, dict] = {}
 
         for field in SCORE_FIELDS:
@@ -1367,6 +1375,9 @@ def build_agreement(rows) -> dict:
                 "annotator_a": left_id,
                 "annotator_b": right_id,
                 "n_shared_items": len(common),
+                "n_union_items": len(common) + only_left_items + only_right_items,
+                "n_items_only_annotator_a": only_left_items,
+                "n_items_only_annotator_b": only_right_items,
                 "dimensions": dimensions,
             }
         )

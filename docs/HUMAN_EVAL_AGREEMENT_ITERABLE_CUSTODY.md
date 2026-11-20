@@ -74,3 +74,23 @@ usage. It does **not** alter the frozen protocol's two-independent-rater
 expectation, define an eligible multi-rater study, validate participant
 eligibility, or establish any inter-annotator reliability from real humans.
 Human ratings and original report/trace provenance remain outstanding.
+
+## Pairwise report coverage denominators (20 November 2026)
+
+Direct agreement receipts now disclose **item-level** pairwise coverage as
+`n_union_items`, `n_items_only_annotator_a`, and
+`n_items_only_annotator_b`, alongside the existing `n_shared_items`.
+These counts are derived solely from blinded opaque item IDs. They expose
+when two annotators share only a subset of their submitted reports, whereas
+the existing dimension-specific `n_annotator_*_only_rated` and
+`n_neither_rated` counters measure missing scores **within the shared
+reports only**. The union identity is always the sum of the shared and
+the two exclusive counts. No missing report is imputed as a score, and
+pairwise agreement estimators and existing denominator fields are unchanged.
+
+Synthetic list and one-pass tests cover partially overlapping assignments,
+dimension missingness on a shared item, complete overlap, and zero overlap.
+These are additive diagnostic receipt fields, not a declaration of
+human-evaluation readiness: only the verified blinded freeze and assignment
+coverage gate can certify protocol-complete annotation. In particular,
+no genuine human rating or report/trace provenance is supplied or inferred.

@@ -191,3 +191,51 @@ def test_excess_distinct_raters_fail_before_pairwise_enumeration(monkeypatch):
     )
     with pytest.raises(ValueError, match="rater pairwise safety limit"):
         freeze.build_agreement(rows)
+
+
+def test_item_coverage_discloses_unshared_reports_separately_from_score_missingness():
+    # Shared-item dimension missingness is not the same as a whole report
+    # absent from one annotator's submissions. Keep both denominators visible.
+    missing = row("rater-b", "H002")
+    missing["correctness_1_5"] = ""
+    missing["notes"] = "The available evidence does not support a correctness judgment."
+    ratings = [
+        row("rater-a", "H001"),
+        row("rater-a", "H002"),
+        missing,
+        row("rater-b", "H003"),
+    ]
+    result = freeze.build_agreement(iter(ratings))
+    pairwise = result["pairwise"][0]
+    assert (pairwise["annotator_a"], pairwise["annotator_b"]) == (
+        "rater-a", "rater-b"
+    )
+    assert pairwise["n_shared_items"] == 1
+    assert pairwise["n_union_items"] == 3
+    assert pairwise["n_items_only_annotator_a"] == 1
+    assert pairwise["n_items_only_annotator_b"] == 1
+    correctness = pairwise["dimensions"]["correctness_1_5"]
+    assert correctness["n_annotator_a_only_rated"] == 1
+    assert correctness["n_annotator_b_only_rated"] == 0
+    assert correctness["n_double_rated"] == 0
+    assert correctness["quadratic_weighted_cohen_kappa"] is None
+    assert pairwise["dimensions"]["clarity_1_5"]["n_double_rated"] == 1
+
+
+def test_item_coverage_distinguishes_complete_from_disjoint_rater_assignments():
+    complete = freeze.build_agreement(pair())["pairwise"][0]
+    assert complete["n_shared_items"] == complete["n_union_items"] == 1
+    assert complete["n_items_only_annotator_a"] == 0
+    assert complete["n_items_only_annotator_b"] == 0
+
+    disjoint = freeze.build_agreement(
+        [row("rater-a", "H001"), row("rater-b", "H002")]
+    )["pairwise"][0]
+    assert disjoint["n_shared_items"] == 0
+    assert disjoint["n_union_items"] == 2
+    assert disjoint["n_items_only_annotator_a"] == 1
+    assert disjoint["n_items_only_annotator_b"] == 1
+    assert all(
+        value["n_double_rated"] == 0
+        for value in disjoint["dimensions"].values()
+    )
