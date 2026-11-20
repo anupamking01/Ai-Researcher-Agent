@@ -997,44 +997,39 @@ def paired_run_trace_bootstrap_by_task(
         expected_task_ids, expected_questions_by_task
     )
     _validate_bootstrap_draw_budget(len(task_ids), n_resamples)
-    # The independent reference bounds cardinality *before* we materialize
-    # either one-pass arm. A never-ending or excessively repeated producer must
-    # not exhaust memory while we are still checking the treatment matrix.
-    def snapshot_arm(records: Iterable[RunTrace], label: str) -> list[RunTrace]:
+    # Stream each bounded one-pass arm directly through the provenance
+    # validator while retaining its records for subsequent paired extraction.
+    # A substituted ID/question/setting must fail at the offending record,
+    # not after an entire stream is captured (or hidden by a later producer
+    # error). Validate the complete baseline before touching the candidate.
+    def validated_snapshot_arm(
+        records: Iterable[RunTrace], label: str, variant_id: str
+    ) -> list[RunTrace]:
         observed: list[RunTrace] = []
-        for trace in records:
-            if len(observed) >= len(task_ids):
-                raise ValueError(
-                    f"{label} has more records than the independent task manifest"
-                )
-            observed.append(trace)
+
+        def bounded_records() -> Iterable[RunTrace]:
+            for trace in records:
+                if len(observed) >= len(task_ids):
+                    raise ValueError(
+                        f"{label} has more records than the independent task manifest"
+                    )
+                observed.append(trace)
+                yield trace
+
+        aggregate_runs_by_task(
+            bounded_records(),
+            variant_id=variant_id,
+            task_set_id=task_set_id,
+            expected_task_ids=task_ids,
+            expected_questions_by_task=questions,
+            expected_treatment_settings=(
+                configs[variant_id] if configs is not None else None
+            ),
+        )
         return observed
 
-    baseline = snapshot_arm(baseline_runs, "baseline")
-    # Check the first arm before touching the second arm. This prevents an
-    # invalid baseline from exhausting a candidate generator or obscuring its
-    # own provenance failure with a later unrelated producer error.
-    aggregate_runs_by_task(
-        baseline,
-        variant_id=baseline_variant_id,
-        task_set_id=task_set_id,
-        expected_task_ids=task_ids,
-        expected_questions_by_task=questions,
-        expected_treatment_settings=(
-            configs[baseline_variant_id] if configs is not None else None
-        ),
-    )
-    candidate = snapshot_arm(candidate_runs, "candidate")
-    aggregate_runs_by_task(
-        candidate,
-        variant_id=candidate_variant_id,
-        task_set_id=task_set_id,
-        expected_task_ids=task_ids,
-        expected_questions_by_task=questions,
-        expected_treatment_settings=(
-            configs[candidate_variant_id] if configs is not None else None
-        ),
-    )
+    baseline = validated_snapshot_arm(baseline_runs, "baseline", baseline_variant_id)
+    candidate = validated_snapshot_arm(candidate_runs, "candidate", candidate_variant_id)
     reused_run_ids = sorted(
         {trace.run_id for trace in baseline}
         & {trace.run_id for trace in candidate}

@@ -2265,9 +2265,10 @@ def test_run_trace_pairing_bounds_unending_baseline_without_consuming_candidate(
         raise AssertionError("candidate arm read before baseline cardinality validation")
         yield None
 
-    with pytest.raises(ValueError, match="baseline has more records"):
+    with pytest.raises(ValueError, match="duplicate observed task_id"):
         _compare_paired_traces(endless_baseline(), unread_candidate())
-    assert len(reads) == len(_PAIR_QUESTIONS) + 1
+    # The second duplicate is invalid; no need to inspect a third record.
+    assert len(reads) == 2
 
 
 def test_run_trace_pairing_bounds_unending_candidate_after_valid_baseline():
@@ -2279,9 +2280,71 @@ def test_run_trace_pairing_bounds_unending_candidate_after_valid_baseline():
             yield _paired_run_trace("a", "D6")
 
     baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
-    with pytest.raises(ValueError, match="candidate has more records"):
+    with pytest.raises(ValueError, match="duplicate observed task_id"):
         _compare_paired_traces(iter(baseline), endless_candidate())
-    assert len(reads) == len(_PAIR_QUESTIONS) + 1
+    assert len(reads) == 2
+
+
+@pytest.mark.parametrize("arm", ["baseline", "candidate"])
+@pytest.mark.parametrize(
+    ("bad_fields", "error"),
+    [
+        ({"task_id": "unplanned"}, "task coverage mismatch"),
+        ({"question": "Substituted question?"}, "task question mismatch"),
+        ({"variant_id": "other"}, "variant_id mismatch"),
+    ],
+)
+def test_paired_run_trace_validates_each_record_before_stream_advances(
+    arm, bad_fields, error,
+):
+    # Synthetic traces. A late producer exception must not conceal the first
+    # mislabeled observed cell, and invalid baseline data must not read the
+    # independent candidate arm at all.
+    reads = {"baseline": 0, "candidate": 0}
+
+    def source(name, variant):
+        reads[name] += 1
+        first = _paired_run_trace("a", variant)
+        if name == arm:
+            yield replace(first, **bad_fields)
+            raise AssertionError("invalid arm advanced after its first bad trace")
+        yield first
+        reads[name] += 1
+        yield _paired_run_trace("b", variant)
+
+    with pytest.raises(ValueError, match=error):
+        _compare_paired_traces(
+            source("baseline", "D3"), source("candidate", "D6"),
+        )
+    assert reads == (
+        {"baseline": 1, "candidate": 0}
+        if arm == "baseline" else {"baseline": 2, "candidate": 1}
+    )
+
+
+@pytest.mark.parametrize("arm", ["baseline", "candidate"])
+def test_paired_run_trace_checks_planned_settings_before_more_records(arm):
+    reads = {"baseline": 0, "candidate": 0}
+
+    def source(name, variant):
+        reads[name] += 1
+        first = _planned_trace("a", variant)
+        if name == arm:
+            yield replace(first, source_budget=99)
+            raise AssertionError("invalid planned setting did not stop stream")
+        yield first
+        reads[name] += 1
+        yield _planned_trace("b", variant)
+
+    with pytest.raises(ValueError, match="treatment setting mismatch for source_budget"):
+        _compare_paired_traces(
+            source("baseline", "D3"), source("candidate", "D6"),
+            expected_treatment_settings_by_variant=_PLANNED,
+        )
+    assert reads == (
+        {"baseline": 1, "candidate": 0}
+        if arm == "baseline" else {"baseline": 2, "candidate": 1}
+    )
 
 
 def test_run_trace_pairing_rejects_bad_baseline_before_candidate_read():

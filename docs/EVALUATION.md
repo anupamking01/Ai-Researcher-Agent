@@ -8,6 +8,28 @@ The project has progressed beyond the original proposed-study document. Pilot in
 
 Human quality ratings are **not yet results**. They remain pending and must be collected under `paper/HUMAN_EVAL_PROTOCOL.md` before any human-quality claim is made.
 
+### Stream-validated paired RunTrace provenance (20 November 2026)
+
+The prospective `paired_run_trace_bootstrap_by_task` adapter now validates
+each one-pass treatment trace against the independent task/question manifest
+and optional planned treatment settings *as that record is read*. Previously
+it buffered an entire arm first and only then called
+`aggregate_runs_by_task`: a first-record substitution could be concealed by
+a later producer failure, even though the lower-level validator already
+rejected substitutions immediately. The adapter still bounds the observed
+population by the independent task count, preserves complete-arm validation
+before reading the second arm, and retains validated records for deterministic
+paired extraction. Synthetic baseline/candidate regressions verify early
+rejection of substituted task IDs, questions, variant IDs, and planned budgets;
+one-pass valid results and frozen estimators remain unchanged.
+
+This is a prospective input-integrity safeguard, **not** independent
+authentication of the missing historical report/trace sources. Pilot findings
+remain diagnostic, the original designated-primary automated analysis retains
+its post-collection/fixed-order/evaluator-comparability qualifications,
+retrospective sensitivity checks are exploratory, and actual blinded human
+validation is still pending.
+
 
 ### Fail-fast task-question provenance in complete-arm diagnostics (20 November 2026)
 
