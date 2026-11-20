@@ -9,6 +9,25 @@ The project has progressed beyond the original proposed-study document. Pilot in
 Human quality ratings are **not yet results**. They remain pending and must be collected under `paper/HUMAN_EVAL_PROTOCOL.md` before any human-quality claim is made.
 
 
+### Diagnostic bootstrap estimand preflight (prospective only)
+
+The reusable `bootstrap_confidence_interval` now rejects a **non-callable
+`statistic`** before accessing the observation stream, including when the
+sample is empty. Previously an empty sample returned an all-zero estimate and
+interval without ever calling the invalid statistic, yielding an apparently
+successful result for a misconfigured analysis. Nonempty samples instead failed
+later with an incidental `TypeError`, after reading the input. A consistent,
+explicit `ValueError` now fails closed before any observations are consumed.
+
+This only validates callable configuration, not estimator purity or the
+scientific suitability of a user-defined statistic. For valid callables, seeded
+resampling and the existing zero-valued **empty-input compatibility convention**
+are unchanged; that convention is not evidence of an observed effect or a
+statistically meaningful confidence interval. Synthetic pytest and
+pre-install standard-library regressions cover this gap. No frozen historical
+estimates, experimental data, pilot conclusions, exploratory sensitivities, or
+pending human ratings are changed.
+
 ### Positional diagnostic pairing checks observed row counts (prospective only)
 
 The low-level `paired_metric_comparison` now compares the **actual

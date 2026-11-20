@@ -58,6 +58,20 @@ def compare(baseline, candidate, **extra):
 
 
 class DependencyFreeEvaluationGate(unittest.TestCase):
+    def test_bootstrap_rejects_noncallable_statistic_before_observation_capture(self):
+        class MustNotRead:
+            def __iter__(self):
+                raise AssertionError("invalid estimand consumed input rows")
+
+        with self.assertRaisesRegex(ValueError, "bootstrap statistic must be callable"):
+            bootstrap_confidence_interval(MustNotRead(), statistic=None, n_resamples=2)
+        with self.assertRaisesRegex(ValueError, "bootstrap statistic must be callable"):
+            bootstrap_confidence_interval([], statistic="safe_mean", n_resamples=2)
+        self.assertEqual(
+            bootstrap_confidence_interval([], statistic=max, n_resamples=2)["estimate"],
+            0.0,
+        )
+
     def test_source_dedup_cannot_count_characters_or_hang_on_repeated_source(self):
         with self.assertRaisesRegex(ValueError, "collection, not scalar text"):
             deduplicate_sources("https://example.com/a")

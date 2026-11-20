@@ -351,6 +351,11 @@ def bootstrap_confidence_interval(
     statistical significance.
     """
     _validate_bootstrap_settings(confidence, n_resamples, seed)
+    # Reject an invalid estimand before touching a one-shot observation source.
+    # In particular, an empty sample must not make a non-callable statistic
+    # appear to be a successful zero-valued bootstrap analysis.
+    if not callable(statistic):
+        raise ValueError("bootstrap statistic must be callable")
 
     sample: list[float] = []
     for value in values:

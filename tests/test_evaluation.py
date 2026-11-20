@@ -591,6 +591,34 @@ def test_bootstrap_resource_limits_preserve_small_seeded_diagnostic_intervals():
     assert first == second
     assert first["estimate"] == 0.5
 
+
+
+@pytest.mark.parametrize("statistic", [None, 1, "safe_mean", [], {}])
+def test_bootstrap_rejects_noncallable_statistic_before_reading_any_samples(statistic):
+    # Previously an empty sample bypassed statistic invocation altogether,
+    # returning a plausible all-zero CI for an invalid analysis configuration.
+    class MustNotRead:
+        def __iter__(self):
+            raise AssertionError("invalid statistic consumed experimental observations")
+
+    with pytest.raises(ValueError, match="bootstrap statistic must be callable"):
+        bootstrap_confidence_interval(MustNotRead(), statistic=statistic, n_resamples=2)
+    with pytest.raises(ValueError, match="bootstrap statistic must be callable"):
+        bootstrap_confidence_interval([], statistic=statistic, n_resamples=2)
+
+
+def test_bootstrap_callable_custom_statistic_preserves_seeded_and_empty_compatibility():
+    statistic = lambda values: max(values)
+    first = bootstrap_confidence_interval([0.0, 1.0, 2.0], statistic=statistic,
+                                          seed=23, n_resamples=12)
+    second = bootstrap_confidence_interval((v for v in (0.0, 1.0, 2.0)),
+                                           statistic=statistic, seed=23, n_resamples=12)
+    assert first == second
+    assert first["estimate"] == 2.0
+    # The existing no-observations convention survives for valid estimands;
+    # it is not evidence of a measured zero effect or a meaningful interval.
+    assert bootstrap_confidence_interval([], statistic=statistic, n_resamples=2)["estimate"] == 0.0
+
 def test_bootstrap_confidence_interval_handles_empty_and_invalid_settings():
     empty = bootstrap_confidence_interval([], n_resamples=10)
     assert empty["estimate"] == empty["lower"] == empty["upper"] == 0.0
