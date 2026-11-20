@@ -158,6 +158,26 @@ def _unique_json_object(pairs):
     return value
 
 
+
+def _require_generated_opaque_blind_id(value: str, *, context: str) -> None:
+    """Require the coordinator packet builder's current H001-H999 namespace.
+
+    Standalone freeze/agreement callers lack the coordinator-only mapping.
+    Reject treatment-bearing or noncanonical item identifiers rather than
+    publishing a seemingly blinded agreement on labels such as P6V.
+    This shape check does not authenticate a packet or its original reports.
+    """
+    if not (
+        isinstance(value, str)
+        and len(value) == 4
+        and value[0] == "H"
+        and value != "H000"
+        and all("0" <= digit <= "9" for digit in value[1:])
+    ):
+        raise ValueError(
+            f"{context} blind_id must be a generated opaque H001-H999 identifier"
+        )
+
 def _packet_blind_ids(packet_path: Path, *, content: bytes | None = None) -> list[str]:
     if content is None:
         if not packet_path.is_file():
@@ -197,7 +217,10 @@ def _packet_blind_ids(packet_path: Path, *, content: bytes | None = None) -> lis
                 raise ValueError(
                     f"packet line {line_number} {field} must be non-empty text"
                 )
-        blind_id = row["blind_id"].strip()
+        _require_generated_opaque_blind_id(
+            row["blind_id"], context=f"packet line {line_number}"
+        )
+        blind_id = row["blind_id"]
         if blind_id in seen:
             raise ValueError(f"duplicate blind_id in packet: {blind_id}")
         seen.add(blind_id)
@@ -722,6 +745,9 @@ def _load_ratings(
                 _validate_annotator_id_characters(submitted_annotator_id)
                 annotator_id = submitted_annotator_id.strip()
                 blind_id = str(raw.get("blind_id") or "").strip()
+                _require_generated_opaque_blind_id(
+                    blind_id, context=f"{path.name}:{line_number}"
+                )
                 notes = str(raw.get("notes") or "").strip()
 
                 if not annotator_id:
@@ -844,6 +870,10 @@ def _load_ratings(
 def _validate_assignment_coverage(rows: list[dict], blind_ids: list[str]) -> dict:
     """Require two distinct independent raters for every blinded report."""
     _validate_annotator_identity_spellings(rows)
+    for blind_id in blind_ids:
+        _require_generated_opaque_blind_id(blind_id, context="assignment packet")
+    for row in rows:
+        _require_generated_opaque_blind_id(row["blind_id"], context="assignment rating")
     raters_by_item = {blind_id: set() for blind_id in blind_ids}
     for row in rows:
         raters_by_item[row["blind_id"]].add(
@@ -1191,6 +1221,7 @@ def _validate_direct_agreement_row(row: dict) -> None:
             raise ValueError(
                 f"direct agreement {field} must be nonempty and trimmed"
             )
+    _require_generated_opaque_blind_id(row["blind_id"], context="direct agreement")
 
     scores = [_score(row, field) for field in SCORE_FIELDS]
     notes = row["notes"].strip()

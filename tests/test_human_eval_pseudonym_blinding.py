@@ -5,6 +5,8 @@ measurements are used. This validates the existing protocol's ID boundary.
 """
 import csv
 import io
+import json
+from pathlib import Path
 
 import pytest
 
@@ -121,3 +123,76 @@ def test_direct_agreement_and_coverage_reject_spreadsheet_formula_pseudonym():
         freeze.build_agreement(rows)
     with pytest.raises(ValueError, match="spreadsheet-active"):
         freeze._validate_assignment_coverage(rows, ["H001"])
+
+
+def _synthetic_packet_bytes(blind_id):
+    return (
+        json.dumps(
+            {
+                "blind_id": blind_id,
+                "task_id": "main-01",
+                "question": "Synthetic research question",
+                "report_markdown": "Synthetic report.",
+            },
+            ensure_ascii=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+@pytest.mark.parametrize(
+    "unsafe",
+    [
+        "P6V",
+        "D3",
+        "H001-P6V",
+        "Ｈ００１",
+        "H００１",
+        "H001\u200b",
+        "H001 ",
+        "H01",
+        "H000",
+        "H0001",
+        "=HYPERLINK(\"https://example.invalid\",\"H001\")",
+    ],
+)
+def test_standalone_freeze_packet_rejects_unblinded_or_noncanonical_report_ids(unsafe):
+    with pytest.raises(ValueError, match="generated opaque H001-H999"):
+        freeze._packet_blind_ids(
+            Path("synthetic-packet.jsonl"), content=_synthetic_packet_bytes(unsafe)
+        )
+
+
+@pytest.mark.parametrize("unsafe", ["D3", "H001-P6V", "H000", "H００１"])
+def test_direct_agreement_rejects_unblinded_report_ids(unsafe):
+    rows = [
+        {
+            "annotator_id": annotator,
+            "blind_id": unsafe,
+            **{field: "3" for field in freeze.SCORE_FIELDS},
+            "notes": "",
+        }
+        for annotator in ("rater-a", "rater-b")
+    ]
+    with pytest.raises(ValueError, match="generated opaque H001-H999"):
+        freeze.build_agreement(rows)
+
+
+def test_ratings_import_rejects_unblinded_id_even_if_caller_whitelists_it(tmp_path):
+    path = tmp_path / "synthetic-ratings.csv"
+    path.write_bytes(_rating_bytes("rater-a").replace(b"H001", b"P6V"))
+    with pytest.raises(ValueError, match="generated opaque H001-H999"):
+        freeze._load_ratings([path], allowed_blind_ids={"P6V"})
+
+
+def test_direct_assignment_coverage_rejects_treatment_coded_id():
+    rows = [{"annotator_id": "rater-a", "blind_id": "D6"}]
+    with pytest.raises(ValueError, match="generated opaque H001-H999"):
+        freeze._validate_assignment_coverage(rows, ["D6"])
+
+
+def test_standalone_opaque_ids_preserve_valid_sparse_blind_labels():
+    payload = _synthetic_packet_bytes("H999")
+    assert freeze._packet_blind_ids(Path("synthetic-packet.jsonl"), content=payload) == [
+        "H999"
+    ]

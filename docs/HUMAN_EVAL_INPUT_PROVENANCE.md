@@ -381,3 +381,27 @@ offline human-packet CI lane executes these cross-stage regression tests.
 This is an observed local-filesystem safeguard, not independent historical
 source authentication or proof of annotator identity or uninterrupted custody.
 It does not generate, change, adjudicate or infer any human ratings.
+
+## Generated opaque report IDs at standalone freeze and agreement boundaries (20 November 2026)
+
+The coordinator packet builder emits three-digit opaque report identifiers
+(`H001` through `H999`; the frozen main-study packet uses `H001`–`H040`).
+The source-bound annotator-bundle exporter already requires this generator
+namespace. The standalone ratings freezer and direct pre-unblinding
+agreement/assignment helpers now reject arbitrary or treatment-coded
+`blind_id` values instead of reporting blinded reliability for rows labeled
+`D3`, `P6V`, or obfuscated/noncanonical variants. The rule is enforced on
+captured packet input before submitted ratings are read, on imported rating
+rows even when a caller supplies a permissive allowed-ID set, and on directly
+supplied diagnostic rows. Valid generated IDs and score estimators are unchanged.
+Rejected content is never silently remapped to an apparently benign ID.
+
+This is a **blinding-namespace shape check**, not proof that the actual blind-ID
+to treatment assignment is random, independent, authentic, or unknown to a
+human reader. Source-bound packet verification and the original report/trace
+custody gate remain separately required before distribution. No real human
+ratings, treatments, evaluators, frozen automated outputs, or scientific
+inference were generated or changed. Synthetic tests only exercise the input
+contract; the pilot remains diagnostic, designated-primary automated analysis
+retains its post-collection-plan and fixed-order/comparability qualifications,
+and retrospective sensitivity analyses remain exploratory.
