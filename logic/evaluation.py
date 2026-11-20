@@ -1003,7 +1003,8 @@ def paired_run_trace_bootstrap_by_task(
     # not after an entire stream is captured (or hidden by a later producer
     # error). Validate the complete baseline before touching the candidate.
     def validated_snapshot_arm(
-        records: Iterable[RunTrace], label: str, variant_id: str
+        records: Iterable[RunTrace], label: str, variant_id: str,
+        *, disallowed_run_ids: set[str] | None = None,
     ) -> list[RunTrace]:
         observed: list[RunTrace] = []
 
@@ -1012,6 +1013,19 @@ def paired_run_trace_bootstrap_by_task(
                 if len(observed) >= len(task_ids):
                     raise ValueError(
                         f"{label} has more records than the independent task manifest"
+                    )
+                # The baseline has already passed complete-arm provenance checks.
+                # Reject the first reused candidate run identity without
+                # consuming later single-use candidate records, whose producer
+                # errors could otherwise mask the pairing violation.
+                if (
+                    disallowed_run_ids is not None
+                    and isinstance(trace, RunTrace)
+                    and trace.run_id in disallowed_run_ids
+                ):
+                    raise ValueError(
+                        "run_id reused across baseline and candidate arms: "
+                        f"{trace.run_id!r}"
                     )
                 observed.append(trace)
                 yield trace
@@ -1029,15 +1043,10 @@ def paired_run_trace_bootstrap_by_task(
         return observed
 
     baseline = validated_snapshot_arm(baseline_runs, "baseline", baseline_variant_id)
-    candidate = validated_snapshot_arm(candidate_runs, "candidate", candidate_variant_id)
-    reused_run_ids = sorted(
-        {trace.run_id for trace in baseline}
-        & {trace.run_id for trace in candidate}
+    candidate = validated_snapshot_arm(
+        candidate_runs, "candidate", candidate_variant_id,
+        disallowed_run_ids={trace.run_id for trace in baseline},
     )
-    if reused_run_ids:
-        raise ValueError(
-            f"run_id reused across baseline and candidate arms: {reused_run_ids!r}"
-        )
 
     paired = paired_bootstrap_confidence_interval_by_task(
         ((trace.task_id, getattr(trace, metric)) for trace in baseline),

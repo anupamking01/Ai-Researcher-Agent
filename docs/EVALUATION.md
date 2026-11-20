@@ -8,6 +8,25 @@ The project has progressed beyond the original proposed-study document. Pilot in
 
 Human quality ratings are **not yet results**. They remain pending and must be collected under `paper/HUMAN_EVAL_PROTOCOL.md` before any human-quality claim is made.
 
+### Fail-fast cross-arm run identity in prospective paired traces (20 November 2026)
+
+The task-keyed RunTrace bootstrap adapter now checks each candidate run ID
+against the already-validated baseline-arm ID set **as the candidate is read**.
+Previously it detected cross-arm run-ID reuse only after consuming every
+candidate record; a later single-use producer exception could mask an earlier
+collision, or advance a source that should have failed at its first invalid
+record. Synthetic one-pass tests cover an immediate reuse and reuse on the
+last expected candidate task, with an otherwise valid baseline.
+
+The full baseline arm is still validated before touching the candidate. Valid
+pairing, task/question identity, failed-run denominators, seeded sampling, and
+numeric outputs are unchanged. This is a prospective in-memory provenance
+safeguard, not authentication of missing original treatment reports/traces.
+The pilot is diagnostic, historical designated-primary automated results have
+post-collection planning, fixed-order and evaluator comparability limitations,
+retrospective sensitivity remains exploratory, and genuine blinded human
+validation is still pending.
+
 ### Stream-validated paired RunTrace provenance (20 November 2026)
 
 The prospective `paired_run_trace_bootstrap_by_task` adapter now validates

@@ -1960,6 +1960,35 @@ def test_run_trace_bootstrap_rejects_cross_arm_run_id_reuse():
         _compare_paired_traces(baseline, candidate)
 
 
+@pytest.mark.parametrize("reused_task_id", ["a", "b"])
+def test_run_trace_cross_arm_reuse_fails_on_first_collision(reused_task_id):
+    # Synthetic one-pass producer: a later exception must not conceal an
+    # earlier cross-arm identity reuse, even when task coverage is otherwise
+    # complete and the collision occurs on the final expected candidate row.
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    reads = {"baseline": 0, "candidate": 0}
+
+    def baseline_rows():
+        for row in baseline:
+            reads["baseline"] += 1
+            yield row
+
+    def candidate_rows():
+        for task_id in ("a", "b"):
+            reads["candidate"] += 1
+            row = _paired_run_trace(task_id, "D6")
+            if task_id == reused_task_id:
+                yield replace(row, run_id=baseline[0].run_id)
+                raise AssertionError("read beyond the reused candidate run_id")
+            yield row
+
+    with pytest.raises(ValueError, match="run_id reused across"):
+        _compare_paired_traces(baseline_rows(), candidate_rows())
+    assert reads == {
+        "baseline": 2, "candidate": 1 if reused_task_id == "a" else 2,
+    }
+
+
 @pytest.mark.parametrize(
     ("baseline", "candidate", "message"),
     [
