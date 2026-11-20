@@ -9,6 +9,29 @@ The project has progressed beyond the original proposed-study document. Pilot in
 Human quality ratings are **not yet results**. They remain pending and must be collected under `paper/HUMAN_EVAL_PROTOCOL.md` before any human-quality claim is made.
 
 
+### Caller identity preflight for prospective paired RunTrace comparisons
+
+The high-level `paired_run_trace_bootstrap_by_task` adapter now validates
+`baseline_variant_id`, `candidate_variant_id`, and `task_set_id` as
+nonempty, unpadded strings **before reading either observed arm or the
+independent task-reference stream**. Previously the same identity checks in
+`aggregate_runs_by_task` occurred after the adapter had captured the baseline
+arm, so an invalid caller-supplied task-set or variant identity could consume
+single-use treatment records needlessly before the operation failed. This
+preflight also preserves the existing rule that baseline and candidate
+variants differ.
+
+Parameterized synthetic regressions verify that malformed, whitespace-padded,
+and nontext caller identities fail without touching either treatment stream or
+the task reference. Valid paired comparisons and their seeded estimators are
+unchanged. This guards prospective diagnostic stream custody; it does not
+authenticate an independent manifest, recover missing historical report/trace
+archives, alter frozen automated findings, or establish human ratings. The
+five-task pilot remains diagnostic, designated-primary automated claims retain
+post-collection planning, fixed treatment ordering, and evaluator-policy
+comparability qualifications, and retrospective sensitivity analyses remain
+exploratory rather than prospectively confirmatory.
+
 ### Diagnostic bootstrap estimand preflight (prospective only)
 
 The reusable `bootstrap_confidence_interval` now rejects a **non-callable

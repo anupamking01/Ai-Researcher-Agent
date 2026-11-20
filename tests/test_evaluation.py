@@ -1869,6 +1869,41 @@ def test_run_trace_bootstrap_rejects_same_variant_and_invalid_resamples():
         _compare_paired_traces([], [], n_resamples=1)
 
 
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [
+        (field, invalid)
+        for field in (
+            "baseline_variant_id", "candidate_variant_id", "task_set_id"
+        )
+        for invalid in (None, True, 0, b"D3", "", " ", " D3", "D3 ")
+    ],
+)
+def test_paired_trace_preflights_caller_identity_without_reading_reference_or_arms(
+    field, invalid
+):
+    # The caller's own research identifiers must be valid before touching
+    # independent reference/observed streams (which may be single-use).
+    def unread(label):
+        raise AssertionError(f"{label} read with invalid pairing identity")
+        yield None
+
+    settings = {
+        "baseline_variant_id": "D3",
+        "candidate_variant_id": "D6",
+        "task_set_id": "prospective-paired",
+    }
+    settings[field] = invalid
+    with pytest.raises(ValueError, match=field + " must be a nonempty, unpadded string"):
+        paired_run_trace_bootstrap_by_task(
+            unread("baseline"), unread("candidate"),
+            expected_task_ids=unread("reference"),
+            expected_questions_by_task={"a": _PAIR_QUESTIONS["a"]},
+            n_resamples=3,
+            **settings,
+        )
+
+
 def test_run_trace_bootstrap_rejects_nonindependent_reference_question_mapping():
     baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
     candidate = [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")]

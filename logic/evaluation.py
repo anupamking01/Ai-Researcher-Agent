@@ -938,6 +938,16 @@ def paired_run_trace_bootstrap_by_task(
         "citation_precision_proxy",
     ):
         raise ValueError("metric must be a supported higher-is-better diagnostic rate")
+    # Caller-declared arm and task-set identities are part of the independent
+    # pairing plan. Reject invalid scalars before reading a task manifest or
+    # either observed arm, including one-pass streams with side effects.
+    for label, value in (
+        ("baseline_variant_id", baseline_variant_id),
+        ("candidate_variant_id", candidate_variant_id),
+        ("task_set_id", task_set_id),
+    ):
+        if type(value) is not str or not value or value.strip() != value:
+            raise ValueError(f"{label} must be a nonempty, unpadded string")
     if baseline_variant_id == candidate_variant_id:
         raise ValueError("baseline and candidate variant IDs must differ")
     if not isinstance(expected_questions_by_task, Mapping):
