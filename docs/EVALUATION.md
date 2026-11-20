@@ -180,6 +180,33 @@ analysis planning, fixed order and evaluator-policy comparability still
 qualify the historical designated-primary automated results. Retrospective
 sensitivity analyses remain exploratory and blinded human validation pending.
 
+### Claim-denominator classification provenance in diagnostic summaries (20 November 2026)
+
+A positive `RunTrace.verified_claim_count` does not always mean an evaluator
+recorded claim-level judgments. The legacy compatibility rule uses
+`citation_count` as a fallback when **all four explicit classification
+counts** (supported, partially supported, unsupported, contradicted) are zero.
+Thus a citation-only run can have a positive numeric denominator and a zero
+strict-support rate without a populated verdict field.
+
+Prospective `aggregate_runs` and its complete-task wrapper now disclose
+`n_explicit_claim_judgment_runs` (at least one positive classification count)
+and `n_citation_fallback_runs` (no classified claims, positive citation
+count). Along with `n_zero_verified_claim_runs`, these categories
+**partition `n_runs`**, including failures. The new counts do not assert
+that citations were independently checked or that original evidence is
+authentic. They disclose which numeric denominator policy the normalized
+record uses. Empty populations yield zero for both new counters.
+
+Historical rates, denominators, estimators, frozen automated results and
+treatment/evaluator outputs are untouched. Synthetic tests cover complete
+partition and unchanged estimates for generic one-pass and task-keyed runs.
+This prospective diagnostic disclosure cannot restore the inaccessible
+original report/trace pairs. Pilot findings remain diagnostic; designated
+primary historical automation remains qualified by post-collection planning,
+fixed order and evaluator comparability; retrospective sensitivities remain
+exploratory, and blinded human validation remains pending.
+
 ### One-population diagnostic aggregation (prospective only)
 
 `logic.evaluation.aggregate_runs` now takes **one in-memory tuple snapshot**

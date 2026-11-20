@@ -353,6 +353,60 @@ def test_aggregate_runs_discloses_evidence_absence_without_changing_denominators
     assert aggregate_runs([])["n_zero_verified_claim_runs"] == 0
 
 
+def test_diagnostic_claim_denominator_provenance_partition_preserves_rates():
+    # Synthetic records only. Citation fallback is a numeric denominator,
+    # not evidence of an actual independent claim-level adjudication.
+    traces = [
+        RunTrace(
+            run_id="explicit-supported", completed=True, source_count=1,
+            citation_count=9, supported_claim_count=1, unsupported_claim_count=1,
+        ),
+        RunTrace(
+            run_id="explicit-unsupported", completed=False, source_count=1,
+            unsupported_claim_count=2,
+        ),
+        RunTrace(
+            run_id="citation-only", completed=False, source_count=1,
+            citation_count=7,
+        ),
+        RunTrace(run_id="no-denominator", completed=False, source_count=0),
+    ]
+    generic = aggregate_runs(iter(traces))
+    assert generic["n_runs"] == 4
+    assert generic["n_explicit_claim_judgment_runs"] == 2
+    assert generic["n_citation_fallback_runs"] == 1
+    assert generic["n_zero_verified_claim_runs"] == 1
+    assert (
+        generic["n_explicit_claim_judgment_runs"]
+        + generic["n_citation_fallback_runs"]
+        + generic["n_zero_verified_claim_runs"]
+    ) == generic["n_runs"]
+    assert generic["avg_claim_support_rate"] == pytest.approx(0.125)
+    assert generic["completion_rate"] == 0.25
+
+    # The complete-task path retains failed runs, irrespective of input order.
+    keyed = [
+        replace(
+            trace, task_id=f"synthetic-{index}",
+            variant_id="D3", task_set_id="synthetic-claim-custody",
+        )
+        for index, trace in enumerate(traces)
+    ]
+    summary = aggregate_runs_by_task(
+        reversed(keyed), variant_id="D3",
+        task_set_id="synthetic-claim-custody",
+        expected_task_ids=[row.task_id for row in keyed],
+    )
+    for name in (
+        "n_runs", "n_zero_verified_claim_runs",
+        "n_explicit_claim_judgment_runs", "n_citation_fallback_runs",
+        "avg_claim_support_rate", "completion_rate",
+    ):
+        assert summary[name] == generic[name]
+    assert aggregate_runs([])["n_explicit_claim_judgment_runs"] == 0
+    assert aggregate_runs([])["n_citation_fallback_runs"] == 0
+
+
 @pytest.mark.parametrize("completed", [None, "False", 1])
 def test_aggregate_runs_rejects_unvalidated_duck_typed_records(completed):
     # This impostor exposes every derived field used by the aggregator, so

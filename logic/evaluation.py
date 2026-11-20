@@ -677,6 +677,9 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
     record's Boolean, count, and finite-value invariants. Explicit
     zero-successful-source and zero-verified-claim counts disclose evidence
     coverage without excluding runs or changing any descriptive estimator.
+    Claim-denominator provenance also distinguishes explicitly classified
+    claim outcomes from the legacy citation-count fallback; neither category
+    changes a support rate or establishes historical evidence authenticity.
     """
     snapshot: list[RunTrace] = []
     for run in runs:
@@ -694,6 +697,8 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
             "n_runs": 0,
             "n_zero_successful_source_runs": 0,
             "n_zero_verified_claim_runs": 0,
+            "n_explicit_claim_judgment_runs": 0,
+            "n_citation_fallback_runs": 0,
             "completion_rate": 0.0,
             "avg_sources": 0.0,
             "avg_successful_sources": 0.0,
@@ -715,6 +720,16 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
         latencies = [run.latency_seconds for run in runs]
         total_tokens = [float(run.total_tokens) for run in runs]
         costs = [run.estimated_cost_usd for run in runs]
+        # The legacy verified_claim_count falls back to citation_count if no
+        # explicit verdict fields are populated. That supplies a numeric
+        # denominator, not evidence that citations received judgments.
+        explicit_claim_totals = [
+            run.supported_claim_count
+            + run.partially_supported_claim_count
+            + run.unsupported_claim_count
+            + run.contradicted_claim_count
+            for run in runs
+        ]
 
         summary = {
             "n_runs": len(runs),
@@ -726,6 +741,13 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
             ),
             "n_zero_verified_claim_runs": sum(
                 run.verified_claim_count == 0 for run in runs
+            ),
+            "n_explicit_claim_judgment_runs": sum(
+                total > 0 for total in explicit_claim_totals
+            ),
+            "n_citation_fallback_runs": sum(
+                total == 0 and run.citation_count > 0
+                for total, run in zip(explicit_claim_totals, runs)
             ),
             "completion_rate": safe_mean(1.0 if run.completed else 0.0 for run in runs),
             "avg_sources": safe_mean(float(run.source_count) for run in runs),
