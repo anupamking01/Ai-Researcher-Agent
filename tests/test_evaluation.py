@@ -2122,6 +2122,80 @@ def test_paired_claim_denominator_disclosure_does_not_imply_labeled_evidence():
     assert result["n_pairs"] == 2
 
 
+def test_paired_claim_denominator_joint_origin_matrix_retains_all_task_pairs():
+    """Equal zero rates can conceal arm-matched measurement-origin differences."""
+    origins = {"e": "explicit_judgments", "f": "citation_fallback", "n": "no_denominator"}
+    tasks = tuple(left + right for left in "efn" for right in "efn")
+    questions = {task: f"Synthetic paired provenance task {task}?" for task in tasks}
+
+    def record(task, variant, origin):
+        counts = {
+            "e": {"unsupported_claim_count": 1},
+            "f": {"citation_count": 1},
+            "n": {},
+        }[origin]
+        return RunTrace(
+            run_id=f"{variant}-{task}",
+            completed=(task != "fn"),
+            source_count=0,
+            variant_id=variant,
+            task_set_id="synthetic-joint-origin",
+            task_id=task,
+            question=questions[task],
+            **counts,
+        )
+
+    baseline = [record(task, "D3", task[0]) for task in reversed(tasks)]
+    candidate = [record(task, "D6", task[1]) for task in tasks]
+    args = dict(
+        baseline_variant_id="D3", candidate_variant_id="D6",
+        task_set_id="synthetic-joint-origin",
+        expected_questions_by_task=questions,
+        confidence=0.9, n_resamples=101, seed=23,
+    )
+    actual = paired_run_trace_bootstrap_by_task(
+        iter(baseline), iter(candidate), expected_task_ids=iter(reversed(tasks)),
+        **args,
+    )
+    reversed_receipt = paired_run_trace_bootstrap_by_task(
+        iter(reversed(baseline)), iter(reversed(candidate)),
+        expected_task_ids=iter(tasks), **args,
+    )
+    assert actual == reversed_receipt
+    matrix = actual["claim_denominator_origin_coverage"]["baseline_by_candidate"]
+    assert matrix == {
+        origins[left]: {origins[right]: 1 for right in "efn"} for left in "efn"
+    }
+    assert sum(sum(row.values()) for row in matrix.values()) == actual["n_pairs"] == 9
+    assert actual["rate_denominator_coverage"] == {
+        "denominator_field": "verified_claim_count",
+        "n_both_positive": 4,
+        "n_baseline_only_positive": 2,
+        "n_candidate_only_positive": 2,
+        "n_neither_positive": 1,
+    }
+    # This is a receipt, never a complete-case filter or an outcome revision.
+    # Both explicit unsupported and unclassified fallback produce zero rates,
+    # as do absent denominators under the existing compatibility convention.
+    assert all(t.claim_support_rate == 0.0 for t in baseline + candidate)
+    direct = paired_bootstrap_confidence_interval_by_task(
+        ((t.task_id, t.claim_support_rate) for t in baseline),
+        ((t.task_id, t.claim_support_rate) for t in candidate),
+        expected_task_ids=tasks, confidence=0.9, n_resamples=101, seed=23,
+    )
+    assert all(actual[key] == value for key, value in direct.items())
+    assert actual["mean_delta"] == 0.0
+
+
+@pytest.mark.parametrize("metric", ["source_success_rate", "citation_precision_proxy"])
+def test_joint_claim_origin_coverage_is_not_misapplied_to_other_metrics(metric):
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")]
+    receipt = _compare_paired_traces(iter(baseline), iter(candidate), metric=metric)
+    assert "claim_denominator_origin_coverage" not in receipt
+    assert receipt["n_pairs"] == 2
+
+
 def test_paired_trace_fingerprint_independently_replays_exact_input_rows():
     """Synthetic digest oracle, independent of the production hash helper."""
     import hashlib

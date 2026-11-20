@@ -1124,6 +1124,41 @@ def paired_run_trace_bootstrap_by_task(
             bucket = "n_neither_positive"
         denominator_coverage[bucket] += 1
 
+    # A positive claim denominator can mean an explicit evaluator judgment OR
+    # the legacy unclassified citation fallback. A four-bucket positive/zero
+    # denominator summary cannot reveal when the two arms use different
+    # measurement origins on the *same* task. Report their full joint 3x3
+    # classification rather than post-selecting pairs with explicit judgments.
+    # This is descriptive input provenance, not evidence authentication.
+    claim_denominator_origin_coverage = None
+    if metric == "claim_support_rate":
+        origins = ("explicit_judgments", "citation_fallback", "no_denominator")
+
+        def claim_origin(trace: RunTrace) -> str:
+            explicit_total = (
+                trace.supported_claim_count
+                + trace.partially_supported_claim_count
+                + trace.unsupported_claim_count
+                + trace.contradicted_claim_count
+            )
+            if explicit_total > 0:
+                return "explicit_judgments"
+            if trace.citation_count > 0:
+                return "citation_fallback"
+            return "no_denominator"
+
+        joint = {
+            baseline_origin: {candidate_origin: 0 for candidate_origin in origins}
+            for baseline_origin in origins
+        }
+        for task_id in task_ids:
+            left_origin = claim_origin(baseline_by_task[task_id])
+            right_origin = claim_origin(candidate_by_task[task_id])
+            joint[left_origin][right_origin] += 1
+        claim_denominator_origin_coverage = {
+            "baseline_by_candidate": joint,
+        }
+
     # Bind the exact task-keyed metric inputs to a replayable, ordered digest.
     # This attests neither original trace archives nor independent manifest custody.
     fingerprint = sha256()
@@ -1241,6 +1276,10 @@ def paired_run_trace_bootstrap_by_task(
         "task_set_id": task_set_id,
         "metric": metric,
         "rate_denominator_coverage": denominator_coverage,
+        **(
+            {"claim_denominator_origin_coverage": claim_denominator_origin_coverage}
+            if claim_denominator_origin_coverage is not None else {}
+        ),
         **paired,
     }
 

@@ -1454,6 +1454,24 @@ can fall back to citation count when explicit claim-support labels are absent.
 The disclosure neither excludes any task nor changes the numerical paired
 estimate, bootstrap draws, confidence interval, or frozen analyses.
 
+The strict claim-support adapter also reports a **task-matched joint
+denominator-origin matrix** under `claim_denominator_origin_coverage`
+(`baseline_by_candidate`). Rows identify the baseline arm, columns the
+candidate arm, and each axis has exactly three categories:
+`explicit_judgments` (at least one populated supported/partial/unsupported/
+contradicted classification), `citation_fallback` (no explicit judgments but
+positive citation count), and `no_denominator` (neither). All nine cells are
+integers and sum to the original `n_pairs`, including failed and zero-evidence
+runs. This makes asymmetric evaluator-label availability visible **within**
+the same paired tasks, which the four positive/zero denominator counts alone
+cannot establish. The matrix is only returned for `claim_support_rate`;
+retrieval success and the legacy citation proxy do not inherit an unrelated
+claim-judgment classification. An explicit field is recorded telemetry, not
+independent evidence that a claim was human-verified. No task is filtered,
+resampled differently, re-evaluated, or reclassified; the frozen automated
+study, pilot and pending human evaluation retain their distinct status.
+
+
 This adapter checks **in-memory identity consistency only**. The independent
 task/question reference must itself be authenticated elsewhere; matching
 `RunTrace` metadata is not proof of report/trace source custody, treatment
