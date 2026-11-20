@@ -680,8 +680,10 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
     zero-successful-source and zero-verified-claim counts disclose evidence
     coverage without excluding runs or changing any descriptive estimator.
     Claim-denominator provenance also distinguishes explicitly classified
-    claim outcomes from the legacy citation-count fallback; neither category
-    changes a support rate or establishes historical evidence authenticity.
+    claim outcomes from the legacy citation-count fallback. Model-call usage
+    coverage discloses missing provider telemetry without treating absent
+    token counts as measured zero usage or changing numerical estimates.
+    None of these counters authenticates historical evidence.
     """
     snapshot: list[RunTrace] = []
     for run in runs:
@@ -701,6 +703,10 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
             "n_zero_verified_claim_runs": 0,
             "n_explicit_claim_judgment_runs": 0,
             "n_citation_fallback_runs": 0,
+            "n_zero_model_call_runs": 0,
+            "n_runs_with_unavailable_model_usage": 0,
+            "n_model_calls": 0,
+            "n_model_calls_with_unavailable_usage": 0,
             "completion_rate": 0.0,
             "avg_sources": 0.0,
             "avg_successful_sources": 0.0,
@@ -750,6 +756,20 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
             "n_citation_fallback_runs": sum(
                 total == 0 and run.citation_count > 0
                 for total, run in zip(explicit_claim_totals, runs)
+            ),
+            # Raw provider-usage exposure is separate from observed tokens and
+            # cost. A missing-usage call can contribute zero logged tokens
+            # without being evidence of a zero-token or zero-cost model call.
+            # Include failed runs, and distinguish no calls from unreported calls.
+            "n_zero_model_call_runs": sum(
+                run.model_call_count == 0 for run in runs
+            ),
+            "n_runs_with_unavailable_model_usage": sum(
+                run.unavailable_usage_call_count > 0 for run in runs
+            ),
+            "n_model_calls": sum(run.model_call_count for run in runs),
+            "n_model_calls_with_unavailable_usage": sum(
+                run.unavailable_usage_call_count for run in runs
             ),
             "completion_rate": safe_mean(1.0 if run.completed else 0.0 for run in runs),
             "avg_sources": safe_mean(float(run.source_count) for run in runs),

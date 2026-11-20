@@ -207,6 +207,39 @@ primary historical automation remains qualified by post-collection planning,
 fixed order and evaluator comparability; retrospective sensitivities remain
 exploratory, and blinded human validation remains pending.
 
+### Model-usage availability in prospective diagnostic summaries (20 November 2026)
+
+A recorded `prompt_tokens=0` or `estimated_cost_usd=0` does not
+demonstrate that every model call had zero usage or was free. The normalized
+`RunTrace` ledger distinguishes `model_call_count` from
+`unavailable_usage_call_count` (provider usage missing for some calls), but
+the former diagnostic aggregation previously reported token/cost averages
+without the latter's exposure.
+
+`aggregate_runs` and its complete-task wrapper now disclose four **raw
+telemetry** counters: `n_model_calls`, `n_model_calls_with_unavailable_usage`,
+`n_runs_with_unavailable_model_usage`, and `n_zero_model_call_runs`.
+They include completed and failed runs, use the original one-pass population,
+and return zero on empty input. `RunTrace` already rejects unavailable-call
+counts greater than total model calls. A run with no model calls is distinct
+from one where calls occurred but every call lacked provider usage.
+
+The existing means, denominators, cost fields, estimates, failed-run inclusion,
+and task pairing are **unchanged**. These counters reveal flagged missing
+provider telemetry; absence of such a flag is **not** independent proof of
+complete billing records, correct prices, accurate token measurements, or
+original-archive custody. In particular, estimated cost remains subject to
+separate pricing-table and accounting-status provenance. No imputation,
+zero-to-positive substitution, treatment rerun, or evaluator rerun occurs.
+Synthetic one-pass and complete-task tests cover partial versus fully missing
+usage, zero-call and failed runs, as well as unchanged numeric summaries.
+
+The five-task pilot remains diagnostic, historical automated inference remains
+qualified by post-collection analysis planning, fixed treatment order, and
+historical evaluator-policy comparability, and retrospective sensitivities
+remain exploratory rather than prospective confirmation. Original report/
+trace authentication and independent blinded human validation remain pending.
+
 ### One-population diagnostic aggregation (prospective only)
 
 `logic.evaluation.aggregate_runs` now takes **one in-memory tuple snapshot**

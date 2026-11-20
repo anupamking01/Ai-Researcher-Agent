@@ -304,6 +304,68 @@ def test_run_trace_accepts_valid_resource_boundaries_and_aggregates():
     assert aggregate_runs(runs)["avg_latency_seconds"] == 1.0
 
 
+def test_diagnostic_model_usage_coverage_preserves_failed_and_zero_call_runs():
+    # Prospective synthetic ledger: a zero token count on a call whose
+    # provider usage is unavailable is not a measured zero-token call.
+    traces = [
+        RunTrace(
+            run_id="reported", completed=True, source_count=1,
+            model_call_count=2, unavailable_usage_call_count=0,
+            prompt_tokens=60, estimated_cost_usd=0.2,
+        ),
+        RunTrace(
+            run_id="partial", completed=True, source_count=1,
+            model_call_count=3, unavailable_usage_call_count=1,
+            prompt_tokens=30,
+        ),
+        RunTrace(
+            run_id="unavailable", completed=False, source_count=0,
+            model_call_count=2, unavailable_usage_call_count=2,
+        ),
+        RunTrace(
+            run_id="no-model-call", completed=False, source_count=0,
+            model_call_count=0, unavailable_usage_call_count=0,
+        ),
+    ]
+    summary = aggregate_runs(iter(traces))
+    assert summary["n_runs"] == 4
+    assert summary["n_zero_model_call_runs"] == 1
+    assert summary["n_runs_with_unavailable_model_usage"] == 2
+    assert summary["n_model_calls"] == 7
+    assert summary["n_model_calls_with_unavailable_usage"] == 3
+    assert 0 <= summary["n_model_calls_with_unavailable_usage"] <= summary["n_model_calls"]
+    # The existing observed-only means and failed-run denominators do not change.
+    assert summary["avg_model_calls"] == pytest.approx(1.75)
+    assert summary["avg_total_tokens"] == pytest.approx(22.5)
+    assert summary["avg_estimated_cost_usd"] == pytest.approx(0.05)
+    assert summary["completion_rate"] == pytest.approx(0.5)
+
+    keyed = [
+        replace(
+            row, task_id=f"usage-{index}", task_set_id="synthetic-usage",
+            variant_id="D3",
+        )
+        for index, row in enumerate(traces)
+    ]
+    keyed_summary = aggregate_runs_by_task(
+        iter(reversed(keyed)), variant_id="D3",
+        task_set_id="synthetic-usage",
+        expected_task_ids=[row.task_id for row in keyed],
+    )
+    for key in (
+        "n_zero_model_call_runs", "n_runs_with_unavailable_model_usage",
+        "n_model_calls", "n_model_calls_with_unavailable_usage",
+        "avg_model_calls", "avg_total_tokens", "avg_estimated_cost_usd",
+        "completion_rate",
+    ):
+        assert keyed_summary[key] == summary[key]
+    for key in (
+        "n_zero_model_call_runs", "n_runs_with_unavailable_model_usage",
+        "n_model_calls", "n_model_calls_with_unavailable_usage",
+    ):
+        assert aggregate_runs([])[key] == 0
+
+
 def test_aggregate_runs():
     runs = [
         RunTrace(run_id="run-1", completed=True, source_count=10, failed_source_count=2, latency_seconds=20.0, prompt_tokens=100, completion_tokens=50, estimated_cost_usd=0.05),
