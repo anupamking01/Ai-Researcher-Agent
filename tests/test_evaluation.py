@@ -2425,6 +2425,54 @@ def test_paired_trace_fingerprint_rejects_nontext_treatment_factor():
         _compare_paired_traces(baseline, candidate)
 
 
+@pytest.mark.parametrize("arm", ["baseline", "candidate"])
+@pytest.mark.parametrize(
+    "field", ["planning_mode", "verification_mode", "smart_model", "fast_model"]
+)
+def test_paired_trace_rejects_nontext_factor_at_first_observed_record(arm, field):
+    # A one-pass producer may fail after its first bad row. The malformed
+    # observed treatment identity must win over any subsequent producer error.
+    # There is deliberately no independent treatment plan in this comparison.
+    reads = {"baseline": 0, "candidate": 0}
+
+    def source(name, variant):
+        reads[name] += 1
+        first = _paired_run_trace("a", variant)
+        if name == arm:
+            yield replace(first, **{field: object()})
+            raise AssertionError("malformed treatment metadata was read past")
+        yield first
+        reads[name] += 1
+        yield _paired_run_trace("b", variant)
+
+    with pytest.raises(ValueError, match=f"treatment metadata {field} must be text"):
+        _compare_paired_traces(source("baseline", "D3"), source("candidate", "D6"))
+    assert reads == (
+        {"baseline": 1, "candidate": 0}
+        if arm == "baseline" else {"baseline": 2, "candidate": 1}
+    )
+
+
+@pytest.mark.parametrize("bad_run_id", [[], {}])
+def test_paired_trace_rejects_unhashable_candidate_run_id_as_validation_error(
+    bad_run_id,
+):
+    # Cross-arm reuse lookup must not raise TypeError on an invalid ID before
+    # the complete-arm validator can give the explicit provenance error.
+    baseline = [_paired_run_trace(task, "D3") for task in "ab"]
+    reads = 0
+
+    def invalid_candidate():
+        nonlocal reads
+        reads += 1
+        yield replace(_paired_run_trace("a", "D6"), run_id=bad_run_id)
+        raise AssertionError("invalid candidate run_id advanced the producer")
+
+    with pytest.raises(ValueError, match="run_id must be a nonempty, unpadded string"):
+        _compare_paired_traces(iter(baseline), invalid_candidate())
+    assert reads == 1
+
+
 @pytest.mark.parametrize("bad_metric", ["estimated_cost_usd", "question", "", None, True])
 def test_run_trace_bootstrap_rejects_unapproved_or_non_numeric_metric(bad_metric):
     with pytest.raises(ValueError, match="supported higher-is-better"):

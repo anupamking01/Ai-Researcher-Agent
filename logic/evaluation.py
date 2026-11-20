@@ -1046,6 +1046,19 @@ def paired_run_trace_bootstrap_by_task(
     # A substituted ID/question/setting must fail at the offending record,
     # not after an entire stream is captured (or hidden by a later producer
     # error). Validate the complete baseline before touching the candidate.
+    def treatment_identity(trace: RunTrace) -> dict[str, object]:
+        """Bind observed treatment factors even when no independent plan exists.
+
+        Legacy empty strings remain representable, but nontext factor values
+        cannot acquire a credible or ambiguously serialized provenance digest.
+        This captures metadata, not independent verification of the treatment.
+        """
+        identity = {field: getattr(trace, field) for field in _TREATMENT_FIELDS}
+        for field in ("planning_mode", "verification_mode", "smart_model", "fast_model"):
+            if type(identity[field]) is not str:
+                raise ValueError(f"treatment metadata {field} must be text")
+        return identity
+
     def validated_snapshot_arm(
         records: Iterable[RunTrace], label: str, variant_id: str,
         *, disallowed_run_ids: set[str] | None = None,
@@ -1062,9 +1075,17 @@ def paired_run_trace_bootstrap_by_task(
                 # Reject the first reused candidate run identity without
                 # consuming later single-use candidate records, whose producer
                 # errors could otherwise mask the pairing violation.
+                if isinstance(trace, RunTrace):
+                    # The receipt requires text treatment factors even without
+                    # independently declared plans. Fail at the offending
+                    # one-pass record, before later producer errors can mask it.
+                    treatment_identity(trace)
                 if (
                     disallowed_run_ids is not None
                     and isinstance(trace, RunTrace)
+                    # Malformed/unhashable run IDs are handled by the complete
+                    # arm validator, not by a premature set-membership TypeError.
+                    and type(trace.run_id) is str
                     and trace.run_id in disallowed_run_ids
                 ):
                     raise ValueError(
@@ -1213,19 +1234,6 @@ def paired_run_trace_bootstrap_by_task(
             "citation_count": trace.citation_count,
             "unsupported_claim_count": trace.unsupported_claim_count,
         }
-
-    def treatment_identity(trace: RunTrace) -> dict[str, object]:
-        """Bind observed treatment factors even when no independent plan exists.
-
-        Legacy empty strings remain representable, but nontext factor values
-        cannot acquire a credible or ambiguously serialized provenance digest.
-        This captures metadata, not independent verification of the treatment.
-        """
-        identity = {field: getattr(trace, field) for field in _TREATMENT_FIELDS}
-        for field in ("planning_mode", "verification_mode", "smart_model", "fast_model"):
-            if type(identity[field]) is not str:
-                raise ValueError(f"treatment metadata {field} must be text")
-        return identity
 
     baseline_metrics: list[tuple[str, float]] = []
     candidate_metrics: list[tuple[str, float]] = []

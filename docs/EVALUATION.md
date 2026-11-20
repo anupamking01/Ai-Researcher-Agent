@@ -8,6 +8,30 @@ The project has progressed beyond the original proposed-study document. Pilot in
 
 Human quality ratings are **not yet results**. They remain pending and must be collected under `paper/HUMAN_EVAL_PROTOCOL.md` before any human-quality claim is made.
 
+### Early paired fingerprint-identity validation (21 November 2026)
+
+The prospective task-keyed RunTrace adapter now validates the four text-valued
+observed treatment factors used by its input fingerprint
+(`planning_mode`, `verification_mode`, `smart_model`, `fast_model`)
+**on the first offending one-pass record**, even when no independent treatment
+settings were supplied. Previously those factors were checked only while
+building the fingerprint *after both complete arms had been read*, allowing a
+subsequent producer failure to mask malformed baseline metadata and
+unnecessarily consume candidate records. The candidate cross-arm run-ID
+lookup also defers unhashable/nontext IDs to the complete-arm validator,
+which yields an explicit provenance `ValueError` rather than `TypeError`.
+
+Synthetic parameterized regressions cover all four fields in either arm,
+baseline-before-candidate ordering, early stream termination, and malformed
+candidate run IDs. Valid text factors, legacy empty text, one-pass input,
+identical rate estimators, seeded inference, and the v3 fingerprint schema
+remain unchanged. This is prospective in-memory diagnostic robustness, **not**
+independent treatment-plan verification or authentication of unavailable
+historical reports and traces. The five-task pilot remains diagnostic;
+designated-primary automated findings retain post-collection planning,
+fixed-order and evaluator-policy comparability limitations. Retrospective
+sensitivities are exploratory, and genuine human validation remains pending.
+
 ### Fail-fast cross-arm run identity in prospective paired traces (20 November 2026)
 
 The task-keyed RunTrace bootstrap adapter now checks each candidate run ID
