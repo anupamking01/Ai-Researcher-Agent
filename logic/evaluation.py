@@ -1117,7 +1117,7 @@ def paired_run_trace_bootstrap_by_task(
         fingerprint.update(serialized)
 
     feed_fingerprint({
-        "schema_version": 1,
+        "schema_version": 2,
         "metric": metric,
         "task_set_id": task_set_id,
         "baseline_variant_id": baseline_variant_id,
@@ -1130,6 +1130,32 @@ def paired_run_trace_bootstrap_by_task(
         if metric == "source_success_rate":
             return trace.successful_source_count
         return max(trace.citation_count - trace.unsupported_claim_count, 0)
+
+    def metric_input_counts(trace: RunTrace) -> dict[str, int]:
+        """Bind the original metric-relevant telemetry, not only its ratio.
+
+        The v1 numerator/denominator pair can be identical for an explicitly
+        unsupported claim and a citation-only fallback with no judgments.
+        The legacy citation proxy also clamps unsupported counts, losing
+        information about the observed count when it exceeds citations.
+        """
+        if metric == "claim_support_rate":
+            return {
+                "citation_count": trace.citation_count,
+                "supported_claim_count": trace.supported_claim_count,
+                "partially_supported_claim_count": trace.partially_supported_claim_count,
+                "unsupported_claim_count": trace.unsupported_claim_count,
+                "contradicted_claim_count": trace.contradicted_claim_count,
+            }
+        if metric == "source_success_rate":
+            return {
+                "source_count": trace.source_count,
+                "failed_source_count": trace.failed_source_count,
+            }
+        return {
+            "citation_count": trace.citation_count,
+            "unsupported_claim_count": trace.unsupported_claim_count,
+        }
 
     baseline_metrics: list[tuple[str, float]] = []
     candidate_metrics: list[tuple[str, float]] = []
@@ -1157,6 +1183,8 @@ def paired_run_trace_bootstrap_by_task(
             "candidate_numerator": numerator(right),
             "baseline_denominator": getattr(left, denominator_field),
             "candidate_denominator": getattr(right, denominator_field),
+            "baseline_metric_input_counts": metric_input_counts(left),
+            "candidate_metric_input_counts": metric_input_counts(right),
         })
 
     # The numeric adapter consumes the same captured values as the fingerprint;
@@ -1169,7 +1197,7 @@ def paired_run_trace_bootstrap_by_task(
         seed=seed,
     )
     return {
-        "paired_input_fingerprint_schema": "length-prefixed-json-v1",
+        "paired_input_fingerprint_schema": "length-prefixed-json-v2",
         "paired_input_fingerprint_sha256": fingerprint.hexdigest(),
         "baseline_variant_id": baseline_variant_id,
         "candidate_variant_id": candidate_variant_id,

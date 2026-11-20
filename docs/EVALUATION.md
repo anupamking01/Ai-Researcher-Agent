@@ -1723,35 +1723,57 @@ prospective confirmatory evidence. The frozen historical automated inference,
 pilot, exploratory sensitivities, and pending genuine human validation are
 untouched.
 
-## Source-independent paired diagnostic input fingerprint (20 November 2026)
+## Paired diagnostic input fingerprint and metric telemetry custody (20 November 2026)
 
-The `paired_run_trace_bootstrap_by_task` diagnostic receipt now includes
-`paired_input_fingerprint_schema: length-prefixed-json-v1` and
-`paired_input_fingerprint_sha256`. This lets a second analyst replay the
-fingerprint from the **same independently verified input records**, rather
-than treating matching seeded point estimates as proof of matching inputs.
-It is not a signature or a historical report/trace authenticity claim.
+The prospective `paired_run_trace_bootstrap_by_task` diagnostic receipt
+includes `paired_input_fingerprint_schema: length-prefixed-json-v2` and
+`paired_input_fingerprint_sha256`. A second analyst can reconstruct this
+digest from the **same independently verified task manifest and run traces**,
+rather than treating matching seeded estimates as evidence of matching inputs.
+This digest is not a signature or a source-archive attestation.
 
-For schema v1, compute SHA-256 over a header followed by one row per sorted
-task ID. Each record is serialized as UTF-8 JSON with sorted keys, compact
+For schema v2, compute SHA-256 over a header followed by one record per
+sorted task ID. Serialize each record as UTF-8 JSON with sorted keys, compact
 `(",", ":")` separators, `ensure_ascii=False`, and `allow_nan=False`.
-Prefix each serialized record with its byte length as an unsigned 8-byte
-big-endian integer. Header keys are `schema_version=1`, `metric`,
-`task_set_id`, `baseline_variant_id`, and `candidate_variant_id`.
-Each task row includes independently expected `task_id` and `question`,
-both run IDs and completion flags, the exact extracted baseline/candidate
-numeric rates, and both nonnegative count numerators and denominators.
-The numerator is supported claims for claim-support rate, successful sources
-for source-success rate, or `max(citations - unsupported_claims, 0)` for
-the legacy citation-precision proxy. Denominators follow each existing
-rate definition. Rates are captured once and passed unchanged to the
-existing paired-bootstrap estimator; a changed count exposure with the same
-rate therefore changes the digest without changing the estimate.
+Prefix each record with its UTF-8 byte length as an unsigned 8-byte big-endian
+integer. The header contains `schema_version=2`, `metric`, `task_set_id`,
+`baseline_variant_id`, and `candidate_variant_id`. Each task row contains
+the independently expected `task_id` and `question`, both run IDs,
+completion flags, each captured metric rate, and its numerator and denominator.
+The numerator is fully supported claims for claim-support rate, successful
+sources for source-success rate, or
+`max(citation_count - unsupported_claim_count, 0)` for the legacy citation
+proxy. Numeric denominator definitions are unchanged.
 
-This prospective diagnostic fingerprint is order-invariant, but does not
-pin unused RunTrace fields, verify external source bytes, prove original
-artifact custody, create prospective preregistration, or supply independent
-human ratings. The pilot remains diagnostic; frozen designated-primary
-automated findings retain post-collection planning, fixed-order and
-evaluator-comparability limitations. Retrospective sensitivity is exploratory,
-not prospectively confirmatory, and human validation remains pending.
+Schema v2 also includes `baseline_metric_input_counts` and
+`candidate_metric_input_counts` dictionaries for every task. Their fields
+depend on the preselected metric:
+
+- `claim_support_rate`: `citation_count`, `supported_claim_count`,
+  `partially_supported_claim_count`, `unsupported_claim_count`, and
+  `contradicted_claim_count`.
+- `source_success_rate`: `source_count` and `failed_source_count`.
+- `citation_precision_proxy`: `citation_count` and
+  `unsupported_claim_count`, **before** the proxy clamps negative support
+  to zero.
+
+This closes a provenance ambiguity in v1: explicitly classified unsupported
+claims and unclassified citation-count fallback can yield identical zero
+support rates with identical denominators. Different partial/contradicted
+verdict counts can likewise produce the same numeric ratio. In the legacy
+citation proxy, distinct unsupported counts beyond the citation count
+collapse to the same zero. Such different input telemetry now gives different
+v2 fingerprints without changing any estimator or excluding failed runs.
+Prior v1 receipts retain their own schema and must **not** be reinterpreted
+as v2. To replay an existing v1 receipt, use the historical v1 specification;
+a v2 hash is intentionally not byte-equal to a v1 hash.
+
+The same captured rates are passed unchanged into the existing paired
+bootstrap, so the revision does not alter task ordering, point estimates,
+resamples, confidence intervals, or frozen automated findings. Fingerprints
+do not pin unused trace metadata, independently authenticate trace bytes,
+establish preregistration, resolve fixed-order/evaluator limitations, or
+constitute human judgments. The five-task pilot remains diagnostic;
+historical designated-primary automated findings remain post-collection
+qualified; retrospective sensitivities remain exploratory; genuine blinded
+human validation remains pending.

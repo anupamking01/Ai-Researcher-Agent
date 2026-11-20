@@ -2071,11 +2071,11 @@ def test_paired_trace_fingerprint_independently_replays_exact_input_rows():
                                    unsupported_claim_count=0),
                  _paired_run_trace("b", "D6", completed=False)]
     result = _compare_paired_traces(iter(baseline), iter(candidate))
-    assert result["paired_input_fingerprint_schema"] == "length-prefixed-json-v1"
+    assert result["paired_input_fingerprint_schema"] == "length-prefixed-json-v2"
     left_rows = {row.task_id: row for row in baseline}
     right_rows = {row.task_id: row for row in candidate}
     records = [{
-        "schema_version": 1, "metric": "claim_support_rate",
+        "schema_version": 2, "metric": "claim_support_rate",
         "task_set_id": "prospective-paired",
         "baseline_variant_id": "D3", "candidate_variant_id": "D6",
     }]
@@ -2092,6 +2092,20 @@ def test_paired_trace_fingerprint_independently_replays_exact_input_rows():
             "candidate_numerator": right.supported_claim_count,
             "baseline_denominator": left.verified_claim_count,
             "candidate_denominator": right.verified_claim_count,
+            "baseline_metric_input_counts": {
+                "citation_count": left.citation_count,
+                "supported_claim_count": left.supported_claim_count,
+                "partially_supported_claim_count": left.partially_supported_claim_count,
+                "unsupported_claim_count": left.unsupported_claim_count,
+                "contradicted_claim_count": left.contradicted_claim_count,
+            },
+            "candidate_metric_input_counts": {
+                "citation_count": right.citation_count,
+                "supported_claim_count": right.supported_claim_count,
+                "partially_supported_claim_count": right.partially_supported_claim_count,
+                "unsupported_claim_count": right.unsupported_claim_count,
+                "contradicted_claim_count": right.contradicted_claim_count,
+            },
         })
     digest = hashlib.sha256()
     for record in records:
@@ -2137,6 +2151,63 @@ def test_paired_trace_fingerprint_binds_run_id_without_changing_effect():
             == updated["bootstrap_confidence_interval"])
     assert (original["paired_input_fingerprint_sha256"]
             != updated["paired_input_fingerprint_sha256"])
+
+
+@pytest.mark.parametrize(
+    ("original_counts", "replacement_counts"),
+    [
+        (
+            {"unsupported_claim_count": 2},
+            {"citation_count": 2},
+        ),
+        (
+            {"partially_supported_claim_count": 2},
+            {"contradicted_claim_count": 2},
+        ),
+    ],
+)
+def test_paired_trace_fingerprint_separates_equal_rate_claim_provenance(
+    original_counts, replacement_counts,
+):
+    """Same strict-zero rate and denominator need not mean same judgments."""
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")]
+    no_verdicts = replace(
+        candidate[0], citation_count=0, supported_claim_count=0,
+        partially_supported_claim_count=0, unsupported_claim_count=0,
+        contradicted_claim_count=0,
+    )
+    candidate[0] = replace(no_verdicts, **original_counts)
+    first = _compare_paired_traces(baseline, candidate)
+    replacement = replace(no_verdicts, **replacement_counts)
+    assert candidate[0].claim_support_rate == replacement.claim_support_rate == 0.0
+    assert candidate[0].verified_claim_count == replacement.verified_claim_count == 2
+    candidate[0] = replacement
+    second = _compare_paired_traces(reversed(baseline), reversed(candidate))
+    assert first["mean_delta"] == second["mean_delta"]
+    assert first["bootstrap_confidence_interval"] == second["bootstrap_confidence_interval"]
+    assert first["rate_denominator_coverage"] == second["rate_denominator_coverage"]
+    assert first["paired_input_fingerprint_sha256"] != second["paired_input_fingerprint_sha256"]
+
+
+def test_paired_trace_fingerprint_binds_unclamped_legacy_proxy_input():
+    """A saturated zero proxy must not erase its underlying claim count."""
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")]
+    candidate[0] = replace(candidate[0], citation_count=2, unsupported_claim_count=2)
+    original = _compare_paired_traces(
+        baseline, candidate, metric="citation_precision_proxy",
+    )
+    changed = list(candidate)
+    changed[0] = replace(candidate[0], unsupported_claim_count=3)
+    assert candidate[0].citation_precision_proxy == changed[0].citation_precision_proxy == 0.0
+    updated = _compare_paired_traces(
+        baseline, changed, metric="citation_precision_proxy",
+    )
+    assert original["mean_delta"] == updated["mean_delta"]
+    assert original["bootstrap_confidence_interval"] == updated["bootstrap_confidence_interval"]
+    assert original["rate_denominator_coverage"] == updated["rate_denominator_coverage"]
+    assert original["paired_input_fingerprint_sha256"] != updated["paired_input_fingerprint_sha256"]
 
 
 @pytest.mark.parametrize("bad_metric", ["estimated_cost_usd", "question", "", None, True])
