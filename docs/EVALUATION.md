@@ -1722,3 +1722,36 @@ authenticate source artifacts or upgrade diagnostic analysis to
 prospective confirmatory evidence. The frozen historical automated inference,
 pilot, exploratory sensitivities, and pending genuine human validation are
 untouched.
+
+## Source-independent paired diagnostic input fingerprint (20 November 2026)
+
+The `paired_run_trace_bootstrap_by_task` diagnostic receipt now includes
+`paired_input_fingerprint_schema: length-prefixed-json-v1` and
+`paired_input_fingerprint_sha256`. This lets a second analyst replay the
+fingerprint from the **same independently verified input records**, rather
+than treating matching seeded point estimates as proof of matching inputs.
+It is not a signature or a historical report/trace authenticity claim.
+
+For schema v1, compute SHA-256 over a header followed by one row per sorted
+task ID. Each record is serialized as UTF-8 JSON with sorted keys, compact
+`(",", ":")` separators, `ensure_ascii=False`, and `allow_nan=False`.
+Prefix each serialized record with its byte length as an unsigned 8-byte
+big-endian integer. Header keys are `schema_version=1`, `metric`,
+`task_set_id`, `baseline_variant_id`, and `candidate_variant_id`.
+Each task row includes independently expected `task_id` and `question`,
+both run IDs and completion flags, the exact extracted baseline/candidate
+numeric rates, and both nonnegative count numerators and denominators.
+The numerator is supported claims for claim-support rate, successful sources
+for source-success rate, or `max(citations - unsupported_claims, 0)` for
+the legacy citation-precision proxy. Denominators follow each existing
+rate definition. Rates are captured once and passed unchanged to the
+existing paired-bootstrap estimator; a changed count exposure with the same
+rate therefore changes the digest without changing the estimate.
+
+This prospective diagnostic fingerprint is order-invariant, but does not
+pin unused RunTrace fields, verify external source bytes, prove original
+artifact custody, create prospective preregistration, or supply independent
+human ratings. The pilot remains diagnostic; frozen designated-primary
+automated findings retain post-collection planning, fixed-order and
+evaluator-comparability limitations. Retrospective sensitivity is exploratory,
+not prospectively confirmatory, and human validation remains pending.

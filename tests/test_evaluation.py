@@ -2060,6 +2060,85 @@ def test_paired_claim_denominator_disclosure_does_not_imply_labeled_evidence():
     assert result["n_pairs"] == 2
 
 
+def test_paired_trace_fingerprint_independently_replays_exact_input_rows():
+    """Synthetic digest oracle, independent of the production hash helper."""
+    import hashlib
+    import json
+
+    baseline = [_paired_run_trace("b", "D3", completed=False),
+                _paired_run_trace("a", "D3")]
+    candidate = [_paired_run_trace("a", "D6", supported_claim_count=2,
+                                   unsupported_claim_count=0),
+                 _paired_run_trace("b", "D6", completed=False)]
+    result = _compare_paired_traces(iter(baseline), iter(candidate))
+    assert result["paired_input_fingerprint_schema"] == "length-prefixed-json-v1"
+    left_rows = {row.task_id: row for row in baseline}
+    right_rows = {row.task_id: row for row in candidate}
+    records = [{
+        "schema_version": 1, "metric": "claim_support_rate",
+        "task_set_id": "prospective-paired",
+        "baseline_variant_id": "D3", "candidate_variant_id": "D6",
+    }]
+    for task_id in ("a", "b"):
+        left, right = left_rows[task_id], right_rows[task_id]
+        records.append({
+            "task_id": task_id, "question": _PAIR_QUESTIONS[task_id],
+            "baseline_run_id": left.run_id, "candidate_run_id": right.run_id,
+            "baseline_completed": left.completed,
+            "candidate_completed": right.completed,
+            "baseline_value": left.claim_support_rate,
+            "candidate_value": right.claim_support_rate,
+            "baseline_numerator": left.supported_claim_count,
+            "candidate_numerator": right.supported_claim_count,
+            "baseline_denominator": left.verified_claim_count,
+            "candidate_denominator": right.verified_claim_count,
+        })
+    digest = hashlib.sha256()
+    for record in records:
+        data = json.dumps(
+            record, sort_keys=True, ensure_ascii=False,
+            separators=(",", ":"), allow_nan=False,
+        ).encode("utf-8")
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+    assert result["paired_input_fingerprint_sha256"] == digest.hexdigest()
+    assert result["bootstrap_confidence_interval"]["n_observations"] == 2
+
+
+def test_paired_trace_fingerprint_distinguishes_equal_rates_with_new_exposure():
+    """Reproducible estimates must not hide different source-count inputs."""
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")]
+    original = _compare_paired_traces(
+        baseline, candidate, metric="source_success_rate",
+    )
+    changed = list(candidate)
+    changed[0] = replace(changed[0], source_count=4)
+    updated = _compare_paired_traces(
+        reversed(baseline), reversed(changed), metric="source_success_rate",
+    )
+    assert original["mean_delta"] == updated["mean_delta"] == 0.0
+    assert (original["bootstrap_confidence_interval"]
+            == updated["bootstrap_confidence_interval"])
+    assert original["rate_denominator_coverage"] == updated["rate_denominator_coverage"]
+    assert (original["paired_input_fingerprint_sha256"]
+            != updated["paired_input_fingerprint_sha256"])
+
+
+def test_paired_trace_fingerprint_binds_run_id_without_changing_effect():
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")]
+    original = _compare_paired_traces(baseline, candidate)
+    changed = list(candidate)
+    changed[1] = replace(changed[1], run_id="other-synthetic-D6-b")
+    updated = _compare_paired_traces(baseline, changed)
+    assert original["mean_delta"] == updated["mean_delta"]
+    assert (original["bootstrap_confidence_interval"]
+            == updated["bootstrap_confidence_interval"])
+    assert (original["paired_input_fingerprint_sha256"]
+            != updated["paired_input_fingerprint_sha256"])
+
+
 @pytest.mark.parametrize("bad_metric", ["estimated_cost_usd", "question", "", None, True])
 def test_run_trace_bootstrap_rejects_unapproved_or_non_numeric_metric(bad_metric):
     with pytest.raises(ValueError, match="supported higher-is-better"):

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
+from hashlib import sha256
+import json
 from math import floor, fsum, isfinite, sqrt
 from random import Random
 from typing import Callable, Iterable, Sequence
@@ -1102,15 +1104,73 @@ def paired_run_trace_bootstrap_by_task(
             bucket = "n_neither_positive"
         denominator_coverage[bucket] += 1
 
+    # Bind the exact task-keyed metric inputs to a replayable, ordered digest.
+    # This attests neither original trace archives nor independent manifest custody.
+    fingerprint = sha256()
+
+    def feed_fingerprint(record: dict) -> None:
+        serialized = json.dumps(
+            record, sort_keys=True, ensure_ascii=False,
+            separators=(",", ":"), allow_nan=False,
+        ).encode("utf-8")
+        fingerprint.update(len(serialized).to_bytes(8, "big"))
+        fingerprint.update(serialized)
+
+    feed_fingerprint({
+        "schema_version": 1,
+        "metric": metric,
+        "task_set_id": task_set_id,
+        "baseline_variant_id": baseline_variant_id,
+        "candidate_variant_id": candidate_variant_id,
+    })
+
+    def numerator(trace: RunTrace) -> int:
+        if metric == "claim_support_rate":
+            return trace.supported_claim_count
+        if metric == "source_success_rate":
+            return trace.successful_source_count
+        return max(trace.citation_count - trace.unsupported_claim_count, 0)
+
+    baseline_metrics: list[tuple[str, float]] = []
+    candidate_metrics: list[tuple[str, float]] = []
+    for task_id in task_ids:
+        left = baseline_by_task[task_id]
+        right = candidate_by_task[task_id]
+        left_value = _finite_float(
+            getattr(left, metric), label="baseline paired metric"
+        )
+        right_value = _finite_float(
+            getattr(right, metric), label="candidate paired metric"
+        )
+        baseline_metrics.append((task_id, left_value))
+        candidate_metrics.append((task_id, right_value))
+        feed_fingerprint({
+            "task_id": task_id,
+            "question": questions[task_id],
+            "baseline_run_id": left.run_id,
+            "candidate_run_id": right.run_id,
+            "baseline_completed": left.completed,
+            "candidate_completed": right.completed,
+            "baseline_value": left_value,
+            "candidate_value": right_value,
+            "baseline_numerator": numerator(left),
+            "candidate_numerator": numerator(right),
+            "baseline_denominator": getattr(left, denominator_field),
+            "candidate_denominator": getattr(right, denominator_field),
+        })
+
+    # The numeric adapter consumes the same captured values as the fingerprint;
+    # it does not reread rate properties or change paired resampling.
     paired = paired_bootstrap_confidence_interval_by_task(
-        ((trace.task_id, getattr(trace, metric)) for trace in baseline),
-        ((trace.task_id, getattr(trace, metric)) for trace in candidate),
+        baseline_metrics, candidate_metrics,
         expected_task_ids=task_ids,
         confidence=confidence,
         n_resamples=n_resamples,
         seed=seed,
     )
     return {
+        "paired_input_fingerprint_schema": "length-prefixed-json-v1",
+        "paired_input_fingerprint_sha256": fingerprint.hexdigest(),
         "baseline_variant_id": baseline_variant_id,
         "candidate_variant_id": candidate_variant_id,
         "task_set_id": task_set_id,
