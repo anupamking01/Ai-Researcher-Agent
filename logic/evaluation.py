@@ -674,7 +674,9 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
     is limited to 10,000 records so an endless or unexpectedly large producer
     cannot prevent a diagnostic result from failing closed. Require actual
     validated RunTrace objects, not duck-typed telemetry that bypasses the
-    record's Boolean, count, and finite-value invariants.
+    record's Boolean, count, and finite-value invariants. Explicit
+    zero-successful-source and zero-verified-claim counts disclose evidence
+    coverage without excluding runs or changing any descriptive estimator.
     """
     snapshot: list[RunTrace] = []
     for run in runs:
@@ -690,6 +692,8 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
     if not runs:
         return {
             "n_runs": 0,
+            "n_zero_successful_source_runs": 0,
+            "n_zero_verified_claim_runs": 0,
             "completion_rate": 0.0,
             "avg_sources": 0.0,
             "avg_successful_sources": 0.0,
@@ -714,6 +718,15 @@ def aggregate_runs(runs: Sequence[RunTrace]) -> dict:
 
         summary = {
             "n_runs": len(runs),
+            # Keep zero-evidence runs in the original mean denominators while
+            # disclosing how often there was no successful retrieval or no
+            # verifiable claim. Neither count implies a measured zero effect.
+            "n_zero_successful_source_runs": sum(
+                run.successful_source_count == 0 for run in runs
+            ),
+            "n_zero_verified_claim_runs": sum(
+                run.verified_claim_count == 0 for run in runs
+            ),
             "completion_rate": safe_mean(1.0 if run.completed else 0.0 for run in runs),
             "avg_sources": safe_mean(float(run.source_count) for run in runs),
             "avg_successful_sources": safe_mean(

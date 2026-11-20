@@ -92,6 +92,34 @@ post-collection automated analysis. The pilot remains diagnostic,
 retrospective sensitivity analysis exploratory, and actual independently
 blinded human ratings and original artifact authentication outstanding.
 
+### Explicit evidence-absence denominators in diagnostic run summaries (20 November 2026)
+
+Prospective `aggregate_runs` now reports two integer coverage counters alongside
+its unchanged per-run means and total `n_runs`:
+`n_zero_successful_source_runs` counts runs with no successfully retrieved
+source (including both no attempts and all-failed attempts), while
+`n_zero_verified_claim_runs` counts runs with no verifiable claim under
+`RunTrace.verified_claim_count` (including the legacy citation fallback).
+The counters also appear in `aggregate_runs_by_task` because it reuses the
+generic summary, and they are both zero for an empty population.
+
+A zero **verified-claim count** is not the same as an observed zero support
+rate on assessed claims. For example, a run with exclusively unsupported
+assessed claims counts as having verified claims, whereas an unassessed run
+does not. Historical zero-denominator rates, failed/zero-source inclusion,
+and all existing estimates remain unchanged; the new counters disclose this
+distinction rather than retrospectively selecting or reweighting runs. The
+synthetic one-pass regression tests both cases and retains all five runs in
+its original means.
+
+This is an in-memory diagnostic coverage disclosure, **not** independent
+authentication of source material, recovery of the missing original
+report/trace pairs, a change to the frozen 10-task automated analysis, or
+new human evidence. The five-task pilot remains diagnostic; post-collection
+analysis planning, fixed order and evaluator-policy comparability still
+qualify the historical designated-primary automated results. Retrospective
+sensitivity analyses remain exploratory and blinded human validation pending.
+
 ### One-population diagnostic aggregation (prospective only)
 
 `logic.evaluation.aggregate_runs` now takes **one in-memory tuple snapshot**

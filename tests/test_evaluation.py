@@ -323,6 +323,36 @@ def test_aggregate_runs():
     assert summary["median_estimated_cost_usd"] == pytest.approx(0.035)
 
 
+def test_aggregate_runs_discloses_evidence_absence_without_changing_denominators():
+    # Distinguish absence of a verifiable claim from a measured unsupported
+    # claim. Failed and zero-evidence runs remain in the means, never dropped.
+    traces = [
+        RunTrace(run_id="no-attempt", completed=False, source_count=0),
+        RunTrace(
+            run_id="all-retrievals-failed", completed=True,
+            source_count=2, failed_source_count=2,
+        ),
+        RunTrace(run_id="retrieved-unscored", completed=True, source_count=1),
+        RunTrace(
+            run_id="assessed-unsupported", completed=True, source_count=1,
+            unsupported_claim_count=2,
+        ),
+        RunTrace(
+            run_id="assessed-supported", completed=True, source_count=1,
+            supported_claim_count=1,
+        ),
+    ]
+    summary = aggregate_runs(iter(traces))
+    assert summary["n_runs"] == 5
+    assert summary["n_zero_successful_source_runs"] == 2
+    assert summary["n_zero_verified_claim_runs"] == 3
+    assert summary["completion_rate"] == pytest.approx(0.8)
+    assert summary["avg_successful_sources"] == pytest.approx(0.6)
+    assert summary["avg_claim_support_rate"] == pytest.approx(0.2)
+    assert aggregate_runs([])["n_zero_successful_source_runs"] == 0
+    assert aggregate_runs([])["n_zero_verified_claim_runs"] == 0
+
+
 @pytest.mark.parametrize("completed", [None, "False", 1])
 def test_aggregate_runs_rejects_unvalidated_duck_typed_records(completed):
     # This impostor exposes every derived field used by the aggregator, so
