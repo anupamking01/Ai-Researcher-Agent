@@ -1378,6 +1378,22 @@ candidate minus baseline; no new hypothesis test or significance claim is
 introduced. One-pass trace/task iterables work, and input order does not alter
 the seeded output.
 
+The returned `rate_denominator_coverage` provides task-matched exposure
+bookkeeping for the selected metric: `denominator_field` and
+`n_both_positive`, `n_baseline_only_positive`,
+`n_candidate_only_positive`, and `n_neither_positive`.
+These four counts always sum to `n_pairs` and include failed runs.
+The relevant denominators are `verified_claim_count` for strict
+`claim_support_rate`, `source_count` for source success,
+and `citation_count` for the legacy citation proxy.
+A zero-denominator rate remains zero under the existing compatibility
+convention, but its exposure status is now visible instead of silently
+looking like a measured zero. **Positive denominator does not establish
+validated evidence**: in particular, the legacy `verified_claim_count`
+can fall back to citation count when explicit claim-support labels are absent.
+The disclosure neither excludes any task nor changes the numerical paired
+estimate, bootstrap draws, confidence interval, or frozen analyses.
+
 This adapter checks **in-memory identity consistency only**. The independent
 task/question reference must itself be authenticated elsewhere; matching
 `RunTrace` metadata is not proof of report/trace source custody, treatment

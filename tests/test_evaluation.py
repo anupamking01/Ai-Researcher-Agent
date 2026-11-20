@@ -1920,6 +1920,92 @@ def test_run_trace_bootstrap_supports_only_preselected_rate_metrics(metric, esti
     )["mean_delta"] == estimate
 
 
+@pytest.mark.parametrize(
+    "metric",
+    ("claim_support_rate", "source_success_rate", "citation_precision_proxy"),
+)
+def test_paired_trace_discloses_task_matched_rate_denominator_coverage(metric):
+    # Four synthetic tasks exercise every possible arm-level denominator
+    # pattern. The paired estimates must still include all four zero-filled
+    # tasks, without selecting only those with favorable observed values.
+    questions = {task: f"Frozen synthetic question {task}?" for task in "abcd"}
+    def record(task, variant, *, positive):
+        values = {
+            "run_id": f"{variant}-{task}",
+            "completed": positive,
+            "source_count": 0,
+            "variant_id": variant,
+            "task_set_id": "prospective-paired",
+            "task_id": task,
+            "question": questions[task],
+        }
+        if positive:
+            field = {
+                "claim_support_rate": "supported_claim_count",
+                "source_success_rate": "source_count",
+                "citation_precision_proxy": "citation_count",
+            }[metric]
+            values[field] = 1
+        return RunTrace(**values)
+
+    baseline = [record(task, "D3", positive=task in "ab") for task in "dbca"]
+    candidate = [record(task, "D6", positive=task in "ac") for task in "cbad"]
+    result = paired_run_trace_bootstrap_by_task(
+        iter(baseline), iter(candidate),
+        baseline_variant_id="D3", candidate_variant_id="D6",
+        task_set_id="prospective-paired", expected_task_ids=iter("dcab"),
+        expected_questions_by_task=questions, metric=metric,
+        n_resamples=101, seed=23,
+    )
+    denominator_field = {
+        "claim_support_rate": "verified_claim_count",
+        "source_success_rate": "source_count",
+        "citation_precision_proxy": "citation_count",
+    }[metric]
+    assert result["rate_denominator_coverage"] == {
+        "denominator_field": denominator_field,
+        "n_both_positive": 1,
+        "n_baseline_only_positive": 1,
+        "n_candidate_only_positive": 1,
+        "n_neither_positive": 1,
+    }
+    direct = paired_bootstrap_confidence_interval_by_task(
+        ((trace.task_id, getattr(trace, metric)) for trace in baseline),
+        ((trace.task_id, getattr(trace, metric)) for trace in candidate),
+        expected_task_ids="abcd", n_resamples=101, seed=23,
+    )
+    # The new reporting-only metadata must not change the numeric estimand,
+    # bootstrap draws, pairing or task denominator.
+    assert all(result[key] == value for key, value in direct.items())
+    assert result["n_pairs"] == 4
+
+
+def test_paired_claim_denominator_disclosure_does_not_imply_labeled_evidence():
+    # Under the legacy RunTrace convention, citations can supply a numeric
+    # denominator when no supported/partial/unsupported/contradicted labels
+    # exist. Report denominator presence without claiming human verification.
+    baseline = [
+        _paired_run_trace("a", "D3", citation_count=2,
+                          supported_claim_count=0, unsupported_claim_count=0),
+        _paired_run_trace("b", "D3", completed=False),
+    ]
+    candidate = [
+        _paired_run_trace("a", "D6", supported_claim_count=1,
+                          unsupported_claim_count=0),
+        _paired_run_trace("b", "D6", completed=False),
+    ]
+    result = _compare_paired_traces(iter(baseline), iter(candidate))
+    assert baseline[0].claim_support_rate == 0.0
+    assert result["rate_denominator_coverage"] == {
+        "denominator_field": "verified_claim_count",
+        "n_both_positive": 1,
+        "n_baseline_only_positive": 0,
+        "n_candidate_only_positive": 0,
+        "n_neither_positive": 1,
+    }
+    assert result["n_pairs"] == 2
+
+
 @pytest.mark.parametrize("bad_metric", ["estimated_cost_usd", "question", "", None, True])
 def test_run_trace_bootstrap_rejects_unapproved_or_non_numeric_metric(bad_metric):
     with pytest.raises(ValueError, match="supported higher-is-better"):

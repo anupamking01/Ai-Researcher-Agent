@@ -1048,6 +1048,38 @@ def paired_run_trace_bootstrap_by_task(
         disallowed_run_ids={trace.run_id for trace in baseline},
     )
 
+    # The compatibility convention returns zero for rates with a zero
+    # denominator. Expose arm-matched denominator availability independently
+    # from those seeded numeric estimates: a zero from missing exposure is
+    # not the same observation as a measured zero with a positive denominator.
+    # Count all tasks, including failures; never subset the paired analysis.
+    denominator_field = {
+        "claim_support_rate": "verified_claim_count",
+        "source_success_rate": "source_count",
+        "citation_precision_proxy": "citation_count",
+    }[metric]
+    baseline_by_task = {trace.task_id: trace for trace in baseline}
+    candidate_by_task = {trace.task_id: trace for trace in candidate}
+    denominator_coverage = {
+        "denominator_field": denominator_field,
+        "n_both_positive": 0,
+        "n_baseline_only_positive": 0,
+        "n_candidate_only_positive": 0,
+        "n_neither_positive": 0,
+    }
+    for task_id in task_ids:
+        baseline_positive = getattr(baseline_by_task[task_id], denominator_field) > 0
+        candidate_positive = getattr(candidate_by_task[task_id], denominator_field) > 0
+        if baseline_positive and candidate_positive:
+            bucket = "n_both_positive"
+        elif baseline_positive:
+            bucket = "n_baseline_only_positive"
+        elif candidate_positive:
+            bucket = "n_candidate_only_positive"
+        else:
+            bucket = "n_neither_positive"
+        denominator_coverage[bucket] += 1
+
     paired = paired_bootstrap_confidence_interval_by_task(
         ((trace.task_id, getattr(trace, metric)) for trace in baseline),
         ((trace.task_id, getattr(trace, metric)) for trace in candidate),
@@ -1061,6 +1093,7 @@ def paired_run_trace_bootstrap_by_task(
         "candidate_variant_id": candidate_variant_id,
         "task_set_id": task_set_id,
         "metric": metric,
+        "rate_denominator_coverage": denominator_coverage,
         **paired,
     }
 
