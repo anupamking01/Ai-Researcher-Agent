@@ -239,3 +239,32 @@ traces or proof of provider billing. Pilot findings remain diagnostic;
 historical automated comparisons retain post-collection chronology and
 evaluator-policy comparability qualifications; retrospective sensitivity
 findings remain exploratory; blinded human validation remains pending.
+
+## Prospective completion finish-reason integrity (21 November 2026)
+
+The pinned provider can return a textual completion with an explicit
+`finish_reason` such as `length` (token-limit truncation),
+`content_filter` (filtered text), or `tool_calls` (not a supported textual
+report in this adapter). Previously both streaming and non-streaming paths
+could return that text as a successfully completed research output. A partial
+or censored report must not silently enter prospective evaluation as a normal
+finished report.
+
+The adapter now rejects **explicit non-`stop` finish reasons** in both
+paths, including malformed non-string reasons. A normal `stop` remains
+accepted; a missing or `None` reason is still accepted to preserve legacy
+provider/mock envelopes. The streaming check occurs before forwarding any
+text from the flagged frame, though text from earlier frames cannot be
+retracted. A completed non-streaming provider response still contributes its
+reported token usage exactly once; streaming usage remains unavailable.
+This is a **prospective validity guard**, not evidence that historical
+outputs were truncated or a change to frozen outcomes. It does not
+authenticate missing finish-reason envelopes or guarantee that every
+stream terminated cleanly. Offline synthetic regressions exercise accepted
+and rejected outcomes, response preservation, and usage accounting.
+
+The pilot remains diagnostic; the frozen automated study retains
+post-collection planning and evaluator-policy comparability qualifications;
+retrospective sensitivity findings are exploratory, not prospectively
+confirmatory; independently authenticated original artifacts and genuine
+blinded human ratings remain outstanding.

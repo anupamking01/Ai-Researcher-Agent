@@ -4147,3 +4147,81 @@ def test_stream_adapter_accepts_role_terminal_and_empty_content_frames(monkeypat
     ]
     assert tracker.snapshot()["model_calls"] == 1
     assert tracker.snapshot()["unavailable_calls"] == 1
+
+# A provider may return textual content yet explicitly signal truncation,
+# content filtering, or an unsupported tool-call output. Such a report is not
+# a normally completed research output, even though the call was attempted.
+@pytest.mark.parametrize(
+    "finish_reason",
+    ["length", "content_filter", "tool_calls", "unexpected", False, 3],
+    ids=["token-limit", "content-filter", "tool-calls", "unknown", "bool", "integer"],
+)
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+def test_chat_adapter_rejects_explicit_nonstop_finish_reason(
+    monkeypatch, stream, finish_reason
+):
+    import asyncio
+
+    attempts = []
+
+    def provider_create(**kwargs):
+        attempts.append(kwargs)
+        if stream:
+            return iter([
+                {"choices": [{"delta": {"content": "partial synthetic report"}}]},
+                {"choices": [{"delta": {}, "finish_reason": finish_reason}]},
+            ])
+        return {
+            "choices": [{
+                "message": {"content": "partial synthetic report"},
+                "finish_reason": finish_reason,
+            }],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
+        }
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    with pytest.raises(ValueError, match="finish_reason"):
+        response = adapter.create_chat_completion(
+            model="synthetic-model", messages=[], stream=stream,
+            usage_tracker=tracker,
+        )
+        if stream:
+            asyncio.run(response)
+    assert len(attempts) == 1
+    ledger = tracker.snapshot()
+    assert ledger["model_calls"] == 1
+    assert ledger["unavailable_calls"] == int(stream)
+    assert ledger["total_tokens"] == (0 if stream else 7)
+    assert ledger["by_model"]["synthetic-model"]["model_calls"] == 1
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+@pytest.mark.parametrize("finish_reason", ["stop", None], ids=["stop", "legacy-none"])
+def test_chat_adapter_accepts_normal_or_legacy_finish_reason(
+    monkeypatch, stream, finish_reason
+):
+    import asyncio
+
+    def provider_create(**kwargs):
+        if stream:
+            return iter([
+                {"choices": [{"delta": {"content": "complete synthetic report"}}]},
+                {"choices": [{"delta": {}, "finish_reason": finish_reason}]},
+            ])
+        return {
+            "choices": [{
+                "message": {"content": "complete synthetic report"},
+                "finish_reason": finish_reason,
+            }],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        }
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    response = adapter.create_chat_completion(
+        model="synthetic-model", messages=[], stream=stream, usage_tracker=tracker,
+    )
+    assert (asyncio.run(response) if stream else response) == "complete synthetic report"
+    assert tracker.snapshot()["model_calls"] == 1
+    assert tracker.snapshot()["unavailable_calls"] == int(stream)

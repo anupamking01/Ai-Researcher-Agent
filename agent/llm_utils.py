@@ -26,6 +26,24 @@ CFG = Config()
 OPENAI_REQUEST_TIMEOUT_SECONDS = 150
 
 
+def _validate_finish_reason(choice: Any, *, source: str) -> None:
+    """Reject a provider-declared truncated or non-text completion.
+
+    A missing/None reason is retained for older provider envelopes, but an
+    explicit reason other than 'stop' must not certify a research report as
+    successfully completed (e.g. 'length' or 'content_filter').
+    """
+    try:
+        try:
+            reason = choice.get("finish_reason", None)
+        except AttributeError:
+            reason = getattr(choice, "finish_reason", None)
+    except Exception as exc:
+        raise ValueError(f"provider {source} finish_reason is unreadable") from exc
+    if reason is not None and (type(reason) is not str or reason != "stop"):
+        raise ValueError(f"provider {source} finish_reason is not normal completion")
+
+
 def _choice_content(response: Any) -> str:
     """Require a well-formed textual completion rather than fabricating an empty one.
 
@@ -33,11 +51,13 @@ def _choice_content(response: Any) -> str:
     response is a failed output, not evidence that the model answered "".
     """
     try:
-        content = response["choices"][0]["message"]["content"]
+        choice = response["choices"][0]
+        content = choice["message"]["content"]
     except (KeyError, IndexError, TypeError, AttributeError) as exc:
         raise ValueError("provider response missing a textual assistant message") from exc
     if not isinstance(content, str):
         raise ValueError("provider response assistant content must be text")
+    _validate_finish_reason(choice, source="completion")
     return content
 
 
@@ -79,12 +99,14 @@ async def _stream_completion(
         # envelope or a present non-text content field is different: skipping
         # it could turn a truncated stream into a successful research report.
         try:
-            content = chunk["choices"][0]["delta"].get("content", "")
+            choice = chunk["choices"][0]
+            content = choice["delta"].get("content", "")
         except (KeyError, IndexError, AttributeError, TypeError) as exc:
             raise ValueError("provider stream chunk missing a valid delta") from exc
 
         if not isinstance(content, str):
             raise ValueError("provider stream delta content must be text")
+        _validate_finish_reason(choice, source="stream")
         if not content:
             continue
 
