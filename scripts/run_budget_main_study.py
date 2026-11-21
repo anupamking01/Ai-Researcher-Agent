@@ -1015,7 +1015,7 @@ def _validated_trace_cost(
     # certified. Future marked completed cells must conserve source provenance.
     if completed and "search_provenance_schema" in trace:
         try:
-            validate_search_trace_provenance(trace)
+            validate_search_trace_provenance(trace, experiment=experiment)
         except ValueError as exc:
             raise SystemExit(
                 f"Invalid treatment trace {path}: search provenance {exc}"

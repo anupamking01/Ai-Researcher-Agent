@@ -413,7 +413,7 @@ def test_versioned_search_trace_is_emitted_and_checked_by_runner():
         )
     ]
     assert len(stamped) == 1
-    assert 'validate_search_trace_provenance(trace)' in runner_text
+    assert 'validate_search_trace_provenance(trace, experiment=experiment)' in runner_text
 
 
 def _request_bound_search_custody_fixture():
@@ -634,4 +634,111 @@ def test_schema3_incomplete_plan_is_preserved_without_fabricating_queries():
     from logic.search_provenance import validate_search_trace_provenance
     trace = _treatment_bound_direct_fixture()
     trace.update(completed=False, planning_mode=None, question=None)
+    validate_search_trace_provenance(trace)
+
+
+# Schema 4: the trace's treatment factors and the independently persisted
+# ExperimentConfig envelope must both match the fixed four-arm assignment.
+# All synthetic records are offline; no treatment or evaluator is executed.
+def _factor_bound_fixture(variant):
+    from copy import deepcopy
+    factors = {
+        "D3": ("direct", 3, "none"),
+        "D6": ("direct", 6, "none"),
+        "P6": ("planner", 6, "none"),
+        "P6V": ("planner", 6, "verify"),
+    }
+    mode, budget, verification = factors[variant]
+    trace = deepcopy(
+        _treatment_bound_direct_fixture() if mode == "direct"
+        else _treatment_bound_planner_fixture()
+    )
+    trace.update(
+        search_provenance_schema=4,
+        variant_id=variant,
+        source_budget=budget,
+        verification_mode=verification,
+    )
+    if mode == "direct":
+        trace["search_records"][0]["requested_candidate_limit"] = min(budget * 2, 20)
+    else:
+        # Six slots over four planner queries: 2, 2, 1, 1. All funded
+        # searches must appear, even when the provider returns an outage.
+        trace["search_records"][0]["requested_candidate_limit"] = 4
+        trace["search_records"][1]["requested_candidate_limit"] = 4
+        for query in ("q3", "q4"):
+            trace["search_records"].append({
+                "query": query,
+                "requested_candidate_limit": 2,
+                "candidate_urls": [], "candidate_sources": [],
+                "scheduled_urls": [], "scheduled_sources": [],
+                "search_error": "synthetic provider outage",
+            })
+        trace["search_call_count"] = 4
+    experiment = {
+        "variant_id": variant,
+        "planning_mode": mode,
+        "source_budget": budget,
+        "verification_mode": verification,
+    }
+    return trace, experiment
+
+
+@pytest.mark.parametrize("variant", ["D3", "D6", "P6", "P6V"])
+def test_schema4_accepts_all_frozen_treatment_factor_assignments(variant):
+    from logic.search_provenance import validate_search_trace_provenance
+    trace, experiment = _factor_bound_fixture(variant)
+    validate_search_trace_provenance(trace, experiment=experiment)
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda t: t.update(variant_id="D6"),
+    lambda t: t.update(variant_id="unknown"),
+    lambda t: t.update(verification_mode="verify"),
+    lambda t: t.update(verification_mode=None),
+    lambda t: t.update(source_budget=6),
+    lambda t: t.update(source_budget=True),
+    lambda t: t.pop("variant_id"),
+])
+def test_schema4_rejects_forged_completed_trace_factors(mutate):
+    from logic.search_provenance import validate_search_trace_provenance
+    trace, experiment = _factor_bound_fixture("D3")
+    mutate(trace)
+    with pytest.raises(ValueError, match="treatment factor"):
+        validate_search_trace_provenance(trace, experiment=experiment)
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda e: e.update(variant_id="P6V"),
+    lambda e: e.update(planning_mode="direct"),
+    lambda e: e.update(verification_mode="verify"),
+    lambda e: e.update(source_budget=3),
+    lambda e: e.update(source_budget=True),
+    lambda e: e.pop("source_budget"),
+])
+def test_schema4_rejects_conflicting_persisted_experiment_envelope(mutate):
+    from logic.search_provenance import validate_search_trace_provenance
+    trace, experiment = _factor_bound_fixture("P6")
+    mutate(experiment)
+    with pytest.raises(ValueError, match="treatment factor"):
+        validate_search_trace_provenance(trace, experiment=experiment)
+
+
+def test_schema4_missing_envelope_is_not_silently_certified():
+    from logic.search_provenance import validate_search_trace_provenance
+    trace, _ = _factor_bound_fixture("P6V")
+    with pytest.raises(ValueError, match="treatment factor"):
+        validate_search_trace_provenance(trace)
+
+
+def test_schema4_incomplete_trace_does_not_invent_missing_factors():
+    from logic.search_provenance import validate_search_trace_provenance
+    trace, _ = _factor_bound_fixture("D3")
+    trace.update(completed=False, variant_id=None, verification_mode=None)
+    validate_search_trace_provenance(trace)
+
+
+def test_schema3_remains_valid_without_schema4_envelope_certification():
+    from logic.search_provenance import validate_search_trace_provenance
+    trace = _treatment_bound_direct_fixture()
     validate_search_trace_provenance(trace)

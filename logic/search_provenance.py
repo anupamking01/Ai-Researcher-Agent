@@ -180,19 +180,37 @@ def selected_search_sources(
 
 
 # Explicitly prospective; historical traces without the marker are not certified.
-SEARCH_TRACE_PROVENANCE_SCHEMA = 3
-# Earlier prospective versions retain their original, narrower contracts.
+SEARCH_TRACE_PROVENANCE_SCHEMA = 4
+# Historical prospective versions retain their original, narrower contracts.
+TREATMENT_PLAN_SEARCH_TRACE_PROVENANCE_SCHEMA = 3
 REQUEST_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA = 2
 LEGACY_SEARCH_TRACE_PROVENANCE_SCHEMA = 1
 
+# Frozen main-study assignments. Checked independently of the claimed
+# treatment trace and persisted ExperimentConfig envelope, so a valid-looking
+# retrieval ledger cannot be attributed to a different experimental arm.
+_FROZEN_TREATMENT_FACTORS = {
+    "D3": ("direct", 3, "none"),
+    "D6": ("direct", 6, "none"),
+    "P6": ("planner", 6, "none"),
+    "P6V": ("planner", 6, "verify"),
+}
 
-def validate_search_trace_provenance(trace: dict) -> None:
-    """Conserve ordered query, candidate, scheduled-source and browse ledgers."""
+
+def validate_search_trace_provenance(
+    trace: dict, *, experiment: dict | None = None
+) -> None:
+    """Conserve ordered retrieval ledgers and prospective treatment identity.
+
+    Schema 4 additionally requires the persisted experiment envelope for
+    completed runs. Earlier schemas are not retroactively certified.
+    """
     if type(trace) is not dict or (
         type(trace.get("search_provenance_schema")) is not int
         or trace["search_provenance_schema"] not in (
             LEGACY_SEARCH_TRACE_PROVENANCE_SCHEMA,
             REQUEST_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA,
+            TREATMENT_PLAN_SEARCH_TRACE_PROVENANCE_SCHEMA,
             SEARCH_TRACE_PROVENANCE_SCHEMA,
         )
     ):
@@ -222,7 +240,7 @@ def validate_search_trace_provenance(trace: dict) -> None:
     # Preserve incomplete runs even when planning could not finish, and do
     # not retroactively strengthen earlier schemas.
     if (
-        trace["search_provenance_schema"] == SEARCH_TRACE_PROVENANCE_SCHEMA
+        trace["search_provenance_schema"] >= TREATMENT_PLAN_SEARCH_TRACE_PROVENANCE_SCHEMA
         and trace.get("completed") is True
     ):
         mode = trace.get("planning_mode")
@@ -237,6 +255,32 @@ def validate_search_trace_provenance(trace: dict) -> None:
                 raise ValueError("planner search plan must contain exactly four queries")
         else:
             raise ValueError("completed search plan has invalid planning mode")
+
+    # Schema 4 ties the persisted experimental arm to BOTH the trace factors
+    # and the independent ExperimentConfig envelope. A correctly accounted
+    # direct search must not be misreported as a verification treatment, and
+    # the envelope cannot silently disagree with the serialized trace.
+    if (
+        trace["search_provenance_schema"] == SEARCH_TRACE_PROVENANCE_SCHEMA
+        and trace.get("completed") is True
+    ):
+        variant = trace.get("variant_id")
+        factors = (
+            _FROZEN_TREATMENT_FACTORS.get(variant)
+            if type(variant) is str else None
+        )
+        if factors is None or type(experiment) is not dict:
+            raise ValueError("completed treatment factor identity or envelope missing")
+        planning_mode, budget, verification_mode = factors
+        for source in (trace, experiment):
+            if (
+                source.get("variant_id") != variant
+                or source.get("planning_mode") != planning_mode
+                or type(source.get("source_budget")) is not int
+                or source["source_budget"] != budget
+                or source.get("verification_mode") != verification_mode
+            ):
+                raise ValueError("completed treatment factors disagree with frozen arm")
 
     # Schema 2+ binds the requested candidate count to the allocated query
     # slot and remaining browse budget. Schema 1 cannot establish this.

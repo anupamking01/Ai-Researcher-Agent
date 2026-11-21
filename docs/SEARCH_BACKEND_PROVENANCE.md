@@ -277,3 +277,37 @@ human rating was produced. The pilot remains diagnostic, frozen automated
 inference remains post-collection and qualified by fixed-order and evaluator
 comparability limitations, retrospective sensitivities are exploratory,
 and independent human validation remains pending.
+
+
+## Prospective frozen-arm treatment-factor custody (21 November 2026)
+
+Schema-3 completed traces could demonstrate that a direct search used its
+exact original question, or that a planner emitted four queries, without
+independently binding the recorded **variant ID, source budget and
+verification mode** to the predeclared D3/D6/P6/P6V treatment assignment.
+A locally consistent direct retrieval ledger could thus misstate whether
+treatment-time verification was enabled. A separately persisted
+`experiment` envelope might also disagree with its own trace.
+
+Schema **4** now fails closed on completed traces unless *both* the trace
+and the saved ExperimentConfig envelope agree on the frozen factors:
+D3 = direct / 3 attempted browses / no verification;
+D6 = direct / 6 / no verification;
+P6 = planner / 6 / no verification;
+P6V = planner / 6 / verification. Unknown variant identifiers, Boolean
+budgets, missing envelopes and any conflicting factor fail validation.
+The noncanonical study runner passes the independently persisted
+experiment envelope to the validator. Existing query-plan, candidate,
+schedule and browse-outcome reconciliation remains in force.
+
+The check does not authenticate the physical execution of a model or
+verifier, external search results, or historical source documents.
+Previously recorded schemas 1–3 are not retroactively certified for
+this new factor-envelope invariant. Incomplete traces remain preservable
+without fabricated treatment factors. Offline synthetic cases exercise
+all four correct assignments, altered trace/envelope factors, missing
+envelopes, and backward compatibility; no treatment, evaluator or human
+rating was rerun. The five-task pilot remains diagnostic, frozen
+automated findings remain post-collection with fixed-order and
+evaluator-policy caveats, retrospective sensitivity analyses stay
+exploratory, and genuine blinded human validation remains pending.
