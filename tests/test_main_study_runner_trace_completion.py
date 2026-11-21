@@ -287,9 +287,12 @@ def test_prior_report_change_cannot_be_hidden_by_new_completed_trace(
             prior_report_fingerprints=report_pins,
         )
 
-@pytest.mark.parametrize("malformed_trace", [False, True])
-def test_agent_return_without_valid_trace_stops_and_records_failure(
-    tmp_path, monkeypatch, malformed_trace,
+@pytest.mark.parametrize("failure_mode", [
+    "missing_trace", "malformed_trace",
+    "cancelled_missing_trace", "cancelled_malformed_trace",
+])
+def test_agent_failure_or_cancellation_records_attempt(
+    tmp_path, monkeypatch, failure_mode,
 ):
     """The stub never performs provider calls or publishes experimental data."""
     monkeypatch.setattr(study, "REPO_ROOT", tmp_path)
@@ -319,10 +322,12 @@ def test_agent_return_without_valid_trace_stops_and_records_failure(
 
     async def fake_agent(**kwargs):
         attempts.append(kwargs["experiment_config"].variant_id)
-        if malformed_trace:
+        if failure_mode.endswith("malformed_trace"):
             broken = study.TRACE_ROOT / "D3" / "run-1.json"
             broken.parent.mkdir(parents=True, exist_ok=True)
             broken.write_text("{not valid JSON", encoding="utf-8")
+        if failure_mode.startswith("cancelled_"):
+            raise asyncio.CancelledError("synthetic cancellation; no provider calls")
         return "Synthetic report", "synthetic-report.md"
 
     actual_import = study.importlib.import_module
@@ -334,8 +339,12 @@ def test_agent_return_without_valid_trace_stops_and_records_failure(
         return actual_import(name)
 
     monkeypatch.setattr(study.importlib, "import_module", fake_import)
-    with pytest.raises(SystemExit, match="stopped after D3/main-01 status=failed"):
-        asyncio.run(study._run_main_study())
+    if failure_mode.startswith("cancelled_"):
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(study._run_main_study())
+    else:
+        with pytest.raises(SystemExit, match="stopped after D3/main-01 status=failed"):
+            asyncio.run(study._run_main_study())
     progress = json.loads(
         (tmp_path / "outputs" / "main_study_progress.json").read_text()
     )
@@ -345,14 +354,17 @@ def test_agent_return_without_valid_trace_stops_and_records_failure(
     assert progress["failed_runs"] == 1
     assert progress["current"] is None
     assert progress["events"][0]["status"] == "failed"
-    if malformed_trace:
+    if failure_mode.startswith("cancelled_"):
+        assert "CancelledError: treatment interrupted" in progress["events"][0]["error"]
+    if failure_mode.endswith("malformed_trace"):
         assert progress["estimated_treatment_cost_usd"] is None
         assert progress["trace_cost_reconciliation"] == "unverifiable"
         assert "post-treatment trace spend cannot be verified" in progress["events"][0]["error"]
     else:
         assert progress["estimated_treatment_cost_usd"] == 0
         assert progress["trace_cost_reconciliation"] == "recomputed_from_retained_traces"
-        assert "exactly one new trace" in progress["events"][0]["error"]
+        if failure_mode == "missing_trace":
+            assert "exactly one new trace" in progress["events"][0]["error"]
 
 
 def test_completed_report_gate_reuses_bounded_trace_capture(

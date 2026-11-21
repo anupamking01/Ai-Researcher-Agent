@@ -180,3 +180,29 @@ report custody or human validation. The five-task pilot is diagnostic; frozen
 automated results retain post-collection planning, fixed treatment-order and
 evaluator-policy limitations, retrospective sensitivities are exploratory,
 and independent human ratings remain pending. No treatment or evaluator reruns.
+
+### Durable cancellation accounting (22 November 2026)
+
+Python 3.11's `asyncio.CancelledError` inherits from `BaseException`, not
+`Exception`. An interrupted agent task previously bypassed the runner's
+ordinary error handler after the post-call Git check, potentially leaving the
+durable progress record showing an **active but uncounted** treatment. This is
+particularly misleading when an interruption occurs after model requests have
+started, and must not be interpreted as an unattempted cell eligible for replay.
+
+The noncanonical runner now catches this specific cancellation, marks the cell
+**failed** (not completed or scientifically timed out), reconciles available
+retained trace spend, writes the terminal progress event with `current=null`,
+then **re-raises the original cancellation**. If trace spend cannot be verified,
+the existing `unverifiable`/JSON-null accounting remains in force; cancellation
+never silently resets costs to zero. No subsequent treatment runs. The offline
+regressions inject synthetic cancellation both without a trace and with a
+malformed trace; no provider calls, treatment reruns or research scores occur.
+
+This only covers cooperative Python task cancellation after the runner reaches
+its treatment exception handler. It cannot guarantee durable writes after
+`SIGKILL`, process crashes, disk failure or a second interruption during
+cleanup, nor authenticate historical September artifacts. The pilot remains
+diagnostic, frozen automated comparisons retain post-collection and
+fixed-order/evaluator-policy caveats, exploratory sensitivities remain
+exploratory, and human validation has not taken place.

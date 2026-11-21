@@ -1709,6 +1709,7 @@ async def _run_main_study() -> None:
 
             status = "completed"
             error = None
+            cancelled_task = None
             prior_trace_paths = _treatment_trace_paths()
             try:
                 _require_source_state_unchanged(
@@ -1743,6 +1744,13 @@ async def _run_main_study() -> None:
                     task_question=task["question"],
                     pricing=pricing,
                 )
+            except asyncio.CancelledError as exc:
+                # Cancellation is a BaseException on supported Python versions.
+                # Record the attempted treatment before propagating the signal;
+                # otherwise progress remains active with zero attempts.
+                status = "failed"
+                error = "CancelledError: treatment interrupted; completion not certified"
+                cancelled_task = exc
             except Exception as exc:
                 status = "timeout" if isinstance(exc, TimeoutError) else "failed"
                 error = f"{type(exc).__name__}: {str(exc)[:800]}"
@@ -1783,6 +1791,10 @@ async def _run_main_study() -> None:
             )
             _write_json("main_study_progress.json", progress)
 
+            # Preserve cancellation semantics after the durable failure event.
+            # The next treatment must never run after an interrupted attempt.
+            if cancelled_task is not None:
+                raise cancelled_task
             if status != "completed":
                 raise SystemExit(f"Main study stopped after {variant_id}/{task['id']} status={status}: {error}")
 
