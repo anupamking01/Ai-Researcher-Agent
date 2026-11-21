@@ -1,6 +1,7 @@
 # Description: Research assistant class that handles the research process for a given question.
 
 import asyncio
+import hashlib
 import json
 import os
 import uuid
@@ -62,6 +63,7 @@ class ResearchAgent:
         self.browse_success_count = 0
         self.browse_failure_count = 0
         self.verification_result = None
+        self.verification_artifact_sha256 = None
 
     async def _log(self, output):
         if self.websocket is not None and hasattr(self.websocket, "send_json"):
@@ -331,10 +333,16 @@ class ResearchAgent:
         self.verification_result = result
         verification_path = f"./outputs/{self.directory_name}/verification.json"
         os.makedirs(os.path.dirname(verification_path), exist_ok=True)
-        write_to_file(
-            verification_path,
-            json.dumps(result, indent=2, ensure_ascii=False),
+        # Pin the exact UTF-8 bytes published for prospective verification
+        # custody; the independent runner subsequently rereads this file.
+        serialized = json.dumps(
+            result, indent=2, ensure_ascii=False, allow_nan=False
         )
+        with open(verification_path, "w", encoding="utf-8") as stream:
+            stream.write(serialized)
+        self.verification_artifact_sha256 = hashlib.sha256(
+            serialized.encode("utf-8")
+        ).hexdigest()
         return result
 
     async def create_concepts(self):

@@ -742,3 +742,163 @@ def test_schema3_remains_valid_without_schema4_envelope_certification():
     from logic.search_provenance import validate_search_trace_provenance
     trace = _treatment_bound_direct_fixture()
     validate_search_trace_provenance(trace)
+
+
+# Schema 5: source-independent, outcome-blind proof that a claimed verifier
+# treatment has a retained JSON receipt consistent with the trace ledger.
+def _verifier_bound_fixture(variant="P6V", *, status="ok"):
+    import hashlib
+    from logic.search_provenance import SEARCH_TRACE_PROVENANCE_SCHEMA
+
+    trace, experiment = _factor_bound_fixture(variant)
+    trace["search_provenance_schema"] = SEARCH_TRACE_PROVENANCE_SCHEMA
+    counters = {
+        "citation_count": 0, "supported_claim_count": 0,
+        "partially_supported_claim_count": 0,
+        "unsupported_claim_count": 0, "contradicted_claim_count": 0,
+    }
+    trace.update(counters)
+    if variant != "P6V":
+        trace.update(
+            verification_status="not_requested",
+            verification_artifact_sha256=None,
+        )
+        return trace, experiment, None
+
+    receipt = {
+        "status": status, "claims_checked": 2,
+        "supported": 1, "partially_supported": 1,
+        "unsupported": 0, "contradicted": 0, "examples": [],
+    }
+    if status == "parse_error":
+        receipt.update(
+            claims_checked=0, supported=0, partially_supported=0,
+            error="ValueError",
+        )
+    raw = json.dumps(receipt, ensure_ascii=False).encode("utf-8")
+    trace.update(
+        verification_status=status,
+        verification_artifact_sha256=hashlib.sha256(raw).hexdigest(),
+        citation_count=receipt["claims_checked"],
+        supported_claim_count=receipt["supported"],
+        partially_supported_claim_count=receipt["partially_supported"],
+    )
+    return trace, experiment, raw
+
+
+@pytest.mark.parametrize("variant", ["D3", "D6", "P6", "P6V"])
+def test_schema5_valid_frozen_arm_verification_receipts(variant):
+    from logic.search_provenance import (
+        validate_search_trace_provenance, validate_verifier_artifact,
+    )
+    trace, experiment, raw = _verifier_bound_fixture(variant)
+    validate_search_trace_provenance(trace, experiment=experiment)
+    if raw is not None:
+        validate_verifier_artifact(trace, raw)
+
+
+def test_schema5_accepts_retained_verifier_parse_error_without_inventing_claims():
+    from logic.search_provenance import (
+        validate_search_trace_provenance, validate_verifier_artifact,
+    )
+    trace, experiment, raw = _verifier_bound_fixture(status="parse_error")
+    validate_search_trace_provenance(trace, experiment=experiment)
+    validate_verifier_artifact(trace, raw)
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda t: t.update(verification_status="not_requested"),
+    lambda t: t.update(verification_status="repaired"),
+    lambda t: t.update(verification_artifact_sha256=None),
+    lambda t: t.update(verification_artifact_sha256="0" * 64),
+    lambda t: t.update(verification_artifact_sha256=True),
+    lambda t: t.update(citation_count=3),
+    lambda t: t.update(supported_claim_count=0),
+    lambda t: t.update(contradicted_claim_count=True),
+])
+def test_schema5_rejects_forged_verifier_trace_ledger(mutate):
+    from logic.search_provenance import validate_search_trace_provenance
+    trace, experiment, _ = _verifier_bound_fixture()
+    mutate(trace)
+    if trace.get("verification_artifact_sha256") == "0" * 64:
+        # A syntactically valid but forged digest is rejected against bytes
+        # by the separate retained-artifact validator, not the schema check.
+        from logic.search_provenance import validate_verifier_artifact
+        validate_search_trace_provenance(trace, experiment=experiment)
+        with pytest.raises(ValueError, match="SHA-256"):
+            validate_verifier_artifact(trace, _verifier_bound_fixture()[2])
+    else:
+        with pytest.raises(ValueError, match="verif"):
+            validate_search_trace_provenance(trace, experiment=experiment)
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda t: t.update(verification_status="ok"),
+    lambda t: t.update(verification_artifact_sha256="a" * 64),
+    lambda t: t.update(citation_count=1),
+])
+def test_schema5_non_verifier_arms_cannot_claim_verification(mutate):
+    from logic.search_provenance import validate_search_trace_provenance
+    trace, experiment, _ = _verifier_bound_fixture("D3")
+    mutate(trace)
+    with pytest.raises(ValueError, match="non-verifier"):
+        validate_search_trace_provenance(trace, experiment=experiment)
+
+
+@pytest.mark.parametrize("malformed", [
+    b"", b"not-json",
+    b'{"status":"ok","status":"ok"}',
+    b'{"status":"ok","examples":NaN}',
+])
+def test_schema5_rejects_malformed_retained_verifier_evidence(malformed):
+    import hashlib
+    from logic.search_provenance import validate_verifier_artifact
+    trace, _, _ = _verifier_bound_fixture()
+    trace["verification_artifact_sha256"] = hashlib.sha256(malformed).hexdigest()
+    with pytest.raises(ValueError, match="verifier artifact"):
+        validate_verifier_artifact(trace, malformed)
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda r: r.update(claims_checked=4),
+    lambda r: r.update(supported=0),
+    lambda r: r.update(status="parse_error"),
+    lambda r: r.update(examples="not-an-array"),
+])
+def test_schema5_rejects_digest_rebound_but_inconsistent_verifier_receipt(mutation):
+    import hashlib
+    from logic.search_provenance import validate_verifier_artifact
+    trace, _, raw = _verifier_bound_fixture()
+    receipt = json.loads(raw)
+    mutation(receipt)
+    corrupt = json.dumps(receipt).encode("utf-8")
+    trace["verification_artifact_sha256"] = hashlib.sha256(corrupt).hexdigest()
+    with pytest.raises(ValueError, match="verifier artifact"):
+        validate_verifier_artifact(trace, corrupt)
+
+
+def test_schema5_incomplete_verifier_trace_retains_uncertainty():
+    from logic.search_provenance import validate_search_trace_provenance
+    trace, experiment, _ = _verifier_bound_fixture()
+    trace.update(
+        completed=False, verification_status="not_requested",
+        verification_artifact_sha256=None,
+    )
+    validate_search_trace_provenance(trace, experiment=experiment)
+
+
+def test_schema4_remains_valid_without_physical_verifier_receipt():
+    from logic.search_provenance import validate_search_trace_provenance
+    trace, experiment = _factor_bound_fixture("P6V")
+    validate_search_trace_provenance(trace, experiment=experiment)
+
+
+def test_schema5_custody_wired_to_persisted_producer_and_runner():
+    root = Path(__file__).resolve().parents[1]
+    agent = (root / "logic/research_agent.py").read_text(encoding="utf-8")
+    run = (root / "logic/run.py").read_text(encoding="utf-8")
+    runner = (root / "scripts/run_budget_main_study.py").read_text(encoding="utf-8")
+    assert 'self.verification_artifact_sha256 = hashlib.sha256(' in agent
+    assert 'trace_payload["verification_artifact_sha256"] = getattr(' in run
+    assert '_read_treatment_trace_bytes(evidence_path)' in runner
+    assert 'validate_verifier_artifact(' in runner

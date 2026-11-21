@@ -42,7 +42,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from logic.search_provenance import validate_search_trace_provenance
+from logic.search_provenance import (
+    SEARCH_TRACE_PROVENANCE_SCHEMA,
+    validate_search_trace_provenance,
+    validate_verifier_artifact,
+)
 
 REQUIRED_ENV = ("OPENAI_API_KEY", "SMART_LLM_MODEL", "FAST_LLM_MODEL", "TEMPERATURE")
 DEFAULT_TASK_FILE = REPO_ROOT / "experiments" / "main_budget_tasks.json"
@@ -1019,6 +1023,24 @@ def _validated_trace_cost(
         except ValueError as exc:
             raise SystemExit(
                 f"Invalid treatment trace {path}: search provenance {exc}"
+            ) from exc
+
+    # Bind a completed verification treatment to the physical receipt, not
+    # merely a self-reported verification_mode flag or fabricated counts.
+    # The trace's verified run ID determines the only permitted local path.
+    if (
+        completed
+        and trace.get("search_provenance_schema") == SEARCH_TRACE_PROVENANCE_SCHEMA
+        and trace.get("verification_mode") == "verify"
+    ):
+        evidence_path = TRACE_ROOT.parent / run_id / "verification.json"
+        try:
+            validate_verifier_artifact(
+                trace, _read_treatment_trace_bytes(evidence_path)
+            )
+        except (ValueError, SystemExit) as exc:
+            raise SystemExit(
+                f"Invalid treatment trace {path}: verifier evidence {exc}"
             ) from exc
 
     latency_seconds = trace.get("latency_seconds")

@@ -6,6 +6,7 @@ proof of which external search engine produced any individual result.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -180,8 +181,9 @@ def selected_search_sources(
 
 
 # Explicitly prospective; historical traces without the marker are not certified.
-SEARCH_TRACE_PROVENANCE_SCHEMA = 4
+SEARCH_TRACE_PROVENANCE_SCHEMA = 5
 # Historical prospective versions retain their original, narrower contracts.
+FACTOR_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA = 4
 TREATMENT_PLAN_SEARCH_TRACE_PROVENANCE_SCHEMA = 3
 REQUEST_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA = 2
 LEGACY_SEARCH_TRACE_PROVENANCE_SCHEMA = 1
@@ -202,8 +204,9 @@ def validate_search_trace_provenance(
 ) -> None:
     """Conserve ordered retrieval ledgers and prospective treatment identity.
 
-    Schema 4 additionally requires the persisted experiment envelope for
-    completed runs. Earlier schemas are not retroactively certified.
+    Schema 4+ additionally requires the persisted experiment envelope.
+    Schema 5 binds completed verifier treatments to retained verifier receipts.
+    Earlier schemas are not retroactively certified.
     """
     if type(trace) is not dict or (
         type(trace.get("search_provenance_schema")) is not int
@@ -211,6 +214,7 @@ def validate_search_trace_provenance(
             LEGACY_SEARCH_TRACE_PROVENANCE_SCHEMA,
             REQUEST_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA,
             TREATMENT_PLAN_SEARCH_TRACE_PROVENANCE_SCHEMA,
+            FACTOR_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA,
             SEARCH_TRACE_PROVENANCE_SCHEMA,
         )
     ):
@@ -261,7 +265,7 @@ def validate_search_trace_provenance(
     # direct search must not be misreported as a verification treatment, and
     # the envelope cannot silently disagree with the serialized trace.
     if (
-        trace["search_provenance_schema"] == SEARCH_TRACE_PROVENANCE_SCHEMA
+        trace["search_provenance_schema"] >= FACTOR_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA
         and trace.get("completed") is True
     ):
         variant = trace.get("variant_id")
@@ -281,6 +285,44 @@ def validate_search_trace_provenance(
                 or source.get("verification_mode") != verification_mode
             ):
                 raise ValueError("completed treatment factors disagree with frozen arm")
+
+    # Schema 5 requires a retained verifier artifact for successful P6V
+    # treatments. A verification flag alone cannot establish that the
+    # verifier produced any output. Failed/incomplete traces are preserved.
+    if (
+        trace["search_provenance_schema"] >= SEARCH_TRACE_PROVENANCE_SCHEMA
+        and trace.get("completed") is True
+    ):
+        status = trace.get("verification_status")
+        digest = trace.get("verification_artifact_sha256")
+        count_fields = (
+            "citation_count", "supported_claim_count",
+            "partially_supported_claim_count", "unsupported_claim_count",
+            "contradicted_claim_count",
+        )
+        if any(
+            type(trace.get(name)) is not int or trace[name] < 0
+            for name in count_fields
+        ):
+            raise ValueError("completed verification counts must be nonnegative integers")
+        checked, supported, partial, unsupported, contradicted = (
+            trace[name] for name in count_fields
+        )
+        if trace["verification_mode"] == "none":
+            if status != "not_requested" or digest is not None or any(
+                (checked, supported, partial, unsupported, contradicted)
+            ):
+                raise ValueError("non-verifier arm claims verification evidence")
+        else:
+            if (
+                status not in ("ok", "parse_error")
+                or type(digest) is not str
+                or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                or checked > 20
+                or checked != supported + partial + unsupported + contradicted
+                or (status == "parse_error" and checked != 0)
+            ):
+                raise ValueError("verifier arm missing or contradictory verification receipt")
 
     # Schema 2+ binds the requested candidate count to the allocated query
     # slot and remaining browse budget. Schema 1 cannot establish this.
@@ -416,3 +458,59 @@ def validate_search_trace_provenance(
         or actual_rate != expected_rate
     ):
         raise ValueError("browse success rate disagrees with source outcomes")
+
+
+# This verifier is deliberately separate from treatment-label and retrieval
+# validation. The noncanonical runner reads *retained file bytes* through its
+# bounded, no-follow evidence reader before using this function.
+MAX_VERIFICATION_ARTIFACT_BYTES = 1024 * 1024
+
+
+def validate_verifier_artifact(trace: dict, raw: bytes) -> None:
+    """Cross-check retained verifier bytes against a completed schema-5 trace.
+
+    This attests internal file/trace continuity, not external provider
+    execution or the correctness of the verifier's judgments.
+    """
+    if (
+        type(trace) is not dict
+        or trace.get("search_provenance_schema") != SEARCH_TRACE_PROVENANCE_SCHEMA
+        or trace.get("completed") is not True
+        or trace.get("verification_mode") != "verify"
+    ):
+        raise ValueError("verifier artifact requires a completed schema-5 verifier run")
+    if type(raw) is not bytes or not 0 < len(raw) <= MAX_VERIFICATION_ARTIFACT_BYTES:
+        raise ValueError("verifier artifact must be bounded nonempty bytes")
+    if hashlib.sha256(raw).hexdigest() != trace.get("verification_artifact_sha256"):
+        raise ValueError("verifier artifact SHA-256 differs from trace")
+    try:
+        receipt = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_unique_object_members,
+            parse_constant=_reject_json_constant,
+            parse_int=_bounded_json_int,
+            parse_float=_bounded_json_float,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError) as exc:
+        raise ValueError("verifier artifact must contain strict UTF-8 JSON") from exc
+    if type(receipt) is not dict or receipt.get("status") != trace.get("verification_status"):
+        raise ValueError("verifier artifact status differs from trace")
+    fields = (
+        ("claims_checked", "citation_count"),
+        ("supported", "supported_claim_count"),
+        ("partially_supported", "partially_supported_claim_count"),
+        ("unsupported", "unsupported_claim_count"),
+        ("contradicted", "contradicted_claim_count"),
+    )
+    if any(
+        type(receipt.get(source)) is not int
+        or receipt[source] != trace.get(target)
+        for source, target in fields
+    ):
+        raise ValueError("verifier artifact claim counts differ from trace")
+    if type(receipt.get("examples")) is not list:
+        raise ValueError("verifier artifact examples must be an array")
+    if receipt["status"] == "parse_error" and (
+        type(receipt.get("error")) is not str or not receipt["error"].strip()
+    ):
+        raise ValueError("verifier parse-error artifact needs its error type")

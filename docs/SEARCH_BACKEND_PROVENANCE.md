@@ -311,3 +311,36 @@ rating was rerun. The five-task pilot remains diagnostic, frozen
 automated findings remain post-collection with fixed-order and
 evaluator-policy caveats, retrospective sensitivity analyses stay
 exploratory, and genuine blinded human validation remains pending.
+
+
+## Prospective retained verifier-output custody (22 November 2026)
+
+Schema-4 treatment-factor checks only established that a completed P6V trace
+*claimed* verification mode. They did not require a matching
+`verification.json` receipt, or cross-check the reported verification status
+and claim-category totals against that retained output. A completed trace could
+otherwise be accepted with a verification flag but no accompanying verifier
+output.
+
+New **schema 5** adds an exact UTF-8 SHA-256 of the verifier's published JSON
+bytes to prospective traces. The noncanonical treatment validator requires a
+completed P6V trace to report `ok` or explicit `parse_error`, checks bounded
+nonnegative claim totals, and reads the expected `outputs/<run-id>/verification.json`
+through the existing bounded, no-follow file capture before matching SHA-256,
+strict JSON structure, status and all five verifier counters. Non-verification
+arms must claim neither a verifier artifact nor verifier counts. An actual
+parse error remains a recorded measurement failure with **zero** checked
+claims, never silently presented as successful evidence verification.
+Incomplete runs remain preservable without inventing a verifier result.
+
+The new contract does **not** establish that the external LLM executed, that
+a verifier's judgments were correct, or independent custody of historical
+September treatments. Historical schema-1 through schema-4 traces retain their
+original contracts and are not retroactively certified. Synthetic offline
+tests cover all four arms, successful/parse-error receipts, altered digests,
+duplicate JSON keys, forged counts/statuses, missing receipts, and backwards
+compatibility. No treatment, evaluator or search is rerun for better outcomes.
+The five-task pilot is diagnostic; frozen automated inference retains
+post-collection planning, fixed-order and evaluator-policy limitations;
+retrospective sensitivity analyses remain exploratory; and blinded human
+validation is pending.
