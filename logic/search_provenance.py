@@ -230,6 +230,15 @@ def validate_search_trace_provenance(trace: dict) -> None:
             budget // len(queries) + (index < budget % len(queries))
             for index in range(len(queries))
         ]
+        # In a completed prospective run, every query assigned a positive
+        # browse slot must have an attempted search record, including outages.
+        # The production agent cannot exhaust a later funded slot early:
+        # each earlier query is individually capped at its own allocation.
+        if trace.get("completed") is True and (
+            not any(per_query_budgets)
+            or len(records) != sum(slot > 0 for slot in per_query_budgets)
+        ):
+            raise ValueError("completed search trace omits funded planned queries")
 
     query_cursor = 0
     accumulated = []
@@ -263,6 +272,10 @@ def validate_search_trace_provenance(trace: dict) -> None:
                 or len(cs) > requested
             ):
                 raise ValueError(f"search record {index} violates requested candidate limit")
+            # Candidate requests may overfetch, but actual browsing cannot
+            # consume another planned query's separately allocated slot.
+            if len(su) > allowed:
+                raise ValueError(f"search record {index} exceeds allocated query browse budget")
         for entry in cs + ss:
             if (
                 type(entry) is not dict

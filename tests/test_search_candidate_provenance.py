@@ -484,3 +484,69 @@ def test_schema2_request_metadata_is_emitted_on_success_error_and_trace():
         'trace_payload["search_candidate_multiplier"] = config.search_candidate_multiplier'
         in run_source
     )
+
+# Prospective per-query allocation conservation: search-call cardinality alone
+# must not allow a completed report to silently omit a funded planner query.
+@pytest.mark.parametrize("omitted_record", [0, 1])
+def test_schema2_completed_trace_rejects_unattempted_funded_query(omitted_record):
+    from logic.search_provenance import validate_search_trace_provenance
+    trace = _request_bound_search_custody_fixture()
+    trace["search_records"].pop(omitted_record)
+    trace["search_call_count"] -= 1
+    with pytest.raises(ValueError, match="omits funded planned queries"):
+        validate_search_trace_provenance(trace)
+
+
+def test_schema2_completed_trace_allows_trailing_zero_budget_query_slot():
+    from logic.search_provenance import validate_search_trace_provenance
+    trace = _request_bound_search_custody_fixture()
+    trace["search_queries"].append("intentionally unfunded third query")
+    trace["query_count"] += 1
+    # Two available attempts fund q1 and q2, but not q3.
+    validate_search_trace_provenance(trace)
+
+
+def test_schema2_completed_trace_rejects_zero_query_plans():
+    from logic.search_provenance import validate_search_trace_provenance
+    trace = _request_bound_search_custody_fixture()
+    trace.update(
+        search_queries=[], query_count=0, search_records=[],
+        search_call_count=0, source_count=0, scheduled_urls=[],
+        successful_urls=[], failed_urls=[], successful_source_count=0,
+        failed_source_count=0, source_success_rate=0.0,
+    )
+    with pytest.raises(ValueError, match="omits funded planned queries"):
+        validate_search_trace_provenance(trace)
+
+
+def test_schema2_rejects_per_query_overspend_even_when_global_count_is_bounded():
+    from logic.search_provenance import validate_search_trace_provenance
+    trace = _request_bound_search_custody_fixture()
+    # Four global browse slots split 2+2. q1 improperly spends 3 and q2
+    # records a real search outage. The former validator accepted this:
+    # requests and all run-level URL/count ledgers are self-consistent.
+    trace["source_budget"] = 4
+    candidates = [
+        {"url": f"https://example.org/{suffix}", "backend_pool": "pool"}
+        for suffix in ("one", "two", "three")
+    ]
+    first, second = trace["search_records"]
+    first.update(
+        requested_candidate_limit=4,
+        candidate_urls=[c["url"] for c in candidates],
+        candidate_sources=candidates,
+        scheduled_urls=[c["url"] for c in candidates],
+        scheduled_sources=[dict(c) for c in candidates],
+    )
+    # With three attempts already recorded, q2 could request two candidates.
+    second["requested_candidate_limit"] = 2
+    trace.update(
+        scheduled_urls=[c["url"] for c in candidates],
+        source_count=3,
+        successful_urls=[candidates[0]["url"]],
+        failed_urls=[candidates[1]["url"], candidates[2]["url"]],
+        successful_source_count=1, failed_source_count=2,
+        source_success_rate=1 / 3,
+    )
+    with pytest.raises(ValueError, match="exceeds allocated query browse budget"):
+        validate_search_trace_provenance(trace)

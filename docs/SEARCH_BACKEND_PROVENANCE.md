@@ -213,3 +213,37 @@ produced. The pilot remains diagnostic, the frozen automated comparisons
 remain post-collection and subject to fixed-order/evaluator-policy
 limitations, retrospective sensitivity analyses remain exploratory, and
 independent human validation remains pending.
+
+
+## Prospective funded-query and per-slot browse-accounting gate (21 November 2026)
+
+A schema-2 search receipt previously checked that every *recorded* query had
+an allowable candidate-request limit, but it did not require every **funded**
+planned query to appear in a completed run. A completed report could omit a
+planner query and still preserve internally consistent aggregate counts.
+It also checked candidate overproduction without separately limiting how
+many URLs were actually scheduled for a single query; the first query could
+spend another query's allotted browse attempts while staying under the
+run-level total budget.
+
+The completed-trace gate now requires exactly one search record for each
+planned query given a positive browse allocation, including explicitly
+recorded provider outages (which need not return candidates). A trailing
+zero-budget query slot remains legitimately unattempted. Each recorded
+query's **scheduled browse attempts** must also fit its own allocated slot
+and the remaining global budget. Neither valid duplicates in candidate
+results nor source failures are silently removed or replaced, and no
+treatment is retried to meet the rule. Legacy schema-1 receipts remain
+under their historical, weaker contract; incomplete traces are not
+misrepresented as completed research.
+
+Offline regressions exercise omitted funded query attempts, recorded outages,
+legitimate unfunded queries, zero-query completed reports and a three-attempt
+first query exceeding its two-attempt allocation without exceeding the
+global four-attempt budget. This is **internal accounting integrity**, not
+proof of external search results or missing historical report custody.
+The pilot remains diagnostic, the frozen automated main-study analysis is
+post-collection with fixed-order and evaluator-comparability limitations,
+retrospective sensitivities remain exploratory, and independent human
+validation has not yet been performed. No historical treatment, evaluator,
+score or human rating is changed.
