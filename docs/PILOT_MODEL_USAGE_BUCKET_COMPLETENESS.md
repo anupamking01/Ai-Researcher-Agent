@@ -298,3 +298,34 @@ remains diagnostic; designated-primary automated results retain
 post-collection planning and evaluator-policy limitations; retrospective
 sensitivity work is exploratory; original report/trace custody and genuine
 blinded human validation remain pending.
+
+
+## Assistant-role and unsupported tool-result provenance (21 November 2026)
+
+A prospective completion could previously contain valid text and a normal or
+missing `finish_reason` while its provider message/delta explicitly declared a
+non-assistant role or embedded a function/tool invocation. The adapter would
+return that content as a completed research report even though it was not an
+ordinary assistant-generated textual answer. In streaming mode, it could also
+forward the malformed payload to a websocket before detecting a later issue.
+
+Both streaming and non-streaming paths now inspect **explicit role and
+function/tool-call metadata** in the selected provider message or delta before
+accepting or forwarding its text. A present role must be the exact
+`assistant` label. A present function invocation or a nonempty/malformed
+tool-call field is rejected rather than silently treated as report content.
+Legacy omitted roles, absent/null call metadata and valid empty tool-call
+lists remain supported. An explicitly non-assistant frame fails even if the
+reported finish reason is `stop`.
+
+Offline synthetic regressions cover non-assistant roles, malformed metadata,
+unsupported function/tool outputs, legitimate assistant/legacy payloads,
+websocket forwarding boundaries and **single-call usage accounting**.
+Recorded non-streaming usage is still preserved once after a provider response;
+streaming usage remains unavailable, without fabricated counts. Previously
+delivered websocket text cannot be retracted. This check strengthens future
+report identity, not provider billing authentication or recovery of historical
+report bytes. The five-task pilot is diagnostic; historical designated-primary
+automated inference retains post-collection planning and evaluator-policy
+comparability limits; retrospective sensitivity remains exploratory; genuine
+blinded human evaluation remains pending.

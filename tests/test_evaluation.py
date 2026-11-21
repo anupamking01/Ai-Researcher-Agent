@@ -4328,3 +4328,111 @@ def test_stream_adapter_accepts_explicit_empty_completed_stream(monkeypatch, chu
     assert len(attempts) == 1
     assert tracker.snapshot()["model_calls"] == 1
     assert tracker.snapshot()["unavailable_calls"] == 1
+
+
+# Provider-result identity is part of prospective report validity. A textual
+# tool/function request or a role other than assistant is not a research report.
+# All fixtures are synthetic; this does not call an external model.
+@pytest.mark.parametrize(
+    ("metadata", "diagnostic"),
+    [
+        ({"role": "user"}, "role"),
+        ({"role": "tool"}, "role"),
+        ({"role": False}, "role"),
+        ({"function_call": {"name": "synthetic_tool", "arguments": "{}"}}, "function_call"),
+        ({"function_call": ""}, "function_call"),
+        ({"tool_calls": [{"id": "synthetic", "type": "function"}]}, "tool_calls"),
+        ({"tool_calls": {}}, "tool_calls"),
+        ({"tool_calls": True}, "tool_calls"),
+    ],
+    ids=[
+        "user-role", "tool-role", "malformed-role", "function-request",
+        "empty-function-request", "tool-request", "malformed-tool-map",
+        "malformed-tool-boolean",
+    ],
+)
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+def test_chat_adapter_rejects_nonassistant_or_tool_payload(
+    monkeypatch, stream, metadata, diagnostic
+):
+    import asyncio
+
+    attempts = []
+
+    def provider_create(**kwargs):
+        attempts.append(kwargs)
+        if stream:
+            return iter([
+                {"choices": [{"delta": {"content": "safe prefix"}}]},
+                {"choices": [{"delta": {"content": "invalid output", **metadata}}]},
+                {"choices": [{"delta": {"content": "must not forward"}}]},
+            ])
+        return {
+            "choices": [{"message": {"content": "invalid output", **metadata},
+                         "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+        }
+
+    class Socket:
+        def __init__(self):
+            self.sent = []
+
+        async def send_text(self, value):
+            self.sent.append(value)
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    socket = Socket()
+    with pytest.raises(ValueError, match=diagnostic):
+        result = adapter.create_chat_completion(
+            model="synthetic-model", messages=[], stream=stream,
+            websocket=socket, usage_tracker=tracker,
+        )
+        if stream:
+            asyncio.run(result)
+
+    assert len(attempts) == 1
+    assert socket.sent == (["safe prefix"] if stream else [])
+    snapshot = tracker.snapshot()
+    assert snapshot["model_calls"] == 1
+    assert snapshot["unavailable_calls"] == int(stream)
+    assert snapshot["total_tokens"] == (0 if stream else 6)
+    assert snapshot["by_model"]["synthetic-model"]["model_calls"] == 1
+
+
+@pytest.mark.parametrize(
+    "metadata", [
+        {},
+        {"role": "assistant"},
+        {"role": "assistant", "function_call": None, "tool_calls": []},
+    ],
+    ids=["legacy-omitted", "explicit-assistant", "empty-tool-metadata"],
+)
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+def test_chat_adapter_accepts_assistant_or_legacy_payload_without_tool_calls(
+    monkeypatch, stream, metadata
+):
+    import asyncio
+
+    def provider_create(**kwargs):
+        if stream:
+            return iter([
+                {"choices": [{"delta": {"content": "synthetic report", **metadata}}]},
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+            ])
+        return {
+            "choices": [{"message": {"content": "synthetic report", **metadata},
+                         "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        }
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    response = adapter.create_chat_completion(
+        model="synthetic-model", messages=[], stream=stream, usage_tracker=tracker,
+    )
+    assert (asyncio.run(response) if stream else response) == "synthetic report"
+    snapshot = tracker.snapshot()
+    assert snapshot["model_calls"] == 1
+    assert snapshot["unavailable_calls"] == int(stream)
+    assert snapshot["total_tokens"] == (0 if stream else 3)

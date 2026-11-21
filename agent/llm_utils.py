@@ -45,6 +45,28 @@ def _validate_finish_reason(choice: Any, *, source: str) -> bool:
     return reason == "stop"
 
 
+def _validate_assistant_payload(payload: Any, *, source: str) -> None:
+    """Reject a non-assistant or tool-invocation result masquerading as report text.
+
+    The legacy provider sometimes omits role/function metadata, which remains
+    accepted. Explicit non-assistant roles and tool/function calls cannot be
+    interpreted as completed research reports, even with normal finish status.
+    """
+    try:
+        role = payload.get("role")
+        function_call = payload.get("function_call")
+        tool_calls = payload.get("tool_calls")
+    except Exception as exc:
+        raise ValueError(f"provider {source} assistant metadata is unreadable") from exc
+
+    if role is not None and (type(role) is not str or role != "assistant"):
+        raise ValueError(f"provider {source} message role is not assistant")
+    if function_call is not None:
+        raise ValueError(f"provider {source} contains unsupported function_call")
+    if tool_calls is not None and (type(tool_calls) is not list or tool_calls):
+        raise ValueError(f"provider {source} contains unsupported tool_calls")
+
+
 def _choice_content(response: Any) -> str:
     """Require a well-formed textual completion rather than fabricating an empty one.
 
@@ -53,11 +75,13 @@ def _choice_content(response: Any) -> str:
     """
     try:
         choice = response["choices"][0]
-        content = choice["message"]["content"]
+        message = choice["message"]
+        content = message["content"]
     except (KeyError, IndexError, TypeError, AttributeError) as exc:
         raise ValueError("provider response missing a textual assistant message") from exc
     if not isinstance(content, str):
         raise ValueError("provider response assistant content must be text")
+    _validate_assistant_payload(message, source="completion")
     _validate_finish_reason(choice, source="completion")
     return content
 
@@ -107,12 +131,14 @@ async def _stream_completion(
         # it could turn a truncated stream into a successful research report.
         try:
             choice = chunk["choices"][0]
-            content = choice["delta"].get("content", "")
+            delta = choice["delta"]
+            content = delta.get("content", "")
         except (KeyError, IndexError, AttributeError, TypeError) as exc:
             raise ValueError("provider stream chunk missing a valid delta") from exc
 
         if not isinstance(content, str):
             raise ValueError("provider stream delta content must be text")
+        _validate_assistant_payload(delta, source="stream")
         saw_frame = True
         saw_terminal = _validate_finish_reason(choice, source="stream")
         if not content:
