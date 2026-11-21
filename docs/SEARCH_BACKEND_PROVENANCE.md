@@ -247,3 +247,33 @@ post-collection with fixed-order and evaluator-comparability limitations,
 retrospective sensitivities remain exploratory, and independent human
 validation has not yet been performed. No historical treatment, evaluator,
 score or human rating is changed.
+
+## Prospective treatment-to-search-plan binding (21 November 2026)
+
+The completed schema-2 trace verifier reconciled requested candidate counts,
+per-query browsing budgets and total search calls, but did not independently
+check whether the *planned queries themselves* matched the treatment's
+planning mode. A self-consistent two-query planner trace, or a direct-mode
+trace that substituted a different question, could pass those accounting
+checks even though production planning uses exactly four queries for the
+planner treatment and the exact task question for direct retrieval.
+
+New prospective `search_provenance_schema: 3` receipts fail completed traces
+unless they record a nonblank original `question`, the proper
+`planning_mode`, and either the exact one-query direct plan
+`search_queries == [question]` or **exactly four** planner query strings.
+Planner-query order and legitimate duplicates are preserved; the validator
+does not invent, truncate or replace any queries or search results. These
+checks use fields already emitted by the agent. Incomplete/failed traces are
+still preserved when planning has not completed, rather than fabricating a
+valid plan.
+
+Schemas 1 and 2 retain their original, weaker contracts; this stronger
+gate does **not** retroactively certify previously recorded traces.
+Offline synthetic tests cover valid direct/planner plans, duplicate planner
+queries, missing or changed task identity, altered planner arity, invalid
+mode and incomplete-run retention. No live treatment, search, evaluator or
+human rating was produced. The pilot remains diagnostic, frozen automated
+inference remains post-collection and qualified by fixed-order and evaluator
+comparability limitations, retrospective sensitivities are exploratory,
+and independent human validation remains pending.

@@ -550,3 +550,88 @@ def test_schema2_rejects_per_query_overspend_even_when_global_count_is_bounded()
     )
     with pytest.raises(ValueError, match="exceeds allocated query browse budget"):
         validate_search_trace_provenance(trace)
+
+# Schema 3 independently checks the original experiment's plan identity,
+# beyond candidate-request and source-budget arithmetic.
+def _treatment_bound_planner_fixture():
+    trace = _request_bound_search_custody_fixture()
+    trace.update(
+        search_provenance_schema=3, planning_mode="planner",
+        question="What is the research question?",
+    )
+    # Two scheduled slots fund q1/q2; q3/q4 remain legitimately unfunded.
+    trace["search_queries"].extend(["q3", "q4"])
+    trace["query_count"] = 4
+    return trace
+
+
+def _treatment_bound_direct_fixture():
+    trace = _request_bound_search_custody_fixture()
+    trace.update(
+        search_provenance_schema=3, planning_mode="direct",
+        question="q1", search_queries=["q1"], query_count=1,
+        source_budget=1, search_call_count=1,
+    )
+    trace["search_records"] = trace["search_records"][:1]
+    return trace
+
+
+def test_schema3_accepts_original_direct_question_and_four_planner_queries():
+    from logic.search_provenance import validate_search_trace_provenance
+    validate_search_trace_provenance(_treatment_bound_direct_fixture())
+    validate_search_trace_provenance(_treatment_bound_planner_fixture())
+
+
+def test_schema3_preserves_duplicate_planned_queries_as_distinct_slots():
+    from logic.search_provenance import validate_search_trace_provenance
+    trace = _treatment_bound_planner_fixture()
+    trace["search_queries"][1] = "q1"
+    trace["search_records"][1]["query"] = "q1"
+    validate_search_trace_provenance(trace)
+
+
+@pytest.mark.parametrize("alteration", [
+    lambda t: t.update(question="different research question"),
+    lambda t: t.update(question="q1 "),
+    lambda t: t.update(question=""),
+    lambda t: t.pop("question"),
+    lambda t: t.update(planning_mode="planner"),
+    lambda t: t.update(planning_mode=None),
+    lambda t: t.pop("planning_mode"),
+])
+def test_schema3_rejects_direct_query_identity_or_mode_changes(alteration):
+    from logic.search_provenance import validate_search_trace_provenance
+    trace = _treatment_bound_direct_fixture()
+    alteration(trace)
+    with pytest.raises(ValueError, match="search plan"):
+        validate_search_trace_provenance(trace)
+
+
+@pytest.mark.parametrize("alteration", [
+    lambda t: (t["search_queries"].pop(), t.update(query_count=3)),
+    lambda t: (t["search_queries"].append("q5"), t.update(query_count=5)),
+    lambda t: t.update(question=" "),
+    lambda t: t.pop("question"),
+    lambda t: t.update(planning_mode="direct"),
+    lambda t: t.update(planning_mode=False),
+    lambda t: t.pop("planning_mode"),
+])
+def test_schema3_rejects_planner_arity_or_treatment_identity_changes(alteration):
+    from logic.search_provenance import validate_search_trace_provenance
+    trace = _treatment_bound_planner_fixture()
+    alteration(trace)
+    with pytest.raises(ValueError, match="search plan"):
+        validate_search_trace_provenance(trace)
+
+
+def test_schema2_is_not_retroactively_certified_for_plan_arity():
+    from logic.search_provenance import validate_search_trace_provenance
+    trace = _request_bound_search_custody_fixture()
+    validate_search_trace_provenance(trace)
+
+
+def test_schema3_incomplete_plan_is_preserved_without_fabricating_queries():
+    from logic.search_provenance import validate_search_trace_provenance
+    trace = _treatment_bound_direct_fixture()
+    trace.update(completed=False, planning_mode=None, question=None)
+    validate_search_trace_provenance(trace)

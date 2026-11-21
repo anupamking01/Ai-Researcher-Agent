@@ -180,8 +180,9 @@ def selected_search_sources(
 
 
 # Explicitly prospective; historical traces without the marker are not certified.
-SEARCH_TRACE_PROVENANCE_SCHEMA = 2
-# Schema 1 traces remain legible but cannot establish per-request count custody.
+SEARCH_TRACE_PROVENANCE_SCHEMA = 3
+# Earlier prospective versions retain their original, narrower contracts.
+REQUEST_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA = 2
 LEGACY_SEARCH_TRACE_PROVENANCE_SCHEMA = 1
 
 
@@ -191,6 +192,7 @@ def validate_search_trace_provenance(trace: dict) -> None:
         type(trace.get("search_provenance_schema")) is not int
         or trace["search_provenance_schema"] not in (
             LEGACY_SEARCH_TRACE_PROVENANCE_SCHEMA,
+            REQUEST_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA,
             SEARCH_TRACE_PROVENANCE_SCHEMA,
         )
     ):
@@ -214,11 +216,34 @@ def validate_search_trace_provenance(trace: dict) -> None:
     ):
         raise ValueError("search/browse count ledger mismatch")
 
-    # Schema 2 binds the *requested* metasearch count to the experimental
-    # query-slot budget, not just to a self-reported number in each record.
-    # Historical schema 1 records lack this measurement and are only checked
-    # against their original, weaker provenance contract.
-    request_bound = trace["search_provenance_schema"] == SEARCH_TRACE_PROVENANCE_SCHEMA
+    # Schema 3 binds the completed query plan to the experimental treatment.
+    # Direct retrieval searches the exact original question. The planner
+    # produces four ordered strings; legitimate duplicates remain distinct.
+    # Preserve incomplete runs even when planning could not finish, and do
+    # not retroactively strengthen earlier schemas.
+    if (
+        trace["search_provenance_schema"] == SEARCH_TRACE_PROVENANCE_SCHEMA
+        and trace.get("completed") is True
+    ):
+        mode = trace.get("planning_mode")
+        question = trace.get("question")
+        if type(question) is not str or not question.strip():
+            raise ValueError("completed search plan missing original question")
+        if mode == "direct":
+            if queries != [question]:
+                raise ValueError("direct search plan differs from task question")
+        elif mode == "planner":
+            if len(queries) != 4:
+                raise ValueError("planner search plan must contain exactly four queries")
+        else:
+            raise ValueError("completed search plan has invalid planning mode")
+
+    # Schema 2+ binds the requested candidate count to the allocated query
+    # slot and remaining browse budget. Schema 1 cannot establish this.
+    request_bound = (
+        trace["search_provenance_schema"]
+        >= REQUEST_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA
+    )
     if request_bound:
         budget = trace.get("source_budget")
         multiplier = trace.get("search_candidate_multiplier")
