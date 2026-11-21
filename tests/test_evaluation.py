@@ -1,12 +1,32 @@
+from dataclasses import replace
+from types import SimpleNamespace
+import json
+
 import pytest
 
+from logic.usage import UsageTracker
 from logic.evaluation import (
     RunTrace,
+    MAX_DIAGNOSTIC_REFERENCE_TASKS,
+    MAX_DIAGNOSTIC_DESCRIPTIVE_VALUES,
+    MAX_DIAGNOSTIC_AGGREGATE_RUNS,
+    MAX_DIAGNOSTIC_POSITIONAL_PAIRS,
+    MAX_DIAGNOSTIC_SOURCE_URL_OBSERVATIONS,
+    MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS,
+    MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES,
+    MAX_DIAGNOSTIC_BOOTSTRAP_DRAWS,
+    MAX_DIAGNOSTIC_BOOTSTRAP_SEED_BITS,
+    _validated_reference_task_manifest,
     aggregate_runs,
+    aggregate_runs_by_task,
     bootstrap_confidence_interval,
     deduplicate_sources,
     paired_metric_comparison,
+    paired_metric_comparison_by_task,
+    paired_bootstrap_confidence_interval_by_task,
+    paired_run_trace_bootstrap_by_task,
     population_stddev,
+    safe_mean,
     safe_median,
 )
 
@@ -28,6 +48,325 @@ def test_run_trace_metrics():
     assert trace.citation_precision_proxy == 0.875
 
 
+@pytest.mark.parametrize(
+    "invalid",
+    [None, "False", "True", "", 0, 1, -1, 0.0, 1.0, [], {}, ()],
+)
+def test_run_trace_rejects_non_boolean_completion_before_aggregation(invalid):
+    # Python truthiness would otherwise turn "False" and -1 into success.
+    with pytest.raises(ValueError, match="completed must be a Boolean"):
+        RunTrace(
+            run_id="invalid-completion",
+            completed=invalid,
+            source_count=0,
+        )
+
+
+def test_run_trace_boolean_completion_retains_failed_runs_in_generic_summary():
+    complete = RunTrace(run_id="success", completed=True, source_count=1)
+    failed = RunTrace(run_id="failed", completed=False, source_count=0)
+    assert complete.to_dict()["completed"] is True
+    assert failed.to_dict()["completed"] is False
+    assert aggregate_runs([complete, failed])["completion_rate"] == 0.5
+    assert aggregate_runs([failed, failed])["completion_rate"] == 0.0
+
+
+@pytest.mark.parametrize(
+    ("source_count", "failed_source_count"),
+    [
+        (-1, 0),
+        (0, -1),
+        (1, 2),
+        (True, 0),
+        (1, False),
+        (1.0, 0),
+        (2, 1.0),
+        ("2", 0),
+    ],
+)
+def test_run_trace_fails_closed_on_impossible_source_accounting(
+    source_count, failed_source_count
+):
+    with pytest.raises(ValueError, match="source_count|failed_source_count"):
+        RunTrace(
+            run_id="invalid-diagnostic",
+            completed=False,
+            source_count=source_count,
+            failed_source_count=failed_source_count,
+        )
+
+
+@pytest.mark.parametrize(
+    ("attempted", "failed", "successful", "rate"),
+    [(0, 0, 0, 0.0), (3, 0, 3, 1.0), (3, 3, 0, 0.0), (4, 1, 3, 0.75)],
+)
+def test_run_trace_source_accounting_conserves_attempts(
+    attempted, failed, successful, rate
+):
+    trace = RunTrace(
+        run_id="accounting-fixture",
+        completed=True,
+        source_count=attempted,
+        failed_source_count=failed,
+    )
+    assert trace.successful_source_count == successful
+    assert trace.source_success_rate == rate
+    summary = trace.to_dict()
+    assert summary["successful_source_count"] + trace.failed_source_count == attempted
+    assert summary["source_success_rate"] == rate
+
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [
+        (field, invalid)
+        for field in (
+            "citation_count",
+            "supported_claim_count",
+            "partially_supported_claim_count",
+            "unsupported_claim_count",
+            "contradicted_claim_count",
+        )
+        for invalid in (-1, True, 1.0, "1")
+    ],
+)
+def test_run_trace_rejects_invalid_claim_accounting(field, invalid):
+    counts = {
+        "citation_count": 4,
+        "supported_claim_count": 1,
+        "partially_supported_claim_count": 1,
+        "unsupported_claim_count": 1,
+        "contradicted_claim_count": 1,
+    }
+    counts[field] = invalid
+    with pytest.raises(ValueError, match=field):
+        RunTrace(
+            run_id="invalid-claim-telemetry",
+            completed=True,
+            source_count=1,
+            **counts,
+        )
+
+
+@pytest.mark.parametrize(
+    ("labels", "expected_rate"),
+    [
+        ((0, 0, 0, 0), 0.0),
+        ((3, 0, 1, 0), 0.75),
+        ((0, 1, 2, 1), 0.0),
+        ((2, 1, 1, 0), 0.5),
+    ],
+)
+def test_run_trace_claim_accounting_is_bounded_and_conserved(
+    labels, expected_rate
+):
+    supported, partial, unsupported, contradicted = labels
+    claims_checked = sum(labels)
+    trace = RunTrace(
+        run_id="valid-claim-telemetry",
+        completed=True,
+        source_count=1,
+        citation_count=claims_checked,
+        supported_claim_count=supported,
+        partially_supported_claim_count=partial,
+        unsupported_claim_count=unsupported,
+        contradicted_claim_count=contradicted,
+    )
+    assert trace.verified_claim_count == claims_checked
+    assert trace.claim_support_rate == expected_rate
+    assert 0.0 <= trace.claim_support_rate <= 1.0
+    assert trace.to_dict()["claim_support_rate"] == expected_rate
+
+
+def test_run_trace_keeps_citations_distinct_from_claim_labels():
+    # A citation count need not equal a claim-label partition; do not add
+    # an unjustified cross-unit constraint to the generic diagnostic helper.
+    trace = RunTrace(
+        run_id="different-units",
+        completed=True,
+        source_count=1,
+        citation_count=1,
+        unsupported_claim_count=2,
+    )
+    assert trace.verified_claim_count == 2
+    assert trace.claim_support_rate == 0.0
+    assert trace.citation_precision_proxy == 0.0
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [
+        (field, invalid)
+        for field in (
+            "prompt_tokens",
+            "completion_tokens",
+            "source_budget",
+            "query_count",
+            "search_call_count",
+            "model_call_count",
+            "unavailable_usage_call_count",
+        )
+        for invalid in (-1, False, 1.5, "2")
+    ],
+)
+def test_run_trace_rejects_invalid_resource_counts(field, invalid):
+    counts = {
+        "prompt_tokens": 12,
+        "completion_tokens": 8,
+        "source_budget": 4,
+        "query_count": 2,
+        "search_call_count": 1,
+        "model_call_count": 2,
+        "unavailable_usage_call_count": 1,
+    }
+    counts[field] = invalid
+    with pytest.raises(ValueError, match=field):
+        RunTrace(
+            run_id="invalid-budget-telemetry",
+            completed=True,
+            source_count=1,
+            **counts,
+        )
+
+
+@pytest.mark.parametrize("field", ["latency_seconds", "estimated_cost_usd", "temperature"])
+@pytest.mark.parametrize(
+    "invalid",
+    [-1, -0.01, True, "1", None, float("nan"), float("inf"), float("-inf"), 10**400],
+)
+def test_run_trace_rejects_invalid_numeric_telemetry_and_temperature(field, invalid):
+    with pytest.raises(ValueError, match=field):
+        RunTrace(
+            run_id="invalid-finite-telemetry",
+            completed=False,
+            source_count=0,
+            **{field: invalid},
+        )
+
+
+@pytest.mark.parametrize("temperature", [0, 0.0, 0.7, 1.0, 2, 1e-320])
+def test_run_trace_preserves_finite_sampling_temperature_as_serializable_provenance(temperature):
+    trace = RunTrace(
+        run_id="finite-temperature", completed=True, source_count=1,
+        temperature=temperature,
+    )
+    assert trace.temperature == temperature
+    assert trace.to_dict()["temperature"] == temperature
+    assert json.loads(json.dumps(trace.to_dict(), allow_nan=False))["temperature"] == temperature
+
+
+@pytest.mark.parametrize(
+    ("model_calls", "unavailable_calls"),
+    [(0, 1), (2, 3)],
+)
+def test_run_trace_rejects_impossible_missing_usage_call_ledger(
+    model_calls, unavailable_calls
+):
+    with pytest.raises(ValueError, match="unavailable_usage_call_count"):
+        RunTrace(
+            run_id="bad-call-accounting",
+            completed=False,
+            source_count=0,
+            model_call_count=model_calls,
+            unavailable_usage_call_count=unavailable_calls,
+        )
+
+
+def test_run_trace_accepts_valid_resource_boundaries_and_aggregates():
+    runs = [
+        RunTrace(
+            run_id="complete-usage",
+            completed=True,
+            source_count=2,
+            source_budget=2,
+            prompt_tokens=100,
+            completion_tokens=50,
+            query_count=2,
+            search_call_count=2,
+            model_call_count=3,
+            unavailable_usage_call_count=1,
+            latency_seconds=2,
+            estimated_cost_usd=0.25,
+        ),
+        RunTrace(
+            run_id="zero-usage",
+            completed=False,
+            source_count=0,
+            model_call_count=0,
+            unavailable_usage_call_count=0,
+            latency_seconds=0.0,
+            estimated_cost_usd=0.0,
+        ),
+    ]
+    assert runs[0].to_dict()["total_tokens"] == 150
+    assert aggregate_runs(runs)["avg_total_tokens"] == 75.0
+    assert aggregate_runs(runs)["avg_estimated_cost_usd"] == 0.125
+    assert aggregate_runs(runs)["avg_latency_seconds"] == 1.0
+
+
+def test_diagnostic_model_usage_coverage_preserves_failed_and_zero_call_runs():
+    # Prospective synthetic ledger: a zero token count on a call whose
+    # provider usage is unavailable is not a measured zero-token call.
+    traces = [
+        RunTrace(
+            run_id="reported", completed=True, source_count=1,
+            model_call_count=2, unavailable_usage_call_count=0,
+            prompt_tokens=60, estimated_cost_usd=0.2,
+        ),
+        RunTrace(
+            run_id="partial", completed=True, source_count=1,
+            model_call_count=3, unavailable_usage_call_count=1,
+            prompt_tokens=30,
+        ),
+        RunTrace(
+            run_id="unavailable", completed=False, source_count=0,
+            model_call_count=2, unavailable_usage_call_count=2,
+        ),
+        RunTrace(
+            run_id="no-model-call", completed=False, source_count=0,
+            model_call_count=0, unavailable_usage_call_count=0,
+        ),
+    ]
+    summary = aggregate_runs(iter(traces))
+    assert summary["n_runs"] == 4
+    assert summary["n_zero_model_call_runs"] == 1
+    assert summary["n_runs_with_unavailable_model_usage"] == 2
+    assert summary["n_model_calls"] == 7
+    assert summary["n_model_calls_with_unavailable_usage"] == 3
+    assert 0 <= summary["n_model_calls_with_unavailable_usage"] <= summary["n_model_calls"]
+    # The existing observed-only means and failed-run denominators do not change.
+    assert summary["avg_model_calls"] == pytest.approx(1.75)
+    assert summary["avg_total_tokens"] == pytest.approx(22.5)
+    assert summary["avg_estimated_cost_usd"] == pytest.approx(0.05)
+    assert summary["completion_rate"] == pytest.approx(0.5)
+
+    keyed = [
+        replace(
+            row, task_id=f"usage-{index}", task_set_id="synthetic-usage",
+            variant_id="D3",
+        )
+        for index, row in enumerate(traces)
+    ]
+    keyed_summary = aggregate_runs_by_task(
+        iter(reversed(keyed)), variant_id="D3",
+        task_set_id="synthetic-usage",
+        expected_task_ids=[row.task_id for row in keyed],
+    )
+    for key in (
+        "n_zero_model_call_runs", "n_runs_with_unavailable_model_usage",
+        "n_model_calls", "n_model_calls_with_unavailable_usage",
+        "avg_model_calls", "avg_total_tokens", "avg_estimated_cost_usd",
+        "completion_rate",
+    ):
+        assert keyed_summary[key] == summary[key]
+    for key in (
+        "n_zero_model_call_runs", "n_runs_with_unavailable_model_usage",
+        "n_model_calls", "n_model_calls_with_unavailable_usage",
+    ):
+        assert aggregate_runs([])[key] == 0
+
+
 def test_aggregate_runs():
     runs = [
         RunTrace(run_id="run-1", completed=True, source_count=10, failed_source_count=2, latency_seconds=20.0, prompt_tokens=100, completion_tokens=50, estimated_cost_usd=0.05),
@@ -47,6 +386,297 @@ def test_aggregate_runs():
     assert summary["median_estimated_cost_usd"] == pytest.approx(0.035)
 
 
+def test_aggregate_runs_discloses_evidence_absence_without_changing_denominators():
+    # Distinguish absence of a verifiable claim from a measured unsupported
+    # claim. Failed and zero-evidence runs remain in the means, never dropped.
+    traces = [
+        RunTrace(run_id="no-attempt", completed=False, source_count=0),
+        RunTrace(
+            run_id="all-retrievals-failed", completed=True,
+            source_count=2, failed_source_count=2,
+        ),
+        RunTrace(run_id="retrieved-unscored", completed=True, source_count=1),
+        RunTrace(
+            run_id="assessed-unsupported", completed=True, source_count=1,
+            unsupported_claim_count=2,
+        ),
+        RunTrace(
+            run_id="assessed-supported", completed=True, source_count=1,
+            supported_claim_count=1,
+        ),
+    ]
+    summary = aggregate_runs(iter(traces))
+    assert summary["n_runs"] == 5
+    assert summary["n_zero_successful_source_runs"] == 2
+    assert summary["n_zero_verified_claim_runs"] == 3
+    assert summary["completion_rate"] == pytest.approx(0.8)
+    assert summary["avg_successful_sources"] == pytest.approx(0.6)
+    assert summary["avg_claim_support_rate"] == pytest.approx(0.2)
+    assert aggregate_runs([])["n_zero_successful_source_runs"] == 0
+    assert aggregate_runs([])["n_zero_verified_claim_runs"] == 0
+
+
+def test_diagnostic_claim_denominator_provenance_partition_preserves_rates():
+    # Synthetic records only. Citation fallback is a numeric denominator,
+    # not evidence of an actual independent claim-level adjudication.
+    traces = [
+        RunTrace(
+            run_id="explicit-supported", completed=True, source_count=1,
+            citation_count=9, supported_claim_count=1, unsupported_claim_count=1,
+        ),
+        RunTrace(
+            run_id="explicit-unsupported", completed=False, source_count=1,
+            unsupported_claim_count=2,
+        ),
+        RunTrace(
+            run_id="citation-only", completed=False, source_count=1,
+            citation_count=7,
+        ),
+        RunTrace(run_id="no-denominator", completed=False, source_count=0),
+    ]
+    generic = aggregate_runs(iter(traces))
+    assert generic["n_runs"] == 4
+    assert generic["n_explicit_claim_judgment_runs"] == 2
+    assert generic["n_citation_fallback_runs"] == 1
+    assert generic["n_zero_verified_claim_runs"] == 1
+    assert (
+        generic["n_explicit_claim_judgment_runs"]
+        + generic["n_citation_fallback_runs"]
+        + generic["n_zero_verified_claim_runs"]
+    ) == generic["n_runs"]
+    assert generic["avg_claim_support_rate"] == pytest.approx(0.125)
+    assert generic["completion_rate"] == 0.25
+
+    # The complete-task path retains failed runs, irrespective of input order.
+    keyed = [
+        replace(
+            trace, task_id=f"synthetic-{index}",
+            variant_id="D3", task_set_id="synthetic-claim-custody",
+        )
+        for index, trace in enumerate(traces)
+    ]
+    summary = aggregate_runs_by_task(
+        reversed(keyed), variant_id="D3",
+        task_set_id="synthetic-claim-custody",
+        expected_task_ids=[row.task_id for row in keyed],
+    )
+    for name in (
+        "n_runs", "n_zero_verified_claim_runs",
+        "n_explicit_claim_judgment_runs", "n_citation_fallback_runs",
+        "avg_claim_support_rate", "completion_rate",
+    ):
+        assert summary[name] == generic[name]
+    assert aggregate_runs([])["n_explicit_claim_judgment_runs"] == 0
+    assert aggregate_runs([])["n_citation_fallback_runs"] == 0
+
+
+@pytest.mark.parametrize("completed", [None, "False", 1])
+def test_aggregate_runs_rejects_unvalidated_duck_typed_records(completed):
+    # This impostor exposes every derived field used by the aggregator, so
+    # attribute-access duck typing used to accept it without RunTrace guards.
+    valid = RunTrace(run_id="valid", completed=False, source_count=2)
+    imposter = SimpleNamespace(**valid.to_dict())
+    if completed is not None:
+        imposter.completed = completed
+    with pytest.raises(ValueError, match="validated RunTrace"):
+        aggregate_runs([valid, imposter])
+
+
+def test_aggregate_runs_rejects_malformed_input_before_reading_more_records():
+    valid = RunTrace(run_id="valid", completed=True, source_count=1)
+    read = []
+
+    def stream():
+        read.append("valid")
+        yield valid
+        read.append("imposter")
+        yield SimpleNamespace(**valid.to_dict())
+        raise AssertionError("consumed rows beyond invalid telemetry")
+
+    with pytest.raises(ValueError, match="validated RunTrace"):
+        aggregate_runs(stream())
+    assert read == ["valid", "imposter"]
+
+
+def test_aggregate_runs_accepts_valid_runtrace_subclass_in_one_pass():
+    class SpecializedTrace(RunTrace):
+        pass
+
+    runs = (
+        SpecializedTrace(run_id=f"special-{i}", completed=bool(i), source_count=i)
+        for i in range(2)
+    )
+    result = aggregate_runs(runs)
+    assert result["n_runs"] == 2
+    assert result["completion_rate"] == 0.5
+    assert result["avg_sources"] == 0.5
+
+
+@pytest.mark.parametrize(
+    "metric", (
+        "total_tokens", "successful_source_count", "source_success_rate",
+        "verified_claim_count", "claim_support_rate", "citation_precision_proxy",
+    )
+)
+def test_diagnostic_aggregation_rejects_overridden_subclass_scores(metric):
+    # A frozen dataclass subclass may redefine properties even with ordinary,
+    # apparently valid raw counters. Never let those outputs enter research means.
+    class SpoofedMetric(RunTrace):
+        pass
+
+    setattr(SpoofedMetric, metric, property(lambda self: 1.0))
+    record = SpoofedMetric(
+        run_id="spoofed", completed=True, source_count=1,
+        variant_id="D3", task_set_id="s", task_id="t", question="Q",
+    )
+    with pytest.raises(ValueError, match=f"derived metric {metric}"):
+        aggregate_runs(iter([record]))
+    with pytest.raises(ValueError, match=f"derived metric {metric}"):
+        aggregate_runs_by_task(
+            iter([record]), variant_id="D3", task_set_id="s",
+            expected_task_ids=["t"], expected_questions_by_task={"t": "Q"},
+        )
+
+
+@pytest.mark.parametrize("bad_field,bad_value", [
+    ("completed", "False"), ("source_count", -1),
+    ("estimated_cost_usd", float("nan")),
+])
+def test_diagnostic_aggregation_rechecks_subclass_bypassed_post_init(
+    bad_field, bad_value,
+):
+    class SkippedValidation(RunTrace):
+        def __post_init__(self):
+            pass
+
+    values = dict(
+        run_id="unvalidated", completed=True, source_count=1,
+        variant_id="D3", task_set_id="s", task_id="t", question="Q",
+    )
+    values[bad_field] = bad_value
+    record = SkippedValidation(**values)
+    with pytest.raises(ValueError, match=bad_field):
+        aggregate_runs([record])
+    with pytest.raises(ValueError, match=bad_field):
+        aggregate_runs_by_task(
+            [record], variant_id="D3", task_set_id="s",
+            expected_task_ids=["t"], expected_questions_by_task={"t": "Q"},
+        )
+
+
+def test_paired_trace_adapter_rejects_spoofed_baseline_before_candidate_read():
+    class SpoofedRate(RunTrace):
+        @property
+        def claim_support_rate(self):
+            return 1.0
+
+    baseline = SpoofedRate(
+        run_id="bad", completed=True, source_count=1,
+        variant_id="D3", task_set_id="s", task_id="t", question="Q",
+        unsupported_claim_count=1,
+    )
+    reads = []
+    def candidate():
+        reads.append("candidate")
+        yield RunTrace(
+            run_id="good", completed=True, source_count=1,
+            variant_id="D6", task_set_id="s", task_id="t", question="Q",
+        )
+    with pytest.raises(ValueError, match="derived metric claim_support_rate"):
+        paired_run_trace_bootstrap_by_task(
+            iter([baseline]), candidate(),
+            baseline_variant_id="D3", candidate_variant_id="D6",
+            task_set_id="s", expected_task_ids=["t"],
+            expected_questions_by_task={"t": "Q"}, n_resamples=2,
+        )
+    assert reads == []
+
+
+def test_aggregate_runs_snapshots_a_single_traversal_for_all_metrics():
+    first = RunTrace(
+        run_id="snapshot-a", completed=True, source_count=2,
+        latency_seconds=2.0, prompt_tokens=20, estimated_cost_usd=0.1,
+    )
+    second = RunTrace(
+        run_id="snapshot-b", completed=False, source_count=0,
+        latency_seconds=6.0, prompt_tokens=40, estimated_cost_usd=0.3,
+    )
+
+    class SingleTraversalRuns(list):
+        passes = 0
+
+        def __iter__(self):
+            self.passes += 1
+            if self.passes != 1:
+                raise AssertionError("diagnostic run population was reread")
+            return super().__iter__()
+
+    source = SingleTraversalRuns([first, second])
+    expected = aggregate_runs((first, second))
+    assert aggregate_runs(source) == expected
+    assert source.passes == 1
+
+
+def test_aggregate_runs_does_not_mix_successive_source_epochs():
+    original = [
+        RunTrace(run_id="original-complete", completed=True, source_count=2,
+                 latency_seconds=2.0, estimated_cost_usd=0.1),
+        RunTrace(run_id="original-failed", completed=False, source_count=0,
+                 latency_seconds=6.0, estimated_cost_usd=0.3),
+    ]
+    replacement = [
+        RunTrace(run_id="replacement-1", completed=False, source_count=9,
+                 latency_seconds=100.0, estimated_cost_usd=7.0),
+        RunTrace(run_id="replacement-2", completed=False, source_count=9,
+                 latency_seconds=100.0, estimated_cost_usd=7.0),
+    ]
+
+    class ChangingRuns(list):
+        passes = 0
+
+        def __iter__(self):
+            self.passes += 1
+            return iter(original if self.passes == 1 else replacement)
+
+    source = ChangingRuns(original)
+    assert aggregate_runs(source) == aggregate_runs(tuple(original))
+    assert source.passes == 1
+
+
+def test_aggregate_runs_rejects_infinite_one_pass_population_at_first_excess():
+    trace = RunTrace(run_id="repeated-synthetic", completed=False, source_count=0)
+    reads = 0
+
+    def endless_runs():
+        nonlocal reads
+        while True:
+            reads += 1
+            yield trace
+
+    with pytest.raises(ValueError, match="diagnostic limit"):
+        aggregate_runs(endless_runs())
+    assert reads == MAX_DIAGNOSTIC_AGGREGATE_RUNS + 1
+
+
+def test_aggregate_runs_rejects_finite_oversized_population():
+    trace = RunTrace(run_id="synthetic", completed=True, source_count=1)
+    with pytest.raises(ValueError, match="diagnostic limit"):
+        aggregate_runs([trace] * (MAX_DIAGNOSTIC_AGGREGATE_RUNS + 1))
+
+
+def test_aggregate_runs_accepts_inclusive_limit_without_changing_estimators():
+    trace = RunTrace(
+        run_id="synthetic", completed=True, source_count=1,
+        latency_seconds=2.5, estimated_cost_usd=0.25,
+    )
+    summary = aggregate_runs(trace for _ in range(MAX_DIAGNOSTIC_AGGREGATE_RUNS))
+    assert summary["n_runs"] == MAX_DIAGNOSTIC_AGGREGATE_RUNS
+    assert summary["completion_rate"] == 1.0
+    assert summary["avg_sources"] == 1.0
+    assert summary["avg_latency_seconds"] == 2.5
+    assert summary["avg_estimated_cost_usd"] == 0.25
+
+
 def test_empty_aggregate_is_defined():
     summary = aggregate_runs([])
     assert summary["n_runs"] == 0
@@ -55,6 +685,37 @@ def test_empty_aggregate_is_defined():
     assert summary["latency_stddev_seconds"] == 0.0
     assert summary["total_tokens_stddev"] == 0.0
     assert summary["median_estimated_cost_usd"] == 0.0
+
+
+
+@pytest.mark.parametrize(
+    "statistic",
+    [safe_mean, safe_median, population_stddev],
+    ids=["mean", "median", "population-stddev"],
+)
+@pytest.mark.parametrize(
+    "invalid",
+    [float("nan"), float("inf"), float("-inf"), True, "1.0", None, 10**400],
+    ids=["nan", "positive-infinity", "negative-infinity", "bool",
+         "coercible-string", "none", "unrepresentable-integer"],
+)
+def test_descriptive_statistics_reject_invalid_one_pass_observations(statistic, invalid):
+    # A NaN in one run must not turn a descriptive summary into a silent
+    # nonfinite result or be hidden by a sort/median of the remaining runs.
+    observations = (value for value in [1.0, invalid, 3.0])
+    with pytest.raises(ValueError, match="descriptive observation must be finite"):
+        statistic(observations)
+
+
+@pytest.mark.parametrize(
+    ("statistic", "expected"),
+    [(safe_mean, 2.0), (safe_median, 2.0),
+     (population_stddev, (2.0 / 3.0) ** 0.5)],
+    ids=["mean", "median", "population-stddev"],
+)
+def test_descriptive_statistics_accept_finite_one_pass_observations(statistic, expected):
+    observations = (value for value in [1.0, 2.0, 3.0])
+    assert statistic(observations) == pytest.approx(expected)
 
 
 def test_robust_statistics_handle_odd_even_and_empty_inputs():
@@ -67,6 +728,34 @@ def test_robust_statistics_handle_odd_even_and_empty_inputs():
     assert population_stddev([10.0, 20.0]) == 5.0
 
 
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ([1e308, 1e308], 1e308),
+        ([-1e308, -1e308], -1e308),
+        ([-1e308, 1e308], 0.0),
+        ([1e308, 1e308, -1e308], 1e308 / 3),
+        ([5e-324, 5e-324], 5e-324),
+    ],
+)
+def test_safe_mean_retains_representable_large_and_subnormal_centers(values, expected):
+    observed = safe_mean(values)
+    assert observed == expected if expected == 5e-324 else observed == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ([1e308, 1e308], 1e308),
+        ([-1e308, -1e308], -1e308),
+        ([-1e308, 1e308], 0.0),
+        ([5e-324, 5e-324], 5e-324),
+    ],
+)
+def test_safe_median_retains_representable_large_and_subnormal_centers(values, expected):
+    assert safe_median(values) == expected
+
+
 def test_bootstrap_confidence_interval_is_reproducible_and_bounded():
     first = bootstrap_confidence_interval([1, 2, 3, 4, 5], n_resamples=500, seed=42)
     second = bootstrap_confidence_interval([1, 2, 3, 4, 5], n_resamples=500, seed=42)
@@ -75,6 +764,141 @@ def test_bootstrap_confidence_interval_is_reproducible_and_bounded():
     assert 1.0 <= first["lower"] <= first["estimate"] <= first["upper"] <= 5.0
 
 
+
+def test_bootstrap_receipt_discloses_seed_and_observation_count_on_one_pass_sample():
+    values = (value for value in (0.0, 1.0, 2.0))
+    interval = bootstrap_confidence_interval(values, n_resamples=19, seed=-23)
+    assert interval["seed"] == -23
+    assert interval["n_observations"] == 3
+    assert interval == bootstrap_confidence_interval(
+        [0.0, 1.0, 2.0], n_resamples=19, seed=-23
+    )
+
+
+def test_bootstrap_receipt_keeps_original_denominator_for_mutating_statistic():
+    def consuming_mean(values):
+        count = len(values)
+        result = sum(values) / count
+        values.clear()
+        return result
+
+    result = bootstrap_confidence_interval(
+        [1.0, 3.0, 5.0], statistic=consuming_mean, n_resamples=4, seed=31
+    )
+    assert result["n_observations"] == 3
+    assert result["estimate"] == 3.0
+
+
+def test_bootstrap_empty_receipt_has_explicit_zero_observations_not_measured_zero_effect():
+    interval = bootstrap_confidence_interval(
+        iter(()), n_resamples=7, confidence=0.9, seed=41
+    )
+    assert interval == {
+        "estimate": 0.0,
+        "lower": 0.0,
+        "upper": 0.0,
+        "confidence": 0.9,
+        "n_resamples": 7,
+        "seed": 41,
+        "n_observations": 0,
+    }
+
+
+def test_paired_bootstrap_receipt_binds_seed_and_task_pair_cardinality():
+    result = paired_bootstrap_confidence_interval_by_task(
+        iter([("task-b", 0.25), ("task-a", 0.0)]),
+        iter([("task-a", 0.5), ("task-b", 0.75)]),
+        expected_task_ids=iter(["task-b", "task-a"]),
+        n_resamples=9,
+        seed=47,
+    )
+    assert result["n_pairs"] == 2
+    assert result["bootstrap_confidence_interval"]["seed"] == 47
+    assert result["bootstrap_confidence_interval"]["n_observations"] == 2
+    assert result["bootstrap_confidence_interval"]["estimate"] == result["mean_delta"]
+
+
+def test_bootstrap_rejects_excessive_resamples_before_reading_any_observations():
+    class MustNotRead:
+        def __iter__(self):
+            raise AssertionError("invalid bootstrap plan read observations")
+
+    with pytest.raises(ValueError, match="n_resamples exceeds"):
+        bootstrap_confidence_interval(
+            MustNotRead(), n_resamples=MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES + 1
+        )
+
+
+def test_bootstrap_bounds_unending_one_pass_diagnostic_samples():
+    reads = 0
+
+    def infinite_observations():
+        nonlocal reads
+        while True:
+            reads += 1
+            yield 0.25
+
+    with pytest.raises(ValueError, match="bootstrap sample exceeds"):
+        bootstrap_confidence_interval(infinite_observations(), n_resamples=2)
+    assert reads == MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS + 1
+
+
+def test_bootstrap_rejects_oversized_draw_plan_before_statistic_execution():
+    called = False
+
+    def forbidden_statistic(_values):
+        nonlocal called
+        called = True
+        raise AssertionError("over-budget bootstrap ran statistic")
+
+    samples = [0.25] * MAX_DIAGNOSTIC_BOOTSTRAP_INPUTS
+    requested = MAX_DIAGNOSTIC_BOOTSTRAP_DRAWS // len(samples) + 1
+    assert requested <= MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES
+    with pytest.raises(ValueError, match="bootstrap work budget exceeds"):
+        bootstrap_confidence_interval(
+            samples, statistic=forbidden_statistic, n_resamples=requested
+        )
+    assert called is False
+
+
+def test_bootstrap_resource_limits_preserve_small_seeded_diagnostic_intervals():
+    first = bootstrap_confidence_interval(
+        (v for v in (0.0, 0.5, 1.0)), n_resamples=50, seed=37
+    )
+    second = bootstrap_confidence_interval(
+        [0.0, 0.5, 1.0], n_resamples=50, seed=37
+    )
+    assert first == second
+    assert first["estimate"] == 0.5
+
+
+
+@pytest.mark.parametrize("statistic", [None, 1, "safe_mean", [], {}])
+def test_bootstrap_rejects_noncallable_statistic_before_reading_any_samples(statistic):
+    # Previously an empty sample bypassed statistic invocation altogether,
+    # returning a plausible all-zero CI for an invalid analysis configuration.
+    class MustNotRead:
+        def __iter__(self):
+            raise AssertionError("invalid statistic consumed experimental observations")
+
+    with pytest.raises(ValueError, match="bootstrap statistic must be callable"):
+        bootstrap_confidence_interval(MustNotRead(), statistic=statistic, n_resamples=2)
+    with pytest.raises(ValueError, match="bootstrap statistic must be callable"):
+        bootstrap_confidence_interval([], statistic=statistic, n_resamples=2)
+
+
+def test_bootstrap_callable_custom_statistic_preserves_seeded_and_empty_compatibility():
+    statistic = lambda values: max(values)
+    first = bootstrap_confidence_interval([0.0, 1.0, 2.0], statistic=statistic,
+                                          seed=23, n_resamples=12)
+    second = bootstrap_confidence_interval((v for v in (0.0, 1.0, 2.0)),
+                                           statistic=statistic, seed=23, n_resamples=12)
+    assert first == second
+    assert first["estimate"] == 2.0
+    # The existing no-observations convention survives for valid estimands;
+    # it is not evidence of a measured zero effect or a meaningful interval.
+    assert bootstrap_confidence_interval([], statistic=statistic, n_resamples=2)["estimate"] == 0.0
+
 def test_bootstrap_confidence_interval_handles_empty_and_invalid_settings():
     empty = bootstrap_confidence_interval([], n_resamples=10)
     assert empty["estimate"] == empty["lower"] == empty["upper"] == 0.0
@@ -82,6 +906,189 @@ def test_bootstrap_confidence_interval_handles_empty_and_invalid_settings():
         bootstrap_confidence_interval([1.0], confidence=1.0)
     with pytest.raises(ValueError, match="n_resamples"):
         bootstrap_confidence_interval([1.0], n_resamples=0)
+
+
+@pytest.mark.parametrize(
+    "invalid", [0, 1, -1, True, False, 2.0, "50", None, [], {}, 10**400]
+)
+def test_generic_bootstrap_requires_explicit_multiple_integer_draws(invalid):
+    with pytest.raises(ValueError, match="n_resamples"):
+        bootstrap_confidence_interval([0.25, 0.75], n_resamples=invalid)
+
+
+@pytest.mark.parametrize(
+    "invalid", [True, False, None, 0.5, "1", [], {}]
+)
+def test_generic_bootstrap_requires_explicit_integer_seed(invalid):
+    with pytest.raises(ValueError, match="seed"):
+        bootstrap_confidence_interval([0.25, 0.75], seed=invalid)
+
+
+@pytest.mark.parametrize("sign", [1, -1])
+def test_bootstrap_oversized_seed_fails_before_reading_observations(sign):
+    # Invalid seed setup must not consume even one untrusted input record.
+    reads = {"generic": 0, "baseline": 0, "candidate": 0}
+
+    def forbidden(name):
+        reads[name] += 1
+        raise AssertionError("invalid seed consumed observations")
+        yield ("task-a", 0.5)
+
+    oversized = sign * (1 << MAX_DIAGNOSTIC_BOOTSTRAP_SEED_BITS)
+    with pytest.raises(ValueError, match="seed exceeds"):
+        bootstrap_confidence_interval(forbidden("generic"), seed=oversized)
+    with pytest.raises(ValueError, match="seed exceeds"):
+        paired_bootstrap_confidence_interval_by_task(
+            forbidden("baseline"), forbidden("candidate"),
+            expected_task_ids=("task-a",), seed=oversized,
+        )
+    assert reads == {"generic": 0, "baseline": 0, "candidate": 0}
+
+
+@pytest.mark.parametrize("sign", [1, -1])
+def test_bootstrap_seed_inclusive_bit_boundary_is_repeatable(sign):
+    boundary = sign * ((1 << MAX_DIAGNOSTIC_BOOTSTRAP_SEED_BITS) - 1)
+    first = bootstrap_confidence_interval(
+        [0.0, 1.0], n_resamples=4, seed=boundary,
+    )
+    second = bootstrap_confidence_interval(
+        [0.0, 1.0], n_resamples=4, seed=boundary,
+    )
+    assert first == second
+    assert first["estimate"] == 0.5
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [True, False, "0.95", None, float("nan"), float("inf"),
+     float("-inf"), 0, 1, -1, 10**400],
+)
+def test_generic_bootstrap_requires_finite_numeric_confidence(invalid):
+    with pytest.raises(ValueError, match="confidence"):
+        bootstrap_confidence_interval([0.25, 0.75], confidence=invalid)
+
+
+def test_generic_bootstrap_rejects_bad_settings_before_consuming_observations():
+    class ForbidIteration:
+        def __iter__(self):
+            raise AssertionError("invalid settings consumed diagnostic inputs")
+
+    with pytest.raises(ValueError, match="seed"):
+        bootstrap_confidence_interval(ForbidIteration(), seed="3")
+
+
+def test_generic_bootstrap_preserves_valid_seeded_intervals_and_empty_input():
+    first = bootstrap_confidence_interval(
+        [0.0, 0.25, 0.75], confidence=0.9, n_resamples=25, seed=-7
+    )
+    second = bootstrap_confidence_interval(
+        [0.0, 0.25, 0.75], confidence=0.9, n_resamples=25, seed=-7
+    )
+    assert first == second
+    assert first["confidence"] == 0.9
+    assert first["n_resamples"] == 25
+    assert bootstrap_confidence_interval(
+        [], confidence=0.9, n_resamples=2, seed=-7
+    )["estimate"] == 0.0
+
+
+def test_bootstrap_confidence_interval_uses_linear_percentiles(monkeypatch):
+    samples = iter(([0.0], [10.0], [20.0], [30.0]))
+
+    class FixedRandom:
+        def __init__(self, seed):
+            assert seed == 0
+
+        def choices(self, population, *, k):
+            assert population == [0.0]
+            assert k == 1
+            return next(samples)
+
+    monkeypatch.setattr("logic.evaluation.Random", FixedRandom)
+
+    interval = bootstrap_confidence_interval(
+        [0.0], confidence=0.5, n_resamples=4, seed=0
+    )
+
+    assert interval["lower"] == pytest.approx(7.5)
+    assert interval["upper"] == pytest.approx(22.5)
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
+def test_bootstrap_confidence_interval_rejects_non_finite_samples(invalid):
+    with pytest.raises(ValueError, match="bootstrap sample must be finite"):
+        bootstrap_confidence_interval([1.0, invalid], n_resamples=10)
+
+
+def test_bootstrap_confidence_interval_rejects_non_finite_statistic():
+    with pytest.raises(ValueError, match="bootstrap statistic must be finite"):
+        bootstrap_confidence_interval(
+            [1.0, 2.0], statistic=lambda values: float("nan"), n_resamples=10
+        )
+
+
+@pytest.mark.parametrize("invalid", [True, False, "1.0", None, 10**400])
+def test_bootstrap_rejects_coerced_or_unrepresentable_sample_metric(invalid):
+    # A coercible status/string is not an observed research measurement.
+    with pytest.raises(ValueError, match="bootstrap sample must be finite"):
+        bootstrap_confidence_interval([1.0, invalid], n_resamples=10)
+
+
+@pytest.mark.parametrize("invalid", [True, "3.0", None, 10**400])
+def test_bootstrap_rejects_coerced_or_unrepresentable_statistic(invalid):
+    with pytest.raises(ValueError, match="bootstrap statistic must be finite"):
+        bootstrap_confidence_interval(
+            [1.0, 2.0], statistic=lambda values: invalid, n_resamples=10
+        )
+
+
+def test_bootstrap_confidence_interval_interpolates_extreme_finite_estimates():
+    statistic_values = iter((-1e308, 1e308, 0.0))
+
+    interval = bootstrap_confidence_interval(
+        [0.0],
+        statistic=lambda values: next(statistic_values),
+        confidence=0.5,
+        n_resamples=2,
+    )
+
+    assert interval["estimate"] == 0.0
+    assert interval["lower"] == pytest.approx(-5e307)
+    assert interval["upper"] == pytest.approx(5e307)
+
+
+def test_bootstrap_mean_keeps_finite_extreme_constant_sample():
+    interval = bootstrap_confidence_interval([1e308, 1e308], n_resamples=20, seed=7)
+    assert interval["estimate"] == 1e308
+    assert interval["lower"] == interval["upper"] == 1e308
+
+
+
+@pytest.mark.parametrize("constant", [5e-324, -5e-324, 1e-320, -1e-320])
+def test_bootstrap_percentiles_keep_constant_subnormal_effects(constant):
+    # With 101 draws, the default 95% endpoints land halfway between two
+    # order statistics. Multiplying both smallest-subnormal observations
+    # by their 0.5 weights independently incorrectly produced zero.
+    interval = bootstrap_confidence_interval(
+        [constant], n_resamples=101, seed=17
+    )
+    assert interval["estimate"] == constant
+    assert interval["lower"] == constant
+    assert interval["upper"] == constant
+
+
+def test_bootstrap_percentiles_keep_same_sign_subnormal_bounds():
+    # Exercise interpolation through the public API with known ordered
+    # statistic draws, not a private helper or any experiment outcomes.
+    values = iter((5e-324, 1e-323, 0.0))
+    interval = bootstrap_confidence_interval(
+        [0.0],
+        statistic=lambda sample: next(values),
+        confidence=0.5,
+        n_resamples=2,
+    )
+    assert interval["estimate"] == 0.0
+    assert 5e-324 <= interval["lower"] <= interval["upper"] <= 1e-323
 
 
 def test_paired_metric_comparison_preserves_task_pairing():
@@ -98,6 +1105,191 @@ def test_paired_metric_comparison_preserves_task_pairing():
     assert summary["losses"] == 1
 
 
+@pytest.mark.parametrize(
+    ("baseline_rows", "candidate_rows"),
+    [
+        ([0.25, 0.5], [0.75]),
+        ([0.25], [0.75, 1.0]),
+    ],
+)
+def test_paired_metric_comparison_rejects_stale_sequence_lengths(
+    baseline_rows, candidate_rows
+):
+    # Both arms initially claim two rows, but one observation disappears
+    # or appears before the actual data traversal. zip() must not quietly
+    # truncate an unmatched candidate/baseline task.
+    class ChangingSequence:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def __len__(self):
+            return 2
+
+        def __iter__(self):
+            return iter(self.rows)
+
+        def __getitem__(self, index):
+            return self.rows[index]
+
+    with pytest.raises(ValueError, match="equal-length"):
+        paired_metric_comparison(
+            ChangingSequence(baseline_rows), ChangingSequence(candidate_rows)
+        )
+
+
+
+@pytest.mark.parametrize(
+    ("declared_length", "actual_rows"),
+    [
+        (2, [0.25]),        # Both arms simultaneously lose a declared task.
+        (1, [0.25, 0.5]),  # Both arms simultaneously gain an undeclared task.
+        (0, [0.25]),       # A declared empty comparison cannot gain a task.
+    ],
+)
+def test_paired_metric_comparison_rejects_common_mode_cardinality_drift(
+    declared_length, actual_rows
+):
+    # The earlier observed-count guard catches one-sided drift. This case
+    # has *equal* observed arm lengths despite both disagreeing with the
+    # original declared count, so a simple equality check is insufficient.
+    class ChangingSequence:
+        def __init__(self, rows):
+            self.rows = rows
+            self.iterations = 0
+            self.length_reads = 0
+
+        def __len__(self):
+            self.length_reads += 1
+            assert self.length_reads == 1  # Do not re-query a live length.
+            return declared_length
+
+        def __iter__(self):
+            self.iterations += 1
+            return iter(self.rows)
+
+        def __getitem__(self, index):
+            return self.rows[index]
+
+    baseline = ChangingSequence(actual_rows)
+    candidate = ChangingSequence(actual_rows)
+    with pytest.raises(ValueError, match="declared counts"):
+        paired_metric_comparison(baseline, candidate)
+    # A malformed first arm now fails before touching the second arm.
+    assert baseline.iterations == 1
+    assert candidate.iterations == 0
+    assert baseline.length_reads == candidate.length_reads == 1
+
+def test_paired_metric_comparison_accepts_equal_snapshot_sizes():
+    class OnceSequence:
+        def __init__(self, rows):
+            self.rows = rows
+            self.iterations = 0
+
+        def __len__(self):
+            return 2
+
+        def __iter__(self):
+            self.iterations += 1
+            return iter(self.rows)
+
+        def __getitem__(self, index):
+            return self.rows[index]
+
+    baseline = OnceSequence([0.25, 0.5])
+    candidate = OnceSequence([0.75, 0.25])
+    result = paired_metric_comparison(baseline, candidate)
+    assert result["n_pairs"] == 2
+    assert (result["wins"], result["ties"], result["losses"]) == (1, 0, 1)
+    assert baseline.iterations == candidate.iterations == 1
+
+
+@pytest.mark.parametrize("invalid_arm", ["baseline", "candidate"])
+@pytest.mark.parametrize("declared_count", [0, 2])
+def test_positional_pairing_stops_unending_sequence_after_declared_count(
+    invalid_arm, declared_count
+):
+    # With the earlier unbounded list conversion, even a Sequence claiming
+    # zero or two tasks could hang forever instead of failing closed.
+    class UnendingSequence:
+        def __init__(self):
+            self.reads = 0
+
+        def __len__(self):
+            return declared_count
+
+        def __iter__(self):
+            while True:
+                self.reads += 1
+                if self.reads > declared_count + 1:
+                    raise AssertionError("read beyond the declared count plus one")
+                yield 0.5
+
+        def __getitem__(self, index):
+            return 0.5
+
+    unending = UnendingSequence()
+    valid = [0.25] * declared_count
+    baseline, candidate = (
+        (unending, valid) if invalid_arm == "baseline" else (valid, unending)
+    )
+    with pytest.raises(ValueError, match="declared counts"):
+        paired_metric_comparison(baseline, candidate)
+    assert unending.reads == declared_count + 1
+
+
+def test_positional_pairing_invalid_baseline_does_not_read_candidate():
+    class BadBaseline:
+        def __len__(self):
+            return 1
+
+        def __iter__(self):
+            yield 0.5
+            yield 0.5
+            raise AssertionError("baseline read beyond first unexpected row")
+
+        def __getitem__(self, index):
+            return 0.5
+
+    class UnreadCandidate:
+        def __len__(self):
+            return 1
+
+        def __iter__(self):
+            raise AssertionError("candidate must not be consumed")
+            yield 0.5
+
+        def __getitem__(self, index):
+            raise AssertionError("candidate must not be indexed")
+
+    with pytest.raises(ValueError, match="declared counts"):
+        paired_metric_comparison(BadBaseline(), UnreadCandidate())
+
+
+def test_positional_pairing_rejects_overlarge_declared_population_before_reads():
+    class NoReadSequence:
+        def __len__(self):
+            return MAX_DIAGNOSTIC_POSITIONAL_PAIRS + 1
+
+        def __iter__(self):
+            raise AssertionError("oversized declaration must fail before reads")
+            yield 0.5
+
+        def __getitem__(self, index):
+            raise AssertionError("oversized declaration must fail before indexing")
+
+    with pytest.raises(ValueError, match="diagnostic positional limit"):
+        paired_metric_comparison(NoReadSequence(), NoReadSequence())
+
+
+def test_positional_pairing_accepts_exact_resource_boundary():
+    baseline = [0.0] * MAX_DIAGNOSTIC_POSITIONAL_PAIRS
+    candidate = [0.5] * MAX_DIAGNOSTIC_POSITIONAL_PAIRS
+    result = paired_metric_comparison(baseline, candidate)
+    assert result["n_pairs"] == MAX_DIAGNOSTIC_POSITIONAL_PAIRS
+    assert result["mean_delta"] == 0.5
+    assert result["wins"] == MAX_DIAGNOSTIC_POSITIONAL_PAIRS
+
+
 def test_paired_metric_comparison_handles_empty_and_rejects_misalignment():
     assert paired_metric_comparison([], []) == {
         "n_pairs": 0,
@@ -112,6 +1304,3135 @@ def test_paired_metric_comparison_handles_empty_and_rejects_misalignment():
         paired_metric_comparison([1.0], [1.0, 2.0])
 
 
+@pytest.mark.parametrize("side", ["baseline", "candidate"])
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
+def test_paired_metric_comparison_rejects_non_finite_samples(side, invalid):
+    baseline = [1.0]
+    candidate = [2.0]
+    if side == "baseline":
+        baseline[0] = invalid
+    else:
+        candidate[0] = invalid
+
+    with pytest.raises(ValueError, match=f"{side} values must be finite"):
+        paired_metric_comparison(baseline, candidate)
+
+
+@pytest.mark.parametrize("side", ["baseline", "candidate"])
+@pytest.mark.parametrize("invalid", [True, False, "1.0", None, 10**400])
+def test_positional_pairing_rejects_coerced_or_unrepresentable_metrics(
+    side, invalid
+):
+    # The task-keyed API already rejected these, but the positional API
+    # previously converted them to plausible floating-point observations.
+    baseline = [1.0]
+    candidate = [2.0]
+    if side == "baseline":
+        baseline[0] = invalid
+    else:
+        candidate[0] = invalid
+    with pytest.raises(ValueError, match=f"{side} values must be finite"):
+        paired_metric_comparison(baseline, candidate)
+
+
+def test_paired_metric_comparison_rejects_overflowed_delta():
+    with pytest.raises(ValueError, match="paired deltas must be finite"):
+        paired_metric_comparison([-1e308], [1e308])
+
+
+def test_paired_metric_comparison_keeps_finite_extreme_mean():
+    # The two deltas and their true mean are finite; only the old sum overflowed.
+    result = paired_metric_comparison([-1e308, -1e308], [0.0, 0.0])
+    assert result["n_pairs"] == 2
+    assert result["mean_delta"] == pytest.approx(1e308)
+    assert result["median_delta"] == pytest.approx(1e308)
+    assert result["delta_stddev"] == 0.0
+    assert (result["wins"], result["ties"], result["losses"]) == (2, 0, 0)
+
+
+def test_paired_metric_comparison_retains_finite_extreme_dispersion():
+    # Opposing finite deltas have representable mean and population stddev.
+    # Squaring them directly used to overflow and falsely reject this pair.
+    result = paired_metric_comparison([0.0, 0.0], [1e308, -1e308])
+    assert result["n_pairs"] == 2
+    assert result["mean_delta"] == 0.0
+    assert result["median_delta"] == 0.0
+    assert result["delta_stddev"] == pytest.approx(1e308)
+    assert (result["wins"], result["ties"], result["losses"]) == (1, 0, 1)
+
+
+def test_task_keyed_pairing_joins_by_id_not_row_order():
+    expected = ["task-c", "task-a", "task-b"]
+    baseline = [("task-b", 2), ("task-c", 3), ("task-a", 1)]
+    candidate = [("task-a", 2), ("task-b", 2), ("task-c", 1)]
+    result = paired_metric_comparison_by_task(
+        baseline, candidate, expected_task_ids=expected
+    )
+    assert result["task_ids"] == ["task-a", "task-b", "task-c"]
+    assert result["n_pairs"] == 3
+    assert result["mean_delta"] == pytest.approx(-1 / 3)
+    assert (result["wins"], result["ties"], result["losses"]) == (1, 1, 1)
+    assert result == paired_metric_comparison_by_task(
+        reversed(baseline),
+        reversed(candidate),
+        expected_task_ids=reversed(expected),
+    )
+
+
+@pytest.mark.parametrize(
+    ("baseline", "candidate", "message"),
+    [
+        ([("a", 1)], [("a", 2)], "baseline task coverage mismatch"),
+        ([("a", 1), ("b", 1)], [("a", 2)], "candidate task coverage mismatch"),
+        ([("a", 1), ("b", 1)], [("a", 2), ("x", 2)], "candidate task coverage mismatch"),
+        ([("a", 1), ("a", 2), ("b", 3)], [("a", 1), ("b", 2)], "duplicate baseline"),
+        ([("a", 1), ("b", 2)], [("a", 1), ("b", 2), ("b", 3)], "duplicate candidate"),
+    ],
+)
+def test_task_keyed_pairing_rejects_missing_substituted_or_replicated_cells(
+    baseline, candidate, message
+):
+    with pytest.raises(ValueError, match=message):
+        paired_metric_comparison_by_task(
+            baseline, candidate, expected_task_ids=["a", "b"]
+        )
+
+
+@pytest.mark.parametrize(
+    ("expected", "message"),
+    [
+        ([], "must not be empty"),
+        (["a", "a"], "duplicate expected"),
+        (["a", ""], "expected task_id"),
+        (["a", " b"], "expected task_id"),
+    ],
+)
+def test_task_keyed_pairing_rejects_invalid_reference_task_set(expected, message):
+    with pytest.raises(ValueError, match=message):
+        paired_metric_comparison_by_task([], [], expected_task_ids=expected)
+
+
+@pytest.mark.parametrize("bad_id", ["", " a", "a ", False, 1, None])
+@pytest.mark.parametrize("arm", ["baseline", "candidate"])
+def test_task_keyed_pairing_rejects_invalid_observed_task_ids(bad_id, arm):
+    baseline, candidate = [("a", 1)], [("a", 2)]
+    if arm == "baseline":
+        baseline = [(bad_id, 1)]
+    else:
+        candidate = [(bad_id, 2)]
+    with pytest.raises(ValueError, match=f"{arm} task_id"):
+        paired_metric_comparison_by_task(
+            baseline, candidate, expected_task_ids=["a"]
+        )
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [False, "1", None, float("nan"), float("inf"), float("-inf"), 10**400],
+)
+@pytest.mark.parametrize("arm", ["baseline", "candidate"])
+def test_task_keyed_pairing_rejects_non_numeric_or_nonfinite_metrics(
+    bad_value, arm
+):
+    baseline, candidate = [("a", 1)], [("a", 2)]
+    if arm == "baseline":
+        baseline = [("a", bad_value)]
+    else:
+        candidate = [("a", bad_value)]
+    with pytest.raises(ValueError, match=f"{arm} metric"):
+        paired_metric_comparison_by_task(
+            baseline, candidate, expected_task_ids=["a"]
+        )
+
+
+@pytest.mark.parametrize(
+    "bad_record", [("a",), ("a", 1, 2), "a", {"task_id": "a"}]
+)
+def test_task_keyed_pairing_rejects_malformed_rows(bad_record):
+    with pytest.raises(ValueError, match="records must be"):
+        paired_metric_comparison_by_task(
+            [bad_record], [("a", 1)], expected_task_ids=["a"]
+        )
+
+
+def test_task_keyed_pairing_accepts_finite_zero_and_generator_inputs():
+    result = paired_metric_comparison_by_task(
+        (item for item in [("b", 0.0), ("a", -1.0)]),
+        (item for item in [("a", -1.0), ("b", 0.0)]),
+        expected_task_ids=(task for task in ["a", "b"]),
+    )
+    assert result["task_ids"] == ["a", "b"]
+    assert result["n_pairs"] == 2
+    assert result["wins"] == result["losses"] == 0
+    assert result["ties"] == 2
+
+
+
+def _task_aggregate_trace(task_id, *, completed=True, **overrides):
+    fields = {
+        "run_id": f"run-{task_id}",
+        "completed": completed,
+        "source_count": 2,
+        "variant_id": "D3",
+        "task_set_id": "frozen-diagnostic",
+        "task_id": task_id,
+    }
+    fields.update(overrides)
+    return RunTrace(**fields)
+
+
+def test_task_aggregate_checks_all_tasks_and_retains_failed_cells():
+    rows = [
+        _task_aggregate_trace("task-b", completed=False, source_count=0),
+        _task_aggregate_trace("task-a", completed=True),
+    ]
+    result = aggregate_runs_by_task(
+        rows,
+        variant_id="D3",
+        task_set_id="frozen-diagnostic",
+        expected_task_ids=["task-b", "task-a"],
+    )
+    assert result["task_ids"] == ["task-a", "task-b"]
+    assert result["n_runs"] == 2
+    assert result["completion_rate"] == 0.5
+    assert result["avg_sources"] == 1.0
+    assert result == aggregate_runs_by_task(
+        reversed(rows),
+        variant_id="D3",
+        task_set_id="frozen-diagnostic",
+        expected_task_ids=reversed(["task-a", "task-b"]),
+    )
+
+
+@pytest.mark.parametrize(
+    ("expected", "message"),
+    [
+        ([], "expected_task_ids must not be empty"),
+        (["a", "a"], "duplicate expected task_id"),
+        (["a", ""], "expected task_id"),
+        (["a", " b"], "expected task_id"),
+        (["a", " "], "expected task_id"),
+        (["a", None], "expected task_id"),
+        (["a", True], "expected task_id"),
+    ],
+)
+def test_task_aggregate_rejects_invalid_reference_manifest(expected, message):
+    with pytest.raises(ValueError, match=message):
+        aggregate_runs_by_task(
+            [], variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=expected,
+        )
+
+
+@pytest.mark.parametrize("field", ["variant_id", "task_set_id"])
+@pytest.mark.parametrize("invalid", ["", " ", " D3", None, False, 123])
+def test_task_aggregate_rejects_invalid_required_identity(field, invalid):
+    arguments = {
+        "variant_id": "D3",
+        "task_set_id": "frozen-diagnostic",
+    }
+    arguments[field] = invalid
+    with pytest.raises(ValueError, match=field):
+        aggregate_runs_by_task(
+            [_task_aggregate_trace("a")], expected_task_ids=["a"], **arguments
+        )
+
+
+@pytest.mark.parametrize(
+    ("observed", "message"),
+    [
+        ([], "task coverage mismatch"),
+        ([_task_aggregate_trace("a")], "task coverage mismatch"),
+        ([_task_aggregate_trace("a"), _task_aggregate_trace("x")], "task coverage mismatch"),
+        ([_task_aggregate_trace("a"), _task_aggregate_trace("a")], "duplicate observed task_id"),
+        (
+            [_task_aggregate_trace("a"), _task_aggregate_trace("b", run_id="run-a")],
+            "duplicate run_id",
+        ),
+    ],
+)
+def test_task_aggregate_rejects_incomplete_substituted_or_duplicate_runs(
+    observed, message
+):
+    with pytest.raises(ValueError, match=message):
+        aggregate_runs_by_task(
+            observed, variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=["a", "b"],
+        )
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"variant_id": "D6"}, "variant_id mismatch"),
+        ({"task_set_id": "other"}, "task_set_id mismatch"),
+        ({"completed": "false"}, "completed must be a Boolean"),
+        ({"completed": 1}, "completed must be a Boolean"),
+        ({"task_id": ""}, "observed task_id"),
+        ({"task_id": " "}, "observed task_id"),
+        ({"task_id": " a"}, "observed task_id"),
+        ({"run_id": " "}, "run_id"),
+        ({"run_id": None}, "run_id"),
+    ],
+)
+def test_task_aggregate_rejects_corrupt_identity_or_completion(override, message):
+    with pytest.raises(ValueError, match=message):
+        aggregate_runs_by_task(
+            [replace(_task_aggregate_trace("a"), **override)],
+            variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=["a"],
+        )
+
+
+def test_task_aggregate_rejects_non_trace_records():
+    with pytest.raises(ValueError, match="RunTrace"):
+        aggregate_runs_by_task(
+            [("a", 2)], variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=["a"],
+        )
+
+
+def test_task_aggregate_accepts_one_pass_generators_and_zero_source_failures():
+    result = aggregate_runs_by_task(
+        (row for row in [
+            _task_aggregate_trace("b", completed=False, source_count=0),
+            _task_aggregate_trace("a", completed=False, source_count=0),
+        ]),
+        variant_id="D3", task_set_id="frozen-diagnostic",
+        expected_task_ids=(task_id for task_id in ["b", "a"]),
+    )
+    assert result["task_ids"] == ["a", "b"]
+    assert result["n_runs"] == 2
+    assert result["completion_rate"] == 0.0
+    assert result["avg_source_success_rate"] == 0.0
+
+
+
+
+def test_task_aggregate_rejects_unbounded_distinct_stream_on_first_unknown_task():
+    reads = []
+
+    def stream():
+        index = 0
+        while True:
+            reads.append(index)
+            yield _task_aggregate_trace(f"unexpected-{index}")
+            index += 1
+
+    with pytest.raises(ValueError, match="task coverage mismatch"):
+        aggregate_runs_by_task(
+            stream(), variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=(task for task in ("a", "b")),
+        )
+    assert reads == [0]
+
+
+def test_task_aggregate_rejects_unbounded_duplicate_stream_without_read_ahead():
+    reads = []
+
+    def stream():
+        while True:
+            reads.append(len(reads))
+            yield _task_aggregate_trace("a")
+
+    with pytest.raises(ValueError, match="duplicate observed task_id"):
+        aggregate_runs_by_task(
+            stream(), variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=["a", "b"],
+        )
+    assert reads == [0, 1]
+
+
+def test_task_aggregate_rejects_extra_after_complete_arm_without_read_ahead():
+    reads = []
+
+    def stream():
+        for task_id in ("b", "a", "extra"):
+            reads.append(task_id)
+            yield _task_aggregate_trace(task_id)
+        raise AssertionError("unexpected extra source read")
+
+    with pytest.raises(ValueError, match="task coverage mismatch"):
+        aggregate_runs_by_task(
+            stream(), variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=["a", "b"],
+        )
+    assert reads == ["b", "a", "extra"]
+
+
+def test_task_aggregate_question_manifest_rejects_swapped_questions():
+    """Task IDs alone cannot detect the correct prompt attached to wrong runs."""
+    questions = {"a": "What is evidence A?", "b": "Why is B different?"}
+    rows = [
+        _task_aggregate_trace("a", question=questions["b"]),
+        _task_aggregate_trace("b", question=questions["a"]),
+    ]
+    with pytest.raises(ValueError, match="task question mismatch"):
+        aggregate_runs_by_task(
+            rows, variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=["a", "b"], expected_questions_by_task=questions,
+        )
+
+
+@pytest.mark.parametrize("wrong_position", [0, 1, 2])
+def test_task_aggregate_question_substitution_fails_on_first_offending_row(
+    wrong_position,
+):
+    """A later producer failure cannot mask the first wrong research question."""
+    task_ids = ["a", "b", "c"]
+    questions = {
+        "a": "Question for A?",
+        "b": "Question for B?",
+        "c": "Question for C?",
+    }
+    reads = []
+
+    def observed_runs():
+        for index, task_id in enumerate(task_ids):
+            if index > wrong_position:
+                raise AssertionError("question mismatch read past offending trace")
+            reads.append(task_id)
+            question = (
+                questions[task_id] if index != wrong_position
+                else questions[task_ids[(index + 1) % len(task_ids)]]
+            )
+            yield _task_aggregate_trace(task_id, question=question)
+
+    with pytest.raises(ValueError, match="task question mismatch"):
+        aggregate_runs_by_task(
+            observed_runs(),
+            variant_id="D3",
+            task_set_id="frozen-diagnostic",
+            expected_task_ids=task_ids,
+            expected_questions_by_task=questions,
+        )
+    assert reads == task_ids[:wrong_position + 1]
+
+
+def test_task_aggregate_question_manifest_accepts_exact_text_and_failed_runs():
+    questions = {"a": "What is evidence A?", "b": "Why is B different?"}
+    rows = [
+        _task_aggregate_trace("b", completed=False, source_count=0, question=questions["b"]),
+        _task_aggregate_trace("a", question=questions["a"]),
+    ]
+    result = aggregate_runs_by_task(
+        (row for row in rows),
+        variant_id="D3", task_set_id="frozen-diagnostic",
+        expected_task_ids=(task_id for task_id in ["b", "a"]),
+        expected_questions_by_task=questions,
+    )
+    assert result["task_ids"] == ["a", "b"]
+    assert result["completion_rate"] == 0.5
+    assert result == aggregate_runs_by_task(
+        reversed(rows), variant_id="D3", task_set_id="frozen-diagnostic",
+        expected_task_ids=reversed(["a", "b"]),
+        expected_questions_by_task=dict(reversed(list(questions.items()))),
+    )
+    # Legacy callers can omit the new independent text contract.
+    assert aggregate_runs_by_task(
+        [_task_aggregate_trace("a")], variant_id="D3",
+        task_set_id="frozen-diagnostic", expected_task_ids=["a"],
+    )["n_runs"] == 1
+
+
+@pytest.mark.parametrize(
+    ("manifest", "message"),
+    [
+        ([], "expected_questions_by_task must be a mapping"),
+        ({}, "expected task question coverage mismatch"),
+        ({"a": "Question?"}, "expected task question coverage mismatch"),
+        ({"a": "Question?", "b": "Other?", "c": "Extra?"}, "expected task question coverage mismatch"),
+        ({"a": "Question?", " b": "Other?"}, "expected question task_id"),
+        ({1: "Question?", "b": "Other?"}, "expected question task_id"),
+        ({"a": "", "b": "Other?"}, "expected task question"),
+        ({"a": "  ", "b": "Other?"}, "expected task question"),
+        ({"a": None, "b": "Other?"}, "expected task question"),
+        ({"a": 123, "b": "Other?"}, "expected task question"),
+        ({"a": True, "b": "Other?"}, "expected task question"),
+    ],
+)
+def test_task_aggregate_rejects_corrupt_question_manifest_before_trace_reads(
+    manifest, message
+):
+    def must_not_read():
+        raise AssertionError("invalid independent manifest consumed trace records")
+        yield None
+
+    with pytest.raises(ValueError, match=message):
+        aggregate_runs_by_task(
+            must_not_read(), variant_id="D3",
+            task_set_id="frozen-diagnostic", expected_task_ids=["a", "b"],
+            expected_questions_by_task=manifest,
+        )
+
+
+@pytest.mark.parametrize(
+    "observed",
+    ["Different case?", "Question? ", " Question?", "", None, True, 42],
+)
+def test_task_aggregate_rejects_mismatched_or_nontext_trace_question(observed):
+    with pytest.raises(ValueError, match="task question mismatch"):
+        aggregate_runs_by_task(
+            [_task_aggregate_trace("a", question=observed)],
+            variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=["a"],
+            expected_questions_by_task={"a": "Question?"},
+        )
+
+
+@pytest.mark.parametrize(
+    ("record_overrides", "error"),
+    [
+        ([{"source_count": 10**400}], "aggregate run statistics must be finite"),
+        ([{"prompt_tokens": 10**400}], "aggregate run statistics must be finite"),
+    ],
+)
+def test_aggregate_runs_rejects_derived_overflow(record_overrides, error):
+    """Finite/valid raw counters need not yield representable statistics."""
+    traces = [
+        RunTrace(run_id=f"overflow-{i}", completed=True, source_count=1, **row)
+        if "source_count" not in row
+        else RunTrace(run_id=f"overflow-{i}", completed=True, **row)
+        for i, row in enumerate(record_overrides)
+    ]
+    with pytest.raises(ValueError, match=error):
+        aggregate_runs(traces)
+
+
+def test_task_keyed_aggregate_preserves_finite_extreme_cost_centers():
+    traces = [
+        _task_aggregate_trace("a", estimated_cost_usd=1e308),
+        _task_aggregate_trace("b", estimated_cost_usd=1e308),
+    ]
+    result = aggregate_runs_by_task(
+        traces, variant_id="D3", task_set_id="frozen-diagnostic",
+        expected_task_ids=["a", "b"],
+    )
+    assert result["avg_estimated_cost_usd"] == pytest.approx(1e308)
+    assert result["median_estimated_cost_usd"] == pytest.approx(1e308)
+
+
+def test_task_keyed_aggregate_still_rejects_oversized_integer_counter():
+    with pytest.raises(ValueError, match="aggregate run statistics must be finite"):
+        aggregate_runs_by_task(
+            [_task_aggregate_trace("a", prompt_tokens=10**400)],
+            variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=["a"],
+        )
+
+
+def test_aggregate_runs_preserves_finite_extreme_timing_and_cost_centers():
+    traces = [
+        RunTrace(
+            run_id=f"finite-large-{index}", completed=True, source_count=1,
+            latency_seconds=1e308, estimated_cost_usd=1e308,
+        )
+        for index in range(2)
+    ]
+    result = aggregate_runs(traces)
+    assert result["avg_latency_seconds"] == pytest.approx(1e308)
+    assert result["median_latency_seconds"] == pytest.approx(1e308)
+    assert result["latency_stddev_seconds"] == 0.0
+    assert result["avg_estimated_cost_usd"] == pytest.approx(1e308)
+    assert result["median_estimated_cost_usd"] == pytest.approx(1e308)
+
+
+@pytest.mark.parametrize("large", [1e100, 1e200])
+def test_aggregate_runs_keeps_large_but_representable_statistics(large):
+    traces = [
+        RunTrace(run_id="a", completed=False, source_count=0,
+                 latency_seconds=0.0, estimated_cost_usd=0.0),
+        RunTrace(run_id="b", completed=True, source_count=1,
+                 latency_seconds=large, estimated_cost_usd=large),
+    ]
+    result = aggregate_runs(traces)
+    assert result["n_runs"] == 2
+    assert result["completion_rate"] == 0.5
+    assert result["avg_latency_seconds"] == pytest.approx(large / 2)
+    assert result["latency_stddev_seconds"] == pytest.approx(large / 2)
+    assert result["avg_estimated_cost_usd"] == pytest.approx(large / 2)
+
+
+@pytest.mark.parametrize(
+    ("observations", "expected"),
+    [
+        ([0.0, 1e200], 5e199),
+        ([0.0, 1e308], 5e307),
+        ([-1e308, 1e308], 1e308),
+        ([1e308, 1e308], 0.0),
+        ([0.0, 1e-200], 5e-201),
+    ],
+)
+def test_population_stddev_avoids_spurious_intermediate_overflow(
+    observations, expected
+):
+    assert population_stddev(observations) == pytest.approx(expected)
+
+
+def test_task_keyed_aggregate_preserves_finite_extreme_latency_dispersion():
+    traces = [
+        _task_aggregate_trace("a", latency_seconds=0.0),
+        _task_aggregate_trace("b", latency_seconds=1e200),
+    ]
+    summary = aggregate_runs_by_task(
+        traces, variant_id="D3", task_set_id="frozen-diagnostic",
+        expected_task_ids=["a", "b"],
+    )
+    assert summary["latency_stddev_seconds"] == pytest.approx(5e199)
+
+
 def test_deduplicate_sources_preserves_order():
     urls = [" https://example.com/a ", "https://example.com/b", "https://example.com/a", "", "https://example.com/c"]
     assert deduplicate_sources(urls) == ["https://example.com/a", "https://example.com/b", "https://example.com/c"]
+
+
+@pytest.mark.parametrize("scalar", ["https://example.com/a", b"https://example.com/a"])
+def test_source_dedup_rejects_scalar_url_text(scalar):
+    # Iterating a bare URL string would otherwise treat individual characters
+    # as separate sources without raising an error.
+    with pytest.raises(ValueError, match="collection, not scalar text"):
+        deduplicate_sources(scalar)
+
+
+@pytest.mark.parametrize("bad_entry", [None, False, 7, b"https://example.com/b"])
+def test_source_dedup_rejects_invalid_rows_instead_of_silently_dropping_them(bad_entry):
+    with pytest.raises(ValueError, match="source URL entries must be strings"):
+        deduplicate_sources(iter(["https://example.com/a", bad_entry]))
+
+
+def test_source_dedup_bounds_unending_repeated_raw_observations():
+    count = 0
+
+    def repeating_urls():
+        nonlocal count
+        while True:
+            count += 1
+            yield " https://example.com/a "
+
+    with pytest.raises(ValueError, match="source URL observations exceed"):
+        deduplicate_sources(repeating_urls())
+    assert count == MAX_DIAGNOSTIC_SOURCE_URL_OBSERVATIONS + 1
+
+
+def test_source_dedup_rejects_finite_oversized_population_without_truncating():
+    with pytest.raises(ValueError, match="source URL observations exceed"):
+        deduplicate_sources(["https://example.com/a"] * (
+            MAX_DIAGNOSTIC_SOURCE_URL_OBSERVATIONS + 1
+        ))
+
+
+def test_source_dedup_accepts_inclusive_raw_observation_limit():
+    urls = (" https://example.com/a " if i % 2 else "https://example.com/b"
+            for i in range(MAX_DIAGNOSTIC_SOURCE_URL_OBSERVATIONS))
+    assert deduplicate_sources(urls) == [
+        "https://example.com/b", "https://example.com/a"
+    ]
+
+def test_task_keyed_bootstrap_resamples_complete_paired_differences():
+    # Exact dyadic deltas make the paired effect and its constant interval
+    # unambiguous without relying on live or historical outcome data.
+    result = paired_bootstrap_confidence_interval_by_task(
+        [("task-b", 0.5), ("task-a", 0.25)],
+        [("task-a", 0.5), ("task-b", 0.75)],
+        expected_task_ids=["task-b", "task-a"],
+        n_resamples=101,
+        seed=31,
+    )
+    assert result["task_ids"] == ["task-a", "task-b"]
+    assert result["n_pairs"] == 2
+    assert result["mean_delta"] == 0.25
+    assert result["wins"] == 2
+    assert result["bootstrap_method"] == "paired_percentile_mean_delta"
+    assert result["bootstrap_confidence_interval"] == {
+        "estimate": 0.25,
+        "lower": 0.25,
+        "upper": 0.25,
+        "confidence": 0.95,
+        "n_resamples": 101,
+        "seed": 31,
+        "n_observations": 2,
+    }
+
+
+def test_task_keyed_bootstrap_is_reproducible_across_generator_record_order():
+    baseline = [("c", 0.0), ("a", 0.0), ("b", 0.0)]
+    candidate = [("b", 0.5), ("c", -0.5), ("a", 1.0)]
+    first = paired_bootstrap_confidence_interval_by_task(
+        iter(baseline),
+        iter(candidate),
+        expected_task_ids=(task for task in ["c", "b", "a"]),
+        n_resamples=211,
+        confidence=0.9,
+        seed=29,
+    )
+    second = paired_bootstrap_confidence_interval_by_task(
+        iter(reversed(baseline)),
+        iter(reversed(candidate)),
+        expected_task_ids=(task for task in ["a", "c", "b"]),
+        n_resamples=211,
+        confidence=0.9,
+        seed=29,
+    )
+    assert first == second
+    assert first["task_ids"] == ["a", "b", "c"]
+    assert first["bootstrap_confidence_interval"]["estimate"] == first["mean_delta"]
+    assert -0.5 <= first["bootstrap_confidence_interval"]["lower"]
+    assert first["bootstrap_confidence_interval"]["upper"] <= 1.0
+
+
+@pytest.mark.parametrize(
+    ("baseline", "candidate", "expected", "message"),
+    [
+        ([("a", 0.0)], [("a", 0.5)], ["a", "b"], "coverage mismatch"),
+        ([("a", 0.0), ("b", 0.0)],
+         [("a", 0.5), ("x", 0.5)], ["a", "b"], "coverage mismatch"),
+        ([("a", 0.0), ("a", 0.0)],
+         [("a", 0.5)], ["a"], "duplicate baseline task_id"),
+        ([("a", 0.0)], [("a", 0.5)], ["a", "a"], "duplicate expected task_id"),
+        ([("a", True)], [("a", 0.5)], ["a"], "baseline metric"),
+        ([("a", 0.0)], [("a", "0.5")], ["a"], "candidate metric"),
+        ([("a", -1e308)], [("a", 1e308)], ["a"], "paired deltas"),
+    ],
+)
+def test_task_keyed_bootstrap_fails_closed_on_invalid_pairing(
+    baseline, candidate, expected, message
+):
+    with pytest.raises(ValueError, match=message):
+        paired_bootstrap_confidence_interval_by_task(
+            iter(baseline), iter(candidate),
+            expected_task_ids=expected, n_resamples=7, seed=0,
+        )
+
+
+@pytest.mark.parametrize("invalid", [0, 1, -1, True, 2.0, "50", None])
+def test_task_keyed_bootstrap_rejects_invalid_resample_count(invalid):
+    with pytest.raises(ValueError, match="n_resamples"):
+        paired_bootstrap_confidence_interval_by_task(
+            [("a", 0.0)], [("a", 1.0)],
+            expected_task_ids=["a"], n_resamples=invalid,
+        )
+
+
+@pytest.mark.parametrize("invalid", [True, None, 0.5, "1", [], {}])
+def test_task_keyed_bootstrap_requires_explicit_integer_seed(invalid):
+    with pytest.raises(ValueError, match="seed"):
+        paired_bootstrap_confidence_interval_by_task(
+            [("a", 0.0)], [("a", 1.0)],
+            expected_task_ids=["a"], seed=invalid,
+        )
+
+
+@pytest.mark.parametrize(
+    "invalid", [True, False, "0.95", None, float("nan"), float("inf"), 0, 1, 10**400]
+)
+def test_task_keyed_bootstrap_rejects_invalid_confidence(invalid):
+    with pytest.raises(ValueError, match="confidence"):
+        paired_bootstrap_confidence_interval_by_task(
+            [("a", 0.0)], [("a", 1.0)],
+            expected_task_ids=["a"], confidence=invalid,
+        )
+
+
+# Prospective-only RunTrace adapter: validate treatment identity and frozen
+# question assignment before turning records into numeric paired observations.
+_PAIR_QUESTIONS = {"a": "First research question?", "b": "Second research question?"}
+
+
+def _paired_run_trace(task_id, variant, *, completed=True, **changes):
+    values = {
+        "run_id": f"{variant}-{task_id}",
+        "completed": completed,
+        "source_count": 2 if completed else 0,
+        "supported_claim_count": 1 if completed else 0,
+        "unsupported_claim_count": 1 if completed else 0,
+        "variant_id": variant,
+        "task_set_id": "prospective-paired",
+        "task_id": task_id,
+        "question": _PAIR_QUESTIONS[task_id],
+    }
+    values.update(changes)
+    return RunTrace(**values)
+
+
+def _compare_paired_traces(baseline, candidate, **settings):
+    options = {"confidence": 0.9, "n_resamples": 101, "seed": 23}
+    options.update(settings)
+    return paired_run_trace_bootstrap_by_task(
+        baseline,
+        candidate,
+        baseline_variant_id="D3",
+        candidate_variant_id="D6",
+        task_set_id="prospective-paired",
+        expected_task_ids=(task for task in ("b", "a")),
+        expected_questions_by_task=_PAIR_QUESTIONS,
+        **options,
+    )
+
+
+def test_run_trace_bootstrap_retains_failed_zero_source_task_and_is_order_invariant():
+    baseline = [
+        _paired_run_trace("b", "D3", completed=False),
+        _paired_run_trace("a", "D3"),
+    ]
+    candidate = [
+        _paired_run_trace("a", "D6", supported_claim_count=2,
+                          unsupported_claim_count=0),
+        _paired_run_trace("b", "D6", completed=False),
+    ]
+    first = _compare_paired_traces(iter(baseline), iter(candidate))
+    second = _compare_paired_traces(reversed(baseline), reversed(candidate))
+    assert first == second
+    assert first["task_ids"] == ["a", "b"]
+    assert first["n_pairs"] == 2
+    assert first["wins"] == 1
+    assert first["ties"] == 1
+    assert first["losses"] == 0
+    assert first["mean_delta"] == 0.25
+    assert first["bootstrap_confidence_interval"]["estimate"] == 0.25
+    assert first["baseline_variant_id"] == "D3"
+    assert first["candidate_variant_id"] == "D6"
+
+
+@pytest.mark.parametrize(
+    ("metric", "estimate"),
+    [
+        ("claim_support_rate", 0.25),
+        ("source_success_rate", 0.0),
+        ("citation_precision_proxy", 0.0),
+    ],
+)
+def test_run_trace_bootstrap_supports_only_preselected_rate_metrics(metric, estimate):
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3", completed=False)]
+    candidate = [
+        _paired_run_trace("a", "D6", supported_claim_count=2,
+                          unsupported_claim_count=0),
+        _paired_run_trace("b", "D6", completed=False),
+    ]
+    assert paired_run_trace_bootstrap_by_task(
+        baseline, candidate,
+        baseline_variant_id="D3", candidate_variant_id="D6",
+        task_set_id="prospective-paired", expected_task_ids=["a", "b"],
+        expected_questions_by_task=_PAIR_QUESTIONS,
+        metric=metric, n_resamples=101,
+    )["mean_delta"] == estimate
+
+
+@pytest.mark.parametrize(
+    "metric",
+    ("claim_support_rate", "source_success_rate", "citation_precision_proxy"),
+)
+def test_paired_trace_discloses_task_matched_rate_denominator_coverage(metric):
+    # Four synthetic tasks exercise every possible arm-level denominator
+    # pattern. The paired estimates must still include all four zero-filled
+    # tasks, without selecting only those with favorable observed values.
+    questions = {task: f"Frozen synthetic question {task}?" for task in "abcd"}
+    def record(task, variant, *, positive):
+        values = {
+            "run_id": f"{variant}-{task}",
+            "completed": positive,
+            "source_count": 1 if positive else 0,
+            "variant_id": variant,
+            "task_set_id": "prospective-paired",
+            "task_id": task,
+            "question": questions[task],
+        }
+        if positive:
+            field = {
+                "claim_support_rate": "supported_claim_count",
+                "source_success_rate": "source_count",
+                "citation_precision_proxy": "citation_count",
+            }[metric]
+            values[field] = 1
+        return RunTrace(**values)
+
+    baseline = [record(task, "D3", positive=task in "ab") for task in "dbca"]
+    candidate = [record(task, "D6", positive=task in "ac") for task in "cbad"]
+    result = paired_run_trace_bootstrap_by_task(
+        iter(baseline), iter(candidate),
+        baseline_variant_id="D3", candidate_variant_id="D6",
+        task_set_id="prospective-paired", expected_task_ids=iter("dcab"),
+        expected_questions_by_task=questions, metric=metric,
+        n_resamples=101, seed=23,
+    )
+    denominator_field = {
+        "claim_support_rate": "verified_claim_count",
+        "source_success_rate": "source_count",
+        "citation_precision_proxy": "citation_count",
+    }[metric]
+    assert result["rate_denominator_coverage"] == {
+        "denominator_field": denominator_field,
+        "n_both_positive": 1,
+        "n_baseline_only_positive": 1,
+        "n_candidate_only_positive": 1,
+        "n_neither_positive": 1,
+    }
+    direct = paired_bootstrap_confidence_interval_by_task(
+        ((trace.task_id, getattr(trace, metric)) for trace in baseline),
+        ((trace.task_id, getattr(trace, metric)) for trace in candidate),
+        expected_task_ids=list("abcd"), n_resamples=101, seed=23,
+    )
+    # The new reporting-only metadata must not change the numeric estimand,
+    # bootstrap draws, pairing or task denominator.
+    assert all(result[key] == value for key, value in direct.items())
+    assert result["n_pairs"] == 4
+
+
+def test_paired_claim_denominator_disclosure_does_not_imply_labeled_evidence():
+    # Under the legacy RunTrace convention, citations can supply a numeric
+    # denominator when no supported/partial/unsupported/contradicted labels
+    # exist. Report denominator presence without claiming human verification.
+    baseline = [
+        _paired_run_trace("a", "D3", citation_count=2,
+                          supported_claim_count=0, unsupported_claim_count=0),
+        _paired_run_trace("b", "D3", completed=False),
+    ]
+    candidate = [
+        _paired_run_trace("a", "D6", supported_claim_count=1,
+                          unsupported_claim_count=0),
+        _paired_run_trace("b", "D6", completed=False),
+    ]
+    result = _compare_paired_traces(iter(baseline), iter(candidate))
+    assert baseline[0].claim_support_rate == 0.0
+    assert result["rate_denominator_coverage"] == {
+        "denominator_field": "verified_claim_count",
+        "n_both_positive": 1,
+        "n_baseline_only_positive": 0,
+        "n_candidate_only_positive": 0,
+        "n_neither_positive": 1,
+    }
+    assert result["n_pairs"] == 2
+
+
+def test_paired_claim_denominator_joint_origin_matrix_retains_all_task_pairs():
+    """Equal zero rates can conceal arm-matched measurement-origin differences."""
+    origins = {"e": "explicit_judgments", "f": "citation_fallback", "n": "no_denominator"}
+    tasks = tuple(left + right for left in "efn" for right in "efn")
+    questions = {task: f"Synthetic paired provenance task {task}?" for task in tasks}
+
+    def record(task, variant, origin):
+        counts = {
+            "e": {"unsupported_claim_count": 1},
+            "f": {"citation_count": 1},
+            "n": {},
+        }[origin]
+        return RunTrace(
+            run_id=f"{variant}-{task}",
+            completed=(task != "fn"),
+            source_count=0,
+            variant_id=variant,
+            task_set_id="synthetic-joint-origin",
+            task_id=task,
+            question=questions[task],
+            **counts,
+        )
+
+    baseline = [record(task, "D3", task[0]) for task in reversed(tasks)]
+    candidate = [record(task, "D6", task[1]) for task in tasks]
+    args = dict(
+        baseline_variant_id="D3", candidate_variant_id="D6",
+        task_set_id="synthetic-joint-origin",
+        expected_questions_by_task=questions,
+        confidence=0.9, n_resamples=101, seed=23,
+    )
+    actual = paired_run_trace_bootstrap_by_task(
+        iter(baseline), iter(candidate), expected_task_ids=iter(reversed(tasks)),
+        **args,
+    )
+    reversed_receipt = paired_run_trace_bootstrap_by_task(
+        iter(reversed(baseline)), iter(reversed(candidate)),
+        expected_task_ids=iter(tasks), **args,
+    )
+    assert actual == reversed_receipt
+    matrix = actual["claim_denominator_origin_coverage"]["baseline_by_candidate"]
+    assert matrix == {
+        origins[left]: {origins[right]: 1 for right in "efn"} for left in "efn"
+    }
+    assert sum(sum(row.values()) for row in matrix.values()) == actual["n_pairs"] == 9
+    assert actual["rate_denominator_coverage"] == {
+        "denominator_field": "verified_claim_count",
+        "n_both_positive": 4,
+        "n_baseline_only_positive": 2,
+        "n_candidate_only_positive": 2,
+        "n_neither_positive": 1,
+    }
+    # This is a receipt, never a complete-case filter or an outcome revision.
+    # Both explicit unsupported and unclassified fallback produce zero rates,
+    # as do absent denominators under the existing compatibility convention.
+    assert all(t.claim_support_rate == 0.0 for t in baseline + candidate)
+    direct = paired_bootstrap_confidence_interval_by_task(
+        ((t.task_id, t.claim_support_rate) for t in baseline),
+        ((t.task_id, t.claim_support_rate) for t in candidate),
+        expected_task_ids=tasks, confidence=0.9, n_resamples=101, seed=23,
+    )
+    assert all(actual[key] == value for key, value in direct.items())
+    assert actual["mean_delta"] == 0.0
+
+
+@pytest.mark.parametrize("metric", ["source_success_rate", "citation_precision_proxy"])
+def test_joint_claim_origin_coverage_is_not_misapplied_to_other_metrics(metric):
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")]
+    receipt = _compare_paired_traces(iter(baseline), iter(candidate), metric=metric)
+    assert "claim_denominator_origin_coverage" not in receipt
+    assert receipt["n_pairs"] == 2
+
+
+def test_paired_trace_fingerprint_independently_replays_exact_input_rows():
+    """Synthetic digest oracle, independent of the production hash helper."""
+    import hashlib
+    import json
+
+    baseline = [_paired_run_trace("b", "D3", completed=False),
+                _paired_run_trace("a", "D3")]
+    candidate = [_paired_run_trace("a", "D6", supported_claim_count=2,
+                                   unsupported_claim_count=0),
+                 _paired_run_trace("b", "D6", completed=False)]
+    result = _compare_paired_traces(iter(baseline), iter(candidate))
+    assert result["paired_input_fingerprint_schema"] == "length-prefixed-json-v3"
+    left_rows = {row.task_id: row for row in baseline}
+    right_rows = {row.task_id: row for row in candidate}
+    records = [{
+        "schema_version": 3, "metric": "claim_support_rate",
+        "task_set_id": "prospective-paired",
+        "baseline_variant_id": "D3", "candidate_variant_id": "D6",
+        "expected_treatment_settings_by_variant": None,
+    }]
+    for task_id in ("a", "b"):
+        left, right = left_rows[task_id], right_rows[task_id]
+        records.append({
+            "task_id": task_id, "question": _PAIR_QUESTIONS[task_id],
+            "baseline_run_id": left.run_id, "candidate_run_id": right.run_id,
+            "baseline_completed": left.completed,
+            "candidate_completed": right.completed,
+            "baseline_value": left.claim_support_rate,
+            "candidate_value": right.claim_support_rate,
+            "baseline_numerator": left.supported_claim_count,
+            "candidate_numerator": right.supported_claim_count,
+            "baseline_denominator": left.verified_claim_count,
+            "candidate_denominator": right.verified_claim_count,
+            "baseline_metric_input_counts": {
+                "citation_count": left.citation_count,
+                "supported_claim_count": left.supported_claim_count,
+                "partially_supported_claim_count": left.partially_supported_claim_count,
+                "unsupported_claim_count": left.unsupported_claim_count,
+                "contradicted_claim_count": left.contradicted_claim_count,
+            },
+            "candidate_metric_input_counts": {
+                "citation_count": right.citation_count,
+                "supported_claim_count": right.supported_claim_count,
+                "partially_supported_claim_count": right.partially_supported_claim_count,
+                "unsupported_claim_count": right.unsupported_claim_count,
+                "contradicted_claim_count": right.contradicted_claim_count,
+            },
+            "baseline_treatment_settings": {
+                "planning_mode": left.planning_mode,
+                "verification_mode": left.verification_mode,
+                "source_budget": left.source_budget,
+                "smart_model": left.smart_model,
+                "fast_model": left.fast_model,
+                "temperature": left.temperature,
+            },
+            "candidate_treatment_settings": {
+                "planning_mode": right.planning_mode,
+                "verification_mode": right.verification_mode,
+                "source_budget": right.source_budget,
+                "smart_model": right.smart_model,
+                "fast_model": right.fast_model,
+                "temperature": right.temperature,
+            },
+        })
+    digest = hashlib.sha256()
+    for record in records:
+        data = json.dumps(
+            record, sort_keys=True, ensure_ascii=False,
+            separators=(",", ":"), allow_nan=False,
+        ).encode("utf-8")
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+    assert result["paired_input_fingerprint_sha256"] == digest.hexdigest()
+    assert result["bootstrap_confidence_interval"]["n_observations"] == 2
+
+
+def test_paired_trace_fingerprint_distinguishes_equal_rates_with_new_exposure():
+    """Reproducible estimates must not hide different source-count inputs."""
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")]
+    original = _compare_paired_traces(
+        baseline, candidate, metric="source_success_rate",
+    )
+    changed = list(candidate)
+    changed[0] = replace(changed[0], source_count=4)
+    updated = _compare_paired_traces(
+        reversed(baseline), reversed(changed), metric="source_success_rate",
+    )
+    assert original["mean_delta"] == updated["mean_delta"] == 0.0
+    assert (original["bootstrap_confidence_interval"]
+            == updated["bootstrap_confidence_interval"])
+    assert original["rate_denominator_coverage"] == updated["rate_denominator_coverage"]
+    assert (original["paired_input_fingerprint_sha256"]
+            != updated["paired_input_fingerprint_sha256"])
+
+
+def test_paired_trace_fingerprint_binds_run_id_without_changing_effect():
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")]
+    original = _compare_paired_traces(baseline, candidate)
+    changed = list(candidate)
+    changed[1] = replace(changed[1], run_id="other-synthetic-D6-b")
+    updated = _compare_paired_traces(baseline, changed)
+    assert original["mean_delta"] == updated["mean_delta"]
+    assert (original["bootstrap_confidence_interval"]
+            == updated["bootstrap_confidence_interval"])
+    assert (original["paired_input_fingerprint_sha256"]
+            != updated["paired_input_fingerprint_sha256"])
+
+
+@pytest.mark.parametrize(
+    ("original_counts", "replacement_counts"),
+    [
+        (
+            {"unsupported_claim_count": 2},
+            {"citation_count": 2},
+        ),
+        (
+            {"partially_supported_claim_count": 2},
+            {"contradicted_claim_count": 2},
+        ),
+    ],
+)
+def test_paired_trace_fingerprint_separates_equal_rate_claim_provenance(
+    original_counts, replacement_counts,
+):
+    """Same strict-zero rate and denominator need not mean same judgments."""
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")]
+    no_verdicts = replace(
+        candidate[0], citation_count=0, supported_claim_count=0,
+        partially_supported_claim_count=0, unsupported_claim_count=0,
+        contradicted_claim_count=0,
+    )
+    candidate[0] = replace(no_verdicts, **original_counts)
+    first = _compare_paired_traces(baseline, candidate)
+    replacement = replace(no_verdicts, **replacement_counts)
+    assert candidate[0].claim_support_rate == replacement.claim_support_rate == 0.0
+    assert candidate[0].verified_claim_count == replacement.verified_claim_count == 2
+    candidate[0] = replacement
+    second = _compare_paired_traces(reversed(baseline), reversed(candidate))
+    assert first["mean_delta"] == second["mean_delta"]
+    assert first["bootstrap_confidence_interval"] == second["bootstrap_confidence_interval"]
+    assert first["rate_denominator_coverage"] == second["rate_denominator_coverage"]
+    assert first["paired_input_fingerprint_sha256"] != second["paired_input_fingerprint_sha256"]
+
+
+def test_paired_trace_fingerprint_binds_unclamped_legacy_proxy_input():
+    """A saturated zero proxy must not erase its underlying claim count."""
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")]
+    candidate[0] = replace(candidate[0], citation_count=2, unsupported_claim_count=2)
+    original = _compare_paired_traces(
+        baseline, candidate, metric="citation_precision_proxy",
+    )
+    changed = list(candidate)
+    changed[0] = replace(candidate[0], unsupported_claim_count=3)
+    assert candidate[0].citation_precision_proxy == changed[0].citation_precision_proxy == 0.0
+    updated = _compare_paired_traces(
+        baseline, changed, metric="citation_precision_proxy",
+    )
+    assert original["mean_delta"] == updated["mean_delta"]
+    assert original["bootstrap_confidence_interval"] == updated["bootstrap_confidence_interval"]
+    assert original["rate_denominator_coverage"] == updated["rate_denominator_coverage"]
+    assert original["paired_input_fingerprint_sha256"] != updated["paired_input_fingerprint_sha256"]
+
+
+@pytest.mark.parametrize(
+    ("factor", "changed_value"),
+    [
+        ("planning_mode", "decomposed"),
+        ("verification_mode", "on"),
+        ("source_budget", 4),
+        ("smart_model", "alternate-synthetic-model"),
+        ("fast_model", "alternate-synthetic-fast-model"),
+        ("temperature", 0.2),
+    ],
+)
+def test_paired_trace_fingerprint_binds_observed_treatment_factors(
+    factor, changed_value,
+):
+    """Numerically equal observations need not represent the same treatment."""
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")]
+    original = _compare_paired_traces(baseline, candidate)
+    changed = list(candidate)
+    changed[0] = replace(candidate[0], **{factor: changed_value})
+    updated = _compare_paired_traces(reversed(baseline), reversed(changed))
+    assert original["mean_delta"] == updated["mean_delta"]
+    assert original["bootstrap_confidence_interval"] == updated["bootstrap_confidence_interval"]
+    assert original["rate_denominator_coverage"] == updated["rate_denominator_coverage"]
+    assert original["paired_input_fingerprint_sha256"] != updated["paired_input_fingerprint_sha256"]
+
+
+def test_paired_trace_fingerprint_marks_independent_treatment_plan_custody():
+    """Identical observed traces must not conceal whether a plan was supplied."""
+    factor_fields = (
+        "planning_mode", "verification_mode", "source_budget",
+        "smart_model", "fast_model", "temperature",
+    )
+    factors = {
+        "planning_mode": "direct", "verification_mode": "off",
+        "source_budget": 4, "smart_model": "frozen-synthetic-main",
+        "fast_model": "frozen-synthetic-fast", "temperature": 0.2,
+    }
+    baseline = [_paired_run_trace(task, "D3", **factors) for task in "ab"]
+    candidate = [_paired_run_trace(task, "D6", **factors) for task in "ab"]
+    observed_only = _compare_paired_traces(baseline, candidate)
+    independent_plans = {
+        variant: {field: getattr(rows[0], field) for field in factor_fields}
+        for variant, rows in (("D3", baseline), ("D6", candidate))
+    }
+    checked = _compare_paired_traces(
+        reversed(baseline), reversed(candidate),
+        expected_treatment_settings_by_variant=independent_plans,
+    )
+    assert observed_only["mean_delta"] == checked["mean_delta"]
+    assert observed_only["bootstrap_confidence_interval"] == checked["bootstrap_confidence_interval"]
+    assert observed_only["paired_input_fingerprint_sha256"] != checked["paired_input_fingerprint_sha256"]
+
+
+def test_paired_trace_fingerprint_rejects_nontext_treatment_factor():
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")]
+    candidate[0] = replace(candidate[0], smart_model=object())
+    with pytest.raises(ValueError, match="treatment metadata smart_model must be text"):
+        _compare_paired_traces(baseline, candidate)
+
+
+@pytest.mark.parametrize("arm", ["baseline", "candidate"])
+@pytest.mark.parametrize(
+    "field", ["planning_mode", "verification_mode", "smart_model", "fast_model"]
+)
+def test_paired_trace_rejects_nontext_factor_at_first_observed_record(arm, field):
+    # A one-pass producer may fail after its first bad row. The malformed
+    # observed treatment identity must win over any subsequent producer error.
+    # There is deliberately no independent treatment plan in this comparison.
+    reads = {"baseline": 0, "candidate": 0}
+
+    def source(name, variant):
+        reads[name] += 1
+        first = _paired_run_trace("a", variant)
+        if name == arm:
+            yield replace(first, **{field: object()})
+            raise AssertionError("malformed treatment metadata was read past")
+        yield first
+        reads[name] += 1
+        yield _paired_run_trace("b", variant)
+
+    with pytest.raises(ValueError, match=f"treatment metadata {field} must be text"):
+        _compare_paired_traces(source("baseline", "D3"), source("candidate", "D6"))
+    assert reads == (
+        {"baseline": 1, "candidate": 0}
+        if arm == "baseline" else {"baseline": 2, "candidate": 1}
+    )
+
+
+@pytest.mark.parametrize("bad_run_id", [[], {}])
+def test_paired_trace_rejects_unhashable_candidate_run_id_as_validation_error(
+    bad_run_id,
+):
+    # Cross-arm reuse lookup must not raise TypeError on an invalid ID before
+    # the complete-arm validator can give the explicit provenance error.
+    baseline = [_paired_run_trace(task, "D3") for task in "ab"]
+    reads = 0
+
+    def invalid_candidate():
+        nonlocal reads
+        reads += 1
+        yield replace(_paired_run_trace("a", "D6"), run_id=bad_run_id)
+        raise AssertionError("invalid candidate run_id advanced the producer")
+
+    with pytest.raises(ValueError, match="run_id must be a nonempty, unpadded string"):
+        _compare_paired_traces(iter(baseline), invalid_candidate())
+    assert reads == 1
+
+
+@pytest.mark.parametrize("bad_metric", ["estimated_cost_usd", "question", "", None, True])
+def test_run_trace_bootstrap_rejects_unapproved_or_non_numeric_metric(bad_metric):
+    with pytest.raises(ValueError, match="supported higher-is-better"):
+        _compare_paired_traces([], [], metric=bad_metric)
+
+
+@pytest.mark.parametrize(
+    ("arm", "change", "message"),
+    [
+        ("baseline", {"variant_id": "D6"}, "variant_id mismatch"),
+        ("candidate", {"variant_id": "D3"}, "variant_id mismatch"),
+        ("baseline", {"task_set_id": "other"}, "task_set_id mismatch"),
+        ("candidate", {"task_set_id": "other"}, "task_set_id mismatch"),
+        ("baseline", {"question": "Second research question?"}, "task question mismatch"),
+        ("candidate", {"question": "Other question?"}, "task question mismatch"),
+        ("baseline", {"task_id": "other"}, "task coverage mismatch"),
+        ("candidate", {"task_id": "other"}, "task coverage mismatch"),
+    ],
+)
+def test_run_trace_bootstrap_fails_before_sampling_on_mislabeled_cells(
+    arm, change, message
+):
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")]
+    rows = baseline if arm == "baseline" else candidate
+    rows[0] = replace(rows[0], **change)
+    with pytest.raises(ValueError, match=message):
+        _compare_paired_traces(baseline, candidate)
+
+
+def test_run_trace_bootstrap_rejects_cross_arm_run_id_reuse():
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [
+        replace(_paired_run_trace("a", "D6"), run_id=baseline[0].run_id),
+        _paired_run_trace("b", "D6"),
+    ]
+    with pytest.raises(ValueError, match="run_id reused across"):
+        _compare_paired_traces(baseline, candidate)
+
+
+@pytest.mark.parametrize("reused_task_id", ["a", "b"])
+def test_run_trace_cross_arm_reuse_fails_on_first_collision(reused_task_id):
+    # Synthetic one-pass producer: a later exception must not conceal an
+    # earlier cross-arm identity reuse, even when task coverage is otherwise
+    # complete and the collision occurs on the final expected candidate row.
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    reads = {"baseline": 0, "candidate": 0}
+
+    def baseline_rows():
+        for row in baseline:
+            reads["baseline"] += 1
+            yield row
+
+    def candidate_rows():
+        for task_id in ("a", "b"):
+            reads["candidate"] += 1
+            row = _paired_run_trace(task_id, "D6")
+            if task_id == reused_task_id:
+                yield replace(row, run_id=baseline[0].run_id)
+                raise AssertionError("read beyond the reused candidate run_id")
+            yield row
+
+    with pytest.raises(ValueError, match="run_id reused across"):
+        _compare_paired_traces(baseline_rows(), candidate_rows())
+    assert reads == {
+        "baseline": 2, "candidate": 1 if reused_task_id == "a" else 2,
+    }
+
+
+@pytest.mark.parametrize(
+    ("baseline", "candidate", "message"),
+    [
+        ([_paired_run_trace("a", "D3")], [_paired_run_trace("a", "D6"),
+                                         _paired_run_trace("b", "D6")],
+         "task coverage mismatch"),
+        ([_paired_run_trace("a", "D3"), _paired_run_trace("a", "D3")],
+         [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")],
+         "duplicate observed task_id"),
+    ],
+)
+def test_run_trace_bootstrap_rejects_missing_and_duplicate_cells(
+    baseline, candidate, message
+):
+    with pytest.raises(ValueError, match=message):
+        _compare_paired_traces(baseline, candidate)
+
+
+def test_run_trace_bootstrap_rejects_same_variant_and_invalid_resamples():
+    with pytest.raises(ValueError, match="must differ"):
+        paired_run_trace_bootstrap_by_task(
+            [], [], baseline_variant_id="D3", candidate_variant_id="D3",
+            task_set_id="prospective-paired", expected_task_ids=["a"],
+            expected_questions_by_task={"a": "First research question?"},
+        )
+    with pytest.raises(ValueError, match="n_resamples"):
+        _compare_paired_traces([], [], n_resamples=1)
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [
+        (field, invalid)
+        for field in (
+            "baseline_variant_id", "candidate_variant_id", "task_set_id"
+        )
+        for invalid in (None, True, 0, b"D3", "", " ", " D3", "D3 ")
+    ],
+)
+def test_paired_trace_preflights_caller_identity_without_reading_reference_or_arms(
+    field, invalid
+):
+    # The caller's own research identifiers must be valid before touching
+    # independent reference/observed streams (which may be single-use).
+    def unread(label):
+        raise AssertionError(f"{label} read with invalid pairing identity")
+        yield None
+
+    settings = {
+        "baseline_variant_id": "D3",
+        "candidate_variant_id": "D6",
+        "task_set_id": "prospective-paired",
+    }
+    settings[field] = invalid
+    with pytest.raises(ValueError, match=field + " must be a nonempty, unpadded string"):
+        paired_run_trace_bootstrap_by_task(
+            unread("baseline"), unread("candidate"),
+            expected_task_ids=unread("reference"),
+            expected_questions_by_task={"a": _PAIR_QUESTIONS["a"]},
+            n_resamples=3,
+            **settings,
+        )
+
+
+def test_run_trace_bootstrap_rejects_nonindependent_reference_question_mapping():
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    candidate = [_paired_run_trace("a", "D6"), _paired_run_trace("b", "D6")]
+    with pytest.raises(ValueError, match="task question mismatch"):
+        paired_run_trace_bootstrap_by_task(
+            baseline, candidate,
+            baseline_variant_id="D3", candidate_variant_id="D6",
+            task_set_id="prospective-paired", expected_task_ids=["a", "b"],
+            expected_questions_by_task={"a": _PAIR_QUESTIONS["b"],
+                                        "b": _PAIR_QUESTIONS["a"]},
+            n_resamples=10,
+        )
+
+
+# Synthetic independent configuration references, not historic treatment data.
+_PLANNED = {
+    "D3": {
+        "planning_mode": "direct", "verification_mode": "off", "source_budget": 3,
+        "smart_model": "smart-v1", "fast_model": "fast-v1", "temperature": 0.0,
+    },
+    "D6": {
+        "planning_mode": "direct", "verification_mode": "off", "source_budget": 6,
+        "smart_model": "smart-v1", "fast_model": "fast-v1", "temperature": 0.0,
+    },
+}
+
+
+def _planned_trace(task, variant, **changes):
+    completed = changes.pop("completed", True)
+    return replace(
+        _paired_run_trace(task, variant, completed=completed),
+        **{**_PLANNED[variant], **changes},
+    )
+
+
+def test_treatment_fidelity_optional_contract_detects_budget_drift():
+    rows = [_planned_trace("a", "D3", source_budget=6)]
+    opts = {
+        "variant_id": "D3", "task_set_id": "prospective-paired",
+        "expected_task_ids": ["a"],
+        "expected_questions_by_task": {"a": _PAIR_QUESTIONS["a"]},
+    }
+    assert aggregate_runs_by_task(rows, **opts)["n_runs"] == 1
+    with pytest.raises(ValueError, match="treatment setting mismatch for source_budget"):
+        aggregate_runs_by_task(
+            rows, expected_treatment_settings=_PLANNED["D3"], **opts
+        )
+
+
+def test_treatment_fidelity_preserves_failed_cells_and_seeded_pairing():
+    baseline = [_planned_trace("b", "D3", completed=False, source_count=0),
+                _planned_trace("a", "D3")]
+    candidate = [_planned_trace("a", "D6", supported_claim_count=2,
+                                unsupported_claim_count=0),
+                 _planned_trace("b", "D6", completed=False, source_count=0)]
+    old = _compare_paired_traces(baseline, candidate)
+    bound = _compare_paired_traces(
+        iter(baseline), iter(candidate),
+        expected_treatment_settings_by_variant=_PLANNED,
+    )
+    reverse = _compare_paired_traces(
+        reversed(baseline), reversed(candidate),
+        expected_treatment_settings_by_variant=_PLANNED,
+    )
+    # A validated independent treatment plan is part of v3 custody even when
+    # the observed traces and all paired numerical estimates are unchanged.
+    assert bound == reverse
+    assert old["paired_input_fingerprint_schema"] == "length-prefixed-json-v3"
+    assert old["paired_input_fingerprint_sha256"] != bound["paired_input_fingerprint_sha256"]
+    assert {
+        key: value for key, value in old.items()
+        if key != "paired_input_fingerprint_sha256"
+    } == {
+        key: value for key, value in bound.items()
+        if key != "paired_input_fingerprint_sha256"
+    }
+    assert bound["task_ids"] == ["a", "b"]
+    assert bound["n_pairs"] == 2
+
+
+@pytest.mark.parametrize("variant", ["D3", "D6"])
+@pytest.mark.parametrize(
+    ("field", "changed"),
+    [
+        ("planning_mode", "planner"), ("verification_mode", "on"),
+        ("source_budget", 9), ("smart_model", "other"),
+        ("fast_model", "other"), ("temperature", 0.3),
+    ],
+)
+def test_treatment_fidelity_detects_wrong_planned_setting_in_both_arms(
+    variant, field, changed
+):
+    baseline = [_planned_trace("a", "D3"), _planned_trace("b", "D3")]
+    candidate = [_planned_trace("a", "D6"), _planned_trace("b", "D6")]
+    arm = baseline if variant == "D3" else candidate
+    arm[0] = replace(arm[0], **{field: changed})
+    with pytest.raises(ValueError, match=f"treatment setting mismatch for {field}"):
+        _compare_paired_traces(
+            baseline, candidate, expected_treatment_settings_by_variant=_PLANNED,
+        )
+
+
+@pytest.mark.parametrize(
+    ("bad", "message"),
+    [
+        ({}, "exactly six"), ({"source_budget": 3}, "exactly six"),
+        ({**_PLANNED["D3"], "extra": 1}, "exactly six"),
+        ({**_PLANNED["D3"], "source_budget": True}, "source_budget"),
+        ({**_PLANNED["D3"], "source_budget": -1}, "source_budget"),
+        ({**_PLANNED["D3"], "planning_mode": ""}, "planning_mode"),
+        ({**_PLANNED["D3"], "verification_mode": " off"}, "verification_mode"),
+        ({**_PLANNED["D3"], "smart_model": None}, "smart_model"),
+        ({**_PLANNED["D3"], "temperature": True}, "temperature"),
+        ({**_PLANNED["D3"], "temperature": "0"}, "temperature"),
+        ({**_PLANNED["D3"], "temperature": float("nan")}, "temperature"),
+        ({**_PLANNED["D3"], "temperature": -1.0}, "temperature"),
+        ({**_PLANNED["D3"], "temperature": 10**400}, "temperature"),
+    ],
+)
+def test_treatment_fidelity_invalid_plan_fails_before_consuming_runs(bad, message):
+    def no_read():
+        raise AssertionError("must not inspect observations with an invalid plan")
+        yield None
+
+    with pytest.raises(ValueError, match=message):
+        aggregate_runs_by_task(
+            no_read(), variant_id="D3", task_set_id="prospective-paired",
+            expected_task_ids=["a"], expected_treatment_settings=bad,
+        )
+
+
+@pytest.mark.parametrize(
+    "configs", [
+        [], {}, {"D3": _PLANNED["D3"]},
+        {**_PLANNED, "P6": _PLANNED["D3"]},
+        {"D3": [], "D6": _PLANNED["D6"]},
+    ],
+)
+def test_treatment_fidelity_paired_manifest_fails_before_arm_reads(configs):
+    def no_read():
+        raise AssertionError("must not inspect observed treatment arms")
+        yield None
+
+    with pytest.raises(ValueError, match="expected_treatment_settings"):
+        _compare_paired_traces(
+            no_read(), no_read(),
+            expected_treatment_settings_by_variant=configs,
+        )
+
+
+# Independent reference inputs must be checked before reading observations.
+@pytest.mark.parametrize("bad_ids", ["a", b"a", "", b""])
+def test_task_reference_rejects_scalar_text_without_reading_observations(bad_ids):
+    def no_read():
+        raise AssertionError("malformed reference must not consume observations")
+        yield None
+
+    with pytest.raises(ValueError, match="expected_task_ids"):
+        paired_metric_comparison_by_task(
+            no_read(), no_read(), expected_task_ids=bad_ids
+        )
+    with pytest.raises(ValueError, match="expected_task_ids"):
+        paired_bootstrap_confidence_interval_by_task(
+            no_read(), no_read(), expected_task_ids=bad_ids,
+            n_resamples=3,
+        )
+    with pytest.raises(ValueError, match="expected_task_ids"):
+        aggregate_runs_by_task(
+            no_read(), variant_id="D3", task_set_id="prospective-paired",
+            expected_task_ids=bad_ids,
+        )
+    with pytest.raises(ValueError, match="expected_task_ids"):
+        paired_run_trace_bootstrap_by_task(
+            no_read(), no_read(),
+            baseline_variant_id="D3", candidate_variant_id="D6",
+            task_set_id="prospective-paired",
+            expected_task_ids=bad_ids,
+            expected_questions_by_task={"a": "First research question?"},
+            n_resamples=3,
+        )
+
+
+@pytest.mark.parametrize(
+    ("bad_ids", "error"),
+    [
+        ([], "must not be empty"),
+        (["a", "a"], "duplicate expected task_id"),
+        (["a", " b"], "expected task_id"),
+        (["a", None], "expected task_id"),
+    ],
+)
+def test_paired_trace_rejects_invalid_reference_ids_before_reading_arms(
+    bad_ids, error
+):
+    def no_read():
+        raise AssertionError("invalid independent task reference read an arm")
+        yield None
+
+    with pytest.raises(ValueError, match=error):
+        paired_run_trace_bootstrap_by_task(
+            no_read(), no_read(),
+            baseline_variant_id="D3", candidate_variant_id="D6",
+            task_set_id="prospective-paired", expected_task_ids=bad_ids,
+            expected_questions_by_task={"a": _PAIR_QUESTIONS["a"]},
+            n_resamples=3,
+        )
+
+
+@pytest.mark.parametrize(
+    ("bad_questions", "error"),
+    [
+        ([], "expected_questions_by_task"),
+        ({}, "coverage mismatch"),
+        ({"a": _PAIR_QUESTIONS["a"]}, "coverage mismatch"),
+        ({"a": "", "b": _PAIR_QUESTIONS["b"]}, "expected task question"),
+        ({" a": "wrong", "b": _PAIR_QUESTIONS["b"]}, "expected question task_id"),
+        ({"a": _PAIR_QUESTIONS["a"], "b": _PAIR_QUESTIONS["b"],
+          "extra": "unexpected"}, "coverage mismatch"),
+    ],
+)
+def test_paired_trace_preflights_reference_questions_before_reading_arms(
+    bad_questions, error
+):
+    def no_read():
+        raise AssertionError("invalid independent question reference read an arm")
+        yield None
+
+    with pytest.raises(ValueError, match=error):
+        paired_run_trace_bootstrap_by_task(
+            no_read(), no_read(),
+            baseline_variant_id="D3", candidate_variant_id="D6",
+            task_set_id="prospective-paired",
+            expected_task_ids=(task for task in ["b", "a"]),
+            expected_questions_by_task=bad_questions,
+            n_resamples=3,
+        )
+
+
+# Fail closed on unbounded one-pass producers: the independent task matrix
+# bounds reads, and a malformed baseline must not touch the candidate arm.
+def test_run_trace_pairing_bounds_unending_baseline_without_consuming_candidate():
+    reads = []
+
+    def endless_baseline():
+        while True:
+            reads.append(1)
+            yield _paired_run_trace("a", "D3")
+
+    def unread_candidate():
+        raise AssertionError("candidate arm read before baseline cardinality validation")
+        yield None
+
+    with pytest.raises(ValueError, match="duplicate observed task_id"):
+        _compare_paired_traces(endless_baseline(), unread_candidate())
+    # The second duplicate is invalid; no need to inspect a third record.
+    assert len(reads) == 2
+
+
+def test_run_trace_pairing_bounds_unending_candidate_after_valid_baseline():
+    reads = []
+
+    def endless_candidate():
+        while True:
+            reads.append(1)
+            yield _paired_run_trace("a", "D6")
+
+    baseline = [_paired_run_trace("a", "D3"), _paired_run_trace("b", "D3")]
+    with pytest.raises(ValueError, match="duplicate observed task_id"):
+        _compare_paired_traces(iter(baseline), endless_candidate())
+    assert len(reads) == 2
+
+
+@pytest.mark.parametrize("arm", ["baseline", "candidate"])
+@pytest.mark.parametrize(
+    ("bad_fields", "error"),
+    [
+        ({"task_id": "unplanned"}, "task coverage mismatch"),
+        ({"question": "Substituted question?"}, "task question mismatch"),
+        ({"variant_id": "other"}, "variant_id mismatch"),
+    ],
+)
+def test_paired_run_trace_validates_each_record_before_stream_advances(
+    arm, bad_fields, error,
+):
+    # Synthetic traces. A late producer exception must not conceal the first
+    # mislabeled observed cell, and invalid baseline data must not read the
+    # independent candidate arm at all.
+    reads = {"baseline": 0, "candidate": 0}
+
+    def source(name, variant):
+        reads[name] += 1
+        first = _paired_run_trace("a", variant)
+        if name == arm:
+            yield replace(first, **bad_fields)
+            raise AssertionError("invalid arm advanced after its first bad trace")
+        yield first
+        reads[name] += 1
+        yield _paired_run_trace("b", variant)
+
+    with pytest.raises(ValueError, match=error):
+        _compare_paired_traces(
+            source("baseline", "D3"), source("candidate", "D6"),
+        )
+    assert reads == (
+        {"baseline": 1, "candidate": 0}
+        if arm == "baseline" else {"baseline": 2, "candidate": 1}
+    )
+
+
+@pytest.mark.parametrize("arm", ["baseline", "candidate"])
+def test_paired_run_trace_checks_planned_settings_before_more_records(arm):
+    reads = {"baseline": 0, "candidate": 0}
+
+    def source(name, variant):
+        reads[name] += 1
+        first = _planned_trace("a", variant)
+        if name == arm:
+            yield replace(first, source_budget=99)
+            raise AssertionError("invalid planned setting did not stop stream")
+        yield first
+        reads[name] += 1
+        yield _planned_trace("b", variant)
+
+    with pytest.raises(ValueError, match="treatment setting mismatch for source_budget"):
+        _compare_paired_traces(
+            source("baseline", "D3"), source("candidate", "D6"),
+            expected_treatment_settings_by_variant=_PLANNED,
+        )
+    assert reads == (
+        {"baseline": 1, "candidate": 0}
+        if arm == "baseline" else {"baseline": 2, "candidate": 1}
+    )
+
+
+def test_run_trace_pairing_rejects_bad_baseline_before_candidate_read():
+    def unread_candidate():
+        raise AssertionError("candidate arm read before baseline identity validation")
+        yield None
+
+    baseline = [
+        replace(_paired_run_trace("a", "D3"), variant_id="D6"),
+        _paired_run_trace("b", "D3"),
+    ]
+    with pytest.raises(ValueError, match="variant_id mismatch"):
+        _compare_paired_traces(iter(baseline), unread_candidate())
+
+
+
+# Prospective-only: bounded one-pass task-keyed numeric comparators. All data
+# below are synthetic; none represent historical or human-evaluation scores.
+@pytest.mark.parametrize(
+    "comparator",
+    [paired_metric_comparison_by_task, paired_bootstrap_confidence_interval_by_task],
+)
+def test_task_keyed_comparators_bound_unending_baseline_before_candidate(comparator):
+    reads = {"baseline": 0, "candidate": 0}
+
+    def baseline():
+        index = 0
+        while True:
+            reads["baseline"] += 1
+            yield (f"extra-{index}", 0.0)
+            index += 1
+
+    def candidate():
+        reads["candidate"] += 1
+        yield ("a", 1.0)
+
+    with pytest.raises(ValueError, match="baseline task coverage mismatch"):
+        comparator(baseline(), candidate(), expected_task_ids=["a", "b"])
+    assert reads == {"baseline": 1, "candidate": 0}
+
+
+@pytest.mark.parametrize(
+    "comparator",
+    [paired_metric_comparison_by_task, paired_bootstrap_confidence_interval_by_task],
+)
+def test_task_keyed_comparators_bound_unending_candidate_after_valid_baseline(
+    comparator,
+):
+    reads = 0
+
+    def candidate():
+        nonlocal reads
+        index = 0
+        while True:
+            reads += 1
+            yield (f"extra-{index}", 1.0)
+            index += 1
+
+    with pytest.raises(ValueError, match="candidate task coverage mismatch"):
+        comparator(
+            [("a", 0.0), ("b", 0.0)],
+            candidate(),
+            expected_task_ids=["a", "b"],
+        )
+    assert reads == 1
+
+
+@pytest.mark.parametrize(
+    "comparator",
+    [paired_metric_comparison_by_task, paired_bootstrap_confidence_interval_by_task],
+)
+@pytest.mark.parametrize("bad_arm", ["baseline", "candidate"])
+def test_task_keyed_comparators_reject_first_unplanned_id_before_invalid_metric(
+    comparator, bad_arm,
+):
+    """A substituted ID, not a later corrupt metric, is the first error."""
+    reads = {"unexpected": 0, "opposite": 0}
+
+    def substituted():
+        reads["unexpected"] += 1
+        yield ("unplanned-task", float("nan"))
+        raise AssertionError("off-manifest stream must not advance past first record")
+
+    def valid():
+        reads["opposite"] += 1
+        yield ("a", 0.0)
+        yield ("b", 0.0)
+
+    baseline, candidate = (
+        (substituted(), valid()) if bad_arm == "baseline"
+        else (valid(), substituted())
+    )
+    with pytest.raises(ValueError, match=f"{bad_arm} task coverage mismatch: unexpected"):
+        comparator(baseline, candidate, expected_task_ids=["a", "b"])
+    assert reads["unexpected"] == 1
+    assert reads["opposite"] == (0 if bad_arm == "baseline" else 1)
+
+
+def test_task_keyed_bootstrap_invalid_baseline_does_not_touch_candidate():
+    def candidate():
+        raise AssertionError("candidate must not be read on bad baseline")
+        yield ("a", 1.0)
+
+    with pytest.raises(ValueError, match="baseline task coverage mismatch"):
+        paired_bootstrap_confidence_interval_by_task(
+            [("a", 0.0)],
+            candidate(),
+            expected_task_ids=["a", "b"],
+        )
+
+
+def test_task_keyed_bootstrap_one_pass_compatibility_remains_seeded():
+    def arm(rows):
+        yield from rows
+
+    params = dict(expected_task_ids=["a", "b"], seed=17, n_resamples=19)
+    first = paired_bootstrap_confidence_interval_by_task(
+        arm([("b", 0.5), ("a", 0.25)]),
+        arm([("a", 0.5), ("b", 0.75)]),
+        **params,
+    )
+    second = paired_bootstrap_confidence_interval_by_task(
+        arm([("a", 0.25), ("b", 0.5)]),
+        arm([("b", 0.75), ("a", 0.5)]),
+        **params,
+    )
+    assert first == second
+    assert first["mean_delta"] == 0.25
+    assert first["bootstrap_confidence_interval"]["estimate"] == 0.25
+
+
+# Prospective diagnostic reference preflight only. Synthetic, no provider calls.
+def test_reference_manifest_at_explicit_limit_preserves_valid_one_pass_order():
+    task_ids, questions = _validated_reference_task_manifest(
+        (f"task-{index:05d}" for index in range(MAX_DIAGNOSTIC_REFERENCE_TASKS))
+    )
+    assert len(task_ids) == MAX_DIAGNOSTIC_REFERENCE_TASKS
+    assert task_ids[0] == "task-00000"
+    assert task_ids[-1] == f"task-{MAX_DIAGNOSTIC_REFERENCE_TASKS - 1:05d}"
+    assert questions is None
+
+
+@pytest.mark.parametrize(
+    "comparator",
+    [paired_metric_comparison_by_task, paired_bootstrap_confidence_interval_by_task],
+)
+def test_unbounded_independent_task_reference_fails_before_reading_arms(comparator):
+    reference_reads = 0
+    arm_reads = 0
+
+    def infinite_unique_reference():
+        nonlocal reference_reads
+        index = 0
+        while True:
+            reference_reads += 1
+            yield f"task-{index}"
+            index += 1
+
+    def forbidden_arm():
+        nonlocal arm_reads
+        arm_reads += 1
+        raise AssertionError("invalid reference must not consume observations")
+        yield ("task-0", 1.0)
+
+    with pytest.raises(ValueError, match="diagnostic reference limit"):
+        comparator(
+            forbidden_arm(), forbidden_arm(),
+            expected_task_ids=infinite_unique_reference(),
+        )
+    assert reference_reads == MAX_DIAGNOSTIC_REFERENCE_TASKS + 1
+    assert arm_reads == 0
+
+
+def test_unbounded_independent_question_mapping_fails_before_trace_reads():
+    class UnboundedQuestions(dict):
+        def __init__(self):
+            self.reads = 0
+
+        def items(self):
+            index = 0
+            while True:
+                self.reads += 1
+                yield f"unknown-{index}", "Synthetic question?"
+                index += 1
+
+    questions = UnboundedQuestions()
+    observations = 0
+
+    def forbidden_runs():
+        nonlocal observations
+        observations += 1
+        raise AssertionError("invalid reference must not consume a trace")
+        yield _task_aggregate_trace("task-a")
+
+    with pytest.raises(ValueError, match="question coverage mismatch"):
+        aggregate_runs_by_task(
+            forbidden_runs(), variant_id="D3", task_set_id="frozen-diagnostic",
+            expected_task_ids=["task-a"], expected_questions_by_task=questions,
+        )
+    assert questions.reads == 2
+    assert observations == 0
+
+
+def test_independent_question_mapping_still_accepts_complete_one_pass_reference():
+    task_ids, questions = _validated_reference_task_manifest(
+        (x for x in ["task-b", "task-a"]),
+        {"task-b": "Question B?", "task-a": "Question A?"},
+    )
+    assert task_ids == ["task-a", "task-b"]
+    assert questions == {"task-b": "Question B?", "task-a": "Question A?"}
+
+
+# Independent planned settings are prospective diagnostic inputs, not observed data.
+def test_unbounded_planned_fields_fail_at_seventh_entry_without_trace_reads():
+    class InfiniteFields(dict):
+        def __init__(self):
+            self.reads = 0
+
+        def items(self):
+            for field, value in _PLANNED["D3"].items():
+                self.reads += 1
+                yield field, value
+            index = 0
+            while True:
+                self.reads += 1
+                yield f"extra-field-{index}", index
+                index += 1
+
+    plan = InfiniteFields()
+    observed = 0
+
+    def forbidden_runs():
+        nonlocal observed
+        observed += 1
+        raise AssertionError("invalid plan cannot consume treatment records")
+        yield _planned_trace("a", "D3")
+
+    with pytest.raises(ValueError, match="expected_treatment_settings.*exactly six"):
+        aggregate_runs_by_task(
+            forbidden_runs(), variant_id="D3", task_set_id="prospective-paired",
+            expected_task_ids=["a"], expected_treatment_settings=plan,
+        )
+    assert plan.reads == 7
+    assert observed == 0
+
+
+def test_unbounded_planned_variants_fail_at_third_entry_without_arm_reads():
+    class InfiniteVariants(dict):
+        def __init__(self):
+            self.reads = 0
+
+        def items(self):
+            for variant, fields in _PLANNED.items():
+                self.reads += 1
+                yield variant, fields
+            index = 0
+            while True:
+                self.reads += 1
+                yield f"extra-variant-{index}", _PLANNED["D3"]
+                index += 1
+
+    plans = InfiniteVariants()
+    observed = 0
+
+    def forbidden_runs():
+        nonlocal observed
+        observed += 1
+        raise AssertionError("invalid plan cannot consume either treatment arm")
+        yield _planned_trace("a", "D3")
+
+    with pytest.raises(ValueError, match="expected_treatment_settings_by_variant.*exactly both"):
+        _compare_paired_traces(
+            forbidden_runs(), forbidden_runs(),
+            expected_treatment_settings_by_variant=plans,
+        )
+    assert plans.reads == 3
+    assert observed == 0
+
+
+def test_valid_one_pass_planned_mappings_preserve_seeded_paired_result():
+    class OnePassMapping(dict):
+        def __init__(self, source):
+            super().__init__()
+            self.source = source
+            self.used = False
+
+        def items(self):
+            if self.used:
+                raise AssertionError("planned source read more than once")
+            self.used = True
+            yield from self.source.items()
+
+    baseline = [_planned_trace("a", "D3"), _planned_trace("b", "D3")]
+    candidate = [_planned_trace("a", "D6"), _planned_trace("b", "D6")]
+    control = _compare_paired_traces(
+        baseline, candidate, expected_treatment_settings_by_variant=_PLANNED
+    )
+    nested = {variant: OnePassMapping(fields) for variant, fields in _PLANNED.items()}
+    actual = _compare_paired_traces(
+        iter(baseline), iter(candidate),
+        expected_treatment_settings_by_variant=OnePassMapping(nested),
+    )
+    assert actual == control
+
+
+@pytest.mark.parametrize(
+    ("settings", "reason"),
+    [
+        ({"source_count": 4, "source_budget": 3}, "source_count exceeds"),
+        ({"source_count": 0, "query_count": 1, "search_call_count": 2}, "search_call_count exceeds"),
+        ({"source_count": 7, "source_budget": 1, "query_count": 1, "search_call_count": 2}, "source_count exceeds"),
+    ],
+)
+def test_diagnostic_trace_rejects_overspent_declared_source_or_query_allocation(
+    settings, reason,
+):
+    # An internally contradictory diagnostic trace must not enter aggregates.
+    with pytest.raises(ValueError, match=reason):
+        RunTrace(run_id="synthetic-inconsistent", completed=True, **settings)
+
+
+def test_diagnostic_trace_allows_within_budget_and_legacy_unspecified_allocations():
+    exact = RunTrace(
+        run_id="synthetic-exact", completed=True,
+        source_count=3, source_budget=3, query_count=2, search_call_count=2,
+    )
+    partial = RunTrace(
+        run_id="synthetic-partial", completed=False,
+        source_count=1, source_budget=3, query_count=3, search_call_count=1,
+    )
+    legacy = RunTrace(
+        run_id="synthetic-legacy", completed=True,
+        source_count=3, search_call_count=2,  # zero defaults mean unspecified
+    )
+    assert [t.source_count for t in (exact, partial, legacy)] == [3, 1, 3]
+    assert aggregate_runs([exact, partial, legacy])["n_runs"] == 3
+
+
+@pytest.mark.parametrize("statistic", [safe_mean, safe_median, population_stddev])
+def test_direct_descriptive_helpers_bound_infinite_one_pass_sources(statistic):
+    """The first excess datum must fail, not turn a prefix into an estimate."""
+    reads = 0
+
+    def unending():
+        nonlocal reads
+        while True:
+            reads += 1
+            if reads > MAX_DIAGNOSTIC_DESCRIPTIVE_VALUES + 1:
+                raise AssertionError("unbounded descriptive sample read")
+            yield 2.0
+
+    with pytest.raises(ValueError, match="descriptive observations exceed"):
+        statistic(unending())
+    assert reads == MAX_DIAGNOSTIC_DESCRIPTIVE_VALUES + 1
+
+
+@pytest.mark.parametrize(
+    ("statistic", "expected"),
+    [(safe_mean, 2.0), (safe_median, 2.0), (population_stddev, 1.0)],
+)
+def test_direct_descriptive_helpers_accept_inclusive_limit_without_estimator_change(
+    statistic, expected
+):
+    # Exactly half the rows are 1.0 and half 3.0; no materialization by caller.
+    data = (1.0 if i % 2 == 0 else 3.0 for i in range(MAX_DIAGNOSTIC_DESCRIPTIVE_VALUES))
+    assert statistic(data) == expected
+
+
+@pytest.mark.parametrize("adapter", ["numeric_pairs", "run_traces"])
+def test_paired_bootstrap_rejects_infeasible_draw_budget_before_arm_reads(adapter):
+    """An invalid planned design cannot consume outcomes before rejection.
+
+    201 planned tasks x 100,000 resamples exceeds the independent 20-million
+    diagnostic draw ceiling. These are synthetic task labels, not study data.
+    """
+    count = MAX_DIAGNOSTIC_BOOTSTRAP_DRAWS // MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES + 1
+    task_ids = [f"synthetic-task-{index}" for index in range(count)]
+    reads = []
+
+    def forbidden_observations():
+        reads.append("consumed")
+        raise AssertionError("invalid bootstrap design read observed treatment data")
+        yield None
+
+    if adapter == "numeric_pairs":
+        operation = lambda: paired_bootstrap_confidence_interval_by_task(
+            forbidden_observations(), forbidden_observations(),
+            expected_task_ids=iter(task_ids),
+            n_resamples=MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES,
+        )
+    else:
+        questions = {task_id: f"Synthetic question {index}?" for index, task_id in enumerate(task_ids)}
+        operation = lambda: paired_run_trace_bootstrap_by_task(
+            forbidden_observations(), forbidden_observations(),
+            baseline_variant_id="D3", candidate_variant_id="D6",
+            task_set_id="synthetic-diagnostic",
+            expected_task_ids=iter(task_ids),
+            expected_questions_by_task=questions,
+            n_resamples=MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES,
+        )
+    with pytest.raises(ValueError, match="bootstrap work budget"):
+        operation()
+    assert reads == []
+
+
+def test_shared_bootstrap_draw_budget_accepts_exact_boundary_without_sampling():
+    """The resource check is inclusive; test the check, not a costly bootstrap."""
+    from logic.evaluation import _validate_bootstrap_draw_budget
+
+    observations = MAX_DIAGNOSTIC_BOOTSTRAP_DRAWS // MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES
+    assert (
+        _validate_bootstrap_draw_budget(
+            observations, MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES
+        ) is None
+    )
+    with pytest.raises(ValueError, match="bootstrap work budget"):
+        _validate_bootstrap_draw_budget(
+            observations + 1, MAX_DIAGNOSTIC_BOOTSTRAP_RESAMPLES
+        )
+
+# Prospective provider capture is a measurement-validity boundary: incomplete
+# usage must not silently become zero consumption in diagnostic cost ledgers.
+@pytest.mark.parametrize(
+    "bad_usage",
+    [
+        None,
+        {},
+        {"prompt_tokens": 3},
+        {"completion_tokens": 2},
+        {"prompt_tokens": 3, "completion_tokens": "2"},
+        {"prompt_tokens": True, "completion_tokens": 2},
+        {"prompt_tokens": 3.0, "completion_tokens": 2},
+        {"prompt_tokens": -3, "completion_tokens": 2},
+        {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 7},
+        {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": "5"},
+        {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": None},
+        {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": True},
+    ],
+)
+def test_diagnostic_provider_usage_missing_or_malformed_is_unavailable(bad_usage):
+    tracker = UsageTracker()
+    tracker.record_response("test-model", {"usage": bad_usage})
+    receipt = tracker.snapshot()
+    assert receipt["model_calls"] == 1
+    assert receipt["unavailable_calls"] == 1
+    assert (receipt["prompt_tokens"], receipt["completion_tokens"], receipt["total_tokens"]) == (0, 0, 0)
+    assert receipt["by_model"]["test-model"] == {
+        "model_calls": 1, "unavailable_calls": 1,
+        "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("provider_usage", "expected_tokens"),
+    [
+        ({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}, (0, 0)),
+        ({"prompt_tokens": 3, "completion_tokens": 2}, (3, 2)),
+        (SimpleNamespace(prompt_tokens=3, completion_tokens=2, total_tokens=5), (3, 2)),
+    ],
+)
+def test_diagnostic_provider_usage_accepts_complete_counts_and_recorded_zeros(
+    provider_usage, expected_tokens
+):
+    tracker = UsageTracker()
+    tracker.record_response("test-model", SimpleNamespace(usage=provider_usage))
+    receipt = tracker.snapshot()
+    assert receipt["model_calls"] == 1
+    assert receipt["unavailable_calls"] == 0
+    assert (receipt["prompt_tokens"], receipt["completion_tokens"]) == expected_tokens
+    assert receipt["total_tokens"] == sum(expected_tokens)
+
+
+def test_diagnostic_provider_usage_mixed_call_ledger_preserves_unavailable_calls():
+    tracker = UsageTracker()
+    tracker.record_response(
+        "model-a",
+        {"usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}},
+    )
+    tracker.record_response("model-a", {"usage": {"prompt_tokens": 3}})
+    tracker.record_unavailable("model-b")
+    receipt = tracker.snapshot()
+    assert (receipt["model_calls"], receipt["unavailable_calls"]) == (3, 2)
+    assert (receipt["prompt_tokens"], receipt["completion_tokens"], receipt["total_tokens"]) == (3, 2, 5)
+    assert receipt["by_model"]["model-a"] == {
+        "model_calls": 2, "unavailable_calls": 1,
+        "prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5,
+    }
+    assert receipt["by_model"]["model-b"] == {
+        "model_calls": 1, "unavailable_calls": 1,
+        "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+    }
+class _NoncanonicalHashModel(str):
+    def __hash__(self):
+        raise AssertionError("noncanonical model keys must be rejected before hashing")
+
+
+@pytest.mark.parametrize(
+    "invalid_model",
+    [
+        None, 0, True, [], {}, ("provider",), b"provider",
+        _NoncanonicalHashModel("provider"),
+    ],
+)
+def test_diagnostic_provider_usage_model_key_is_validated_before_ledger_mutation(
+    invalid_model,
+):
+    tracker = UsageTracker()
+    tracker.record_response(
+        "known-model",
+        {"usage": {"prompt_tokens": 4, "completion_tokens": 1}},
+    )
+    prior = tracker.snapshot()
+
+    # Neither valid provider usage nor explicit missingness may advance only
+    # the global ledger while failing to create a matching per-model bucket.
+    with pytest.raises(ValueError, match="model must be an exact string"):
+        tracker.record_response(
+            invalid_model,
+            {"usage": {"prompt_tokens": 2, "completion_tokens": 3}},
+        )
+    assert tracker.snapshot() == prior
+
+    with pytest.raises(ValueError, match="model must be an exact string"):
+        tracker.record_unavailable(invalid_model)
+    assert tracker.snapshot() == prior
+
+    # Later legitimate calls must still reconcile to the unchanged buckets.
+    tracker.record_unavailable("known-model")
+    receipt = tracker.snapshot()
+    assert (receipt["model_calls"], receipt["unavailable_calls"]) == (2, 1)
+    assert (receipt["prompt_tokens"], receipt["completion_tokens"]) == (4, 1)
+    assert sum(v["model_calls"] for v in receipt["by_model"].values()) == 2
+    assert sum(v["unavailable_calls"] for v in receipt["by_model"].values()) == 1
+
+
+def test_diagnostic_provider_usage_rejects_bad_model_before_provider_read():
+    class ResponseWhoseUsageMustNotBeRead:
+        @property
+        def usage(self):
+            raise AssertionError("invalid model must fail before provider parsing")
+
+    tracker = UsageTracker()
+    with pytest.raises(ValueError, match="model must be an exact string"):
+        tracker.record_response([], ResponseWhoseUsageMustNotBeRead())
+    assert tracker.snapshot() == {
+        "model_calls": 0,
+        "unavailable_calls": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "by_model": {},
+    }
+
+
+def _isolated_chat_adapter_for_usage_test(monkeypatch, create_call):
+    """Load the real legacy adapter with offline OpenAI/settings stubs.
+
+    The diagnostic CI intentionally does not install provider or app packages.
+    These synthetic regressions exercise actual adapter control flow without
+    importing, contacting, or billing an external model provider.
+    """
+    import importlib.util
+    from pathlib import Path
+    import sys
+    from types import ModuleType, SimpleNamespace
+
+    fake_openai = ModuleType("openai")
+    fake_openai.ChatCompletion = SimpleNamespace(create=create_call)
+    fake_settings = ModuleType("settings")
+    fake_settings.Config = lambda: SimpleNamespace(temperature=0.0)
+    monkeypatch.setitem(sys.modules, "openai", fake_openai)
+    monkeypatch.setitem(sys.modules, "settings", fake_settings)
+
+    adapter_path = Path(__file__).resolve().parents[1] / "agent" / "llm_utils.py"
+    spec = importlib.util.spec_from_file_location(
+        "_vera_offline_chat_usage_adapter", adapter_path
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+@pytest.mark.parametrize(
+    "yield_first", [False, True], ids=["failure-before-first", "partial-messages"]
+)
+def test_local_message_producer_failure_is_not_a_provider_attempt(
+    monkeypatch, stream, yield_first
+):
+    """A failing one-pass input producer must not imply a provider invocation."""
+    import asyncio
+
+    attempted = []
+
+    def provider_create(**kwargs):
+        attempted.append(kwargs)
+        raise AssertionError("provider should never receive incomplete local input")
+
+    def malformed_messages():
+        if yield_first:
+            yield {"role": "user", "content": "partial synthetic message"}
+        raise RuntimeError("synthetic local message preparation failure")
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    tracker.record_response(
+        "prior-model", {"usage": {"prompt_tokens": 4, "completion_tokens": 2}}
+    )
+    before = tracker.snapshot()
+    with pytest.raises(RuntimeError, match="local message preparation failure"):
+        call = adapter.create_chat_completion(
+            model="unattempted-model", messages=malformed_messages(),
+            stream=stream, usage_tracker=tracker,
+        )
+        if stream:
+            asyncio.run(call)
+
+    assert attempted == []
+    assert tracker.snapshot() == before
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+def test_failed_provider_invocation_is_counted_with_unavailable_usage(
+    monkeypatch, stream
+):
+    import asyncio
+
+    attempted = []
+
+    def failed_create(**kwargs):
+        attempted.append(kwargs)
+        raise RuntimeError("synthetic provider invocation failure")
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, failed_create)
+    tracker = UsageTracker()
+    tracker.record_response(
+        "prior-model", {"usage": {"prompt_tokens": 4, "completion_tokens": 2}}
+    )
+    with pytest.raises(RuntimeError, match="synthetic provider invocation failure"):
+        result = adapter.create_chat_completion(
+            model="attempted-model", messages=[{"role": "user", "content": "test"}],
+            stream=stream, usage_tracker=tracker,
+        )
+        if stream:
+            asyncio.run(result)
+
+    assert len(attempted) == 1
+    assert attempted[0].get("stream", False) is stream
+    snapshot = tracker.snapshot()
+    assert snapshot["model_calls"] == 2
+    assert snapshot["unavailable_calls"] == 1
+    assert snapshot["total_tokens"] == 6
+    assert snapshot["by_model"]["prior-model"]["model_calls"] == 1
+    assert snapshot["by_model"]["attempted-model"] == {
+        "model_calls": 1, "unavailable_calls": 1,
+        "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+    }
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+def test_successful_chat_adapter_invocation_is_not_double_counted(
+    monkeypatch, stream
+):
+    import asyncio
+
+    if stream:
+        response = iter([
+            {"choices": [{"delta": {"content": "synthetic "}}]},
+            {"choices": [{"delta": {"content": "result"}}]},
+        ])
+    else:
+        response = {
+            "choices": [{"message": {"content": "synthetic result"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2,
+                      "total_tokens": 5},
+        }
+
+    adapter = _isolated_chat_adapter_for_usage_test(
+        monkeypatch, lambda **kwargs: response
+    )
+    tracker = UsageTracker()
+    call = adapter.create_chat_completion(
+        model="test-model", messages=[{"role": "user", "content": "test"}],
+        stream=stream, usage_tracker=tracker,
+    )
+    assert (asyncio.run(call) if stream else call) == "synthetic result"
+    snapshot = tracker.snapshot()
+    assert snapshot["model_calls"] == 1
+    assert snapshot["unavailable_calls"] == (1 if stream else 0)
+    assert snapshot["total_tokens"] == (0 if stream else 5)
+    assert snapshot["by_model"]["test-model"]["model_calls"] == 1
+
+
+def test_midstream_provider_failure_has_only_one_unavailable_call(
+    monkeypatch,
+):
+    import asyncio
+
+    def interrupted_chunks():
+        yield {"choices": [{"delta": {"content": "partial"}}]}
+        raise RuntimeError("synthetic stream interruption")
+
+    adapter = _isolated_chat_adapter_for_usage_test(
+        monkeypatch, lambda **kwargs: interrupted_chunks()
+    )
+    tracker = UsageTracker()
+    with pytest.raises(RuntimeError, match="synthetic stream interruption"):
+        asyncio.run(adapter.create_chat_completion(
+            model="test-model", messages=[], stream=True, usage_tracker=tracker
+        ))
+    assert tracker.snapshot()["model_calls"] == 1
+    assert tracker.snapshot()["unavailable_calls"] == 1
+
+
+@pytest.mark.parametrize("response_style", ["mapping", "attribute"])
+def test_unreadable_provider_response_usage_is_recorded_unavailable(response_style):
+    """A completed provider response with inaccessible metadata remains a call."""
+    class BrokenMapping(dict):
+        def get(self, key):
+            raise RuntimeError("synthetic usage accessor failure")
+
+    class BrokenAttribute:
+        @property
+        def usage(self):
+            raise RuntimeError("synthetic usage attribute failure")
+
+    response = BrokenMapping() if response_style == "mapping" else BrokenAttribute()
+    tracker = UsageTracker()
+    tracker.record_response("synthetic-model", response)
+    assert tracker.snapshot() == {
+        "model_calls": 1, "unavailable_calls": 1,
+        "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+        "by_model": {"synthetic-model": {
+            "model_calls": 1, "unavailable_calls": 1,
+            "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+        }},
+    }
+
+
+@pytest.mark.parametrize("failing_field", [
+    "prompt_tokens", "completion_tokens", "total_tokens",
+])
+def test_unreadable_provider_usage_field_is_not_silently_counted_as_zero(failing_field):
+    """In particular, an unreadable total is not a legitimate omitted total."""
+    class BrokenUsage(dict):
+        def get(self, key, default=None):
+            if key == failing_field:
+                raise RuntimeError("synthetic unreadable provider telemetry")
+            return super().get(key, default)
+
+    usage = BrokenUsage(prompt_tokens=4, completion_tokens=2, total_tokens=6)
+    tracker = UsageTracker()
+    tracker.record_response("synthetic-model", {"usage": usage})
+    snapshot = tracker.snapshot()
+    assert (snapshot["model_calls"], snapshot["unavailable_calls"]) == (1, 1)
+    assert (snapshot["prompt_tokens"], snapshot["completion_tokens"]) == (0, 0)
+    assert snapshot["by_model"]["synthetic-model"]["unavailable_calls"] == 1
+
+    # Later valid provider usage must still reconcile without partial mutation.
+    tracker.record_response(
+        "synthetic-model",
+        {"usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}},
+    )
+    snapshot = tracker.snapshot()
+    assert (snapshot["model_calls"], snapshot["unavailable_calls"]) == (2, 1)
+    assert (snapshot["prompt_tokens"], snapshot["completion_tokens"], snapshot["total_tokens"]) == (3, 1, 4)
+
+
+def test_nonstream_adapter_preserves_completed_text_when_usage_getter_fails(monkeypatch):
+    """Telemetry parsing cannot turn a successful output into a failed run."""
+    class BrokenUsage(dict):
+        def get(self, key, default=None):
+            if key == "total_tokens":
+                raise RuntimeError("synthetic provider usage getter failure")
+            return super().get(key, default)
+
+    calls = []
+    def provider_create(**kwargs):
+        calls.append(kwargs)
+        return {
+            "choices": [{"message": {"content": "synthetic completed report"}}],
+            "usage": BrokenUsage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+        }
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    result = adapter.create_chat_completion(
+        model="synthetic-model",
+        messages=[{"role": "user", "content": "synthetic question"}],
+        usage_tracker=tracker,
+    )
+    assert result == "synthetic completed report"
+    assert len(calls) == 1
+    assert tracker.snapshot()["model_calls"] == 1
+    assert tracker.snapshot()["unavailable_calls"] == 1
+    assert tracker.snapshot()["total_tokens"] == 0
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+@pytest.mark.parametrize(
+    "bad_model", [None, 7, [], _NoncanonicalHashModel("unsafe")],
+    ids=["none", "integer", "unhashable", "str-subclass"],
+)
+def test_tracked_chat_adapter_validates_model_before_messages_or_provider(
+    monkeypatch, stream, bad_model
+):
+    """Invalid model identity must not spend budget before failing locally."""
+    import asyncio
+
+    attempted = []
+
+    def provider_create(**kwargs):
+        attempted.append(kwargs)
+        raise AssertionError("invalid model should not reach provider")
+
+    def messages_not_to_read():
+        raise AssertionError("invalid model should fail before reading messages")
+        yield {"role": "user", "content": "synthetic data"}
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    tracker.record_response(
+        "prior-model", {"usage": {"prompt_tokens": 2, "completion_tokens": 1}}
+    )
+    before = tracker.snapshot()
+
+    with pytest.raises(ValueError, match="model must be an exact string"):
+        result = adapter.create_chat_completion(
+            model=bad_model, messages=messages_not_to_read(),
+            stream=stream, usage_tracker=tracker,
+        )
+        if stream:
+            asyncio.run(result)
+
+    assert attempted == []
+    assert tracker.snapshot() == before
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+@pytest.mark.parametrize(
+    "bad_temperature",
+    [float("nan"), float("inf"), float("-inf"), -0.01, 2.01, True, "0.5", 10**400],
+    ids=["nan", "positive-infinity", "negative-infinity", "negative",
+         "above-provider-range", "boolean", "text", "overflow"],
+)
+def test_chat_adapter_fails_closed_on_invalid_temperature_before_provider(
+    monkeypatch, stream, bad_temperature
+):
+    """An invalid controlled setting cannot consume input or spend model budget."""
+    import asyncio
+
+    attempts = []
+
+    def provider_create(**kwargs):
+        attempts.append(kwargs)
+        raise AssertionError("invalid temperature reached provider")
+
+    def unread_messages():
+        raise AssertionError("invalid temperature consumed a message producer")
+        yield {"role": "user", "content": "not to be read"}
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    tracker.record_response(
+        "earlier-model", {"usage": {"prompt_tokens": 2, "completion_tokens": 1}}
+    )
+    before = tracker.snapshot()
+    with pytest.raises(ValueError, match="temperature must be a finite number"):
+        result = adapter.create_chat_completion(
+            model="synthetic-model", messages=unread_messages(),
+            temperature=bad_temperature, stream=stream, usage_tracker=tracker,
+        )
+        if stream:
+            asyncio.run(result)
+    assert attempts == []
+    assert tracker.snapshot() == before
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+@pytest.mark.parametrize(
+    "bad_timeout",
+    [float("nan"), float("inf"), float("-inf"), 0, -1.0, True,
+     "nan", "inf", "not-a-timeout", 10**400],
+    ids=["nan", "positive-infinity", "negative-infinity", "zero", "negative",
+         "boolean", "text-nan", "text-infinity", "unparseable", "overflow"],
+)
+def test_chat_adapter_fails_closed_on_invalid_timeout_before_provider(
+    monkeypatch, stream, bad_timeout
+):
+    """Invalid timeout parameters must not masquerade as provider attempts."""
+    import asyncio
+
+    attempts = []
+
+    def provider_create(**kwargs):
+        attempts.append(kwargs)
+        raise AssertionError("invalid timeout reached provider")
+
+    def unread_messages():
+        raise AssertionError("invalid timeout consumed a message producer")
+        yield {"role": "user", "content": "not to be read"}
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    tracker.record_response(
+        "earlier-model", {"usage": {"prompt_tokens": 2, "completion_tokens": 1}}
+    )
+    before = tracker.snapshot()
+    with pytest.raises(ValueError, match="request_timeout_seconds must be finite"):
+        result = adapter.create_chat_completion(
+            model="synthetic-model", messages=unread_messages(),
+            request_timeout_seconds=bad_timeout,
+            stream=stream, usage_tracker=tracker,
+        )
+        if stream:
+            asyncio.run(result)
+    assert attempts == []
+    assert tracker.snapshot() == before
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+@pytest.mark.parametrize("temperature", [0.0, 2.0])
+@pytest.mark.parametrize("timeout", [1, "2.5"])
+def test_chat_adapter_preserves_valid_finite_request_parameters(
+    monkeypatch, stream, temperature, timeout
+):
+    """Supported explicit numeric controls still reach the provider unchanged."""
+    import asyncio
+
+    attempts = []
+
+    def provider_create(**kwargs):
+        attempts.append(kwargs)
+        if stream:
+            return iter([{"choices": [{"delta": {"content": "synthetic ok"}}]}])
+        return {
+            "choices": [{"message": {"content": "synthetic ok"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+        }
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    result = adapter.create_chat_completion(
+        model="synthetic-model", messages=[{"role": "user", "content": "test"}],
+        temperature=temperature, request_timeout_seconds=timeout,
+        stream=stream, usage_tracker=tracker,
+    )
+    assert (asyncio.run(result) if stream else result) == "synthetic ok"
+    assert len(attempts) == 1
+    assert attempts[0]["temperature"] == temperature
+    assert attempts[0]["request_timeout"] == float(timeout)
+    assert attempts[0]["stream"] is stream if stream else "stream" not in attempts[0]
+    snapshot = tracker.snapshot()
+    assert snapshot["model_calls"] == 1
+    assert snapshot["unavailable_calls"] == int(stream)
+    assert snapshot["total_tokens"] == (0 if stream else 4)
+
+# Prospective output provenance: a malformed completed provider response is
+# not a valid empty report, even when token usage was recorded correctly.
+@pytest.mark.parametrize(
+    "bad_response",
+    [
+        {},
+        {"choices": []},
+        {"choices": [{}]},
+        {"choices": [{"message": {}}]},
+        {"choices": [{"message": {"content": None}}]},
+        {"choices": [{"message": {"content": False}}]},
+        {"choices": [{"message": {"content": 0}}]},
+        {"choices": [{"message": {"content": []}}]},
+        {"choices": [{"message": {"content": {"text": "not a string"}}}]},
+    ],
+    ids=[
+        "no-choices", "empty-choices", "no-message", "no-content",
+        "null-content", "boolean-content", "numeric-content", "list-content",
+        "mapping-content",
+    ],
+)
+def test_nonstream_adapter_rejects_malformed_output_without_losing_usage(
+    monkeypatch, bad_response
+):
+    """Missing/invalid output must not silently become a successful empty report."""
+    attempted = []
+
+    def provider_create(**kwargs):
+        attempted.append(kwargs)
+        return {
+            **bad_response,
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        }
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    with pytest.raises(ValueError, match="provider response"):
+        adapter.create_chat_completion(
+            model="synthetic-model",
+            messages=[{"role": "user", "content": "synthetic prompt"}],
+            usage_tracker=tracker,
+        )
+    assert len(attempted) == 1
+    # The provider returned and reported actual consumption. Reporting an
+    # invalid output must not erase known usage or count a second failed call.
+    snapshot = tracker.snapshot()
+    assert (snapshot["model_calls"], snapshot["unavailable_calls"]) == (1, 0)
+    assert (snapshot["prompt_tokens"], snapshot["completion_tokens"]) == (3, 2)
+    assert snapshot["by_model"]["synthetic-model"]["total_tokens"] == 5
+
+
+@pytest.mark.parametrize("content", ["", "synthetic completed report"])
+def test_nonstream_adapter_keeps_real_empty_and_nonempty_text(monkeypatch, content):
+    """An explicit empty string is different from a missing assistant message."""
+    attempted = []
+
+    def provider_create(**kwargs):
+        attempted.append(kwargs)
+        return {
+            "choices": [{"message": {"content": content}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+        }
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    assert adapter.create_chat_completion(
+        model="synthetic-model", messages=[], usage_tracker=tracker
+    ) == content
+    assert len(attempted) == 1
+    assert (tracker.snapshot()["model_calls"], tracker.snapshot()["unavailable_calls"]) == (1, 0)
+
+
+# Prospective-only streaming output provenance. Provider content is synthetic;
+# a corrupt frame must not be silently discarded as an empty text delta.
+@pytest.mark.parametrize(
+    "bad_chunk",
+    [
+        {},
+        {"choices": []},
+        {"choices": [{}]},
+        {"choices": [{"delta": None}]},
+        {"choices": [{"delta": []}]},
+        {"choices": [{"delta": {"content": None}}]},
+        {"choices": [{"delta": {"content": False}}]},
+        {"choices": [{"delta": {"content": 0}}]},
+        {"choices": [{"delta": {"content": []}}]},
+        {"choices": [{"delta": {"content": {"text": "not text"}}}]},
+    ],
+    ids=[
+        "missing-choices", "empty-choices", "missing-delta", "null-delta",
+        "nonmapping-delta", "null-content", "boolean-content",
+        "numeric-content", "list-content", "mapping-content",
+    ],
+)
+def test_stream_adapter_rejects_corrupt_chunk_and_preserves_attempt_ledger(
+    monkeypatch, bad_chunk
+):
+    import asyncio
+
+    class Socket:
+        def __init__(self):
+            self.sent = []
+
+        async def send_text(self, value):
+            self.sent.append(value)
+
+    attempts = []
+
+    def provider_create(**kwargs):
+        attempts.append(kwargs)
+        return iter([
+            {"choices": [{"delta": {"content": "partial text"}}]},
+            bad_chunk,
+            {"choices": [{"delta": {"content": "not delivered"}}]},
+        ])
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    socket = Socket()
+    stream = adapter.create_chat_completion(
+        model="synthetic-model",
+        messages=[{"role": "user", "content": "synthetic prompt"}],
+        stream=True, websocket=socket, usage_tracker=tracker,
+    )
+    with pytest.raises(ValueError, match="provider stream"):
+        asyncio.run(stream)
+
+    assert len(attempts) == 1
+    # Earlier websocket output cannot be retracted. No later chunk may be
+    # forwarded and the partial stream must not be returned as a success.
+    assert socket.sent == ["partial text"]
+    ledger = tracker.snapshot()
+    assert ledger["model_calls"] == 1
+    assert ledger["unavailable_calls"] == 1
+    assert ledger["total_tokens"] == 0
+    assert ledger["by_model"]["synthetic-model"]["unavailable_calls"] == 1
+
+
+def test_stream_adapter_accepts_role_terminal_and_empty_content_frames(monkeypatch):
+    import asyncio
+
+    def provider_create(**kwargs):
+        return iter([
+            {"choices": [{"delta": {"role": "assistant"}}]},
+            {"choices": [{"delta": {"content": "first"}}]},
+            {"choices": [{"delta": {"content": ""}}]},
+            {"choices": [{"delta": {"content": " second"}}]},
+            {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+        ])
+
+    class Socket:
+        def __init__(self):
+            self.sent = []
+
+        async def send_json(self, data):
+            self.sent.append(data)
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    socket = Socket()
+    result = asyncio.run(adapter.create_chat_completion(
+        model="synthetic-model", messages=[], stream=True,
+        websocket=socket, usage_tracker=tracker,
+    ))
+    assert result == "first second"
+    assert socket.sent == [
+        {"type": "report", "output": "first"},
+        {"type": "report", "output": " second"},
+    ]
+    assert tracker.snapshot()["model_calls"] == 1
+    assert tracker.snapshot()["unavailable_calls"] == 1
+
+# A provider may return textual content yet explicitly signal truncation,
+# content filtering, or an unsupported tool-call output. Such a report is not
+# a normally completed research output, even though the call was attempted.
+@pytest.mark.parametrize(
+    "finish_reason",
+    ["length", "content_filter", "tool_calls", "unexpected", False, 3],
+    ids=["token-limit", "content-filter", "tool-calls", "unknown", "bool", "integer"],
+)
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+def test_chat_adapter_rejects_explicit_nonstop_finish_reason(
+    monkeypatch, stream, finish_reason
+):
+    import asyncio
+
+    attempts = []
+
+    def provider_create(**kwargs):
+        attempts.append(kwargs)
+        if stream:
+            return iter([
+                {"choices": [{"delta": {"content": "partial synthetic report"}}]},
+                {"choices": [{"delta": {}, "finish_reason": finish_reason}]},
+            ])
+        return {
+            "choices": [{
+                "message": {"content": "partial synthetic report"},
+                "finish_reason": finish_reason,
+            }],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
+        }
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    with pytest.raises(ValueError, match="finish_reason"):
+        response = adapter.create_chat_completion(
+            model="synthetic-model", messages=[], stream=stream,
+            usage_tracker=tracker,
+        )
+        if stream:
+            asyncio.run(response)
+    assert len(attempts) == 1
+    ledger = tracker.snapshot()
+    assert ledger["model_calls"] == 1
+    assert ledger["unavailable_calls"] == int(stream)
+    assert ledger["total_tokens"] == (0 if stream else 7)
+    assert ledger["by_model"]["synthetic-model"]["model_calls"] == 1
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+@pytest.mark.parametrize("finish_reason", ["stop", None], ids=["stop", "legacy-none"])
+def test_chat_adapter_accepts_normal_or_legacy_finish_reason(
+    monkeypatch, stream, finish_reason
+):
+    import asyncio
+
+    def provider_create(**kwargs):
+        if stream:
+            return iter([
+                {"choices": [{"delta": {"content": "complete synthetic report"}}]},
+                {"choices": [{"delta": {}, "finish_reason": finish_reason}]},
+            ])
+        return {
+            "choices": [{
+                "message": {"content": "complete synthetic report"},
+                "finish_reason": finish_reason,
+            }],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        }
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    response = adapter.create_chat_completion(
+        model="synthetic-model", messages=[], stream=stream, usage_tracker=tracker,
+    )
+    assert (asyncio.run(response) if stream else response) == "complete synthetic report"
+    assert tracker.snapshot()["model_calls"] == 1
+    assert tracker.snapshot()["unavailable_calls"] == int(stream)
+
+
+# Prospective streaming completion lifecycle: an empty iterator or frames after
+# a terminal 'stop' cannot be reported as a successfully completed research run.
+# All provider responses and websocket deliveries below are synthetic/offline.
+@pytest.mark.parametrize(
+    ("chunks", "delivered"),
+    [
+        ([], []),
+        (
+            [
+                {"choices": [{"delta": {"content": "first"}}]},
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+                {"choices": [{"delta": {"content": "late"}}]},
+            ],
+            ["first"],
+        ),
+        (
+            [
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+            ],
+            [],
+        ),
+        (
+            [
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+                {"choices": [{"delta": {"role": "assistant"}}]},
+            ],
+            [],
+        ),
+    ],
+    ids=["no-frames", "post-stop-text", "duplicate-stop", "post-stop-role"],
+)
+@pytest.mark.parametrize("tracked", [False, True], ids=["legacy", "tracked"])
+def test_stream_adapter_rejects_empty_or_post_terminal_frames(
+    monkeypatch, chunks, delivered, tracked
+):
+    import asyncio
+
+    attempts = []
+
+    def provider_create(**kwargs):
+        attempts.append(kwargs)
+        return iter(chunks)
+
+    class Socket:
+        def __init__(self):
+            self.sent = []
+
+        async def send_text(self, value):
+            self.sent.append(value)
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker() if tracked else None
+    socket = Socket()
+    response = adapter.create_chat_completion(
+        model="synthetic-model", messages=[], stream=True,
+        websocket=socket, usage_tracker=tracker,
+    )
+    with pytest.raises(ValueError, match="provider stream"):
+        asyncio.run(response)
+
+    assert len(attempts) == 1
+    assert attempts[0]["stream"] is True
+    # Only text preceding a valid stop can have been delivered; later frames
+    # do not convert the failed stream into a successful return value.
+    assert socket.sent == delivered
+    if tracked:
+        ledger = tracker.snapshot()
+        assert ledger["model_calls"] == 1
+        assert ledger["unavailable_calls"] == 1
+        assert ledger["total_tokens"] == 0
+        assert ledger["by_model"]["synthetic-model"]["unavailable_calls"] == 1
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        [{"choices": [{"delta": {}, "finish_reason": "stop"}]}],
+        [{"choices": [{"delta": {"content": ""}, "finish_reason": "stop"}]}],
+    ],
+    ids=["terminal-only", "terminal-explicit-empty"],
+)
+def test_stream_adapter_accepts_explicit_empty_completed_stream(monkeypatch, chunks):
+    import asyncio
+
+    attempts = []
+
+    def provider_create(**kwargs):
+        attempts.append(kwargs)
+        return iter(chunks)
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    result = asyncio.run(adapter.create_chat_completion(
+        model="synthetic-model", messages=[], stream=True,
+        usage_tracker=tracker,
+    ))
+    assert result == ""
+    assert len(attempts) == 1
+    assert tracker.snapshot()["model_calls"] == 1
+    assert tracker.snapshot()["unavailable_calls"] == 1
+
+
+# Provider-result identity is part of prospective report validity. A textual
+# tool/function request or a role other than assistant is not a research report.
+# All fixtures are synthetic; this does not call an external model.
+@pytest.mark.parametrize(
+    ("metadata", "diagnostic"),
+    [
+        ({"role": "user"}, "role"),
+        ({"role": "tool"}, "role"),
+        ({"role": False}, "role"),
+        ({"function_call": {"name": "synthetic_tool", "arguments": "{}"}}, "function_call"),
+        ({"function_call": ""}, "function_call"),
+        ({"tool_calls": [{"id": "synthetic", "type": "function"}]}, "tool_calls"),
+        ({"tool_calls": {}}, "tool_calls"),
+        ({"tool_calls": True}, "tool_calls"),
+    ],
+    ids=[
+        "user-role", "tool-role", "malformed-role", "function-request",
+        "empty-function-request", "tool-request", "malformed-tool-map",
+        "malformed-tool-boolean",
+    ],
+)
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+def test_chat_adapter_rejects_nonassistant_or_tool_payload(
+    monkeypatch, stream, metadata, diagnostic
+):
+    import asyncio
+
+    attempts = []
+
+    def provider_create(**kwargs):
+        attempts.append(kwargs)
+        if stream:
+            return iter([
+                {"choices": [{"delta": {"content": "safe prefix"}}]},
+                {"choices": [{"delta": {"content": "invalid output", **metadata}}]},
+                {"choices": [{"delta": {"content": "must not forward"}}]},
+            ])
+        return {
+            "choices": [{"message": {"content": "invalid output", **metadata},
+                         "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+        }
+
+    class Socket:
+        def __init__(self):
+            self.sent = []
+
+        async def send_text(self, value):
+            self.sent.append(value)
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    socket = Socket()
+    with pytest.raises(ValueError, match=diagnostic):
+        result = adapter.create_chat_completion(
+            model="synthetic-model", messages=[], stream=stream,
+            websocket=socket, usage_tracker=tracker,
+        )
+        if stream:
+            asyncio.run(result)
+
+    assert len(attempts) == 1
+    assert socket.sent == (["safe prefix"] if stream else [])
+    snapshot = tracker.snapshot()
+    assert snapshot["model_calls"] == 1
+    assert snapshot["unavailable_calls"] == int(stream)
+    assert snapshot["total_tokens"] == (0 if stream else 6)
+    assert snapshot["by_model"]["synthetic-model"]["model_calls"] == 1
+
+
+@pytest.mark.parametrize(
+    "metadata", [
+        {},
+        {"role": "assistant"},
+        {"role": "assistant", "function_call": None, "tool_calls": []},
+    ],
+    ids=["legacy-omitted", "explicit-assistant", "empty-tool-metadata"],
+)
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+def test_chat_adapter_accepts_assistant_or_legacy_payload_without_tool_calls(
+    monkeypatch, stream, metadata
+):
+    import asyncio
+
+    def provider_create(**kwargs):
+        if stream:
+            return iter([
+                {"choices": [{"delta": {"content": "synthetic report", **metadata}}]},
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+            ])
+        return {
+            "choices": [{"message": {"content": "synthetic report", **metadata},
+                         "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        }
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    response = adapter.create_chat_completion(
+        model="synthetic-model", messages=[], stream=stream, usage_tracker=tracker,
+    )
+    assert (asyncio.run(response) if stream else response) == "synthetic report"
+    snapshot = tracker.snapshot()
+    assert snapshot["model_calls"] == 1
+    assert snapshot["unavailable_calls"] == int(stream)
+    assert snapshot["total_tokens"] == (0 if stream else 3)

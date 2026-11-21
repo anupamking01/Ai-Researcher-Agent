@@ -1,0 +1,183 @@
+name: human-eval-analysis-fast-ci
+
+# Selected synthetic-only offline regressions of human-analysis production,
+# snapshot custody and independent output verification. Not human validation.
+on:
+  push:
+    branches:
+      - "research-*"
+    paths:
+      - .github/workflows/human-eval-analysis-fast-ci.yml
+      - scripts/human_eval_analysis_core.py
+      - scripts/analyze_human_eval.py
+      - scripts/verify_human_eval_analysis_outputs.py
+      - scripts/freeze_human_eval_ratings.py
+      - scripts/verify_human_eval_freeze.py
+      - scripts/build_human_eval_packet.py
+      - scripts/verify_human_eval_packet.py
+      - scripts/analyze_main_study.py
+      - tests/test_human_eval_analysis_stats.py
+      - tests/test_human_eval_analysis_helper_input_domain.py
+      - tests/test_human_eval_analysis_snapshot_integrity.py
+      - tests/test_human_eval_analysis_snapshot_bounds.py
+      - tests/test_human_eval_analysis_snapshot_hardlinks.py
+      - tests/test_human_eval_analysis_ancestor_custody.py
+      - tests/test_human_eval_analysis_producer_snapshot.py
+      - tests/test_human_eval_analysis_producer_provenance_capture.py
+      - tests/test_human_eval_analysis_output_size_contract.py
+      - tests/test_human_eval_analysis_output_verification.py
+      - tests/test_human_eval_analysis_fast_ci_workflow.py
+      - tests/human_eval_test_support.py
+      - paper/HUMAN_EVAL_ANALYSIS_PLAN.md
+      - paper/HUMAN_EVAL_PROTOCOL.md
+      - paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md
+      - paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md
+      - scripts/run_offline_pytest_firewalled.sh
+      - scripts/verify_ci_python_runtime.py
+      - scripts/verify_ci_source_checkout.py
+      - scripts/verify_ci_test_evidence.py
+      - scripts/verify_retained_ci_test_evidence.py
+      - requirements.txt
+      - requirements-ci.lock
+      - .python-version
+  pull_request:
+    paths:
+      - .github/workflows/human-eval-analysis-fast-ci.yml
+      - scripts/human_eval_analysis_core.py
+      - scripts/analyze_human_eval.py
+      - scripts/verify_human_eval_analysis_outputs.py
+      - scripts/freeze_human_eval_ratings.py
+      - scripts/verify_human_eval_freeze.py
+      - scripts/build_human_eval_packet.py
+      - scripts/verify_human_eval_packet.py
+      - scripts/analyze_main_study.py
+      - tests/test_human_eval_analysis_stats.py
+      - tests/test_human_eval_analysis_helper_input_domain.py
+      - tests/test_human_eval_analysis_snapshot_integrity.py
+      - tests/test_human_eval_analysis_snapshot_bounds.py
+      - tests/test_human_eval_analysis_snapshot_hardlinks.py
+      - tests/test_human_eval_analysis_ancestor_custody.py
+      - tests/test_human_eval_analysis_producer_snapshot.py
+      - tests/test_human_eval_analysis_producer_provenance_capture.py
+      - tests/test_human_eval_analysis_output_size_contract.py
+      - tests/test_human_eval_analysis_output_verification.py
+      - tests/test_human_eval_analysis_fast_ci_workflow.py
+      - tests/human_eval_test_support.py
+      - paper/HUMAN_EVAL_ANALYSIS_PLAN.md
+      - paper/HUMAN_EVAL_PROTOCOL.md
+      - paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md
+      - paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md
+      - scripts/run_offline_pytest_firewalled.sh
+      - scripts/verify_ci_python_runtime.py
+      - scripts/verify_ci_source_checkout.py
+      - scripts/verify_ci_test_evidence.py
+      - scripts/verify_retained_ci_test_evidence.py
+      - requirements.txt
+      - requirements-ci.lock
+      - .python-version
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analysis-regressions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout source without credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Pin offline Python interpreter
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+          pip-version: "26.2.1"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-ci.lock
+
+      - name: Verify runtime and source before installing dependencies
+        run: |
+          python -m scripts.verify_ci_python_runtime --phase before-tests
+          python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
+
+      - name: Install pinned analysis-test dependencies only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-deps \
+            --only-binary=:all: --retries 1 --timeout 15 \
+            --constraint requirements-ci.lock --constraint requirements.txt \
+            pytest pluggy iniconfig packaging PyYAML markdown-it-py mdurl
+          python -m pip check
+
+      - name: Compile human-analysis implementation and regressions
+        run: |
+          python -m py_compile \
+            scripts/human_eval_analysis_core.py \
+            scripts/analyze_human_eval.py \
+            scripts/verify_human_eval_analysis_outputs.py \
+            scripts/freeze_human_eval_ratings.py \
+            scripts/verify_human_eval_freeze.py \
+            scripts/build_human_eval_packet.py \
+            scripts/verify_human_eval_packet.py \
+            scripts/analyze_main_study.py \
+            tests/test_human_eval_analysis_stats.py \
+            tests/test_human_eval_analysis_helper_input_domain.py \
+            tests/test_human_eval_analysis_snapshot_integrity.py \
+            tests/test_human_eval_analysis_snapshot_bounds.py \
+            tests/test_human_eval_analysis_snapshot_hardlinks.py \
+            tests/test_human_eval_analysis_ancestor_custody.py \
+            tests/test_human_eval_analysis_producer_snapshot.py \
+            tests/test_human_eval_analysis_producer_provenance_capture.py \
+            tests/test_human_eval_analysis_output_size_contract.py \
+            tests/test_human_eval_analysis_output_verification.py \
+            tests/test_human_eval_analysis_fast_ci_workflow.py
+
+      - name: Verify source immediately before analysis tests
+        run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
+
+      - name: Run firewalled human-analysis regressions
+        shell: bash
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: |
+          set -euo pipefail
+          bash scripts/run_offline_pytest_firewalled.sh tests/test_human_eval_analysis_stats.py tests/test_human_eval_analysis_helper_input_domain.py tests/test_human_eval_analysis_snapshot_integrity.py tests/test_human_eval_analysis_snapshot_bounds.py tests/test_human_eval_analysis_snapshot_hardlinks.py tests/test_human_eval_analysis_ancestor_custody.py tests/test_human_eval_analysis_producer_snapshot.py tests/test_human_eval_analysis_producer_provenance_capture.py tests/test_human_eval_analysis_output_size_contract.py tests/test_human_eval_analysis_output_verification.py tests/test_human_eval_analysis_fast_ci_workflow.py 2>&1 | tee "$RUNNER_TEMP/vera-human-analysis-tests.log"
+
+      - name: Verify runtime and source after analysis tests
+        run: |
+          python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests
+          python -m scripts.verify_ci_python_runtime --phase after-tests
+
+      - name: Bind exact-commit analysis-test evidence
+        run: |
+          python -m scripts.verify_ci_test_evidence \
+            --log "$RUNNER_TEMP/vera-human-analysis-tests.log" \
+            --out "$RUNNER_TEMP/vera-human-analysis-test-receipt.json"
+
+      - name: Replay analysis-test evidence before retention
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.verify_retained_ci_test_evidence \
+            --log "$RUNNER_TEMP/vera-human-analysis-tests.log" \
+            --receipt "$RUNNER_TEMP/vera-human-analysis-test-receipt.json" \
+            --checkout-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --event "$GITHUB_EVENT_NAME"
+
+      - name: Retain source-bound analysis regression evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-human-analysis-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/vera-human-analysis-tests.log
+            ${{ runner.temp }}/vera-human-analysis-test-receipt.json
+          if-no-files-found: error
+          retention-days: 90

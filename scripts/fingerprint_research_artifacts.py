@@ -1,0 +1,476 @@
+"""Deterministic SHA-256 fingerprints for preserved research artifacts.
+
+This utility makes it possible to bind an analysis result or manuscript table to
+exact input bytes without modifying the underlying artifacts. It is offline and
+uses only Python's standard library.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import stat
+import unicodedata
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_ARTIFACTS = (
+    REPO_ROOT / "outputs" / "main_study_runs.csv",
+    REPO_ROOT / "outputs" / "posthoc_support_runs.csv",
+)
+
+# The verifier's maximum *serialized JSON* size is a producer contract too:
+# never emit a manifest that the independent verifier cannot subsequently read.
+MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+
+
+def require_manifest_payload_size(payload: bytes) -> None:
+    """Reject unverifyable manifest JSON before creating any output path."""
+    if len(payload) > MAX_MANIFEST_BYTES:
+        raise ValueError("manifest exceeds the 16 MiB safety limit")
+
+
+_WINDOWS_DEVICE_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    | {f"COM{number}" for number in range(1, 10)}
+    | {f"LPT{number}" for number in range(1, 10)}
+)
+_WINDOWS_FORBIDDEN_CHARS = frozenset('<>:"\\\\|?*')
+
+
+def portable_manifest_path_identity(relative: str) -> str:
+    """Conservatively identify paths that could alias on another filesystem.
+
+    Research artifacts must remain distinguishable after checkout on platforms
+    with case-insensitive or Unicode-normalizing names. Windows device names,
+    alternate-data-stream separators, and invisible directional controls are
+    rejected. This checks path portability, not independent scientific origin.
+    """
+    if not isinstance(relative, str) or not relative or relative.startswith("/"):
+        raise ValueError(f"non-portable research artifact path: {relative!r}")
+    normalized_parts = []
+    for part in relative.split("/"):
+        normalized = unicodedata.normalize("NFKC", part)
+        if (
+            part in {"", ".", ".."}
+            or normalized in {"", ".", ".."}
+            or normalized.endswith((" ", "."))
+            or any(
+                char in _WINDOWS_FORBIDDEN_CHARS
+                or char == "/"
+                or ord(char) < 32
+                or ord(char) == 127
+                or unicodedata.category(char) == "Cf"
+                for char in normalized
+            )
+            or normalized.split(".", 1)[0].upper() in _WINDOWS_DEVICE_NAMES
+        ):
+            raise ValueError(f"non-portable research artifact path: {relative!r}")
+        normalized_parts.append(normalized)
+    return unicodedata.normalize("NFKC", "/".join(normalized_parts).casefold())
+
+
+SUPPORTS_DESCRIPTOR_TRAVERSAL = (
+    os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd
+)
+
+
+def _identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _read_fingerprint(
+    descriptor: int, *, path: Path
+) -> tuple[str, int, tuple[int, int, int, int, int]]:
+    before = os.fstat(descriptor)
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError(f"research artifact must be a regular file: {path}")
+
+    digest = hashlib.sha256()
+    byte_count = 0
+    while True:
+        chunk = os.read(descriptor, 1024 * 1024)
+        if not chunk:
+            break
+        digest.update(chunk)
+        byte_count += len(chunk)
+
+    after = os.fstat(descriptor)
+    if _identity(before) != _identity(after) or byte_count != after.st_size:
+        raise ValueError(f"research artifact changed while it was fingerprinted: {path}")
+    return digest.hexdigest(), after.st_size, _identity(after)
+
+
+def _fingerprint_with_directory_descriptors(path: Path) -> tuple[str, int, tuple[int, int]]:
+    """Traverse from the filesystem root without following any path component."""
+    directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    directory_flags |= getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    file_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    file_flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    descriptors: list[int] = []
+    directory_bindings: list[tuple[int, str, int]] = []
+    try:
+        root_descriptor = os.open(path.anchor, directory_flags)
+        descriptors.append(root_descriptor)
+        parent_descriptor = root_descriptor
+        for component in path.parts[1:-1]:
+            child_descriptor = os.open(
+                component,
+                directory_flags,
+                dir_fd=parent_descriptor,
+            )
+            descriptors.append(child_descriptor)
+            if not stat.S_ISDIR(os.fstat(child_descriptor).st_mode):
+                raise ValueError(
+                    f"research artifact must be a regular file: {path}"
+                )
+            directory_bindings.append(
+                (parent_descriptor, component, child_descriptor)
+            )
+            parent_descriptor = child_descriptor
+
+        leaf = path.parts[-1]
+        file_descriptor = os.open(leaf, file_flags, dir_fd=parent_descriptor)
+        descriptors.append(file_descriptor)
+        digest, byte_count, file_identity = _read_fingerprint(
+            file_descriptor,
+            path=path,
+        )
+
+        current_file = os.stat(
+            leaf,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        if not stat.S_ISREG(current_file.st_mode) or _identity(
+            current_file
+        ) != file_identity:
+            raise ValueError(
+                f"research artifact changed while it was fingerprinted: {path}"
+            )
+        for parent, name, child in reversed(directory_bindings):
+            current_directory = os.stat(
+                name,
+                dir_fd=parent,
+                follow_symlinks=False,
+            )
+            bound_directory = os.fstat(child)
+            if (
+                not stat.S_ISDIR(current_directory.st_mode)
+                or (current_directory.st_dev, current_directory.st_ino)
+                != (bound_directory.st_dev, bound_directory.st_ino)
+            ):
+                raise ValueError(
+                    f"research artifact changed while it was fingerprinted: {path}"
+                )
+        return digest, byte_count, file_identity[:2]
+    except FileNotFoundError as exc:
+        raise ValueError(f"research artifact is missing or not a file: {path}") from exc
+    except OSError as exc:
+        raise ValueError(f"research artifact must be a regular file: {path}") from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _fingerprint_portably(path: Path) -> tuple[str, int, tuple[int, int]]:
+    """Portable fallback that rejects symlink components and rechecks identities."""
+    components: list[tuple[Path, tuple[int, int, int, int, int], bool]] = []
+    current = Path(path.anchor)
+    try:
+        for component in path.parts[1:]:
+            current = current / component
+            metadata = os.stat(current, follow_symlinks=False)
+            is_leaf = current == path
+            expected_type = stat.S_ISREG if is_leaf else stat.S_ISDIR
+            if not expected_type(metadata.st_mode):
+                raise ValueError(f"research artifact must be a regular file: {path}")
+            components.append((current, _identity(metadata), is_leaf))
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0),
+        )
+    except FileNotFoundError as exc:
+        raise ValueError(f"research artifact is missing or not a file: {path}") from exc
+    except OSError as exc:
+        raise ValueError(f"research artifact must be a regular file: {path}") from exc
+    try:
+        digest, byte_count, file_identity = _read_fingerprint(descriptor, path=path)
+        if not components or components[-1][1] != file_identity:
+            raise ValueError(
+                f"research artifact changed while it was fingerprinted: {path}"
+            )
+        for component, identity, is_leaf in components:
+            current_metadata = os.stat(component, follow_symlinks=False)
+            expected_type = stat.S_ISREG if is_leaf else stat.S_ISDIR
+            if (
+                not expected_type(current_metadata.st_mode)
+                or _identity(current_metadata) != identity
+            ):
+                raise ValueError(
+                    f"research artifact changed while it was fingerprinted: {path}"
+                )
+        return digest, byte_count, file_identity[:2]
+    except OSError as exc:
+        raise ValueError(
+            f"research artifact changed while it was fingerprinted: {path}"
+        ) from exc
+    finally:
+        os.close(descriptor)
+
+
+def fingerprint_regular_file_with_identity(
+    path: Path,
+) -> tuple[str, int, tuple[int, int]]:
+    """Return stable bytes and physical file identity from one checked descriptor.
+
+    The filesystem (device, inode) pair is captured during hashing, not from a
+    separate path lookup after the file could have been replaced. It identifies
+    hard-linked aliases on filesystems exposing meaningful inode identities.
+    """
+    path = Path(os.path.abspath(path))
+    if SUPPORTS_DESCRIPTOR_TRAVERSAL and path.anchor:
+        return _fingerprint_with_directory_descriptors(path)
+    return _fingerprint_portably(path)
+
+
+def fingerprint_regular_file(path: Path) -> tuple[str, int]:
+    """Return a digest and size from one stable, non-symlink file snapshot."""
+    digest, byte_count, _ = fingerprint_regular_file_with_identity(path)
+    return digest, byte_count
+
+
+def sha256_file(path: Path) -> str:
+    """Return the SHA-256 digest of one stable, existing regular file."""
+    digest, _ = fingerprint_regular_file(path)
+    return digest
+
+
+def require_manifest_capture_coherence(
+    entries: list[dict], *, root: Path, identities: dict[str, tuple[int, int]]
+) -> None:
+    """Recheck all selected files after the initial multi-file fingerprint pass.
+
+    Re-read bytes and descriptor-bound physical identity. This detects a source
+    that changes after its first capture while a later source is being scanned.
+    It is not an atomic filesystem snapshot or a historical provenance proof.
+    """
+    for entry in entries:
+        relative = entry["path"]
+        path = root.joinpath(*relative.split("/"))
+        try:
+            digest, byte_count, physical_identity = (
+                fingerprint_regular_file_with_identity(path)
+            )
+        except (ValueError, OSError) as exc:
+            raise ValueError(
+                f"research artifact changed across manifest capture: {relative}"
+            ) from exc
+        if (digest, byte_count, physical_identity) != (
+            entry["sha256"],
+            entry["bytes"],
+            identities[relative],
+        ):
+            raise ValueError(
+                f"research artifact changed across manifest capture: {relative}"
+            )
+
+
+def build_manifest(paths: list[Path], *, root: Path = REPO_ROOT) -> dict:
+    """Build an order-independent manifest and aggregate digest.
+
+    Paths are represented relative to ``root`` so the manifest is portable
+    across clones. Duplicate paths are rejected because they can make provenance
+    records ambiguous.
+    """
+    if not paths:
+        raise ValueError("at least one research artifact is required")
+
+    root = Path(root).resolve()
+    entries = []
+    seen: set[str] = set()
+    portable_seen: dict[str, str] = {}
+    physical_seen: dict[tuple[int, int], str] = {}
+    initial_identities: dict[str, tuple[int, int]] = {}
+    for path in paths:
+        candidate = Path(os.path.abspath(path))
+        try:
+            relative = candidate.relative_to(root).as_posix()
+        except ValueError as exc:
+            raise ValueError(f"artifact must be inside repository root: {path}") from exc
+        if relative in seen:
+            raise ValueError(f"duplicate research artifact: {relative}")
+        seen.add(relative)
+        portable_key = portable_manifest_path_identity(relative)
+        if portable_key in portable_seen:
+            raise ValueError(
+                "portable research artifact path collision: "
+                f"{portable_seen[portable_key]!r} and {relative!r}"
+            )
+        portable_seen[portable_key] = relative
+        digest, byte_count, physical_identity = fingerprint_regular_file_with_identity(
+            candidate
+        )
+        if physical_identity in physical_seen:
+            raise ValueError(
+                "research artifact hard-link alias: "
+                f"{physical_seen[physical_identity]!r} and {relative!r}"
+            )
+        physical_seen[physical_identity] = relative
+        initial_identities[relative] = physical_identity
+        entries.append(
+            {
+                "path": relative,
+                "sha256": digest,
+                "bytes": byte_count,
+            }
+        )
+
+    entries.sort(key=lambda item: item["path"])
+    require_manifest_capture_coherence(
+        entries, root=root, identities=initial_identities
+    )
+    canonical = json.dumps(entries, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {
+        "schema_version": 1,
+        "algorithm": "sha256",
+        "artifacts": entries,
+        "aggregate_sha256": hashlib.sha256(canonical).hexdigest(),
+    }
+
+
+def write_manifest_create_only(destination: Path, rendered: str) -> None:
+    """Create a fingerprint manifest without replacing existing research evidence.
+
+    An existing file (including a symlink) is never opened for writing. On
+    platforms with directory-relative open/mkdir, every parent is traversed
+    through no-follow descriptors, so a symlinked output directory is refused.
+    This protects output creation, not the atomicity of source-file capture.
+    """
+    target = Path(os.path.abspath(destination))
+    payload = rendered.encode("utf-8")
+    require_manifest_payload_size(payload)
+    if not target.name:
+        raise ValueError("manifest output must name a new file")
+
+    # Some platforms cannot perform directory-relative operations. Their
+    # create-exclusive fallback still refuses existing files, and explicitly
+    # checks each parent for symlinks (without promising race-free traversal).
+    if not (os.open in os.supports_dir_fd and os.mkdir in os.supports_dir_fd):
+        current = Path(target.anchor)
+        created = False
+        created_inode = None
+        completed = False
+        try:
+            for name in target.parts[1:-1]:
+                current = current / name
+                current.mkdir(exist_ok=True)
+                if not stat.S_ISDIR(current.lstat().st_mode):
+                    raise ValueError(f"unsafe manifest output directory: {current}")
+            with target.open("xb") as stream:
+                created = True
+                opened = os.fstat(stream.fileno())
+                created_inode = (opened.st_dev, opened.st_ino)
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+                completed = True
+        except FileExistsError as exc:
+            raise ValueError(
+                f"manifest output already exists (create-only): {target}"
+            ) from exc
+        except OSError as exc:
+            raise ValueError(f"unsafe or unavailable manifest output: {target}") from exc
+        finally:
+            if created and not completed and created_inode is not None:
+                try:
+                    current_leaf = target.lstat()
+                    if (current_leaf.st_dev, current_leaf.st_ino) == created_inode:
+                        target.unlink()
+                except OSError:
+                    pass
+        return
+
+    dir_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    dir_flags |= getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    file_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptors: list[int] = []
+    leaf_created = False
+    completed = False
+    parent_fd = None
+    try:
+        parent_fd = os.open(target.anchor, dir_flags)
+        descriptors.append(parent_fd)
+        for name in target.parts[1:-1]:
+            try:
+                os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+            except FileExistsError:
+                pass
+            child_fd = os.open(name, dir_flags, dir_fd=parent_fd)
+            descriptors.append(child_fd)
+            parent_fd = child_fd
+        leaf_fd = os.open(target.name, file_flags, 0o600, dir_fd=parent_fd)
+        descriptors.append(leaf_fd)
+        leaf_created = True
+        remaining = memoryview(payload)
+        while remaining:
+            count = os.write(leaf_fd, remaining)
+            if count <= 0:
+                raise OSError("zero-byte write while creating manifest")
+            remaining = remaining[count:]
+        os.fsync(leaf_fd)
+        completed = True
+    except FileExistsError as exc:
+        raise ValueError(
+            f"manifest output already exists (create-only): {target}"
+        ) from exc
+    except OSError as exc:
+        raise ValueError(f"unsafe or unavailable manifest output: {target}") from exc
+    finally:
+        if leaf_created and not completed and parent_fd is not None:
+            # Never remove a different file/symlink installed at the pathname
+            # after our exclusive create. The opened leaf is still available
+            # for this identity comparison until descriptor cleanup below.
+            try:
+                created_stat = os.fstat(leaf_fd)
+                current_leaf = os.stat(
+                    target.name, dir_fd=parent_fd, follow_symlinks=False
+                )
+                if (created_stat.st_dev, created_stat.st_ino) == (
+                    current_leaf.st_dev, current_leaf.st_ino
+                ):
+                    os.unlink(target.name, dir_fd=parent_fd)
+            except OSError:
+                pass
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("paths", nargs="*", type=Path, help="repository-relative artifacts")
+    parser.add_argument("--output", type=Path, help="optional JSON manifest destination")
+    args = parser.parse_args()
+
+    paths = [REPO_ROOT / path for path in args.paths] if args.paths else list(DEFAULT_ARTIFACTS)
+    manifest = build_manifest(paths)
+    rendered = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    require_manifest_payload_size(rendered.encode("utf-8"))
+    if args.output:
+        output = args.output if args.output.is_absolute() else REPO_ROOT / args.output
+        write_manifest_create_only(output, rendered)
+    else:
+        print(rendered, end="")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

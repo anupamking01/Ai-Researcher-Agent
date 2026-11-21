@@ -1,0 +1,451 @@
+# Prospective treatment-order counterbalancing (design-only)
+
+**Status: optional future-study design tool, not a historical repair, not a registered replication, and not a result.** No treatment, common evaluator, statistical inference, or human annotation is executed by this tool.
+
+## Problem addressed
+
+The frozen September 2026 ten-task VERA main study ran each task's variants in the fixed sequence **D3 → D6 → P6 → P6V**. Retrieval and provider conditions could change between calls. Paired-by-task inference does not remove this treatment-versus-time confounding; exact paired sign-flip inference should not be described as randomization in the original study. See MAIN_STUDY_EXECUTION_ORDER_VALIDITY.md and paper/ANALYSIS_PLAN.md.
+
+To remove *systematic* treatment/position coupling in a **separately defined, prospective** ten-task replication, the new offline helper **scripts/plan_counterbalanced_replication.py** creates a reproducible ten-row ordering plan. It is intentionally **not wired into** the original runner or its Actions workflow. Its output cannot replace or repair the historical 40 treatments, and its source manifest must be a *new* independently selected task set fixed before the proposed replication begins.
+
+## Pre-execution design contract
+
+The helper accepts exactly ten distinct new task IDs and questions in a bounded UTF-8 JSON file using **only** these fields:
+
+~~~json
+{
+  "schema_version": 1,
+  "task_set_id": "new-independent-task-set-identifier",
+  "frozen_before_execution": true,
+  "tasks": [
+    {"id": "new-01", "category": "research", "question": "A new research question"},
+    {"id": "new-02", "category": "research", "question": "A different question"}
+  ]
+}
+~~~
+
+This is a **schema illustration, not a valid runnable manifest**: the actual file must contain ten distinct entries; do not pad the manifest with historical tasks or select tasks based on the original result directions.
+
+Run in an offline checkout after an independently selected future task set is frozen:
+
+~~~bash
+python -m scripts.plan_counterbalanced_replication --task-manifest /path/to/new_frozen_ten_tasks.json > /path/to/proposed_order_receipt.json
+~~~
+
+The prospective task-manifest and schedule-receipt file reader now holds no-follow
+directory descriptors for **every parent path component** until the bounded
+input capture completes. It rejects symlinked parents and observed ancestor
+replacement, including a same-byte directory swap that leaves the opened file
+unchanged. This closes a path-identity gap: a digest of correct bytes alone
+does not guarantee that a later execution resolves the same source pathname.
+This is local pathname stability, **not** an independent timestamp, archival
+attestation, protection from an adversary able to swap and restore paths
+between checks, or a claim that any replication has run. Offline synthetic
+tests cover valid nested directories, symlinked ancestors, an in-flight
+parent replacement, and receipt-CLI enforcement.
+
+**Single-link source custody (prospective only):** The same bounded reader
+now refuses an input file with more than one filesystem hardlink, and checks
+link count along with device, inode, size, mode, modification time and change
+time before and after descriptor-held capture. This applies to the new task
+manifest, frozen schedule receipt and prospective execution chronology log.
+A hardlink can provide a second writable path to the same bytes even when the
+submitted pathname is not a symlink; accepting it would weaken source isolation
+during a local audit. Synthetic tests reject pre-existing aliases, an alias
+introduced during capture, and hardlinked inputs at all three chronology-CLI
+boundaries. The gate does **not** establish an independent archive,
+pre-execution timestamp, genuine execution or protection against a transient
+alias created and removed entirely between observations. Normal single-link
+regular-file inputs remain supported; parent directory link counts are not
+constrained.
+
+The helper itself writes **only to stdout**. It refuses the original historical task-set ID, the ten reserved original task IDs (`main-01` through `main-10`), verbatim reuse of any of the ten frozen original questions even under case changes, Unicode NFKC variants, or whitespace-only changes, unknown or outcome-bearing JSON fields, duplicate keys, IDs or questions, non-finite JSON, missing freeze flag, ambiguous source types, symlinks, oversized inputs (>256 KiB), and an incomplete matrix. These historical-question fingerprints are checked against the byte-pinned September 2026 original source manifest (`experiments/main_budget_tasks.json`) by offline regression tests; they are not derived from measured outcomes or from recovered report artifacts. This **does not** detect paraphrases, substantial rewrites, near-duplicate tasks, conceptual overlap, or deliberate evasions. A coordinator must still independently document task selection, genuine independence, pre-execution timestamp, and integrity, and ensure there is no treatment outcome feedback into selecting or rewording tasks.
+
+The printed receipt includes both the exact SHA-256 of the source manifest bytes and a separate canonical-semantic task-manifest SHA-256 used to assign slots, plus a deterministic design-version identifier, ordered treatment IDs by task, positional counts, pairwise precedence counts, and a SHA-256 of the canonical receipt fields. Reformatting JSON or changing key order does **not** change arm assignment, but does change the source-byte custody hash and full receipt hash. The receipt hash is **not** an external timestamp or independent pre-registration attestation. Preserve the actual manifest and the receipt in a separately reviewable pre-execution location before authorizing future work.
+
+## Design guarantees
+
+The fixed even-order four-treatment Williams Latin square has rows (using the arm index order D3, D6, P6, P6V):
+
+- D3, D6, P6V, P6
+- D6, P6, D3, P6V
+- P6, P6V, D6, D3
+- P6V, D3, P6, D6
+
+Two copies cover eight tasks; the final two schedules are D3, D6, P6, P6V and its reversal. A deterministic SHA-256-based, canonical-task-manifest-bound slot permutation assigns the ten rows to the ten new task IDs. No treatment measurements or adjustable outcome-tuning seed enter the schedule.
+
+For **each** of the six unordered treatment pairs, each member precedes the other on exactly **5 of 10 tasks**. Each variant occurs at every within-task position either **2 or 3 times** across ten tasks—the mathematically closest possible balance because ten is not divisible by four. Every task receives all four conditions exactly once, for **40 planned cells**. Offline regression tests verify these invariants and the receipt digest.
+
+**First-order carryover balance is now an explicit design invariant.** Ten
+four-arm task schedules contain 30 directed, within-task adjacent transitions.
+Across the 12 possible distinct before→after arm pairs, this specific
+Williams-plus-reversal design must contain six directed pairs **twice** and six
+**three times** (the closest possible balance at ten tasks). A regression
+counterexample demonstrates that a schedule can still satisfy the existing
+5:5 pairwise-precedence and 2/3 positional margins while having some directed
+adjacencies only once and others five times. The planner now refuses that
+failure mode before emitting a future schedule. This is an additional internal
+check; it does not change the v1 receipt schema, assignment, or SHA-256 for
+valid manifests, and it does **not** measure or rule out actual carryover.
+
+This balances *position* and *pairwise ordering*, **not** total tokens, latency, dollar budget, or time-varying web content. It does not guarantee independence, remove across-task temporal drift, or imply random assignment in the original study. There is no claim of a causal effect or inference validity from a schedule alone. An actual future independent replication would need its own ethics/provenance, predeclared budget and inference decisions, clean source custody, and separate human validation.
+
+## Historical task-set leakage guard (prospective only)
+
+The prospectively selected task manifest must not quietly recycle previously evaluated questions under fresh IDs: this would invalidate an assertion that the new ten-task replication is independent of the historical main study. The planner now compares SHA-256 of each question after Unicode NFKC normalization, casefolding, and collapsing whitespace against ten source-anchored frozen original-question fingerprints. It also reserves the ten original task IDs. This rejects **normalized exact reuse** only; it is not a semantic similarity filter and does not establish novelty or task-selection blinding. A test checks that the ten stored fingerprints correspond to the full, byte-pinned historical task source; unexpected changes fail closed in CI. The guard performs no treatment, evaluator, or human-annotation execution.
+
+## Within-manifest task uniqueness (prospective only)
+
+A ten-row schedule does not yield ten independent research questions if two task
+IDs contain the same question written with different capitalization, spacing,
+or Unicode compatibility characters. The initial planner rejected only
+`question.strip()`-identical strings, so the same question could enter twice
+under distinct task IDs and inflate the apparent number of independent task
+units in a future paired analysis.
+
+The planner now checks **within the new manifest** for collisions of
+NFKC/whitespace/casefold-normalized question fingerprints, using the same
+normalization as the historical-task leakage guard. It fails closed before
+assigning any treatments; the independent verifier also rejects an invalid
+manifest rather than accepting a self-consistent schedule. Offline synthetic
+tests cover case, whitespace, Unicode-width, and casefold-equivalent duplicates.
+Task IDs must separately remain unique.
+
+**Portable task-ID identity:** Prospective task IDs use ASCII slugs, but an
+otherwise valid manifest previously accepted `fresh-01` and `FRESH-01` as
+two different task units. Filesystem paths on case-insensitive Windows/macOS
+volumes can alias those names, risking trace/report collisions and spurious
+paired-task independence. The planner now rejects casefold-equivalent task IDs
+within the ten-task manifest and case variants of the historically reserved
+`main-01`–`main-10` identifiers. It preserves the exact spelling of
+noncolliding IDs in the frozen schedule, and the independent plan verifier
+inherits the same fail-closed check. Synthetic regressions cover both classes
+of alias, receipt verification, and legitimate mixed-case unique IDs.
+This is a portable **identifier-collision** check, not evidence of task
+novelty, external preregistration, or independent report custody. Existing
+valid design receipts and all historical measurements remain unchanged.
+
+**Additional pre-execution namespace guard:** Prospective task IDs and task-set
+IDs now reject reserved Windows device basenames (including extensions such
+as `con.notes`) and trailing-dot aliases. Case-only variants of the original
+2026 task-set ID are not accepted as an independent task set. Ordinary
+mixed-case slugs and nonreserved names such as `COM10` remain allowed.
+This prevents portability/identity ambiguity before a future plan is frozen;
+it does not authenticate archived evidence, change the historical results,
+or authorize any prospective execution or human-evaluation distribution.
+
+This is a **normalized-exact duplication check**, not a semantic-overlap test:
+paraphrases, closely related tasks, and shared source dependencies can still
+reduce effective task independence. An independent coordinator must review and
+document those risks *before* freezing any future manifest. No historical
+tasks, automated measurements, confirmatory results, exploratory findings, or
+human-evaluation outcomes are changed by this prospective-only guard.
+
+## Frozen category-stratum identity (prospective only)
+
+Category labels are a **pre-execution task stratum**, not an observed outcome.
+The prospective chronology auditor reports planned, attempted, and completed
+arm-position exposure separately by the exact frozen category label. Without a
+category identity guard, a ten-task manifest could label the same stratum
+`research` and `Research` or `ｒｅｓｅａｒｃｈ`; the audit would silently split
+one intended category into separate denominators and obscure differential
+position exposure or attrition.
+
+The planner now fails closed when two **different raw category spellings**
+collide after Unicode NFKC, whitespace collapsing, and casefolding. Repeated
+identical labels remain valid, as do genuinely different categories. Neither
+the original manifest bytes nor any accepted category spelling is rewritten;
+the independent plan verifier applies the same pre-execution rule. Offline
+synthetic regressions exercise case, leading/trailing/internal whitespace,
+Unicode compatibility and composed/decomposed aliases, verifier rejection,
+and legitimate category labels. This only prevents **normalized-exact** label
+fragmentation: it cannot detect synonyms, semantic overlap, outcome-driven
+category selection, or guarantee balanced strata. Category definitions still
+require independent review and freezing before future execution. This does
+not alter historical automated findings, exploratory analyses, or pending
+human-validation claims.
+
+## Joint primary-pair coverage by frozen category (prospective only)
+
+The prospective chronology audit now emits
+`recorded_completed_primary_pair_coverage_by_frozen_task_category`: for every
+pre-execution category, the frozen task count and, for each named primary
+contrast (D6−D3, P6−D6, P6V−P6), its number of **jointly completed same-task
+pairs**, separated by the frozen treatment-order direction. A category-level
+completed-arm total cannot establish this denominator: if D3 survives on one
+task and D6 on another, there is no D6−D3 paired observation for either task.
+Two synthetic execution logs with equal within-category completed-arm totals
+but different matched-pair coverage exercise this distinction. Other offline
+cases reconcile the category counts to whole-study pair counts and exclude
+failed, timed-out, and unstarted treatment cells without inventing coverage.
+
+This is an outcome-blind, self-reported **descriptive coverage diagnostic**;
+it neither validates incomplete confirmatory inference nor proves independent
+execution, corrects historical temporal confounding, authenticates original
+traces/reports, or authorizes human-evaluation distribution. Category selection
+and handling of missing pairs must be independently frozen for a genuine new
+study. The diagnostic does not modify original pilot, frozen automated
+confirmatory, exploratory, or pending human-validation claims.
+
+## Research claim separation
+
+- **Original pilot:** diagnostic operational evidence only.
+- **Original 2026 confirmatory analysis:** frozen paired automated measurements from the historical fixed-order main study; unchanged by this design.
+- **Exploratory robustness checks:** retain exploratory status and cannot choose a favorable future schedule from observed results.
+- **Human validation:** still pending two eligible blinded annotators and authenticated original reports; this prospective schedule produces none.
+
+This work neither recovers the absent original treatment/recovery artifact listings nor resolves the historical source-to-evaluation custody gate. Do not distribute human packets or represent VERA as fully validated on the strength of this planning tool.
+
+
+## Independent pre-execution receipt verification
+
+A prospective design receipt is not self-authenticating: a coordinator could edit its task-to-order mappings after creation, keep the aggregate order counts unchanged, and recompute its self-hash. Before using **any future** receipt for execution planning, independently reconstruct and compare every field against the retained exact manifest bytes:
+
+~~~bash
+python -m scripts.verify_counterbalanced_replication_plan --task-manifest /path/to/new_frozen_ten_tasks.json --plan-file /path/to/proposed_order_receipt.json
+~~~
+
+The verifier is offline, read-only, and no-model-call. It requires a bounded regular no-follow task manifest and receipt; rejects duplicate/nonstandard JSON, unexpected fields, altered assignment even if all aggregate balance counts still match, source-manifest changes, wrong data types and mismatched SHA-256 hashes; and prints only a compact audit receipt. Whitespace in the plan receipt may differ if there is **no external byte pin**, because it compares canonical JSON fields rather than text formatting. The exact input manifest byte digest, not merely semantic task content, must match.
+
+For stronger custody, retain the **SHA-256 of the exact plan file** with an independent pre-execution timestamped record, and verify it with `--expected-plan-file-sha256 <64-lowercase-hex>`. This option checks a coordinator-*supplied* digest; it does **not** attest its independence, publication time, authorization, or the originally frozen task-selection process. A verifier pass without this pin means **internal consistency only**; with a matching pin, it means consistency with the supplied prior value, **not** independent registration proof. Coordinators should preserve the original manifest, plan file, digest, and an externally reviewable timestamp before work begins. This does not modify the original 2026 treatment data or resolve their source-custody and human-rating gates.
+
+
+## Independently retained task-source pin (prospective-only)
+
+The plan verifier recomputes every assignment from the **supplied** manifest,
+but an attacker or accidental edit can rewrite both the manifest and plan and
+still produce a self-consistent receipt. When the coordinator has separately
+preserved a SHA-256 fingerprint of the **original task-manifest bytes before
+execution**, verify those exact bytes independently:
+
+~~~bash
+python -m scripts.verify_counterbalanced_replication_plan \
+  --task-manifest /path/to/new_frozen_ten_tasks.json \
+  --plan-file /path/to/proposed_order_receipt.json \
+  --expected-task-manifest-sha256 <independently-retained-prerun-source-sha256>
+~~~
+
+The result includes `supplied_task_manifest_pin_matched`. This optional pin
+is distinct from the existing plan-file pin; both can be supplied together.
+It rejects even formatting-only source changes, although those need not alter
+the Williams assignment. A matching self-computed digest is *not* proof of
+independent retention, preregistration, task independence or execution. The
+pilot, historical automated confirmatory findings, exploratory analyses,
+future design and pending human ratings remain separate.
+
+## Invisible-character task-source integrity (prospective-only)
+
+The offline plan now **rejects** hidden Unicode formatting and control characters
+in the proposed new task's \`question\` or \`category\` before computing its
+manifest-bound schedule. Previously, a zero-width character, bidirectional
+override/isolate, grapheme joiner, or variation selector could change the
+original task bytes **and** the assignment digest while leaving the task
+visually indistinguishable. It could also make an otherwise identical
+historical or within-manifest question evade normalized-exact duplicate
+checks, undermining the independence claim for ten future task units.
+
+The validator refuses Unicode format characters (\`Cf\`), C0/C1/DEL controls
+other than ordinary tab/newline/carriage-return formatting, U+034F,
+Mongolian variation selectors, and standard/supplementary variation
+selectors. It **does not rewrite** submitted task text; accented characters,
+ordinary combining diacritics, line breaks, and printable multilingual text
+remain accepted. The independent receipt verifier rebuilds the plan through
+this same validation and rejects coherently rehashed invalid input.
+
+This is a conservative pre-execution validity rule: some languages and emoji
+uses intentionally rely on format characters or variation selectors. Those
+future task designs require an explicit, separately reviewed/versioned rule
+rather than silently stripping characters before giving the prompt to a model.
+The guard cannot detect visually confusable letters, paraphrases, conceptual
+overlap, biased task selection, or results-based schedule selection through
+ordinary visible edits. Independent pre-execution registration is still
+required. No original pilot/confirmatory/exploratory results, treatment runs,
+or human evaluations are changed.
+
+## Escaped-surrogate task-source integrity (prospective only)
+
+A JSON document may contain the ASCII escape \uD800 or a lone low
+surrogate even though neither represents a valid Unicode scalar value.
+Python's JSON decoder can accept these escapes as a string, while the
+resulting unpaired surrogate cannot be UTF-8-encoded for the frozen
+task-question fingerprint. Before this guard, this invalid task text
+could cause an uncaught UnicodeEncodeError instead of a controlled
+research-design failure.
+
+Prospective task manifests now reject Unicode surrogate code points
+(general category Cs) inside both question and category, including
+surrogates escaped in otherwise well-formed ASCII JSON. The submitted
+text is never silently rewritten. Properly paired JSON surrogate
+escapes representing a legitimate scalar value (such as an emoji)
+remain supported subject to the existing hidden-control restrictions.
+Independent plan verification rebuilds the schedule with the same rule.
+Offline synthetic regression cases cover both surrogate ranges, both
+task fields, independent receipt verification, and a valid pair.
+
+This only protects prospective input validity and deterministic
+fingerprinting. It neither proves task independence, execution or
+provenance, nor repairs historical fixed-order confounding. The frozen
+pilot and automated confirmatory measurements, exploratory analysis,
+and pending blinded human validation remain unchanged.
+
+
+## Pre-execution category-order exposure audit (prospective only)
+
+Global Williams position and pair-precedence balance does **not** guarantee
+balance **within frozen task categories**. If, for example, task topics cluster
+by assignment slot, a pooled schedule can look balanced while a particular
+topic stratum sees one treatment consistently earlier. This matters for a
+future stratified analysis but does not establish that such a bias occurred.
+
+Once a new ten-task manifest and its schedule receipt have been **independently
+frozen**, inspect that design *before* any proposed treatment execution:
+
+~~~bash
+python -m scripts.audit_prospective_category_order \
+  --task-manifest /path/to/new_frozen_ten_tasks.json \
+  --plan-file /path/to/proposed_order_receipt.json
+~~~
+
+The auditor independently rebuilds and verifies the supplied receipt against
+the **exact** proposed task source before reporting, for each original frozen
+category label, the number of tasks, the four within-task positions occupied
+by each treatment, and the directional precedence count for each of the six
+primary treatment pairs. It also reports the largest per-treatment position
+spread and largest directional precedence gap within each category. Category
+totals must reconcile exactly to the plan's global margins. Optional
+\`--expected-task-manifest-sha256\` and \`--expected-plan-file-sha256\` flags
+enforce separately retained source/receipt fingerprints; self-computed pins do
+not constitute independent preregistration evidence.
+
+The diagnostic **does not rebalance assignments**, reject an otherwise valid
+fixed schedule for unfavorable strata, introduce an optimization seed, or
+read any treatment scores. A concerning imbalance should be recorded and
+addressed, if necessary, in an independently reviewed *new versioned*
+prospective design **before any execution**, never by choosing among schedules
+after viewing results. Strata of one task necessarily have coarse margins, and
+an odd-sized stratum cannot have equal precedence directions for a pair.
+Observed margins are descriptive planning facts, not estimates of carryover,
+causal bias, task independence, or valid human annotation. The frozen 2026
+pilot/automated measurements and exploratory analyses remain unchanged; the
+original archive-authentication and human-validation gates remain blocked.
+
+## Frozen-category directed first-order adjacency audit (prospective only)
+
+The standalone, outcome-blind `scripts.audit_prospective_category_order`
+diagnostic now reports **all 12 directed neighboring arm transitions** within
+each frozen task category. For each category it records
+`directed_adjacent_transition_counts` (e.g. `D3_to_D6` differs from
+`D6_to_D3`), `total_directed_adjacent_transitions` (exactly three per
+task), and `max_directed_adjacent_transition_count_spread` across the 12
+directions. It also emits `global_directed_adjacent_transition_counts`.
+Every directed count is independently reconciled against the exact
+manifest-replayed, receipt-verified ten-task schedule. The diagnostic rejects
+a modified task-to-order mapping even when aggregated margins are unchanged;
+tests independently scan synthetic schedules and verify both per-stratum and
+global transition counts.
+
+A globally Williams-balanced ten-task design guarantees six directed pairs
+occur twice and six three times across the **whole** schedule, but does not
+guarantee those same margins separately inside science, policy, or any other
+preselected category. A stratum with only one task necessarily contains only
+three transitions and nine zero-count directions. Therefore the reported
+spread is a **descriptive exposure diagnostic, not a goodness-of-fit test or a
+category-specific balance pass/fail threshold**. Neither categories nor
+assignment rows are changed to improve the margins; no outcomes, treatment
+reruns, evaluator calls, or human ratings are involved.
+
+Use this audit after separately freezing and retaining the exact new task
+manifest and proposed design receipt, and disclose category-specific order
+concentration before prospective execution. It does not prove that category
+definitions were independently selected, that historical results were
+precollection preregistered, that a future schedule was executed, or that
+carryover or time drift exists. Original 2026 fixed-order limitations,
+unavailable original treatment/report artifacts, diagnostic pilot status,
+exploratory sensitivity work and pending human-validation gates remain
+unchanged.
+
+
+## Frozen-category task-sequence concentration (prospective only)
+
+The category/order diagnostic also checks the **order of the ten tasks
+themselves**, a distinct exposure from the within-task treatment positions
+and first-order treatment adjacencies. The proposed execution convention is
+task-major: all four arms for task 1 precede those for task 2, and so on.
+If similar questions occur in one contiguous block of the frozen manifest,
+their category can coincide with a particular web/provider time window even
+when the *overall* Williams arm-order margins are balanced.
+
+For each exact frozen category, the read-only audit records its
+`first_task_index` and `last_task_index` (1-based positions in the
+manifest-bound schedule), `first_half_task_count` and
+`second_half_task_count` (tasks 1–5 versus 6–10),
+`adjacent_same_category_task_boundaries`, and
+`longest_consecutive_task_run`. Across the ten-task schedule it reports
+`task_order_same_category_adjacent_boundaries` and
+`task_order_category_switch_boundaries`; these necessarily sum to nine.
+Synthetic tests distinguish fully blocked, mixed-block and alternating
+category arrangements **without using treatment outcomes**, and the auditor
+reconciles the category-level counts with the verified exact schedule.
+
+These are **descriptive pre-execution design diagnostics**, not proof of
+actual temporal drift, category-independent sampling, random assignment,
+bias magnitude, or verified chronology. They do not impose a post-hoc
+balance threshold, change the frozen task order, run any treatments, or
+authorize choosing a favorable order. If prospective task-order randomization
+or blocking is scientifically required, it needs a separately reviewed,
+versioned and independently frozen protocol before execution. This
+does not repair the 2026 fixed-order study or advance its blocked original
+artifact authentication or human-rating gates.
+
+
+## Planned early/late arm-order exposure (outcome-blind diagnostic)
+
+The optional `scripts/audit_prospective_category_order.py` additionally divides
+the **immutable, manifest-verified ten-task schedule** into task-major positions
+1–5 and 6–10. It reports all four arm-by-position counts and six pairwise
+precedence counts separately for each five-task window, their within-window
+spreads, and the maximum absolute early-versus-late count gaps. Each count
+reconciles to the independently recomputed full-design margins. These windows
+measure **planned temporal exposure** that global Williams balance can hide:
+an arm can disproportionately occupy an early slot (or precede another arm)
+among early tasks even when its full ten-task margins are balanced.
+
+This is a descriptive *pre-execution* diagnostic, not a second schedule
+optimizer, acceptance rule, randomization test, post-hoc treatment subgroup,
+or measure of observed temporal confounding. The two five-task windows are a
+conventional split, not outcome-selected intervals; no exposure statistic
+establishes actual job ordering, provider conditions, carryover, task
+independence or a prospectively registered statistical claim. Retain the
+externally archived manifest/receipt pins and execution chronology if a
+separate future study is authorized. Nothing here modifies the 2026 pilot,
+the fixed-order original main study, frozen paired outcomes, exploratory
+sensitivity work, or pending blinded human validation.
+
+
+## Joint category × planned-time treatment-order exposure (prospective only)
+
+Separate category totals and early-versus-late arm-order summaries cannot tell
+whether an apparent temporal exposure is concentrated in one preselected task
+category. The outcome-blind category/order auditor now reports the **joint**
+table `category_by_chronological_half_order_summaries`: for every frozen
+category and both immutable task-index windows (1–5 and 6–10), it records the
+exact 1-based planned task indices, task count, four arm-by-position
+distributions, and six pairwise-precedence counts. Even a category with
+**zero tasks** in one half receives an explicit all-zero cell; an absent
+category is not interpreted as balanced or assigned an invented rate.
+
+Each cell is counted from the manifest-bound, independently verified schedule.
+Both projections of the joint table must reconcile exactly with the existing
+per-category and per-half totals, or the audit fails. Synthetic tests independently
+recount exact scheduled rows and cover both mixed and fully blocked categories.
+The auditor never rearranges tasks or treatments, reads scores, or compares
+alternative schedules to select a favorable result.
+
+This is a **descriptive pre-execution interaction diagnostic**, not proof of
+actual wall-clock order, observed temporal drift, category representativeness,
+carryover, or a treatment effect. Small and empty category × half cells prevent
+reliable subgroup inference; no acceptance threshold or post-outcome subgroup
+test is supplied. Any scientific adjustment would require a separately reviewed
+and frozen future design before collection. The original 2026 fixed-order
+automated results, diagnostic pilot, exploratory sensitivity findings, missing
+historical report/trace custody and pending human ratings remain unchanged.

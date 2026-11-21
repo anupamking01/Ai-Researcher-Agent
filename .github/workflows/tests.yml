@@ -1,24 +1,281 @@
 name: tests
 
+# Research pull requests use one complete, source-bound CI suite rather than
+# launching duplicate 16-shard suites for both push and pull_request events.
+# Standalone research branches can run this workflow via workflow_dispatch.
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   unit-tests:
-    runs-on: ubuntu-latest
+    # Preserve independent shard results even if one fails.
+    strategy:
+      fail-fast: false
+      # Limit concurrent runners across the simultaneously triggered push/PR
+      # suites; each exact-run sixteen-shard replay still requires all shards.
+      max-parallel: 8
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.11"
+          python-version: "3.11.17"
+          pip-version: "26.2.1"
+          cache: pip
 
-      - name: Install test dependencies
-        run: pip install -r requirements-dev.txt
+      - name: Verify pinned CI Python runtime before tests
+        run: python -m scripts.verify_ci_python_runtime --phase before-tests
+
+      - name: Verify pinned Python before dependency-free diagnostic gate
+        run: python -m scripts.verify_ci_python_runtime --phase before-tests
+
+      - name: Verify exact checkout before dependency-free diagnostic gate
+        run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
+
+      - name: Run dependency-free diagnostic invariants before pip installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'VERA EARLY DIAGNOSTIC: sha=%s run=%s attempt=%s event=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_EVENT_NAME" | tee "$RUNNER_TEMP/vera-stdlib-evaluation.log"
+          python -m unittest discover -s tests -p 'test_evaluation_stdlib_gate.py' -v 2>&1 | tee -a "$RUNNER_TEMP/vera-stdlib-evaluation.log"
+
+      - name: Verify exact checkout after dependency-free diagnostic gate
+        run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests
+
+      - name: Bind dependency-free test transcript to commit and run
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.verify_ci_early_gate_evidence \
+            --mode create \
+            --log "$RUNNER_TEMP/vera-stdlib-evaluation.log" \
+            --receipt "$RUNNER_TEMP/vera-stdlib-evaluation-receipt.json" \
+            --checkout-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" --event "$GITHUB_EVENT_NAME" \
+            --repository "$GITHUB_REPOSITORY"
+
+      - name: Independently replay dependency-free evidence before retention
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.verify_ci_early_gate_evidence \
+            --mode verify \
+            --log "$RUNNER_TEMP/vera-stdlib-evaluation.log" \
+            --receipt "$RUNNER_TEMP/vera-stdlib-evaluation-receipt.json" \
+            --checkout-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" --event "$GITHUB_EVENT_NAME" \
+            --repository "$GITHUB_REPOSITORY"
+
+      - name: Retain pre-install diagnostic evidence (90 days)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-stdlib-evaluation-shard-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/vera-stdlib-evaluation.log
+            ${{ runner.temp }}/vera-stdlib-evaluation-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Install application and test dependencies
+        run: |
+          python -m pip install --no-deps -r requirements.txt
+          python -m pip install --no-deps -r requirements-ci.lock
+          python -m pip check
+
+      - name: Verify installed CI dependencies before tests
+        run: python -m scripts.verify_ci_installed_dependencies --phase before-tests
+
+      - name: Compile research code
+        run: python -m compileall -q agent logic scripts tests settings scrape text_preprocess
+
+      - name: Verify exact source checkout before tests
+        run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
 
       - name: Run offline unit tests
-        run: python -m pytest -q
+        shell: bash
+        env:
+          VERA_SHARD: "${{ matrix.shard }}"
+        run: |
+          set -euo pipefail
+          python -m scripts.select_full_ci_shard --verify-partition --shards 16
+          python -m scripts.select_full_ci_shard --shard "$VERA_SHARD" --shards 16 > "$RUNNER_TEMP/vera-offline-test-modules.txt"
+          mapfile -t test_modules < "$RUNNER_TEMP/vera-offline-test-modules.txt"
+          (( ${#test_modules[@]} > 0 ))
+          printf 'VERA full-suite shard %s/16; selected %s modules; checkout %s\n' "$VERA_SHARD" "${#test_modules[@]}" "$GITHUB_SHA" | tee "$RUNNER_TEMP/vera-offline-tests.log"
+          cat "$RUNNER_TEMP/vera-offline-test-modules.txt" | tee -a "$RUNNER_TEMP/vera-offline-tests.log"
+          bash scripts/run_offline_pytest_firewalled.sh "${test_modules[@]}" 2>&1 | tee -a "$RUNNER_TEMP/vera-offline-tests.log"
+
+      - name: Verify exact source checkout after tests
+        run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests
+
+      - name: Verify installed CI dependencies after tests
+        run: python -m scripts.verify_ci_installed_dependencies --phase after-tests
+
+      - name: Verify pinned CI Python runtime after tests
+        run: python -m scripts.verify_ci_python_runtime --phase after-tests
+
+      - name: Bind exact-commit offline test evidence
+        run: |
+          python -m scripts.verify_ci_test_evidence \
+            --log "$RUNNER_TEMP/vera-offline-tests.log" \
+            --out "$RUNNER_TEMP/vera-offline-test-receipt.json" \
+            --selected-modules "$RUNNER_TEMP/vera-offline-test-modules.txt" \
+            --shard "${{ matrix.shard }}"
+
+      - name: Replay exact-commit offline test evidence before upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.verify_retained_ci_test_evidence \
+            --log "$RUNNER_TEMP/vera-offline-tests.log" \
+            --receipt "$RUNNER_TEMP/vera-offline-test-receipt.json" \
+            --checkout-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --event "$GITHUB_EVENT_NAME" \
+            --selected-modules "$RUNNER_TEMP/vera-offline-test-modules.txt" \
+            --shard "${{ matrix.shard }}"
+
+      - name: Retain source-bound offline test evidence (90 days)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-offline-tests-shard-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/vera-offline-tests.log
+            ${{ runner.temp }}/vera-offline-test-receipt.json
+            ${{ runner.temp }}/vera-offline-test-modules.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      # A failed or cancelled pytest/source/receipt gate may leave a partial
+      # transcript. Best-effort retention is never a verified success receipt:
+      # cancellation may also prevent GitHub from running the upload step.
+      # Unverified diagnostics are excluded from sixteen-shard success replay.
+      - name: Retain unverified diagnostics on CI failure or cancellation (90 days)
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-unverified-failure-shard-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/vera-offline-tests.log
+            ${{ runner.temp }}/vera-offline-test-modules.txt
+          if-no-files-found: warn
+          retention-days: 90
+
+  # This gate only runs after all sixteen test jobs finish successfully.
+  # It verifies their *downloaded* evidence as one complete exact-run set.
+  replay-complete-shard-set:
+    needs: unit-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact tested sources for full-set replay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up pinned Python for full-set replay
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+          pip-version: "26.2.1"
+
+      - name: Verify Python and checkout before full-set replay
+        run: |
+          python -m scripts.verify_ci_python_runtime --phase before-tests
+          python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
+
+      - name: Install exact pinned replay dependencies
+        run: |
+          python -m pip install --no-deps -r requirements.txt
+          python -m pip install --no-deps -r requirements-ci.lock
+          python -m pip check
+
+      - name: Verify pinned replay dependencies
+        run: python -m scripts.verify_ci_installed_dependencies --phase before-tests
+
+      - name: Download current-attempt shard evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: vera-offline-tests-shard-*-${{ github.run_id }}-${{ github.run_attempt }}
+          merge-multiple: false
+          path: ${{ runner.temp }}/vera-downloaded-shard-artifacts
+
+      - name: Stage exact-attempt shard directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/vera-downloaded-shard-artifacts"
+          target="$RUNNER_TEMP/vera-sixteen-shard-evidence"
+          mkdir "$target"
+          for shard in {0..15}; do
+            source="$base/vera-offline-tests-shard-${shard}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            test -d "$source"
+            test ! -L "$source"
+            mv -- "$source" "$target/shard-$shard"
+          done
+          test -z "$(find "$base" -mindepth 1 -print -quit)"
+
+      - name: Download exact-attempt pre-install diagnostic evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: vera-stdlib-evaluation-shard-*-${{ github.run_id }}-${{ github.run_attempt }}
+          merge-multiple: false
+          path: ${{ runner.temp }}/vera-downloaded-early-artifacts
+
+      - name: Stage complete early diagnostic evidence set
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/vera-downloaded-early-artifacts"
+          target="$RUNNER_TEMP/vera-sixteen-early-diagnostics"
+          mkdir "$target"
+          for shard in {0..15}; do
+            source="$base/vera-stdlib-evaluation-shard-${shard}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            test -d "$source"
+            test ! -L "$source"
+            mkdir "$target/shard-$shard"
+            mv -- "$source/vera-stdlib-evaluation.log" "$target/shard-$shard/"
+            mv -- "$source/vera-stdlib-evaluation-receipt.json" "$target/shard-$shard/"
+            rmdir "$source"
+          done
+          test -z "$(find "$base" -mindepth 1 -print -quit)"
+
+      - name: Independently replay all sixteen downloaded shard receipts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.verify_full_ci_shard_set \
+            --evidence-root "$RUNNER_TEMP/vera-sixteen-shard-evidence" \
+            --early-evidence-root "$RUNNER_TEMP/vera-sixteen-early-diagnostics" \
+            --checkout-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --event "$GITHUB_EVENT_NAME" \
+            > "$RUNNER_TEMP/vera-full-shard-replay.json"
+          cat "$RUNNER_TEMP/vera-full-shard-replay.json"
+
+      - name: Verify exact checkout after full-set replay
+        run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests
+
+      - name: Retain verified sixteen-shard replay (90 days)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-full-shard-replay-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vera-full-shard-replay.json
+          if-no-files-found: error
+          retention-days: 90

@@ -1,0 +1,1894 @@
+"""Verify and independently recompute a human-evaluation analysis result bundle.
+
+The canonical JSON is the machine-readable human-validation result. Markdown is
+only a deterministic rendering of that JSON. The manifest must bind both output
+byte streams and the exact analysis implementation source files used to produce
+them. The command-line verifier additionally recomputes the complete payload
+from retained frozen ratings and exact governing inputs. It makes no model/API
+calls, generates no ratings, and reruns no treatments. Its stability receipt
+attests that the retained output inodes were unchanged from capture through the
+end-of-recomputation observation; storage immutability after that observation
+remains an external publication control.
+"""
+from __future__ import annotations
+
+import argparse
+from functools import lru_cache
+from contextlib import ExitStack
+import hashlib
+from itertools import product
+import json
+import math
+import statistics
+import os
+import random
+import stat
+from pathlib import Path
+
+from scripts import analyze_human_eval
+from scripts import freeze_human_eval_ratings as freeze
+from scripts import human_eval_analysis_core as core
+
+DEFAULT_OUTPUT_ROOT = analyze_human_eval.OUTPUT_ROOT
+
+
+def _require_finite_json(value, *, label: str, path: str = "$") -> None:
+    """Reject non-finite JSON numbers, including exponent overflow, at any depth."""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{label} has a non-finite numeric value at {path}")
+    if isinstance(value, dict):
+        for key, child in value.items():
+            _require_finite_json(child, label=label, path=f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _require_finite_json(child, label=label, path=f"{path}[{index}]")
+
+
+def _regular_bytes(path: Path, *, label: str) -> bytes:
+    path = Path(path)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"{label} must be a regular file: {path}")
+    return path.read_bytes()
+
+
+OUTPUT_SPECS = (
+    (analyze_human_eval.ANALYSIS_JSON, "canonical human-analysis JSON"),
+    (analyze_human_eval.ANALYSIS_MARKDOWN, "human-analysis Markdown"),
+    (analyze_human_eval.ANALYSIS_MANIFEST, "human-analysis output manifest"),
+)
+
+
+def _open_bound_directory(path: Path, *, label: str) -> int:
+    flags = os.O_RDONLY | os.O_DIRECTORY
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(f"{label} must be a regular directory: {path}") from exc
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise ValueError(f"{label} must be a regular directory: {path}")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _require_directory_path_binding(path: Path, descriptor: int, *, label: str) -> None:
+    try:
+        current = os.stat(path, follow_symlinks=False)
+        bound = os.fstat(descriptor)
+    except OSError as exc:
+        raise ValueError(f"{label} changed during independent recomputation: {path}") from exc
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or (current.st_dev, current.st_ino) != (bound.st_dev, bound.st_ino)
+    ):
+        raise ValueError(f"{label} changed during independent recomputation: {path}")
+
+
+def _require_regular_path_binding(path: Path, descriptor: int, *, label: str) -> None:
+    try:
+        current = os.stat(path, follow_symlinks=False)
+        bound = os.fstat(descriptor)
+    except OSError as exc:
+        raise ValueError(
+            f"{label} changed during independent recomputation: {path}"
+        ) from exc
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or (current.st_dev, current.st_ino) != (bound.st_dev, bound.st_ino)
+    ):
+        raise ValueError(f"{label} changed during independent recomputation: {path}")
+
+
+def _regular_snapshot_from_descriptor(
+    descriptor: int,
+    *,
+    label: str,
+) -> tuple[bytes, tuple[int, int, int, int, int]]:
+    """Capture a stat-pinned regular file within the producer's byte budget."""
+    before = os.fstat(descriptor)
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError(f"{label} must be a regular file")
+    limit = analyze_human_eval.MAX_HUMAN_ANALYSIS_ARTIFACT_BYTES
+    if before.st_size > limit:
+        raise ValueError(f"{label} exceeds {limit} bytes")
+    chunks = []
+    offset = 0
+    # Read the length observed on this descriptor, not to an unbounded EOF.
+    while offset < before.st_size:
+        chunk = os.pread(descriptor, min(1024 * 1024, before.st_size - offset), offset)
+        if not chunk:
+            raise ValueError(f"{label} changed while it was being read")
+        chunks.append(chunk)
+        offset += len(chunk)
+    # A concurrent append must not be silently accepted as the older snapshot.
+    if os.pread(descriptor, 1, offset):
+        raise ValueError(f"{label} changed while it was being read")
+    after = os.fstat(descriptor)
+    before_identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    after_identity = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    if before_identity != after_identity:
+        raise ValueError(f"{label} changed while it was being read")
+    return b"".join(chunks), after_identity
+
+_regular_source_snapshot_from_descriptor = _regular_snapshot_from_descriptor
+
+
+def _open_regular_snapshot_at(
+    directory_descriptor: int,
+    name: str,
+    *,
+    label: str,
+) -> tuple[int, tuple[bytes, tuple[int, int, int, int, int]]]:
+    # O_NOFOLLOW rejects final symlinks. O_NONBLOCK ensures that a substituted
+    # FIFO or device reaches the fstat regular-file check instead of hanging the
+    # verifier before its type can be rejected.
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(name, flags, dir_fd=directory_descriptor)
+    except OSError as exc:
+        raise ValueError(f"{label} must be a regular file") from exc
+    try:
+        snapshot = _regular_snapshot_from_descriptor(descriptor, label=label)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor, snapshot
+
+
+def _implementation_source_specs():
+    return (
+        ("analysis_core", Path(core.__file__), "analysis core implementation"),
+        (
+            "analysis_renderer",
+            Path(analyze_human_eval.__file__),
+            "analysis renderer implementation",
+        ),
+        ("analysis_verifier", Path(__file__), "analysis verifier implementation"),
+        (
+            "blinded_freeze_verifier",
+            Path(core.blind_verify.__file__),
+            "blinded freeze verifier implementation",
+        ),
+        ("packet_builder", Path(core.packet.__file__), "packet builder implementation"),
+        (
+            "packet_verifier",
+            Path(core.map_verify.__file__),
+            "packet verifier implementation",
+        ),
+        ("ratings_freezer", Path(freeze.__file__), "ratings freezer implementation"),
+    )
+
+
+def _owned_provenance_source_specs():
+    return (
+        ("analysis_plan", core.PLAN, "frozen human-analysis plan"),
+        ("protocol", freeze.DEFAULT_PROTOCOL, "frozen protocol"),
+        (
+            "assignment_plan",
+            freeze.DEFAULT_ASSIGNMENT_PLAN,
+            "frozen assignment-plan",
+        ),
+        ("annotator_guide", freeze.DEFAULT_ANNOTATOR_GUIDE, "frozen annotator-guide"),
+        (
+            "requirements",
+            analyze_human_eval.ANALYSIS_REQUIREMENTS,
+            "analysis requirements",
+        ),
+        (
+            "ci_requirements",
+            analyze_human_eval.ANALYSIS_CI_REQUIREMENTS,
+            "analysis CI requirements",
+        ),
+        (
+            "python_version",
+            analyze_human_eval.ANALYSIS_PYTHON_VERSION,
+            "analysis Python version contract",
+        ),
+    )
+
+
+def _open_provenance_source_snapshots(descriptors: ExitStack, specs):
+    snapshots = {}
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    for key, path, label in specs:
+        path = Path(path)
+        try:
+            descriptor = os.open(path, flags)
+        except OSError as exc:
+            snapshots[key] = (path, None, None, label, exc)
+            continue
+        descriptors.callback(os.close, descriptor)
+        try:
+            snapshot = _regular_source_snapshot_from_descriptor(
+                descriptor,
+                label=f"current {label}",
+            )
+            _require_regular_path_binding(
+                path,
+                descriptor,
+                label=label,
+            )
+        except (OSError, ValueError) as exc:
+            snapshots[key] = (path, descriptor, None, label, exc)
+        else:
+            snapshots[key] = (path, descriptor, snapshot, label, None)
+    return snapshots
+
+
+def _snapshot_bytes(source_snapshots, key, path: Path, *, label: str) -> bytes:
+    if source_snapshots is None:
+        return _regular_bytes(path, label=label)
+    source_path, _descriptor, snapshot, source_label, error = source_snapshots[key]
+    if error is not None:
+        raise ValueError(
+            f"current {source_label} must be a regular file: {source_path}"
+        ) from error
+    return snapshot[0]
+
+
+def _require_provenance_sources_stable(source_snapshots) -> None:
+    for path, descriptor, original, label, error in source_snapshots.values():
+        if error is not None:
+            raise ValueError(
+                f"current {label} must be a regular file: {path}"
+            ) from error
+        current = _regular_source_snapshot_from_descriptor(
+            descriptor,
+            label=f"current {label}",
+        )
+        if current != original:
+            raise ValueError(
+                f"{label} changed during independent recomputation: {path}"
+            )
+        _require_regular_path_binding(
+            path,
+            descriptor,
+            label=label,
+        )
+
+
+def _require_regular_entry_binding(
+    directory_descriptor: int,
+    name: str,
+    file_descriptor: int,
+    *,
+    label: str,
+) -> None:
+    try:
+        current = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+        bound = os.fstat(file_descriptor)
+    except OSError as exc:
+        raise ValueError(f"{label} changed during independent recomputation") from exc
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or (current.st_dev, current.st_ino) != (bound.st_dev, bound.st_ino)
+    ):
+        raise ValueError(f"{label} changed during independent recomputation")
+
+
+def _open_output_snapshot(descriptors: ExitStack, output_root: Path):
+    output_descriptor = _open_bound_directory(
+        output_root,
+        label="human-analysis output root",
+    )
+    descriptors.callback(os.close, output_descriptor)
+    _require_directory_path_binding(
+        output_root,
+        output_descriptor,
+        label="human-analysis output root",
+    )
+    snapshots = {}
+    for name, label in OUTPUT_SPECS:
+        file_descriptor, snapshot = _open_regular_snapshot_at(
+            output_descriptor,
+            name,
+            label=label,
+        )
+        descriptors.callback(os.close, file_descriptor)
+        snapshots[name] = (file_descriptor, snapshot)
+    directory = os.fstat(output_descriptor)
+    directory_identity = (
+        directory.st_dev,
+        directory.st_ino,
+        directory.st_mtime_ns,
+        directory.st_ctime_ns,
+    )
+    return output_descriptor, snapshots, directory_identity
+
+
+def _require_output_snapshot_stable(
+    output_root: Path,
+    output_descriptor: int,
+    snapshots,
+    directory_identity,
+) -> None:
+    """Observe that captured inodes stayed bound and unchanged through recomputation.
+
+    This is an end-of-recomputation observation, not a filesystem lock. A finite
+    verifier cannot prevent an uncooperative process from changing a regular file
+    after its final syscall; immutable publication storage is a separate control.
+    """
+    for name, label in OUTPUT_SPECS:
+        file_descriptor, original = snapshots[name]
+        current = _regular_snapshot_from_descriptor(file_descriptor, label=label)
+        if current != original:
+            raise ValueError(f"{label} changed during independent recomputation")
+    for name, label in OUTPUT_SPECS:
+        file_descriptor, original = snapshots[name]
+        current = os.fstat(file_descriptor)
+        current_identity = (
+            current.st_dev,
+            current.st_ino,
+            current.st_size,
+            current.st_mtime_ns,
+            current.st_ctime_ns,
+        )
+        if current_identity != original[1]:
+            raise ValueError(f"{label} changed during independent recomputation")
+        _require_regular_entry_binding(
+            output_descriptor,
+            name,
+            file_descriptor,
+            label=label,
+        )
+    directory = os.fstat(output_descriptor)
+    current_directory_identity = (
+        directory.st_dev,
+        directory.st_ino,
+        directory.st_mtime_ns,
+        directory.st_ctime_ns,
+    )
+    if current_directory_identity != directory_identity:
+        raise ValueError(
+            "human-analysis output root changed during independent recomputation: "
+            f"{output_root}"
+        )
+    _require_directory_path_binding(
+        output_root,
+        output_descriptor,
+        label="human-analysis output root",
+    )
+
+
+def _load_json(content: bytes, *, label: str) -> dict:
+    # A valid fingerprint cannot resolve ambiguous duplicate JSON members.
+    # Decode escape-equivalent keys before checking, at every object depth.
+    def unique_object_pairs(pairs):
+        obj = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError(f"{label} contains duplicate JSON key {key!r}")
+            obj[key] = value
+        return obj
+
+    try:
+        payload = json.loads(
+            content.decode("utf-8"), object_pairs_hook=unique_object_pairs
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} is not valid UTF-8 JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label} must contain a JSON object")
+    _require_finite_json(payload, label=label)
+    return payload
+
+
+def _fingerprint(content: bytes) -> dict:
+    return {
+        "bytes": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
+def _canonical_json_bytes(value) -> bytes:
+    """Encode JSON with type distinctions preserved for exact comparisons."""
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _retained_rating_paths(freeze_root: Path) -> list[Path]:
+    raw_root = Path(freeze_root) / "raw_rating_inputs"
+    if raw_root.is_symlink() or not raw_root.is_dir():
+        raise ValueError(
+            f"retained raw rating archive must be a regular directory: {raw_root}"
+        )
+    children = sorted(raw_root.iterdir(), key=lambda path: path.name)
+    if not children:
+        raise ValueError(f"retained raw rating archive is empty: {raw_root}")
+    for path in children:
+        if path.is_symlink() or not path.is_file() or path.suffix != ".csv":
+            raise ValueError(
+                "retained raw rating archive contains an undeclared or non-regular "
+                f"artifact: {path}"
+            )
+    return children
+
+
+def _require_equal(actual, expected, *, label: str) -> None:
+    if actual != expected:
+        raise ValueError(f"{label} mismatch: expected {expected!r}, got {actual!r}")
+
+
+def _verify_entry(entry, *, expected_path: str, content: bytes, label: str) -> None:
+    if not isinstance(entry, dict):
+        raise ValueError(f"{label} manifest entry must be an object")
+    _require_equal(entry.get("path"), expected_path, label=f"{label} path")
+    _require_equal(
+        {"bytes": entry.get("bytes"), "sha256": entry.get("sha256")},
+        _fingerprint(content),
+        label=f"{label} fingerprint",
+    )
+
+
+def _verify_exact_entry(entry, *, expected_path: str, content: bytes, label: str) -> None:
+    """Verify a fingerprint entry without JSON numeric coercion or extra keys."""
+    if not isinstance(entry, dict) or set(entry) != {"path", "bytes", "sha256"}:
+        raise ValueError(
+            f"{label} manifest entry must contain exactly path, bytes, and sha256"
+        )
+    if (
+        not isinstance(entry["path"], str)
+        or not isinstance(entry["bytes"], int)
+        or isinstance(entry["bytes"], bool)
+        or not isinstance(entry["sha256"], str)
+    ):
+        raise ValueError(
+            f"{label} manifest entry must use string path/sha256 and integer bytes"
+        )
+    _verify_entry(
+        entry,
+        expected_path=expected_path,
+        content=content,
+        label=label,
+    )
+
+
+def _validate_paired_rater_coverage(payload: dict) -> None:
+    """Refuse internally contradictory completeness claims in a published result.
+
+    This checks category partition/denominator consistency. Independent
+    recomputation against the verified frozen inputs remains the stronger audit.
+    """
+    tasks = payload.get("task_ids")
+    if not isinstance(tasks, list) or not tasks or any(
+        not isinstance(task, str) or not task for task in tasks
+    ) or len(tasks) != len(set(tasks)):
+        raise ValueError("analysis rater coverage requires unique task IDs")
+    contrasts = payload.get("paired_contrasts")
+    if not isinstance(contrasts, dict):
+        raise ValueError("analysis paired contrasts must be an object")
+    expected_cells = set(core.RATER_COVERAGE_CELLS)
+    # D6 appears on both sides of adjacent contrasts, as does P6. Each
+    # report/dimension is the SAME original two-rater observation wherever
+    # that treatment arm occurs; category partitions alone do not enforce it.
+    shared_arm_counts = {}
+    for left_variant, right_variant, contrast in core.CONTRASTS:
+        for field in core.DIMS:
+            try:
+                block = contrasts[contrast][field]
+                coverage = block["rater_coverage"]
+                count_by_pair = coverage["count_by_rater_pair"]
+                task_ids_by_pair = coverage["task_ids_by_rater_pair"]
+            except (KeyError, TypeError) as exc:
+                raise ValueError(
+                    f"analysis rater coverage missing for {contrast}/{field}"
+                ) from exc
+            if not isinstance(count_by_pair, dict) or not isinstance(task_ids_by_pair, dict):
+                raise ValueError("analysis rater coverage must be objects")
+            if set(count_by_pair) != expected_cells or set(task_ids_by_pair) != expected_cells:
+                raise ValueError("analysis rater coverage categories mismatch")
+            all_ids = []
+            for key in core.RATER_COVERAGE_CELLS:
+                ids = task_ids_by_pair[key]
+                count = count_by_pair[key]
+                if (
+                    not isinstance(ids, list)
+                    or type(count) is not int
+                    or count != len(ids)
+                    or any(not isinstance(item, str) for item in ids)
+                ):
+                    raise ValueError("analysis rater coverage counts mismatch")
+                # Category members retain the same canonical task order.
+                if ids != [task for task in tasks if task in ids]:
+                    raise ValueError("analysis rater coverage task ordering mismatch")
+                all_ids.extend(ids)
+            if len(all_ids) != len(tasks) or set(all_ids) != set(tasks):
+                raise ValueError("analysis rater coverage must partition frozen tasks")
+            included = [
+                task for task in tasks
+                if any(
+                    task in task_ids_by_pair[key]
+                    for key in ("1/1", "1/2", "2/1", "2/2")
+                )
+            ]
+            if (
+                block.get("task_ids_included") != included
+                or block.get("missing_pair_tasks") != [
+                    task for task in tasks if task not in included
+                ]
+                or type(block.get("n_pairs")) is not int
+                or block["n_pairs"] != len(included)
+            ):
+                raise ValueError("analysis rater coverage paired denominator mismatch")
+
+            # Reconcile every repeated treatment/report count across contrasts.
+            # A locally well-formed 2/2 or 1/2 bucket cannot silently revise
+            # the original-rater denominator for a shared D6 or P6 report.
+            # These are diagnostic counts, not score imputations or new tests.
+            for category, category_tasks in task_ids_by_pair.items():
+                left_count, right_count = (int(value) for value in category.split("/"))
+                for task in category_tasks:
+                    for variant, count in (
+                        (left_variant, left_count),
+                        (right_variant, right_count),
+                    ):
+                        key = (variant, task, field)
+                        previous = shared_arm_counts.get(key)
+                        if previous is not None and previous != count:
+                            raise ValueError(
+                                "analysis rater coverage cross-contrast shared-arm mismatch: "
+                                f"{variant}/{task}/{field} claims both {previous} and {count} "
+                                "original ratings"
+                            )
+                        shared_arm_counts[key] = count
+
+
+
+
+def _report_median_feasible(
+    distribution: dict, counts: list[int], mean: float, median: float
+) -> bool:
+    """Find an attainable joint mean/median from anonymous ordinal ratings.
+
+    Enumerate score *multisets*, not people or task assignments. First allocate
+    the singly rated reports, constrained by the already-published mean. Then
+    enumerate unordered pairings of the remaining scores for double-rated
+    reports. Pairing the lowest remaining score first is exhaustive without
+    enumerating rater permutations. With at most ten reports and five possible
+    raw scores, the search is finite and offline.
+    """
+    remaining = [distribution[str(score)] for score in range(1, 6)]
+    n_single = sum(count == 1 for count in counts)
+    n_reports = sum(count > 0 for count in counts)
+    raw_total = sum(score * remaining[score - 1] for score in range(1, 6))
+    target_single_sum = 2 * n_reports * mean - raw_total
+    doubled_singles = []
+    doubled_pairs = []
+
+    def pair_remaining() -> bool:
+        first = next((index for index, count in enumerate(remaining) if count), None)
+        if first is None:
+            ordered = sorted(doubled_singles + doubled_pairs)
+            middle = n_reports // 2
+            attainable = (
+                ordered[middle] / 2
+                if n_reports % 2
+                else (ordered[middle - 1] + ordered[middle]) / 4
+            )
+            return math.isclose(attainable, median, rel_tol=0, abs_tol=1e-9)
+
+        remaining[first] -= 1
+        try:
+            for second in range(first, 5):
+                if not remaining[second]:
+                    continue
+                remaining[second] -= 1
+                doubled_pairs.append(first + second + 2)
+                try:
+                    if pair_remaining():
+                        return True
+                finally:
+                    doubled_pairs.pop()
+                    remaining[second] += 1
+            return False
+        finally:
+            remaining[first] += 1
+
+    def allocate_singletons(index: int, slots: int, single_sum: int) -> bool:
+        if index == 5:
+            return (
+                slots == 0
+                and math.isclose(single_sum, target_single_sum, rel_tol=0, abs_tol=1e-9)
+                and pair_remaining()
+            )
+        for chosen in range(min(remaining[index], slots) + 1):
+            remaining[index] -= chosen
+            doubled_singles.extend([2 * (index + 1)] * chosen)
+            try:
+                if allocate_singletons(
+                    index + 1, slots - chosen, single_sum + (index + 1) * chosen
+                ):
+                    return True
+            finally:
+                if chosen:
+                    del doubled_singles[-chosen:]
+                remaining[index] += chosen
+        return False
+
+    return allocate_singletons(0, n_single, 0)
+
+
+def _validate_report_score_summary(summary: dict, counts: list[int], *, label: str) -> None:
+    """Check report means against raw-score totals without assigning rater identities.
+
+    Each scored report contains one integer rating or the mean of two integer
+    ratings on the frozen 1–5 rubric. The raw histogram and per-report rating
+    counts therefore constrain the *exact attainable* published mean: select
+    the 2*n_double raw scores allocated to double-rated reports, then halve
+    their contribution. This bounded subset-sum check does not reconstruct
+    original ratings or authenticate annotators.
+    """
+    if len(counts) > 10:
+        raise ValueError(f"{label}: exceeds frozen ten-task report limit")
+    if any(type(count) is not int or count not in (0, 1, 2) for count in counts):
+        raise ValueError(f"{label}: invalid original-rater count")
+    distribution = summary["raw_score_distribution"]
+    raw_scores = [
+        rating for rating in range(1, 6)
+        for _ in range(distribution[str(rating)])
+    ]
+    if len(raw_scores) != sum(counts):
+        raise ValueError(f"{label}: raw-score distribution contradicts rater counts")
+
+    scored = sum(count > 0 for count in counts)
+    mean = summary.get("mean_report_score")
+    median = summary.get("median_report_score")
+    if scored == 0:
+        if mean is not None or median is not None:
+            raise ValueError(f"{label}: unscored reports require null summaries")
+        return
+    if (
+        type(mean) not in (int, float)
+        or type(median) not in (int, float)
+        or not math.isfinite(mean)
+        or not math.isfinite(median)
+        or not (1 <= mean <= 5 and 1 <= median <= 5)
+    ):
+        raise ValueError(f"{label}: report mean and median must be finite rubric scores")
+
+    double_slots = 2 * sum(count == 2 for count in counts)
+    # At most 20 ordinal ratings for one variant/dimension in the frozen
+    # ten-task human study. Descending updates consume each raw score once.
+    possible_double_sums = [set() for _ in range(double_slots + 1)]
+    possible_double_sums[0].add(0)
+    for rating in raw_scores:
+        for slots in range(double_slots, 0, -1):
+            possible_double_sums[slots].update(
+                previous + rating for previous in possible_double_sums[slots - 1]
+            )
+    twice_report_sum = 2 * scored * mean
+    total_raw = sum(raw_scores)
+    if not any(
+        math.isclose(twice_report_sum, 2 * total_raw - double_sum,
+                     rel_tol=0, abs_tol=1e-9)
+        for double_sum in possible_double_sums[double_slots]
+    ):
+        raise ValueError(
+            f"{label}: report mean cannot arise from the raw-score distribution "
+            "and observed one-/two-rater coverage"
+        )
+
+    # The median of an odd number of half-integer report means is a
+    # half-integer; with an even number it can be a quarter-integer.
+    median_factor = 2 if scored % 2 else 4
+    if (
+        not min(raw_scores) - 1e-12 <= median <= max(raw_scores) + 1e-12
+        or not math.isclose(
+            median * median_factor, round(median * median_factor),
+            rel_tol=0, abs_tol=1e-9
+        )
+        or (scored == 1 and not math.isclose(median, mean, rel_tol=0, abs_tol=1e-12))
+    ):
+        raise ValueError(f"{label}: report median violates frozen rubric support")
+    if not _report_median_feasible(distribution, counts, mean, median):
+        raise ValueError(
+            f"{label}: report median cannot arise jointly with the published mean, "
+            "raw-score distribution, and original one-/two-rater coverage"
+        )
+
+
+def _validate_rating_denominator_lineage(payload: dict) -> None:
+    """Reconcile original-rating counts across the blinded and unblinded layers.
+
+    A 0/1/2 post-unblinding report count loses which annotator supplied a
+    singleton. Consequently A-only and B-only are checked in aggregate, not
+    attributed to treatments or individual tasks. Exact source authenticity
+    remains the responsibility of independent frozen-input recomputation.
+    """
+    tasks = payload["task_ids"]
+    expected_reports = len(tasks) * len(core.VARIANTS)
+    if type(payload.get("n_tasks")) is not int or payload["n_tasks"] != len(tasks):
+        raise ValueError("analysis rating lineage frozen task denominator mismatch")
+
+    # Each treatment/task/dimension appears in a paired contrast. Shared arms
+    # have already been checked for equality by _validate_paired_rater_coverage.
+    original_counts = {}
+    for left, right, contrast in core.CONTRASTS:
+        for field in core.DIMS:
+            groups = payload["paired_contrasts"][contrast][field][
+                "rater_coverage"
+            ]["task_ids_by_rater_pair"]
+            for cell in core.RATER_COVERAGE_CELLS:
+                left_count, right_count = (int(n) for n in cell.split("/"))
+                for task in groups[cell]:
+                    for variant, count in ((left, left_count), (right, right_count)):
+                        key = (variant, task, field)
+                        previous = original_counts.get(key)
+                        if previous is not None and previous != count:
+                            raise ValueError(
+                                "analysis rating lineage shared-arm count mismatch"
+                            )
+                        original_counts[key] = count
+
+    summaries = payload.get("variant_summary")
+    if not isinstance(summaries, dict):
+        raise ValueError("analysis rating lineage requires variant summaries")
+    agreement = payload.get("pre_unblinding_agreement")
+    if (
+        not isinstance(agreement, dict)
+        or type(agreement.get("n_annotators")) is not int
+        or agreement["n_annotators"] != 2
+        or not isinstance(agreement.get("pairwise"), list)
+        or len(agreement["pairwise"]) != 1
+        or not isinstance(agreement["pairwise"][0], dict)
+    ):
+        raise ValueError("analysis rating lineage requires one blinded two-rater pair")
+    pair = agreement["pairwise"][0]
+    if (
+        "n_shared_items" in pair
+        and (type(pair["n_shared_items"]) is not int
+             or pair["n_shared_items"] != expected_reports)
+    ):
+        raise ValueError("analysis rating lineage blinded shared-report count mismatch")
+    dimensions = pair.get("dimensions")
+    if not isinstance(dimensions, dict):
+        raise ValueError("analysis rating lineage missing blinded dimensions")
+
+    for field in core.DIMS:
+        observed_counts = []
+        for variant in core.VARIANTS:
+            try:
+                counts = [original_counts[(variant, task, field)] for task in tasks]
+                summary = summaries[variant][field]
+            except (KeyError, TypeError) as exc:
+                raise ValueError(
+                    f"analysis rating lineage missing variant/task counts: {variant}/{field}"
+                ) from exc
+            if not isinstance(summary, dict):
+                raise ValueError(f"analysis rating lineage invalid variant summary: {variant}/{field}")
+            expected = {
+                "n_reports_total": len(tasks),
+                "n_reports_scored": sum(count > 0 for count in counts),
+                "n_raw_scores": sum(counts),
+            }
+            for key, count in expected.items():
+                actual = summary.get(key)
+                if type(actual) is not int or actual != count:
+                    raise ValueError(
+                        f"analysis rating lineage variant summary {variant}/{field}/{key} "
+                        f"disagrees with original-rating coverage: expected {count}, got {actual!r}"
+                    )
+            distribution = summary.get("raw_score_distribution")
+            if (
+                not isinstance(distribution, dict)
+                or set(distribution) != {str(n) for n in range(1, 6)}
+                or any(type(n) is not int or n < 0 for n in distribution.values())
+                or sum(distribution.values()) != expected["n_raw_scores"]
+            ):
+                raise ValueError(
+                    f"analysis rating lineage variant summary raw-score distribution "
+                    f"disagrees with coverage: {variant}/{field}"
+                )
+            observed_counts.extend(counts)
+
+        try:
+            dimension = dimensions[field]
+        except KeyError as exc:
+            raise ValueError(
+                f"analysis rating lineage missing blinded agreement for {field}"
+            ) from exc
+        if not isinstance(dimension, dict):
+            raise ValueError(f"analysis rating lineage invalid blinded agreement for {field}")
+        keys = (
+            "n_double_rated",
+            "n_annotator_a_only_rated",
+            "n_annotator_b_only_rated",
+            "n_neither_rated",
+        )
+        if any(
+            type(dimension.get(key)) is not int or dimension[key] < 0 for key in keys
+        ):
+            raise ValueError(
+                f"analysis rating lineage invalid blinded missingness counts: {field}"
+            )
+        double = sum(n == 2 for n in observed_counts)
+        singleton = sum(n == 1 for n in observed_counts)
+        neither = sum(n == 0 for n in observed_counts)
+        if (
+            len(observed_counts) != expected_reports
+            or dimension["n_double_rated"] != double
+            or dimension["n_neither_rated"] != neither
+            or (dimension["n_annotator_a_only_rated"]
+                + dimension["n_annotator_b_only_rated"]) != singleton
+        ):
+            raise ValueError(
+                f"analysis rating lineage pre-unblinding agreement missingness "
+                f"disagrees with post-unblinding coverage: {field}"
+            )
+
+
+
+def _validate_variant_score_publication(payload: dict) -> None:
+    """Check published score arithmetic after manifest and identity verification.
+
+    The preceding rating-denominator gate checks the same coverage matrix but
+    deliberately does not require numeric score summaries. This separate
+    publication gate therefore preserves denominator-only diagnostic callers
+    and allows fingerprint errors to take precedence over semantic drift.
+    """
+    counts_by_report = {}
+    for left, right, contrast in core.CONTRASTS:
+        for field in core.DIMS:
+            groups = payload["paired_contrasts"][contrast][field][
+                "rater_coverage"
+            ]["task_ids_by_rater_pair"]
+            for cell in core.RATER_COVERAGE_CELLS:
+                left_count, right_count = (int(value) for value in cell.split("/"))
+                for task in groups[cell]:
+                    counts_by_report[(left, task, field)] = left_count
+                    counts_by_report[(right, task, field)] = right_count
+    for variant in core.VARIANTS:
+        for field in core.DIMS:
+            counts = [
+                counts_by_report[(variant, task, field)]
+                for task in payload["task_ids"]
+            ]
+            _validate_report_score_summary(
+                payload["variant_summary"][variant][field],
+                counts,
+                label=f"analysis variant score arithmetic {variant}/{field}",
+            )
+
+
+@lru_cache(maxsize=128)
+def _replay_paired_bootstrap_ci(
+    ordered_differences: tuple[float, ...], *, seed: int, draws: int
+) -> tuple[float, float]:
+    """Replay the frozen seeded bootstrap using published task-level effects.
+
+    The caller supplies effects in sorted task-ID order, matching the canonical
+    analysis. Cache only bounded, validated tuples: the same 10-task contrasts
+    are checked repeatedly by publication and offline regression tests.
+    """
+    if not ordered_differences or draws < 1:
+        raise ValueError("paired bootstrap replay requires nonempty effects and draws")
+    rng = random.Random(seed)
+    count = len(ordered_differences)
+    samples = [
+        statistics.mean(
+            [ordered_differences[rng.randrange(count)] for _ in range(count)]
+        )
+        for _ in range(draws)
+    ]
+    samples.sort()
+    bounds = []
+    for quantile in (0.025, 0.975):
+        position = (draws - 1) * quantile
+        lower = math.floor(position)
+        upper = math.ceil(position)
+        if lower == upper:
+            bounds.append(samples[lower])
+        else:
+            weight = position - lower
+            bounds.append(
+                samples[lower] * (1.0 - weight) + samples[upper] * weight
+            )
+    return tuple(bounds)
+
+
+def _validate_paired_arm_mean_feasibility(
+    differences: list[float],
+    left_mean: float,
+    *,
+    label: str,
+    rating_counts: list[tuple[int, int]] | None = None,
+) -> None:
+    """Require paired means to respect the ORIGINAL rater count for each task.
+
+    A report scored by one annotator must have an integer mean; a report
+    scored by two can have a half-integer mean. For each observed difference
+    enumerate all admissible doubled left scores whose corresponding right
+    scores obey the other arm's count. Bounded integer-sum dynamic programming
+    tests whether those same task pairs can produce the published arm total.
+
+    This is anonymous score feasibility, not reconstruction of individual
+    ratings, a histogram assignment, or authentication of human submissions.
+    """
+    if rating_counts is None:
+        # Preserve direct helper callers that have only effects, not coverage.
+        rating_counts = [(2, 2)] * len(differences)
+    if (
+        len(differences) > core.MAX_FROZEN_HUMAN_TASK_PAIRS
+        or len(rating_counts) != len(differences)
+        or any(
+            type(pair) not in (list, tuple)
+            or len(pair) != 2
+            or any(type(count) is not int or count not in (1, 2) for count in pair)
+            for pair in rating_counts
+        )
+    ):
+        raise ValueError(f"{label}: invalid per-task original-rater coverage")
+
+    possible_doubled_totals = {0}
+    for effect, (left_count, right_count) in zip(differences, rating_counts):
+        doubled_effect = int(2 * effect)
+        candidate_left_scores = [
+            score for score in range(2, 11)
+            if (left_count == 2 or score % 2 == 0)
+            and 2 <= score + doubled_effect <= 10
+            and (right_count == 2 or (score + doubled_effect) % 2 == 0)
+        ]
+        possible_doubled_totals = {
+            total + score
+            for total in possible_doubled_totals
+            for score in candidate_left_scores
+        }
+        if not possible_doubled_totals:
+            break
+
+    doubled_left_total = 2 * len(differences) * left_mean
+    nearest = round(doubled_left_total)
+    if (
+        not math.isclose(doubled_left_total, nearest, rel_tol=0, abs_tol=1e-9)
+        or nearest not in possible_doubled_totals
+    ):
+        raise ValueError(
+            f"{label}: paired arm means cannot arise from the published "
+            "task differences and per-report one-/two-rater rubric coverage"
+        )
+
+
+def _validate_paired_effect_arithmetic(payload: dict) -> None:
+    """Check published per-task effects independently of retained ratings.
+
+    An output manifest binds bytes, not arithmetic truth. This inexpensive
+    gate catches contradictory rehashed summaries even when the retained
+    human-rating archive is unavailable. It is not a substitute for the full
+    independent recomputation from independently verified frozen ratings.
+    """
+    for contrast_index, (_, _, contrast) in enumerate(core.CONTRASTS):
+        for dimension_index, field in enumerate(core.DIMS):
+            label = f"analysis paired effect arithmetic {contrast}/{field}"
+            block = payload["paired_contrasts"][contrast][field]
+            included = block["task_ids_included"]
+            differences = block.get("task_differences")
+            if not isinstance(differences, dict) or set(differences) != set(included):
+                raise ValueError(f"{label}: task-level difference IDs mismatch")
+            values = [differences[task] for task in included]
+            if any(
+                type(value) not in (int, float)
+                or not math.isfinite(value)
+                or not -4 <= value <= 4
+                or value * 2 != int(value * 2)
+                for value in values
+            ):
+                raise ValueError(f"{label}: task-level differences violate the frozen rubric")
+            positive = sum(value > 0 for value in values)
+            negative = sum(value < 0 for value in values)
+            tied = sum(value == 0 for value in values)
+            if any(
+                type(block.get(name)) is not int or block[name] != expected
+                for name, expected in (
+                    ("positive_tasks", positive),
+                    ("negative_tasks", negative),
+                    ("tied_tasks", tied),
+                )
+            ):
+                raise ValueError(f"{label}: direction counts disagree with task differences")
+            if not values:
+                if any(
+                    block.get(name) is not None
+                    for name in (
+                        "left_mean", "right_mean", "mean_difference",
+                        "median_difference", "paired_dz",
+                        "bootstrap_95pct_ci_mean_difference",
+                    )
+                ):
+                    raise ValueError(f"{label}: empty paired sample has non-null statistics")
+                continue
+            expected_mean = statistics.mean(values)
+            expected_median = statistics.median(values)
+            for name, expected in (
+                ("mean_difference", expected_mean),
+                ("median_difference", expected_median),
+            ):
+                observed = block.get(name)
+                if (
+                    type(observed) not in (int, float)
+                    or not math.isfinite(observed)
+                    or not math.isclose(observed, expected, rel_tol=0, abs_tol=1e-12)
+                ):
+                    raise ValueError(f"{label}: {name} disagrees with task differences")
+            left_mean = block.get("left_mean")
+            right_mean = block.get("right_mean")
+            if (
+                type(left_mean) not in (int, float)
+                or type(right_mean) not in (int, float)
+                or not (1 <= left_mean <= 5 and 1 <= right_mean <= 5)
+                or not math.isclose(
+                    right_mean - left_mean, expected_mean,
+                    rel_tol=0, abs_tol=1e-12,
+                )
+            ):
+                raise ValueError(f"{label}: arm means disagree with paired effects")
+
+            # A mathematically consistent arm-mean difference is not enough:
+            # both arm means must be achievable by the SAME per-task pairs
+            # on the frozen 1–5 half-point report-score lattice.
+            # One original rating yields an integer report score; two ratings
+            # may yield a half-integer. Enforce both arms' recorded per-task
+            # denominators instead of assuming every report is double-rated.
+            by_task_counts = {
+                task: tuple(int(count) for count in cell.split("/"))
+                for cell, tasks in block["rater_coverage"][
+                    "task_ids_by_rater_pair"
+                ].items()
+                for task in tasks
+            }
+            _validate_paired_arm_mean_feasibility(
+                values,
+                left_mean,
+                label=label,
+                rating_counts=[by_task_counts[task] for task in included],
+            )
+
+            # The paired standardized effect is the mean task difference
+            # divided by the SAMPLE standard deviation of those differences.
+            # With one pair or zero variance the frozen producer emits null,
+            # not infinity or a manufactured zero effect size.
+            sd = statistics.stdev(values) if len(values) > 1 else 0.0
+            expected_dz = expected_mean / sd if sd > 0 else None
+            observed_dz = block.get("paired_dz")
+            if expected_dz is None:
+                if observed_dz is not None:
+                    raise ValueError(f"{label}: paired_dz must be null for zero variance")
+            elif (
+                type(observed_dz) not in (int, float)
+                or not math.isfinite(observed_dz)
+                or not math.isclose(
+                    observed_dz, expected_dz, rel_tol=1e-12, abs_tol=1e-12
+                )
+            ):
+                raise ValueError(f"{label}: paired_dz disagrees with task differences")
+
+            # A nonparametric bootstrap resamples ONLY observed paired task
+            # differences. Every resampled mean, and therefore both percentile
+            # endpoints, must lie inside their observed support envelope.
+            # First reject structurally impossible intervals before spending
+            # work on the frozen seeded bootstrap replay.
+            ci = block.get("bootstrap_95pct_ci_mean_difference")
+            if (
+                type(ci) is not list
+                or len(ci) != 2
+                or any(type(end) not in (int, float) or not math.isfinite(end) for end in ci)
+                or ci[0] > ci[1]
+                or ci[0] < min(values) - 1e-12
+                or ci[1] > max(values) + 1e-12
+            ):
+                raise ValueError(f"{label}: bootstrap CI violates paired task support")
+
+            # Rehashed bounds can still be plausible but numerically false.
+            # Replay the exact 20,000 draws from the canonical task-ID ordering
+            # and the frozen contrast/dimension seed, without reading ratings
+            # or changing the study's original analysis or results.
+            expected_ci = _replay_paired_bootstrap_ci(
+                tuple(differences[task] for task in sorted(included)),
+                seed=core.SEED + contrast_index * 100 + dimension_index,
+                draws=core.BOOTSTRAP_DRAWS,
+            )
+            if any(
+                not math.isclose(actual, expected, rel_tol=0, abs_tol=1e-12)
+                for actual, expected in zip(ci, expected_ci)
+            ):
+                raise ValueError(
+                    f"{label}: bootstrap CI disagrees with seeded task-level replay"
+                )
+
+
+
+def _validate_cross_contrast_task_score_feasibility(payload: dict) -> None:
+    """Require each report's score to be reusable across adjacent contrasts.
+
+    Each task/variant/dimension denotes one report, so a shared D6 or P6
+    report cannot take a different score in its two adjacent contrasts.
+    Carry attainable doubled report scores along the fixed contrast chain,
+    using integer scores for one rater and half-integers for two. Missing
+    reports break the chain rather than being imputed. This is a necessary
+    published-summary constraint, NOT reconstruction of individual ratings.
+    """
+    arms = (core.CONTRASTS[0][0],) + tuple(
+        right for _, right, _ in core.CONTRASTS
+    )
+    for field in core.DIMS:
+        for task in payload["task_ids"]:
+            counts_by_arm = {}
+            for left, right, contrast in core.CONTRASTS:
+                groups = payload["paired_contrasts"][contrast][field][
+                    "rater_coverage"
+                ]["task_ids_by_rater_pair"]
+                # The earlier coverage gate guarantees a unique category for
+                # every frozen task and agrees on repeated arm denominators.
+                category = next(
+                    cell for cell in core.RATER_COVERAGE_CELLS
+                    if task in groups[cell]
+                )
+                left_count, right_count = map(int, category.split("/"))
+                counts_by_arm[left] = left_count
+                counts_by_arm[right] = right_count
+
+            attainable = None
+            for index, arm in enumerate(arms):
+                count = counts_by_arm[arm]
+                if count == 0:
+                    # Unscored report: no hidden score or effect is inferred.
+                    attainable = None
+                    continue
+                scores = set(range(2, 11, 2 if count == 1 else 1))
+                if attainable is not None:
+                    contrast = core.CONTRASTS[index - 1][2]
+                    difference = payload["paired_contrasts"][contrast][field][
+                        "task_differences"
+                    ][task]
+                    doubled_difference = int(2 * difference)
+                    scores = {
+                        score for score in scores
+                        if score - doubled_difference in attainable
+                    }
+                if not scores:
+                    raise ValueError(
+                        "analysis cross-contrast task-score feasibility mismatch: "
+                        f"{task}/{field} has no single admissible report-score "
+                        "assignment across shared treatment arms"
+                    )
+                attainable = scores
+
+
+
+@lru_cache(maxsize=128)
+def _attainable_sparse_weighted_kappas(
+    n: int, n_matching: int, total_absolute_gap: int
+) -> frozenset[float | None]:
+    """Enumerate only tiny ordinal contingency samples, independently of the producer.
+
+    For at most three double-rated reports, exhaust the 1-5 integer pairs.
+    Match both the published number of exact agreements and the integer total
+    absolute gap before calculating quadratic-weighted Cohen's kappa from the
+    resulting two marginal category counts. This is a necessary feasibility
+    constraint on published summaries, not a claim about actual rating rows.
+    """
+    if not 1 <= n <= 3:
+        raise ValueError("sparse kappa enumeration requires one to three pairs")
+    possible = set()
+    for values in product(range(1, 6), repeat=2 * n):
+        first, second = values[::2], values[1::2]
+        if (
+            sum(a == b for a, b in zip(first, second)) != n_matching
+            or sum(abs(a - b) for a, b in zip(first, second))
+            != total_absolute_gap
+        ):
+            continue
+        observed = sum((a - b) ** 2 for a, b in zip(first, second))
+        expected = sum((a - b) ** 2 for a in first for b in second)
+        possible.add(None if expected == 0 else 1.0 - n * observed / expected)
+    return frozenset(possible)
+
+
+@lru_cache(maxsize=128)
+def _attainable_observed_squared_gaps(
+    n_different: int, total_absolute_gap: int
+) -> frozenset[int]:
+    """Possible integer squared-gap totals for 1–5 ordinal disagreements.
+
+    A mismatch has absolute gap 1, 2, 3, or 4; its contribution to
+    observed quadratic disagreement is the square of that gap. The bounded
+    dynamic program keeps only (absolute total, squared total) states.
+    It computes necessary published-data arithmetic, not missing ratings.
+    """
+    states = {(0, 0)}
+    for _ in range(n_different):
+        states = {
+            (absolute + gap, squared + gap * gap)
+            for absolute, squared in states
+            for gap in (1, 2, 3, 4)
+            if absolute + gap <= total_absolute_gap
+        }
+    return frozenset(
+        squared for absolute, squared in states
+        if absolute == total_absolute_gap
+    )
+
+
+def _validate_blinded_agreement_arithmetic(payload: dict) -> None:
+    """Audit published ordinal agreement numbers without inferring raw ratings.
+
+    For n double-rated reports on the frozen integer 1-5 rubric, exact
+    agreements and the sum of absolute rater gaps must both be integers.
+    Each disagreement contributes an integer gap between 1 and 4. These
+    necessary constraints catch self-consistently rehashed impossible
+    reliability summaries; they cannot authenticate the original raters.
+    """
+    pair = payload["pre_unblinding_agreement"]["pairwise"][0]
+    for field in core.DIMS:
+        dimension = pair["dimensions"][field]
+        n = dimension["n_double_rated"]
+        exact = dimension.get("raw_exact_agreement")
+        mad = dimension.get("mean_absolute_difference")
+        kappa = dimension.get("quadratic_weighted_cohen_kappa")
+        label = f"analysis blinded ordinal agreement arithmetic {field}"
+
+        # Denominator lineage has already checked that n is an integer >= 0.
+        # The frozen producer emits null statistics when no pairs overlap.
+        if n == 0:
+            if exact is not None or mad is not None or kappa is not None:
+                raise ValueError(f"{label}: no double-rated items require null metrics")
+            continue
+
+        if (
+            type(exact) not in (int, float)
+            or not math.isfinite(exact)
+            or not 0 <= exact <= 1
+            or type(mad) not in (int, float)
+            or not math.isfinite(mad)
+            or not 0 <= mad <= 4
+        ):
+            raise ValueError(f"{label}: exact agreement and absolute gap must be finite rubric metrics")
+
+        matching = n * exact
+        distance = n * mad
+        n_matching = round(matching)
+        sum_distance = round(distance)
+        if (
+            not math.isclose(matching, n_matching, rel_tol=0, abs_tol=1e-10)
+            or not math.isclose(distance, sum_distance, rel_tol=0, abs_tol=1e-10)
+        ):
+            raise ValueError(f"{label}: reported rates cannot arise from integer ratings")
+
+        n_different = n - n_matching
+        if not n_different <= sum_distance <= 4 * n_different:
+            raise ValueError(f"{label}: absolute gaps contradict exact agreements")
+
+        # Weighted kappa is undefined only when expected disagreement is
+        # zero. Any actually disagreeing pair makes its denominator positive.
+        # With perfect observed agreement it must be 1 or undefined (all
+        # raters used the same single category).
+        if kappa is None:
+            if n_different:
+                raise ValueError(f"{label}: disagreements require defined weighted kappa")
+        elif (
+            type(kappa) not in (int, float)
+            or not math.isfinite(kappa)
+            or not -1 - 1e-12 <= kappa <= 1 + 1e-12
+        ):
+            raise ValueError(f"{label}: weighted kappa outside the ordinal range")
+        elif n_different == 0 and not math.isclose(
+            kappa, 1.0, rel_tol=0, abs_tol=1e-12
+        ):
+            raise ValueError(f"{label}: perfect agreement requires kappa 1 or null")
+        elif n_different and kappa >= 1:
+            raise ValueError(f"{label}: disagreements cannot have perfect weighted kappa")
+
+        # At tiny overlap counts, agreement, mean absolute gap, and kappa
+        # cannot vary independently. Enumerate every possible 1-5 rating
+        # contingency (at most 5**6 cases), not a fabricated set of ratings.
+        if n <= 3:
+            reachable = _attainable_sparse_weighted_kappas(
+                n, n_matching, sum_distance
+            )
+            if not any(
+                (candidate is None and kappa is None)
+                or (
+                    candidate is not None and kappa is not None
+                    and math.isclose(candidate, kappa, rel_tol=0, abs_tol=1e-12)
+                )
+                for candidate in reachable
+            ):
+                raise ValueError(
+                    f"{label}: quadratic-weighted kappa is unattainable for "
+                    "the published sparse pair counts and absolute gaps"
+                )
+
+        # For four or more overlapping pairs, full contingency enumeration
+        # is too expensive. The frozen quadratic-weighted kappa estimator
+        # nevertheless has an exact integer structure: kappa = 1 - n*S/E,
+        # where S is the sum of squared paired ordinal gaps, and E is
+        # the sum of squared distances across the two rater marginals.
+        # Both S and E are integers; positive E cannot exceed 16*n*n.
+        # Derive admissible S values from the separately published count
+        # of disagreements and total absolute gap, then check for ANY
+        # integer E compatible with the published kappa. This is a
+        # necessary condition, not a sufficient reconstruction of ratings.
+        if n >= 4 and n_different:
+            possible_squared = _attainable_observed_squared_gaps(
+                n_different, sum_distance
+            )
+            consistent = False
+            for squared in possible_squared:
+                expected_distance = n * squared / (1.0 - kappa)
+                if (
+                    not math.isfinite(expected_distance)
+                    or not 1 <= expected_distance <= 16 * n * n
+                ):
+                    continue
+                integer_expected = round(expected_distance)
+                if (
+                    1 <= integer_expected <= 16 * n * n
+                    # E = n*sum(a_i**2 + b_i**2) - 2*sum(a_i)*sum(b_i).
+                    # Since a_i**2 + b_i**2 has the parity of (a_i-b_i)**2,
+                    # E must have the same parity as n*S, even when the
+                    # original rater marginals are unavailable.
+                    and integer_expected % 2 == (n * squared) % 2
+                    and math.isclose(
+                        1.0 - n * squared / integer_expected,
+                        kappa,
+                        rel_tol=0,
+                        abs_tol=1e-12,
+                    )
+                ):
+                    consistent = True
+                    break
+            if not consistent:
+                raise ValueError(
+                    f"{label}: quadratic-weighted kappa cannot arise from "
+                    "integer squared ordinal gaps and rater marginals"
+                )
+
+        # If all original reports were double-rated and exact agreement is
+        # perfect, each raw rating occurs in an identical annotator pair.
+        # Kappa is undefined only when EVERY pair uses the same category;
+        # with any category variation the expected disagreement is positive.
+        if (
+            n_different == 0
+            and n == len(payload["task_ids"]) * len(core.VARIANTS)
+        ):
+            categories = {
+                category
+                for variant in core.VARIANTS
+                for category, count in payload["variant_summary"][variant][
+                    field
+                ]["raw_score_distribution"].items()
+                if count > 0
+            }
+            if (kappa is None) != (len(categories) == 1):
+                raise ValueError(
+                    f"{label}: perfect agreement kappa contradicts "
+                    "fully double-rated raw-score category diversity"
+                )
+
+
+def _validate_analysis_identity(payload: dict, source_snapshots=None) -> None:
+    required = {
+        "schema_version": 1,
+        "study_id": "budget-main-v1",
+        "status": "human_validation_analysis",
+        "analysis_scope": "complementary_not_main_confirmatory",
+        "human_ratings_generated": False,
+        "treatment_outputs_rerun": False,
+        "hypothesis_tests": "none_predeclared_for_human_validation",
+        "report_score_aggregation": "mean_observed_rater_scores_per_report_dimension",
+        "bootstrap_seed": core.SEED,
+        "bootstrap_draws": core.BOOTSTRAP_DRAWS,
+    }
+    for key, expected in required.items():
+        _require_equal(payload.get(key), expected, label=f"analysis {key}")
+
+    _require_equal(payload.get("variants"), list(core.VARIANTS), label="analysis variants")
+    _require_equal(payload.get("dimensions"), list(core.DIMS), label="analysis dimensions")
+    _validate_paired_rater_coverage(payload)
+    _validate_rating_denominator_lineage(payload)
+    _validate_blinded_agreement_arithmetic(payload)
+    _validate_paired_effect_arithmetic(payload)
+    _validate_cross_contrast_task_score_feasibility(payload)
+
+    verification = payload.get("verification")
+    if not isinstance(verification, dict):
+        raise ValueError("analysis verification must be an object")
+    snapshot_bound = verification.get("analysis_inputs_snapshot_bound")
+    if snapshot_bound is not True:
+        raise ValueError(
+            "analysis input snapshot binding mismatch: "
+            f"expected literal true, got {snapshot_bound!r}"
+        )
+
+    provenance = payload.get("provenance")
+    if not isinstance(provenance, dict):
+        raise ValueError("analysis provenance must be an object")
+    plan_entry = provenance.get("analysis_plan")
+    if not isinstance(plan_entry, dict):
+        raise ValueError("analysis plan provenance must be an object")
+    plan_bytes = _snapshot_bytes(
+        source_snapshots,
+        "analysis_plan",
+        core.PLAN,
+        label="current frozen human-analysis plan",
+    )
+    expected_plan = _fingerprint(plan_bytes)
+    _require_equal(
+        expected_plan["sha256"],
+        core.FROZEN_ANALYSIS_PLAN_SHA256,
+        label="current frozen analysis plan fingerprint",
+    )
+    _require_equal(
+        {
+            "bytes": plan_entry.get("bytes"),
+            "sha256": plan_entry.get("sha256"),
+        },
+        expected_plan,
+        label="analysis plan provenance",
+    )
+
+    governing_inputs = {
+        "protocol": (
+            freeze.DEFAULT_PROTOCOL,
+            "paper/HUMAN_EVAL_PROTOCOL.md",
+            freeze.FROZEN_PROTOCOL_SHA256,
+        ),
+        "assignment_plan": (
+            freeze.DEFAULT_ASSIGNMENT_PLAN,
+            "paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md",
+            freeze.FROZEN_ASSIGNMENT_PLAN_SHA256,
+        ),
+        "annotator_guide": (
+            freeze.DEFAULT_ANNOTATOR_GUIDE,
+            "paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md",
+            freeze.FROZEN_ANNOTATOR_GUIDE_SHA256,
+        ),
+    }
+    for key, (path, logical_path, frozen_sha256) in governing_inputs.items():
+        label = key.replace("_", "-")
+        content = _snapshot_bytes(
+            source_snapshots,
+            key,
+            path,
+            label=f"current frozen {label}",
+        )
+        _require_equal(
+            _fingerprint(content)["sha256"],
+            frozen_sha256,
+            label=f"current frozen {label} fingerprint",
+        )
+        _verify_entry(
+            provenance.get(key),
+            expected_path=logical_path,
+            content=content,
+            label=f"{label} provenance",
+        )
+
+
+def _verify_implementation(manifest: dict, source_snapshots=None) -> None:
+    """Bind every source dependency before executing its validation logic."""
+    implementation = manifest.get("implementation")
+    if not isinstance(implementation, dict):
+        raise ValueError("analysis manifest implementation must be an object")
+    _require_equal(
+        set(implementation),
+        {
+            "analysis_core",
+            "analysis_renderer",
+            "analysis_verifier",
+            "blinded_freeze_verifier",
+            "packet_builder",
+            "packet_verifier",
+            "ratings_freezer",
+        },
+        label="analysis manifest implementation set",
+    )
+
+    sources = (
+        (
+            "analysis_core",
+            Path(core.__file__),
+            "scripts/human_eval_analysis_core.py",
+            "analysis core implementation",
+        ),
+        (
+            "analysis_renderer",
+            Path(analyze_human_eval.__file__),
+            "scripts/analyze_human_eval.py",
+            "analysis renderer implementation",
+        ),
+        (
+            "analysis_verifier",
+            Path(__file__),
+            "scripts/verify_human_eval_analysis_outputs.py",
+            "analysis verifier implementation",
+        ),
+        (
+            "blinded_freeze_verifier",
+            Path(core.blind_verify.__file__),
+            "scripts/verify_human_eval_freeze.py",
+            "blinded freeze verifier implementation",
+        ),
+        (
+            "packet_builder",
+            Path(core.packet.__file__),
+            "scripts/build_human_eval_packet.py",
+            "packet builder implementation",
+        ),
+        (
+            "packet_verifier",
+            Path(core.map_verify.__file__),
+            "scripts/verify_human_eval_packet.py",
+            "packet verifier implementation",
+        ),
+        (
+            "ratings_freezer",
+            Path(freeze.__file__),
+            "scripts/freeze_human_eval_ratings.py",
+            "ratings freezer implementation",
+        ),
+    )
+    for key, source, logical_path, label in sources:
+        source_bytes = _snapshot_bytes(
+            source_snapshots,
+            key,
+            source,
+            label=f"current {label}",
+        )
+        _verify_exact_entry(
+            implementation[key],
+            expected_path=logical_path,
+            content=source_bytes,
+            label=label,
+        )
+
+
+def _verify_analysis_environment(manifest: dict, source_snapshots=None) -> None:
+    """Bind both pinned environment files and the runtime producing numbers."""
+    environment = manifest.get("analysis_environment")
+    if not isinstance(environment, dict) or set(environment) != {
+        "requirements",
+        "ci_requirements",
+        "python_version",
+        "runtime",
+    }:
+        raise ValueError(
+            "analysis environment must bind application and CI requirements, "
+            "Python version, and runtime"
+        )
+    _verify_exact_entry(
+        environment["requirements"],
+        expected_path="requirements.txt",
+        content=_snapshot_bytes(
+            source_snapshots,
+            "requirements",
+            analyze_human_eval.ANALYSIS_REQUIREMENTS,
+            label="current analysis requirements",
+        ),
+        label="analysis requirements",
+    )
+    _verify_exact_entry(
+        environment["ci_requirements"],
+        expected_path="requirements-ci.lock",
+        content=_snapshot_bytes(
+            source_snapshots,
+            "ci_requirements",
+            analyze_human_eval.ANALYSIS_CI_REQUIREMENTS,
+            label="current analysis CI requirements",
+        ),
+        label="analysis CI requirements",
+    )
+    _verify_exact_entry(
+        environment["python_version"],
+        expected_path=".python-version",
+        content=_snapshot_bytes(
+            source_snapshots,
+            "python_version",
+            analyze_human_eval.ANALYSIS_PYTHON_VERSION,
+            label="current analysis Python version contract",
+        ),
+        label="analysis Python version contract",
+    )
+    expected_runtime = analyze_human_eval.analysis_runtime_contract()
+    if _canonical_json_bytes(environment["runtime"]) != _canonical_json_bytes(
+        expected_runtime
+    ):
+        raise ValueError(
+            "analysis runtime contract mismatch: "
+            f"expected {expected_runtime!r}, got {environment['runtime']!r}"
+        )
+
+
+def _verify_captured_bundle(
+    snapshots,
+    source_snapshots=None,
+    *,
+    source_descriptors: ExitStack | None = None,
+) -> dict:
+    """Verify one descriptor-bound snapshot of the complete output bundle."""
+    json_bytes = snapshots[analyze_human_eval.ANALYSIS_JSON][1][0]
+    markdown_bytes = snapshots[analyze_human_eval.ANALYSIS_MARKDOWN][1][0]
+    manifest_bytes = snapshots[analyze_human_eval.ANALYSIS_MANIFEST][1][0]
+
+    payload = _load_json(json_bytes, label="canonical human-analysis JSON")
+    manifest = _load_json(manifest_bytes, label="human-analysis output manifest")
+    expected_root_fields = {
+        "schema_version",
+        "study_id",
+        "status",
+        "artifacts",
+        "implementation",
+        "analysis_environment",
+        "integrity_note",
+    }
+    undeclared_root_fields = sorted(set(manifest) - expected_root_fields)
+    if undeclared_root_fields:
+        raise ValueError(
+            "analysis manifest schema mismatch at root: "
+            f"undeclared fields {undeclared_root_fields!r}"
+        )
+    _verify_implementation(manifest, source_snapshots)
+    if source_descriptors is not None:
+        source_snapshots.update(
+            _open_provenance_source_snapshots(
+                source_descriptors,
+                _owned_provenance_source_specs(),
+            )
+        )
+    _verify_analysis_environment(manifest, source_snapshots)
+    _validate_analysis_identity(payload, source_snapshots)
+
+    expected_markdown = analyze_human_eval.render_markdown(payload).encode("utf-8")
+    if markdown_bytes != expected_markdown:
+        raise ValueError(
+            "human-analysis Markdown does not match canonical JSON; regenerate the "
+            "bundle instead of editing manuscript-facing results by hand"
+        )
+
+    _require_equal(manifest.get("schema_version"), 1, label="manifest schema_version")
+    _require_equal(manifest.get("study_id"), payload["study_id"], label="manifest study_id")
+    _require_equal(
+        manifest.get("status"),
+        "human_validation_analysis_bundle",
+        label="manifest status",
+    )
+    _require_equal(
+        manifest.get("integrity_note"),
+        analyze_human_eval.ANALYSIS_INTEGRITY_NOTE,
+        label="manifest integrity note",
+    )
+
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise ValueError("analysis manifest artifacts must be an object")
+    _require_equal(
+        set(artifacts),
+        {"canonical_analysis", "manuscript_rendering"},
+        label="analysis manifest artifact set",
+    )
+    _verify_exact_entry(
+        artifacts["canonical_analysis"],
+        expected_path=analyze_human_eval.ANALYSIS_JSON,
+        content=json_bytes,
+        label="canonical analysis",
+    )
+    _verify_exact_entry(
+        artifacts["manuscript_rendering"],
+        expected_path=analyze_human_eval.ANALYSIS_MARKDOWN,
+        content=markdown_bytes,
+        label="manuscript rendering",
+    )
+
+    _validate_variant_score_publication(payload)
+
+    return {
+        "schema_version": 1,
+        "study_id": payload["study_id"],
+        "status": "human_validation_analysis_bundle_verified",
+        "analysis_scope": payload["analysis_scope"],
+        "human_ratings_generated": False,
+        "treatment_outputs_rerun": False,
+        "canonical_analysis_sha256": _fingerprint(json_bytes)["sha256"],
+        "manuscript_rendering_sha256": _fingerprint(markdown_bytes)["sha256"],
+        "output_manifest_sha256": _fingerprint(manifest_bytes)["sha256"],
+        "analysis_environment_bound": True,
+        "implementation_bound": True,
+        "independent_recomputation_verified": False,
+    }
+
+
+def verify_bundle(output_root: Path = DEFAULT_OUTPUT_ROOT) -> dict:
+    """Verify exact outputs, deterministic rendering, and implementation hashes."""
+    output_root = Path(output_root)
+    with ExitStack() as descriptors:
+        source_snapshots = _open_provenance_source_snapshots(
+            descriptors,
+            _implementation_source_specs(),
+        )
+        output_descriptor, snapshots, directory_identity = _open_output_snapshot(
+            descriptors,
+            output_root,
+        )
+        receipt = _verify_captured_bundle(
+            snapshots,
+            source_snapshots,
+            source_descriptors=descriptors,
+        )
+        _require_output_snapshot_stable(
+            output_root,
+            output_descriptor,
+            snapshots,
+            directory_identity,
+        )
+        _require_provenance_sources_stable(source_snapshots)
+        return receipt
+
+
+def verify_bundle_against_inputs(
+    output_root: Path = DEFAULT_OUTPUT_ROOT,
+    *,
+    rating_paths=None,
+    freeze_root: Path = core.FREEZE_ROOT,
+    packet_root: Path = core.PACKET_ROOT,
+    packet_path: Path = freeze.DEFAULT_PACKET,
+    protocol_path: Path = freeze.DEFAULT_PROTOCOL,
+    assignment_plan_path: Path = freeze.DEFAULT_ASSIGNMENT_PLAN,
+    annotator_guide_path: Path = freeze.DEFAULT_ANNOTATOR_GUIDE,
+    analysis_plan_path: Path = core.PLAN,
+    task_manifest_path: Path = core.TASKS,
+    repo_root: Path = core.ROOT,
+) -> dict:
+    """Verify a captured bundle, then independently recompute its full payload.
+
+    The returned stability flag binds the captured output inodes through the
+    end-of-recomputation observation. It does not claim to lock the publication
+    directory against writes after verification.
+    """
+    output_root = Path(output_root)
+    with ExitStack() as descriptors:
+        source_snapshots = _open_provenance_source_snapshots(
+            descriptors,
+            _implementation_source_specs(),
+        )
+        output_descriptor, snapshots, directory_identity = _open_output_snapshot(
+            descriptors,
+            output_root,
+        )
+        receipt = _verify_captured_bundle(
+            snapshots,
+            source_snapshots,
+            source_descriptors=descriptors,
+        )
+        payload = _load_json(
+            snapshots[analyze_human_eval.ANALYSIS_JSON][1][0],
+            label="canonical human-analysis JSON",
+        )
+
+        from_retained_archive = rating_paths is None
+        if from_retained_archive:
+            # Validate the retained archive layout here, but let the blinded freeze
+            # verifier consume its declared archive paths. Passing those numbered
+            # archive names as if they were external inputs would incorrectly compare
+            # them with the original source filenames recorded in the manifest.
+            _retained_rating_paths(freeze_root)
+            analysis_rating_paths = []
+        else:
+            analysis_rating_paths = [Path(path) for path in rating_paths]
+            if not analysis_rating_paths:
+                raise ValueError(
+                    "independent recomputation requires at least one rating file"
+                )
+
+        recomputed = core.analyze(
+            analysis_rating_paths,
+            freeze_root=freeze_root,
+            packet_root=packet_root,
+            packet_path=packet_path,
+            protocol_path=protocol_path,
+            assignment_plan_path=assignment_plan_path,
+            annotator_guide_path=annotator_guide_path,
+            analysis_plan_path=analysis_plan_path,
+            task_manifest_path=task_manifest_path,
+            repo_root=repo_root,
+        )
+
+        if _canonical_json_bytes(payload) != _canonical_json_bytes(recomputed):
+            raise ValueError(
+                "canonical result does not match independently recomputed human analysis"
+            )
+
+        _require_output_snapshot_stable(
+            output_root,
+            output_descriptor,
+            snapshots,
+            directory_identity,
+        )
+        _require_provenance_sources_stable(source_snapshots)
+        receipt["independent_recomputation_verified"] = True
+        receipt["recomputed_from_retained_ratings"] = from_retained_archive
+        receipt["outputs_stable_during_independent_recomputation"] = True
+        return receipt
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("ratings", nargs="*", type=Path)
+    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--freeze-root", type=Path, default=core.FREEZE_ROOT)
+    parser.add_argument("--packet-root", type=Path, default=core.PACKET_ROOT)
+    parser.add_argument("--packet", type=Path, default=freeze.DEFAULT_PACKET)
+    parser.add_argument("--protocol", type=Path, default=freeze.DEFAULT_PROTOCOL)
+    parser.add_argument(
+        "--assignment-plan", type=Path, default=freeze.DEFAULT_ASSIGNMENT_PLAN
+    )
+    parser.add_argument(
+        "--annotator-guide", type=Path, default=freeze.DEFAULT_ANNOTATOR_GUIDE
+    )
+    parser.add_argument("--analysis-plan", type=Path, default=core.PLAN)
+    parser.add_argument("--task-manifest", type=Path, default=core.TASKS)
+    parser.add_argument("--repo-root", type=Path, default=core.ROOT)
+    args = parser.parse_args()
+    try:
+        receipt = verify_bundle_against_inputs(
+            args.output_root,
+            rating_paths=args.ratings or None,
+            freeze_root=args.freeze_root,
+            packet_root=args.packet_root,
+            packet_path=args.packet,
+            protocol_path=args.protocol,
+            assignment_plan_path=args.assignment_plan,
+            annotator_guide_path=args.annotator_guide,
+            analysis_plan_path=args.analysis_plan,
+            task_manifest_path=args.task_manifest,
+            repo_root=args.repo_root,
+        )
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"HUMAN EVAL ANALYSIS VERIFY: FAIL: {exc}") from exc
+    print(json.dumps(receipt, indent=2, sort_keys=True))
+    print("HUMAN EVAL ANALYSIS VERIFY: PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

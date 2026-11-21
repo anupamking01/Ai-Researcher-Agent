@@ -1,0 +1,17 @@
+{
+  "aggregate_sha256": "4e94308472e87cc14b85e5911c40b5f72c63225862a347e624fc0725afd632aa",
+  "algorithm": "sha256",
+  "artifacts": [
+    {
+      "bytes": 5440,
+      "path": "outputs/main_study_runs.csv",
+      "sha256": "966ea80519af5ea7b832c86d7868525a4ef75874f396f242291e3be949382a0e"
+    },
+    {
+      "bytes": 3652,
+      "path": "outputs/posthoc_support_runs.csv",
+      "sha256": "5acd80d6115f269c7fab40180dec0d778a45eaafd7d5c23cb79c43fd7837773c"
+    }
+  ],
+  "schema_version": 1
+}

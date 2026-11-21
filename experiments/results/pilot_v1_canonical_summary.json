@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "task_set_id": "pilot-v1-2026-09-08",
+  "canonical_dataset": {
+    "total_runs": 15,
+    "variants": {"D6": 5, "P6": 5, "P6V": 5},
+    "workflow_sources": [34377707838, 34388324051],
+    "replacement_policy": "Retain the 13 completed traces from workflow 34377707838; replace only failed P6V/pilot-04 and P6V/pilot-05 with successful targeted reruns from workflow 34388324051.",
+    "validation": {
+      "all_15_unique_variant_task_pairs": true,
+      "all_completed": true,
+      "source_budget_six_all_runs": true,
+      "provider_usage_complete_all_runs": true,
+      "cost_accounting_complete_all_runs": true,
+      "smart_model": "gpt-5.6-terra",
+      "fast_model": "gpt-5.6-luna",
+      "temperature": 1.0,
+      "browse_timeout_seconds": 60.0,
+      "run_timeout_seconds": 480.0,
+      "p6v_verification_status_ok_all_runs": true,
+      "selected_run_timeouts": 0
+    }
+  },
+  "variant_summary": {
+    "D6": {
+      "n": 5,
+      "avg_successful_sources": 3.0,
+      "avg_failed_sources": 3.0,
+      "avg_search_calls": 1.0,
+      "avg_model_calls": 5.6,
+      "avg_total_tokens": 16452.0,
+      "avg_estimated_cost_usd": 0.05244156,
+      "total_estimated_cost_usd": 0.2622078,
+      "avg_latency_seconds": 93.7610164808,
+      "avg_report_words": 2657.0
+    },
+    "P6": {
+      "n": 5,
+      "avg_successful_sources": 3.4,
+      "avg_failed_sources": 2.6,
+      "avg_search_calls": 4.0,
+      "avg_model_calls": 7.0,
+      "avg_total_tokens": 20721.6,
+      "avg_estimated_cost_usd": 0.05741896,
+      "total_estimated_cost_usd": 0.2870948,
+      "avg_latency_seconds": 127.642640303,
+      "avg_report_words": 2677.8
+    },
+    "P6V": {
+      "n": 5,
+      "avg_successful_sources": 4.6,
+      "avg_failed_sources": 1.4,
+      "avg_search_calls": 4.0,
+      "avg_model_calls": 8.8,
+      "avg_total_tokens": 32793.8,
+      "avg_estimated_cost_usd": 0.0899772,
+      "total_estimated_cost_usd": 0.449886,
+      "avg_latency_seconds": 126.661752725,
+      "avg_report_words": 2669.8,
+      "claims_checked_total": 88,
+      "supported_claims_total": 75,
+      "partially_supported_claims_total": 9,
+      "unsupported_claims_total": 4,
+      "contradicted_claims_total": 0,
+      "macro_claim_support_rate": 0.84,
+      "micro_claim_support_rate": 0.8522727273
+    }
+  },
+  "mean_paired_deltas": {
+    "P6_minus_D6": {
+      "successful_sources": 0.4,
+      "model_calls": 1.4,
+      "total_tokens": 4269.6,
+      "estimated_cost_usd": 0.0049774,
+      "latency_seconds": 33.8816238222,
+      "report_words": 20.8
+    },
+    "P6V_minus_P6": {
+      "successful_sources": 1.2,
+      "model_calls": 1.8,
+      "total_tokens": 12072.2,
+      "estimated_cost_usd": 0.03255824,
+      "latency_seconds": -0.980887578,
+      "report_words": -8.0
+    }
+  },
+  "interpretation_limits": [
+    "This is a five-task diagnostic pilot, not the main study.",
+    "The pilot equalizes scheduled browse calls, not total tokens, model calls, latency, or dollar cost.",
+    "D6 and P6 were not run through the verifier, so claim-support rates are not available for a fair cross-variant causal comparison.",
+    "Two P6V tasks were rerun later after API credit exhaustion; live-web conditions may differ slightly from the original execution window.",
+    "No blinded human quality evaluation has yet been performed."
+  ]
+}

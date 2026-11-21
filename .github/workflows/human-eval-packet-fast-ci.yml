@@ -1,0 +1,204 @@
+name: human-eval-packet-fast-ci
+
+# Independent, offline regression lane for blinded-packet construction and
+# source custody. It does not certify original evidence or human ratings.
+on:
+  push:
+    branches:
+      - "research-*"
+    paths:
+      - .github/workflows/human-eval-packet-fast-ci.yml
+      - scripts/build_human_eval_packet.py
+      - scripts/verify_human_eval_packet.py
+      - scripts/export_human_eval_annotator_bundle.py
+      - scripts/freeze_human_eval_ratings.py
+      - scripts/verify_human_eval_submission_preflight.py
+      - scripts/verify_human_eval_counterbalanced_handoff.py
+      - scripts/verify_human_eval_counterbalanced_submission_pair.py
+      - scripts/verify_human_eval_counterbalanced_freeze_link.py
+      - scripts/verify_human_eval_automated_run_lineage.py
+      - scripts/verify_human_eval_automated_handoff.py
+      - scripts/audit_human_eval_archive_readiness.py
+      - scripts/triage_historical_archive_candidates.py
+      - scripts/verify_historical_archive_triage_receipt.py
+      - scripts/preflight_recovered_artifact_zip.py
+      - scripts/audit_historical_artifact_job_logs.py
+      - scripts/verify_published_main_study_inputs.py
+      - scripts/validate_main_study_inputs.py
+      - scripts/validate_numeric_inputs.py
+      - scripts/verify_research_artifact_manifest.py
+      - scripts/fingerprint_research_artifacts.py
+      - scripts/verify_frozen_main_study_tasks.py
+      - tests/test_human_eval.py
+      - tests/test_human_eval_submission_preflight.py
+      - tests/test_human_eval_packet_capture_bounds.py
+      - tests/test_human_eval_packet_record_boundaries.py
+      - tests/test_human_eval_packet_source_numeric_integrity.py
+      - tests/test_human_eval_packet_verification.py
+      - tests/test_human_eval_packet_window_custody.py
+      - tests/test_human_eval_annotator_bundle_contract.py
+      - tests/test_human_eval_annotator_export_capture_bounds.py
+      - tests/test_human_eval_annotator_export.py
+      - tests/test_human_eval_packet_fast_ci_workflow.py
+      - tests/test_human_eval_counterbalanced_handoff.py
+      - tests/test_human_eval_counterbalanced_submission_pair.py
+      - tests/test_human_eval_counterbalanced_freeze_link.py
+      - tests/test_human_eval_automated_run_lineage.py
+      - tests/test_human_eval_automated_handoff.py
+      - tests/test_human_eval_archive_readiness.py
+      - tests/test_human_eval_expected_recovery_paths.py
+      - tests/test_historical_archive_candidate_triage.py
+      - tests/test_historical_archive_triage_receipt_replay.py
+      - tests/test_historical_archive_triage_receipt_schema_preflight.py
+      - tests/test_recovered_artifact_zip_preflight.py
+      - tests/human_eval_test_support.py
+      - scripts/run_offline_pytest_firewalled.sh
+      - scripts/verify_ci_python_runtime.py
+      - scripts/verify_ci_source_checkout.py
+      - scripts/verify_ci_test_evidence.py
+      - scripts/verify_retained_ci_test_evidence.py
+      - requirements.txt
+      - requirements-ci.lock
+  pull_request:
+    paths:
+      - .github/workflows/human-eval-packet-fast-ci.yml
+      - scripts/build_human_eval_packet.py
+      - scripts/verify_human_eval_packet.py
+      - scripts/export_human_eval_annotator_bundle.py
+      - scripts/freeze_human_eval_ratings.py
+      - scripts/verify_human_eval_submission_preflight.py
+      - scripts/verify_human_eval_counterbalanced_handoff.py
+      - scripts/verify_human_eval_counterbalanced_submission_pair.py
+      - scripts/verify_human_eval_counterbalanced_freeze_link.py
+      - scripts/verify_human_eval_automated_run_lineage.py
+      - scripts/verify_human_eval_automated_handoff.py
+      - scripts/audit_human_eval_archive_readiness.py
+      - scripts/triage_historical_archive_candidates.py
+      - scripts/verify_historical_archive_triage_receipt.py
+      - scripts/preflight_recovered_artifact_zip.py
+      - scripts/audit_historical_artifact_job_logs.py
+      - scripts/verify_published_main_study_inputs.py
+      - scripts/validate_main_study_inputs.py
+      - scripts/validate_numeric_inputs.py
+      - scripts/verify_research_artifact_manifest.py
+      - scripts/fingerprint_research_artifacts.py
+      - scripts/verify_frozen_main_study_tasks.py
+      - tests/test_human_eval.py
+      - tests/test_human_eval_submission_preflight.py
+      - tests/test_human_eval_packet_capture_bounds.py
+      - tests/test_human_eval_packet_record_boundaries.py
+      - tests/test_human_eval_packet_source_numeric_integrity.py
+      - tests/test_human_eval_packet_verification.py
+      - tests/test_human_eval_packet_window_custody.py
+      - tests/test_human_eval_annotator_bundle_contract.py
+      - tests/test_human_eval_annotator_export_capture_bounds.py
+      - tests/test_human_eval_annotator_export.py
+      - tests/test_human_eval_packet_fast_ci_workflow.py
+      - tests/test_human_eval_counterbalanced_handoff.py
+      - tests/test_human_eval_counterbalanced_submission_pair.py
+      - tests/test_human_eval_counterbalanced_freeze_link.py
+      - tests/test_human_eval_automated_run_lineage.py
+      - tests/test_human_eval_automated_handoff.py
+      - tests/test_human_eval_archive_readiness.py
+      - tests/test_human_eval_expected_recovery_paths.py
+      - tests/test_historical_archive_candidate_triage.py
+      - tests/test_historical_archive_triage_receipt_replay.py
+      - tests/test_historical_archive_triage_receipt_schema_preflight.py
+      - tests/test_recovered_artifact_zip_preflight.py
+      - tests/human_eval_test_support.py
+      - scripts/run_offline_pytest_firewalled.sh
+      - scripts/verify_ci_python_runtime.py
+      - scripts/verify_ci_source_checkout.py
+      - scripts/verify_ci_test_evidence.py
+      - scripts/verify_retained_ci_test_evidence.py
+      - requirements.txt
+      - requirements-ci.lock
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  packet-regressions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout source without credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Pin offline Python interpreter
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+          pip-version: "26.2.1"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-ci.lock
+
+      - name: Verify runtime and source before installing dependencies
+        run: |
+          python -m scripts.verify_ci_python_runtime --phase before-tests
+          python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
+
+      - name: Install pinned packet-test dependencies only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-deps \
+            --only-binary=:all: --retries 1 --timeout 15 \
+            --constraint requirements-ci.lock --constraint requirements.txt \
+            pytest pluggy iniconfig packaging PyYAML markdown-it-py mdurl
+          python -m pip check
+
+      - name: Compile packet implementation and regressions
+        run: |
+          python -m py_compile \
+            scripts/build_human_eval_packet.py scripts/verify_human_eval_packet.py scripts/export_human_eval_annotator_bundle.py scripts/freeze_human_eval_ratings.py scripts/verify_frozen_main_study_tasks.py scripts/verify_human_eval_submission_preflight.py scripts/verify_human_eval_counterbalanced_handoff.py scripts/verify_human_eval_counterbalanced_submission_pair.py scripts/verify_human_eval_counterbalanced_freeze_link.py scripts/verify_human_eval_automated_run_lineage.py scripts/verify_human_eval_automated_handoff.py scripts/verify_published_main_study_inputs.py scripts/validate_main_study_inputs.py scripts/validate_numeric_inputs.py scripts/verify_research_artifact_manifest.py scripts/fingerprint_research_artifacts.py scripts/audit_human_eval_archive_readiness.py scripts/triage_historical_archive_candidates.py scripts/verify_historical_archive_triage_receipt.py scripts/preflight_recovered_artifact_zip.py scripts/audit_historical_artifact_job_logs.py \
+            tests/test_human_eval.py tests/test_human_eval_submission_preflight.py tests/test_human_eval_packet_capture_bounds.py tests/test_human_eval_packet_record_boundaries.py tests/test_human_eval_packet_source_numeric_integrity.py tests/test_human_eval_packet_verification.py tests/test_human_eval_packet_window_custody.py tests/test_human_eval_annotator_bundle_contract.py tests/test_human_eval_annotator_export_capture_bounds.py tests/test_human_eval_annotator_export.py tests/test_human_eval_counterbalanced_handoff.py tests/test_human_eval_counterbalanced_submission_pair.py tests/test_human_eval_counterbalanced_freeze_link.py tests/test_human_eval_automated_run_lineage.py tests/test_human_eval_automated_handoff.py tests/test_human_eval_packet_fast_ci_workflow.py tests/test_human_eval_archive_readiness.py tests/test_human_eval_expected_recovery_paths.py tests/test_historical_archive_candidate_triage.py tests/test_historical_archive_triage_receipt_replay.py tests/test_historical_archive_triage_receipt_schema_preflight.py tests/test_recovered_artifact_zip_preflight.py tests/human_eval_test_support.py
+
+      - name: Verify source immediately before packet tests
+        run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
+
+      - name: Run firewalled blinded-packet regressions
+        shell: bash
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: |
+          set -euo pipefail
+          bash scripts/run_offline_pytest_firewalled.sh tests/test_human_eval.py tests/test_human_eval_submission_preflight.py tests/test_human_eval_packet_capture_bounds.py tests/test_human_eval_packet_record_boundaries.py tests/test_human_eval_packet_source_numeric_integrity.py tests/test_human_eval_packet_verification.py tests/test_human_eval_packet_window_custody.py tests/test_human_eval_annotator_bundle_contract.py tests/test_human_eval_annotator_export_capture_bounds.py tests/test_human_eval_annotator_export.py tests/test_human_eval_counterbalanced_handoff.py tests/test_human_eval_counterbalanced_submission_pair.py tests/test_human_eval_counterbalanced_freeze_link.py tests/test_human_eval_automated_run_lineage.py tests/test_human_eval_automated_handoff.py tests/test_human_eval_archive_readiness.py tests/test_human_eval_expected_recovery_paths.py tests/test_historical_archive_candidate_triage.py tests/test_historical_archive_triage_receipt_replay.py tests/test_historical_archive_triage_receipt_schema_preflight.py tests/test_recovered_artifact_zip_preflight.py tests/test_human_eval_packet_fast_ci_workflow.py 2>&1 | tee "$RUNNER_TEMP/vera-human-packet-tests.log"
+
+      - name: Verify runtime and source after packet tests
+        run: |
+          python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests
+          python -m scripts.verify_ci_python_runtime --phase after-tests
+
+      - name: Bind exact-commit packet-test evidence
+        run: |
+          python -m scripts.verify_ci_test_evidence \
+            --log "$RUNNER_TEMP/vera-human-packet-tests.log" \
+            --out "$RUNNER_TEMP/vera-human-packet-test-receipt.json"
+
+      - name: Replay packet-test evidence before retention
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.verify_retained_ci_test_evidence \
+            --log "$RUNNER_TEMP/vera-human-packet-tests.log" \
+            --receipt "$RUNNER_TEMP/vera-human-packet-test-receipt.json" \
+            --checkout-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --event "$GITHUB_EVENT_NAME"
+
+      - name: Retain source-bound packet regression evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-human-packet-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/vera-human-packet-tests.log
+            ${{ runner.temp }}/vera-human-packet-test-receipt.json
+          if-no-files-found: error
+          retention-days: 90
