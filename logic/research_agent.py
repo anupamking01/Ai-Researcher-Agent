@@ -9,6 +9,7 @@ from agent.llm_utils import UsageTracker
 from logic import prompts
 from logic.experiment import ExperimentConfig, normalize_verifier_output
 from logic.planner_queries import parse_planned_search_queries
+from logic.search_provenance import parse_search_candidates, selected_search_sources
 from scrape.web_search import web_search
 from scrape.web_scrape import async_browse
 from settings import Config
@@ -156,7 +157,7 @@ class ResearchAgent:
         self.search_call_count += 1
         try:
             raw_results = web_search(query, num_results=candidate_limit)
-            search_results = json.loads(raw_results)
+            candidate_sources = parse_search_candidates(raw_results)
         except RuntimeError as exc:
             # A transient metasearch outage should not abort the whole agent
             # before later planned queries are attempted. The artifact validator
@@ -167,6 +168,8 @@ class ResearchAgent:
                     "query": query,
                     "candidate_urls": [],
                     "scheduled_urls": [],
+                    "candidate_sources": [],
+                    "scheduled_sources": [],
                     "search_error": str(exc)[:1000],
                 }
             )
@@ -175,17 +178,16 @@ class ResearchAgent:
             )
             return []
 
-        candidate_urls = [
-            result.get("href")
-            for result in search_results
-            if isinstance(result, dict) and result.get("href")
-        ]
+        candidate_urls = [entry["url"] for entry in candidate_sources]
         new_search_urls = await self.get_new_urls(candidate_urls, limit=allowed)
+        scheduled_sources = selected_search_sources(candidate_sources, new_search_urls)
         self.search_records.append(
             {
                 "query": query,
                 "candidate_urls": candidate_urls,
                 "scheduled_urls": list(new_search_urls),
+                "candidate_sources": candidate_sources,
+                "scheduled_sources": scheduled_sources,
             }
         )
 
