@@ -206,3 +206,23 @@ cleanup, nor authenticate historical September artifacts. The pilot remains
 diagnostic, frozen automated comparisons retain post-collection and
 fixed-order/evaluator-policy caveats, exploratory sensitivities remain
 exploratory, and human validation has not taken place.
+
+### Interrupted pre-agent trace inventory after selecting a cell
+
+A trace-root inventory can become invalid **between** the successful initial
+spend check and the final pre-agent evidence snapshot. Previously this second
+inventory happened after `progress.current` was durably set but outside the
+terminal-event exception handler. A displaced directory or unexpected trace
+entry could therefore raise `SystemExit` and leave a selected treatment marked
+active with no recorded failed event. The noncanonical runner now fails closed
+*inside* the selected-cell handler: it records a failed selection, preserves an
+explicit `unverifiable` spend reconciliation when retained traces cannot be
+inventoried, clears `current`, and stops without invoking the agent or proceeding
+to another cell. The attempt count is a **study-runner selection/failure count**,
+not evidence of a model request or a completed experimental treatment.
+
+A synthetic no-provider regression changes the inventory only after preflight
+and the spend guard have succeeded, verifies no agent invocation, and checks the
+durable failure event and unverified spend designation. This does not recover
+September source artifacts, authenticate provider billing, make the local
+filesystem atomic, or create confirmatory or human-evaluation evidence.

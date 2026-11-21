@@ -1710,8 +1710,17 @@ async def _run_main_study() -> None:
             status = "completed"
             error = None
             cancelled_task = None
-            prior_trace_paths = _treatment_trace_paths()
             try:
+                # Inventory after the active cell is persisted. A late root
+                # substitution must produce a durable failed-cell event, not
+                # leave the progress ledger pointing at an uncounted attempt.
+                try:
+                    prior_trace_paths = _treatment_trace_paths()
+                except SystemExit as exc:
+                    raise ValueError(
+                        f"Cannot inventory retained treatment traces before "
+                        f"{variant_id}/{task['id']}: {exc}"
+                    ) from exc
                 _require_source_state_unchanged(
                     source_state, phase="before treatment"
                 )

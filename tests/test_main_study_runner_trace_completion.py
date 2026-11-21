@@ -290,6 +290,7 @@ def test_prior_report_change_cannot_be_hidden_by_new_completed_trace(
 @pytest.mark.parametrize("failure_mode", [
     "missing_trace", "malformed_trace",
     "cancelled_missing_trace", "cancelled_malformed_trace",
+    "pre_agent_inventory_invalid",
 ])
 def test_agent_failure_or_cancellation_records_attempt(
     tmp_path, monkeypatch, failure_mode,
@@ -339,6 +340,19 @@ def test_agent_failure_or_cancellation_records_attempt(
         return actual_import(name)
 
     monkeypatch.setattr(study.importlib, "import_module", fake_import)
+    if failure_mode == "pre_agent_inventory_invalid":
+        # Simulate a trace-root swap after the ordinary spend check but
+        # before run_agent: this selected cell has not called the model.
+        original_inventory = study._treatment_trace_paths
+        inventory_calls = []
+
+        def late_invalid_inventory():
+            inventory_calls.append(True)
+            if len(inventory_calls) >= 3:
+                raise SystemExit("synthetic trace root replaced after spend guard")
+            return original_inventory()
+
+        monkeypatch.setattr(study, "_treatment_trace_paths", late_invalid_inventory)
     if failure_mode.startswith("cancelled_"):
         with pytest.raises(asyncio.CancelledError):
             asyncio.run(study._run_main_study())
@@ -348,7 +362,7 @@ def test_agent_failure_or_cancellation_records_attempt(
     progress = json.loads(
         (tmp_path / "outputs" / "main_study_progress.json").read_text()
     )
-    assert attempts == ["D3"]
+    assert attempts == ([] if failure_mode == "pre_agent_inventory_invalid" else ["D3"])
     assert progress["attempted_runs"] == 1
     assert progress["completed_runs"] == 0
     assert progress["failed_runs"] == 1
@@ -356,10 +370,13 @@ def test_agent_failure_or_cancellation_records_attempt(
     assert progress["events"][0]["status"] == "failed"
     if failure_mode.startswith("cancelled_"):
         assert "CancelledError: treatment interrupted" in progress["events"][0]["error"]
-    if failure_mode.endswith("malformed_trace"):
+    if failure_mode.endswith("malformed_trace") or failure_mode == "pre_agent_inventory_invalid":
         assert progress["estimated_treatment_cost_usd"] is None
         assert progress["trace_cost_reconciliation"] == "unverifiable"
         assert "post-treatment trace spend cannot be verified" in progress["events"][0]["error"]
+        if failure_mode == "pre_agent_inventory_invalid":
+            assert len(inventory_calls) >= 4
+            assert "Cannot inventory retained treatment traces before D3/main-01" in progress["events"][0]["error"]
     else:
         assert progress["estimated_treatment_cost_usd"] == 0
         assert progress["trace_cost_reconciliation"] == "recomputed_from_retained_traces"
