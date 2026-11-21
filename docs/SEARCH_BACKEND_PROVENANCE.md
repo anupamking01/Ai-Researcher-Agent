@@ -180,3 +180,36 @@ content or the original 40 report/trace pairs. The five-task pilot remains
 diagnostic; frozen automated inference remains post-collection with
 fixed-order and evaluator-policy comparability qualifications; retrospective
 sensitivities are exploratory; and blinded human validation remains pending.
+
+
+## Prospective requested-candidate receipt reconciliation (21 November 2026)
+
+The previous parser enforced the actual per-query search request at ingestion,
+but schema-1 traces recorded the candidates and scheduled sources **without**
+the requested count. A trace reviewer could not independently check whether
+a seemingly valid candidate array exceeded its request even when no URLs were
+scheduled from the excess.
+
+New prospective `search_provenance_schema: 2` traces therefore record the
+`requested_candidate_limit` for every attempted search, including provider
+outages with zero candidates. The run-level trace also records the configured
+`search_candidate_multiplier`. The offline verifier recomputes each request
+limit from the persisted source budget, ordered planned query slots, already
+scheduled browse attempts, multiplier, and the fixed 20-candidate adapter cap.
+It rejects missing/boolean/contradictory request counts, overproduced source
+arrays, and searches attributed to zero-budget or exhausted query slots. The
+same check applies to successful and search-error records. It does not alter
+query allocation, candidate selection, retrieval budgets, or experimental
+outcomes.
+
+Legacy schema-1 traces remain verifiable under their earlier reconciliation
+contract but **are not retroactively certified** for per-request count
+conservation. Schema-2 receipt consistency is not independent authentication
+of the provider's actual web request or the original September report/trace
+bytes. Synthetic offline cases cover valid duplicate candidates, error
+records, forged counts, changed multiplier/budget, overproduction, and
+unfunded query slots; no live treatment/evaluator or human ratings are
+produced. The pilot remains diagnostic, the frozen automated comparisons
+remain post-collection and subject to fixed-order/evaluator-policy
+limitations, retrospective sensitivity analyses remain exploratory, and
+independent human validation remains pending.

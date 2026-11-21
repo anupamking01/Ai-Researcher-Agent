@@ -168,6 +168,7 @@ class ResearchAgent:
             self.search_records.append(
                 {
                     "query": query,
+                    "requested_candidate_limit": candidate_limit,
                     "candidate_urls": [],
                     "scheduled_urls": [],
                     "candidate_sources": [],
@@ -186,6 +187,7 @@ class ResearchAgent:
         self.search_records.append(
             {
                 "query": query,
+                "requested_candidate_limit": candidate_limit,
                 "candidate_urls": candidate_urls,
                 "scheduled_urls": list(new_search_urls),
                 "candidate_sources": candidate_sources,

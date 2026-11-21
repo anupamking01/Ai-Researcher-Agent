@@ -177,6 +177,7 @@ async def run_agent(
         trace_payload["search_queries"] = list(assistant.search_queries)
         trace_payload["search_records"] = list(assistant.search_records)
         trace_payload["search_provenance_schema"] = SEARCH_TRACE_PROVENANCE_SCHEMA
+        trace_payload["search_candidate_multiplier"] = config.search_candidate_multiplier
         trace_payload["scheduled_urls"] = list(assistant.scheduled_urls)
         trace_payload["successful_urls"] = list(assistant.successful_urls)
         trace_payload["failed_urls"] = list(assistant.failed_urls)

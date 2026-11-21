@@ -180,14 +180,19 @@ def selected_search_sources(
 
 
 # Explicitly prospective; historical traces without the marker are not certified.
-SEARCH_TRACE_PROVENANCE_SCHEMA = 1
+SEARCH_TRACE_PROVENANCE_SCHEMA = 2
+# Schema 1 traces remain legible but cannot establish per-request count custody.
+LEGACY_SEARCH_TRACE_PROVENANCE_SCHEMA = 1
 
 
 def validate_search_trace_provenance(trace: dict) -> None:
     """Conserve ordered query, candidate, scheduled-source and browse ledgers."""
     if type(trace) is not dict or (
         type(trace.get("search_provenance_schema")) is not int
-        or trace["search_provenance_schema"] != SEARCH_TRACE_PROVENANCE_SCHEMA
+        or trace["search_provenance_schema"] not in (
+            LEGACY_SEARCH_TRACE_PROVENANCE_SCHEMA,
+            SEARCH_TRACE_PROVENANCE_SCHEMA,
+        )
     ):
         raise ValueError("unsupported search provenance schema")
     queries = trace.get("search_queries")
@@ -209,6 +214,23 @@ def validate_search_trace_provenance(trace: dict) -> None:
     ):
         raise ValueError("search/browse count ledger mismatch")
 
+    # Schema 2 binds the *requested* metasearch count to the experimental
+    # query-slot budget, not just to a self-reported number in each record.
+    # Historical schema 1 records lack this measurement and are only checked
+    # against their original, weaker provenance contract.
+    request_bound = trace["search_provenance_schema"] == SEARCH_TRACE_PROVENANCE_SCHEMA
+    if request_bound:
+        budget = trace.get("source_budget")
+        multiplier = trace.get("search_candidate_multiplier")
+        if type(budget) is not int or budget <= 0:
+            raise ValueError("invalid provenance source budget")
+        if type(multiplier) is not int or multiplier <= 0:
+            raise ValueError("invalid provenance search candidate multiplier")
+        per_query_budgets = [
+            budget // len(queries) + (index < budget % len(queries))
+            for index in range(len(queries))
+        ]
+
     query_cursor = 0
     accumulated = []
     for index, record in enumerate(records, start=1):
@@ -221,11 +243,26 @@ def validate_search_trace_provenance(trace: dict) -> None:
             query_cursor += 1
         if query_cursor == len(queries):
             raise ValueError(f"search record {index} violates query order")
+        query_index = query_cursor
         query_cursor += 1
         cu, su = record.get("candidate_urls"), record.get("scheduled_urls")
         cs, ss = record.get("candidate_sources"), record.get("scheduled_sources")
         if any(type(x) is not list for x in (cu, su, cs, ss)):
             raise ValueError(f"search record {index} missing source arrays")
+        if request_bound:
+            # The agent caps overfetch at 20, based on the allocated query slot
+            # and the unspent attempt budget. A search for an exhausted/zero
+            # slot or an overproduced response must not be accepted as evidence.
+            allowed = min(per_query_budgets[query_index], budget - len(accumulated))
+            if allowed <= 0:
+                raise ValueError(f"search record {index} has no query browse budget")
+            requested = min(allowed * multiplier, 20)
+            if (
+                type(record.get("requested_candidate_limit")) is not int
+                or record["requested_candidate_limit"] != requested
+                or len(cs) > requested
+            ):
+                raise ValueError(f"search record {index} violates requested candidate limit")
         for entry in cs + ss:
             if (
                 type(entry) is not dict

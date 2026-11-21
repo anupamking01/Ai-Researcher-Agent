@@ -292,7 +292,7 @@ def test_versioned_search_custody_accepts_skipped_planner_query():
 
 @pytest.mark.parametrize("mutate", [
     lambda t: t.update(search_provenance_schema=True),
-    lambda t: t.update(search_provenance_schema=2),
+    lambda t: t.update(search_provenance_schema=3),
     lambda t: t.update(query_count=1),
     lambda t: t.update(search_call_count=1),
     lambda t: t.update(source_count=2),
@@ -414,3 +414,73 @@ def test_versioned_search_trace_is_emitted_and_checked_by_runner():
     ]
     assert len(stamped) == 1
     assert 'validate_search_trace_provenance(trace)' in runner_text
+
+
+def _request_bound_search_custody_fixture():
+    """Synthetic schema-2 trace with two one-attempt query slots."""
+    from copy import deepcopy
+    trace = deepcopy(_search_custody_fixture())
+    trace.update(
+        search_provenance_schema=2,
+        source_budget=2,
+        search_candidate_multiplier=2,
+    )
+    for record in trace["search_records"]:
+        record["requested_candidate_limit"] = 2
+    return trace
+
+
+def test_schema2_reconciles_request_limits_to_frozen_budget_and_candidate_records():
+    from logic.search_provenance import validate_search_trace_provenance
+    validate_search_trace_provenance(_request_bound_search_custody_fixture())
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda t: t["search_records"][0].pop("requested_candidate_limit"),
+    lambda t: t["search_records"][0].update(requested_candidate_limit=True),
+    lambda t: t["search_records"][0].update(requested_candidate_limit=3),
+    lambda t: t["search_records"][0].update(requested_candidate_limit=1),
+    lambda t: t["search_records"][1].update(requested_candidate_limit=0),
+    lambda t: t.update(search_candidate_multiplier=3),
+    lambda t: t.update(search_candidate_multiplier=0),
+    lambda t: t.update(search_candidate_multiplier=True),
+    lambda t: t.update(source_budget=1),
+    lambda t: t.update(source_budget=True),
+])
+def test_schema2_rejects_forged_request_bound_or_experiment_controls(mutate):
+    from logic.search_provenance import validate_search_trace_provenance
+    trace = _request_bound_search_custody_fixture()
+    mutate(trace)
+    with pytest.raises(ValueError):
+        validate_search_trace_provenance(trace)
+
+
+def test_schema2_rejects_candidate_overproduction_even_with_valid_scheduled_counts():
+    from logic.search_provenance import validate_search_trace_provenance
+    trace = _request_bound_search_custody_fixture()
+    extra = {"url": "https://example.org/unscheduled", "backend_pool": "pool"}
+    trace["search_records"][0]["candidate_sources"].append(extra)
+    trace["search_records"][0]["candidate_urls"].append(extra["url"])
+    with pytest.raises(ValueError, match="requested candidate limit"):
+        validate_search_trace_provenance(trace)
+
+
+def test_schema2_rejects_search_of_a_zero_budget_planner_slot():
+    from logic.search_provenance import validate_search_trace_provenance
+    trace = _request_bound_search_custody_fixture()
+    trace["search_queries"].insert(1, "skipped by planner budget")
+    trace["query_count"] = 3
+    # With two total attempts and three queries, the third query has no slot.
+    with pytest.raises(ValueError, match="no query browse budget"):
+        validate_search_trace_provenance(trace)
+
+
+def test_schema2_request_metadata_is_emitted_on_success_error_and_trace():
+    root = Path(__file__).resolve().parents[1]
+    agent_source = (root / "logic" / "research_agent.py").read_text(encoding="utf-8")
+    run_source = (root / "logic" / "run.py").read_text(encoding="utf-8")
+    assert agent_source.count('"requested_candidate_limit": candidate_limit') == 2
+    assert (
+        'trace_payload["search_candidate_multiplier"] = config.search_candidate_multiplier'
+        in run_source
+    )
