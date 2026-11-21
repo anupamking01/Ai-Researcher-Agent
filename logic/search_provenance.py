@@ -7,6 +7,7 @@ proof of which external search engine produced any individual result.
 from __future__ import annotations
 
 import json
+import math
 import re
 from ipaddress import ip_address
 from urllib.parse import urlsplit
@@ -14,6 +15,14 @@ from urllib.parse import urlsplit
 
 # Browsers recognize shortened, numeric and hexadecimal IPv4 authorities that
 # ipaddress deliberately does not parse as ordinary dotted-quad literals.
+# Prospective bounds are far above the frozen metasearch adapter's four
+# candidates per query; they limit untrusted JSON resource consumption without
+# trimming or replacing any search evidence. Over-limit batches fail intact.
+MAX_SEARCH_RESULTS_JSON_BYTES = 1024 * 1024
+MAX_SEARCH_CANDIDATES = 128
+MAX_SEARCH_JSON_NUMBER_TOKEN_CHARS = 128
+
+
 _AMBIGUOUS_NUMERIC_HOST = re.compile(
     r"(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+)){0,3}\Z"
 )
@@ -72,6 +81,21 @@ def _reject_json_constant(token: str) -> None:
     raise ValueError(f"Non-finite search result JSON constant {token!r}")
 
 
+def _bounded_json_int(token: str) -> int:
+    if len(token) > MAX_SEARCH_JSON_NUMBER_TOKEN_CHARS:
+        raise ValueError("Search results contain an oversized JSON number")
+    return int(token)
+
+
+def _bounded_json_float(token: str) -> float:
+    if len(token) > MAX_SEARCH_JSON_NUMBER_TOKEN_CHARS:
+        raise ValueError("Search results contain an oversized JSON number")
+    value = float(token)
+    if not math.isfinite(value):
+        raise ValueError("Search results contain a nonfinite JSON number")
+    return value
+
+
 def parse_search_candidates(raw: str) -> list[dict[str, str | None]]:
     """Extract ordered candidate URLs and *reported* pools without coercion.
 
@@ -81,16 +105,31 @@ def parse_search_candidates(raw: str) -> list[dict[str, str | None]]:
     """
     if type(raw) is not str:
         raise ValueError("Search results must be JSON text")
+    # Bound UTF-8 bytes, not just code points (a short-looking Unicode payload
+    # can still be much larger on the wire). Check length first to avoid
+    # encoding an obviously excessive string.
+    if len(raw) > MAX_SEARCH_RESULTS_JSON_BYTES:
+        raise ValueError("Search results exceed the JSON byte limit")
+    try:
+        byte_count = len(raw.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise ValueError("Search results must be valid UTF-8 JSON text") from exc
+    if byte_count > MAX_SEARCH_RESULTS_JSON_BYTES:
+        raise ValueError("Search results exceed the JSON byte limit")
     try:
         results = json.loads(
             raw,
             object_pairs_hook=_unique_object_members,
             parse_constant=_reject_json_constant,
+            parse_int=_bounded_json_int,
+            parse_float=_bounded_json_float,
         )
-    except json.JSONDecodeError as exc:
-        raise ValueError("Search results must be valid JSON text") from exc
+    except (json.JSONDecodeError, RecursionError) as exc:
+        raise ValueError("Search results must be valid bounded JSON text") from exc
     if type(results) is not list:
         raise ValueError("Search results must be a JSON array")
+    if len(results) > MAX_SEARCH_CANDIDATES:
+        raise ValueError("Search results exceed the candidate count limit")
 
     candidates = []
     for index, item in enumerate(results, start=1):

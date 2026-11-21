@@ -71,3 +71,32 @@ local/private and ambiguous numeric hosts, dangerous schemes, credentials,
 control characters and batch failure. No historical treatments or evaluator
 calls were rerun; frozen automated estimates and exploratory/human-validation
 claims remain unchanged.
+
+## Bounded untrusted search-result JSON (21 November 2026)
+
+Prospective metasearch result ingestion now applies explicit, fail-closed
+resource/number bounds **before candidate selection**: at most
+`1,048,576` UTF-8 bytes of JSON, at most `128` returned candidates per
+query, and at most `128` characters per JSON numeric token. A finite
+JSON floating-point value is required, including for otherwise ignored
+metadata (a JSON exponent that overflows to infinity is not silently
+accepted). Deeply nested input produces a bounded validation failure rather
+than propagating an uncaught Python recursion error; unencodable text is
+rejected before JSON parsing.
+
+These ceilings substantially exceed the frozen metasearch adapter's
+four-result-per-query contract. Within the limits, original candidate URL
+bytes, backend-pool labels, order, duplicates and retrieval budgets are
+unchanged. If a response exceeds a limit, the **whole query fails**, rather
+than trimming candidates or choosing more favorable sources. The guard
+limits malformed-result memory and parsing exposure; it is **not** a cap on
+provider execution time, a DNS/redirect security policy, or a verification
+of historical evidence.
+
+Offline regression tests cover both ASCII and multibyte UTF-8 wire sizes,
+candidate ceilings, abnormal JSON exponent/number tokens, recursive JSON
+nesting and valid finite metadata. No live search, treatment, evaluator or
+human rating was generated; the five-task pilot remains diagnostic, frozen
+automated comparisons retain their post-collection and fixed-order caveats,
+retrospective sensitivity remains exploratory, and genuine human validation
+is still pending.

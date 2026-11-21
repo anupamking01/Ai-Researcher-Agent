@@ -3,7 +3,13 @@ import json
 
 import pytest
 
-from logic.search_provenance import parse_search_candidates, selected_search_sources
+from logic.search_provenance import (
+    MAX_SEARCH_CANDIDATES,
+    MAX_SEARCH_JSON_NUMBER_TOKEN_CHARS,
+    MAX_SEARCH_RESULTS_JSON_BYTES,
+    parse_search_candidates,
+    selected_search_sources,
+)
 
 
 def test_preserves_order_duplicates_unicode_and_reported_backend_pools():
@@ -126,4 +132,68 @@ def test_one_unsafe_candidate_fails_entire_batch_without_silent_filtering():
         {"href": "https://example.org/b", "_search_backend_pool": "pool-a"},
     ])
     with pytest.raises(ValueError, match="Search candidate 2"):
+        parse_search_candidates(raw)
+
+
+def test_oversized_ascii_search_batch_fails_before_parse_without_partial_candidates():
+    raw = json.dumps([
+        {"href": "https://example.org/a", "title": "x" * MAX_SEARCH_RESULTS_JSON_BYTES},
+    ])
+    with pytest.raises(ValueError, match="JSON byte limit"):
+        parse_search_candidates(raw)
+
+
+def test_utf8_wire_size_not_character_count_controls_search_batch_limit():
+    # Fewer code points than the limit, but more than 1 MiB of UTF-8.
+    title = "界" * (MAX_SEARCH_RESULTS_JSON_BYTES // 3 + 1)
+    raw = json.dumps([{"href": "https://example.org/a", "title": title}], ensure_ascii=False)
+    assert len(raw) < MAX_SEARCH_RESULTS_JSON_BYTES
+    with pytest.raises(ValueError, match="JSON byte limit"):
+        parse_search_candidates(raw)
+
+
+def test_rejects_unencodable_search_response_even_if_url_is_valid():
+    with pytest.raises(ValueError, match="UTF-8 JSON text"):
+        parse_search_candidates('[{"href":"https://example.org/","title":"' + "\\ud800" + '"}]')
+
+
+def test_overlarge_search_candidate_batch_is_not_silently_truncated():
+    raw = json.dumps([
+        {"href": f"https://example.org/{i}"} for i in range(MAX_SEARCH_CANDIDATES + 1)
+    ])
+    with pytest.raises(ValueError, match="candidate count limit"):
+        parse_search_candidates(raw)
+
+
+def test_exact_candidate_ceiling_is_preserved_without_reordering():
+    raw = json.dumps([
+        {"href": f"https://example.org/{i}"} for i in range(MAX_SEARCH_CANDIDATES)
+    ])
+    candidates = parse_search_candidates(raw)
+    assert len(candidates) == MAX_SEARCH_CANDIDATES
+    assert candidates[0]["url"] == "https://example.org/0"
+    assert candidates[-1]["url"] == f"https://example.org/{MAX_SEARCH_CANDIDATES - 1}"
+
+
+@pytest.mark.parametrize("numeric_json", [
+    "1e10000",
+    "9" * (MAX_SEARCH_JSON_NUMBER_TOKEN_CHARS + 1),
+    "1." + "2" * MAX_SEARCH_JSON_NUMBER_TOKEN_CHARS,
+])
+def test_unbounded_or_nonfinite_metadata_numbers_fail_closed(numeric_json):
+    raw = '[{"href":"https://example.org/","metadata":' + numeric_json + '}]'
+    with pytest.raises(ValueError, match="JSON number"):
+        parse_search_candidates(raw)
+
+
+def test_finite_metadata_numbers_remain_backward_compatible():
+    raw = '[{"href":"https://example.org/","priority":1,"weight":0.5}]'
+    assert parse_search_candidates(raw) == [
+        {"url": "https://example.org/", "backend_pool": None}
+    ]
+
+
+def test_pathologically_nested_provider_json_fails_as_validation_not_recursion_crash():
+    raw = "[" * 1300 + "0" + "]" * 1300
+    with pytest.raises(ValueError, match="valid bounded JSON text"):
         parse_search_candidates(raw)
