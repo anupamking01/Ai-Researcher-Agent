@@ -177,3 +177,82 @@ def selected_search_sources(
         seen.add(url)
         selected.append(dict(first_occurrence[url]))
     return selected
+
+
+# Explicitly prospective; historical traces without the marker are not certified.
+SEARCH_TRACE_PROVENANCE_SCHEMA = 1
+
+
+def validate_search_trace_provenance(trace: dict) -> None:
+    """Conserve ordered query, candidate, scheduled-source and browse ledgers."""
+    if type(trace) is not dict or (
+        type(trace.get("search_provenance_schema")) is not int
+        or trace["search_provenance_schema"] != SEARCH_TRACE_PROVENANCE_SCHEMA
+    ):
+        raise ValueError("unsupported search provenance schema")
+    queries = trace.get("search_queries")
+    records = trace.get("search_records")
+    scheduled = trace.get("scheduled_urls")
+    if any(type(x) is not list for x in (queries, records, scheduled)):
+        raise ValueError("search provenance ledgers must be arrays")
+    if any(type(q) is not str or not q.strip() for q in queries):
+        raise ValueError("invalid planned query")
+    if any(type(url) is not str or not url.strip() for url in scheduled):
+        raise ValueError("invalid run scheduled URL")
+    if (
+        type(trace.get("query_count")) is not int
+        or len(queries) != trace["query_count"]
+        or type(trace.get("search_call_count")) is not int
+        or len(records) != trace["search_call_count"]
+        or type(trace.get("source_count")) is not int
+        or len(scheduled) != trace["source_count"]
+    ):
+        raise ValueError("search/browse count ledger mismatch")
+
+    query_cursor = 0
+    accumulated = []
+    for index, record in enumerate(records, start=1):
+        if type(record) is not dict:
+            raise ValueError(f"search record {index} must be an object")
+        query = record.get("query")
+        if type(query) is not str or not query.strip():
+            raise ValueError(f"search record {index} has invalid query")
+        while query_cursor < len(queries) and queries[query_cursor] != query:
+            query_cursor += 1
+        if query_cursor == len(queries):
+            raise ValueError(f"search record {index} violates query order")
+        query_cursor += 1
+        cu, su = record.get("candidate_urls"), record.get("scheduled_urls")
+        cs, ss = record.get("candidate_sources"), record.get("scheduled_sources")
+        if any(type(x) is not list for x in (cu, su, cs, ss)):
+            raise ValueError(f"search record {index} missing source arrays")
+        for entry in cs + ss:
+            if (
+                type(entry) is not dict
+                or type(entry.get("url")) is not str
+                or not entry["url"].strip()
+                or "backend_pool" not in entry
+                or (entry["backend_pool"] is not None and (
+                    type(entry["backend_pool"]) is not str
+                    or not entry["backend_pool"].strip()
+                ))
+            ):
+                raise ValueError(f"search record {index} invalid source metadata")
+            _require_external_web_url(entry["url"], index=index)
+        if [entry["url"] for entry in cs] != cu:
+            raise ValueError(f"search record {index} candidate URL mismatch")
+        try:
+            expected = selected_search_sources(cs, su)
+        except (ValueError, KeyError, TypeError) as exc:
+            raise ValueError(f"search record {index} unattributable scheduling") from exc
+        if expected != ss:
+            raise ValueError(f"search record {index} scheduled source mismatch")
+        if "search_error" in record and (
+            type(record["search_error"]) is not str
+            or not record["search_error"].strip()
+            or any((cu, su, cs, ss))
+        ):
+            raise ValueError(f"search record {index} contradictory error status")
+        accumulated.extend(su)
+    if accumulated != scheduled or len(set(accumulated)) != len(accumulated):
+        raise ValueError("per-query and run-level scheduled URLs disagree")

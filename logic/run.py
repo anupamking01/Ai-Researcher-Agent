@@ -9,6 +9,7 @@ from agent.llm_utils import UsageTracker
 from logic.evaluation import RunTrace
 from logic.experiment import ExperimentConfig, save_run_trace
 from logic.research_agent import ResearchAgent
+from logic.search_provenance import SEARCH_TRACE_PROVENANCE_SCHEMA
 from settings import Config, check_openai_api_key
 
 
@@ -175,6 +176,7 @@ async def run_agent(
         )
         trace_payload["search_queries"] = list(assistant.search_queries)
         trace_payload["search_records"] = list(assistant.search_records)
+        trace_payload["search_provenance_schema"] = SEARCH_TRACE_PROVENANCE_SCHEMA
         trace_payload["scheduled_urls"] = list(assistant.scheduled_urls)
         trace_payload["successful_urls"] = list(assistant.successful_urls)
         trace_payload["failed_urls"] = list(assistant.failed_urls)

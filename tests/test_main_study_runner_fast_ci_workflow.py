@@ -10,7 +10,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/main-study-runner-provenance-fast-ci.yml"
 TARGETS = ('tests/test_main_study_runner_replication_gate.py','tests/test_main_study_runner_trace_completion.py','tests/test_main_study_task_file.py','tests/test_main_study_pricing_file.py','tests/test_main_study_trace_accounting.py','tests/test_main_study_runner_fast_ci_workflow.py','tests/test_planner_query_contract.py','tests/test_search_candidate_provenance.py',)
-SOURCES = ('.github/workflows/main-study-runner-provenance-fast-ci.yml','.github/workflows/budget-main-study.yml','scripts/run_budget_main_study.py','logic/experiment.py','logic/planner_queries.py','logic/research_agent.py','logic/search_provenance.py','scripts/validate_main_study_inputs.py',)
+SOURCES = ('.github/workflows/main-study-runner-provenance-fast-ci.yml','.github/workflows/budget-main-study.yml','scripts/run_budget_main_study.py','logic/experiment.py','logic/planner_queries.py','logic/research_agent.py','logic/run.py','logic/search_provenance.py','scripts/validate_main_study_inputs.py',)
 
 
 def _definition():

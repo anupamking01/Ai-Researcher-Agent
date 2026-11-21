@@ -42,6 +42,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from logic.search_provenance import validate_search_trace_provenance
+
 REQUIRED_ENV = ("OPENAI_API_KEY", "SMART_LLM_MODEL", "FAST_LLM_MODEL", "TEMPERATURE")
 DEFAULT_TASK_FILE = REPO_ROOT / "experiments" / "main_budget_tasks.json"
 PRICING_FILE = REPO_ROOT / "experiments" / "openai_pricing_2026-09-08.json"
@@ -1008,6 +1010,16 @@ def _validated_trace_cost(
         raise SystemExit(
             f"Invalid treatment trace {path}: source URL ledger mismatch"
         )
+
+    # Historical unmarked traces remain readable, but are not retroactively
+    # certified. Future marked completed cells must conserve source provenance.
+    if completed and "search_provenance_schema" in trace:
+        try:
+            validate_search_trace_provenance(trace)
+        except ValueError as exc:
+            raise SystemExit(
+                f"Invalid treatment trace {path}: search provenance {exc}"
+            ) from exc
 
     latency_seconds = trace.get("latency_seconds")
     if (

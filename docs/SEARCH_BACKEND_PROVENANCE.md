@@ -125,3 +125,27 @@ historical page custody. No treatment/evaluator was rerun; frozen automated
 findings retain post-collection, fixed-order and evaluator-policy caveats,
 pilot findings remain diagnostic, retrospective analyses exploratory, and
 genuine independent human ratings pending.
+
+
+## Versioned prospective search-trace reconciliation (21 November 2026)
+
+A returned candidate array and run-level browse counts can be individually
+well-formed but internally contradictory. Future traces emitted by logic.run
+are explicitly stamped with search_provenance_schema 1. The offline
+noncanonical treatment runner now validates marked completed traces against
+the original ordered query list, per-query candidate and selected-source URL
+arrays, backend-pool labels, search error records, unique run-level scheduled
+URLs and attempted-browse counts. Any contradiction fails the prospective
+trace before it can be accepted as a completed treatment or cost observation.
+Order and duplicate candidate entries are retained, not repaired, trimmed,
+reranked, or replaced.
+
+Historical September traces and legacy fixtures remain unmarked and readable;
+their absence of this marker is not evidence of authentication and they are
+not silently retroactively certified. This is internal source-ledger consistency
+rather than proof of the external engine, original web pages or missing original
+40 report/trace pairs. New offline synthetic and integration tests exercise
+both valid and altered ledgers without model, search, evaluator, treatment or
+human-annotation calls. Diagnostic pilot, post-collection frozen automated
+inference, retrospective exploratory sensitivity and pending human validation
+remain separate.

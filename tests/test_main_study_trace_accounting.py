@@ -696,3 +696,24 @@ def test_trace_cost_rejects_direct_symlink_even_to_valid_json(tmp_path):
     link.symlink_to(original)
     with pytest.raises(SystemExit, match="Cannot read treatment trace"):
         run_budget_main_study._trace_cost_usd(link, PRICING)
+
+
+def test_completed_marked_trace_checks_source_attribution_before_acceptance(tmp_path):
+    p = _trace_payload()
+    urls = p["trace"]["scheduled_urls"]
+    sources = [{"url": u, "backend_pool": "reported-pool"} for u in urls]
+    p["trace"].update(
+        search_provenance_schema=1,
+        search_queries=["synthetic query"],
+        search_records=[{
+            "query": "synthetic query", "candidate_urls": list(urls),
+            "candidate_sources": sources, "scheduled_urls": list(urls),
+            "scheduled_sources": [dict(s) for s in sources],
+        }],
+    )
+    path = _write_trace(tmp_path, p)
+    assert run_budget_main_study._trace_cost_usd(path, PRICING) == pytest.approx(0.000175)
+    p["trace"]["search_records"][0]["scheduled_sources"][0]["backend_pool"] = "forged"
+    path = _write_trace(tmp_path, p)
+    with pytest.raises(SystemExit, match="search provenance"):
+        run_budget_main_study._trace_cost_usd(path, PRICING)

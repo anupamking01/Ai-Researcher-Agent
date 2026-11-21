@@ -243,3 +243,92 @@ def test_actual_agent_search_path_forwards_its_request_limit_to_parser():
         and keyword.value.id == "candidate_limit"
         for keyword in calls[0].keywords
     )
+
+
+def _search_custody_fixture():
+    return {
+        "search_provenance_schema": 1, "query_count": 2,
+        "search_call_count": 2, "source_count": 1,
+        "search_queries": ["q1", "q2"],
+        "scheduled_urls": ["https://example.org/one"],
+        "search_records": [
+            {
+                "query": "q1",
+                "candidate_urls": ["https://example.org/one"] * 2,
+                "candidate_sources": [
+                    {"url": "https://example.org/one", "backend_pool": "pool-a"},
+                    {"url": "https://example.org/one", "backend_pool": "pool-b"},
+                ],
+                "scheduled_urls": ["https://example.org/one"],
+                "scheduled_sources": [
+                    {"url": "https://example.org/one", "backend_pool": "pool-a"},
+                ],
+            },
+            {
+                "query": "q2", "candidate_urls": [], "candidate_sources": [],
+                "scheduled_urls": [], "scheduled_sources": [],
+                "search_error": "synthetic outage",
+            },
+        ],
+    }
+
+
+def test_versioned_search_custody_accepts_duplicate_candidates_and_failed_query():
+    from logic.search_provenance import validate_search_trace_provenance
+    validate_search_trace_provenance(_search_custody_fixture())
+
+
+def test_versioned_search_custody_accepts_skipped_planner_query():
+    from logic.search_provenance import validate_search_trace_provenance
+    t = _search_custody_fixture()
+    t["search_queries"].insert(1, "zero budget query")
+    t["query_count"] += 1
+    validate_search_trace_provenance(t)
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda t: t.update(search_provenance_schema=True),
+    lambda t: t.update(search_provenance_schema=2),
+    lambda t: t.update(query_count=1),
+    lambda t: t.update(search_call_count=1),
+    lambda t: t.update(source_count=2),
+    lambda t: t["search_records"].reverse(),
+    lambda t: t["search_records"][0].update(candidate_urls=[]),
+    lambda t: t["search_records"][0]["scheduled_sources"][0].update(backend_pool="pool-b"),
+    lambda t: t["search_records"][0]["scheduled_urls"].append("https://missing.test"),
+    lambda t: t["search_records"][0]["candidate_sources"][0].update(url="http://127.0.0.1"),
+    lambda t: t["search_records"][0]["scheduled_sources"][0].update(backend_pool=False),
+    lambda t: t["search_records"][0].update(search_error="inconsistent"),
+    lambda t: t["search_records"][1].update(candidate_urls=["https://unexpected.test"]),
+    lambda t: t["search_records"][0].update(candidate_sources=None),
+    lambda t: t.update(scheduled_urls=["https://forged.test"]),
+    lambda t: t.update(scheduled_urls=["https://example.org/one"] * 2, source_count=2),
+])
+def test_versioned_search_custody_rejects_inconsistent_sources(mutate):
+    from copy import deepcopy
+    from logic.search_provenance import validate_search_trace_provenance
+    t = deepcopy(_search_custody_fixture())
+    mutate(t)
+    with pytest.raises(ValueError):
+        validate_search_trace_provenance(t)
+
+
+def test_versioned_search_trace_is_emitted_and_checked_by_runner():
+    import ast
+    root = Path(__file__).resolve().parents[1]
+    run_text = (root / "logic/run.py").read_text(encoding="utf-8")
+    runner_text = (root / "scripts/run_budget_main_study.py").read_text(encoding="utf-8")
+    run_ast = ast.parse(run_text)
+    stamped = [
+        n for n in ast.walk(run_ast)
+        if isinstance(n, ast.Assign) and any(
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "trace_payload"
+            and isinstance(target.slice, ast.Constant)
+            and target.slice.value == "search_provenance_schema"
+            for target in n.targets
+        )
+    ]
+    assert len(stamped) == 1
+    assert 'validate_search_trace_provenance(trace)' in runner_text
