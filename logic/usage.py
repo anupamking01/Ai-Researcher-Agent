@@ -26,9 +26,14 @@ class UsageTracker:
     def _usage_value(usage: Any, key: str) -> int | None:
         """Distinguish a reported zero from missing or malformed token counts."""
         try:
-            value = usage.get(key, None)
-        except AttributeError:
-            value = getattr(usage, key, None)
+            try:
+                value = usage.get(key, None)
+            except AttributeError:
+                value = getattr(usage, key, None)
+        except Exception:
+            # Provider-controlled metadata must not fail an otherwise
+            # completed experiment run. Preserve missingness, not zeros.
+            return None
         return value if type(value) is int and value >= 0 else None
 
     @staticmethod
@@ -57,9 +62,15 @@ class UsageTracker:
     def record_response(self, model: str, response: Any) -> None:
         self._require_model_label(model)
         try:
-            usage = response.get("usage")
-        except AttributeError:
-            usage = getattr(response, "usage", None)
+            try:
+                usage = response.get("usage")
+            except AttributeError:
+                usage = getattr(response, "usage", None)
+        except Exception:
+            # A response was obtained, but its usage metadata is unreadable.
+            # Measurement faults must not discard a completed provider output.
+            self.record_unavailable(model)
+            return
 
         if usage is None:
             self.record_unavailable(model)
@@ -76,9 +87,15 @@ class UsageTracker:
         # an exact, nonnegative integer matching the category sum.
         missing = object()
         try:
-            reported_total = usage.get("total_tokens", missing)
-        except AttributeError:
-            reported_total = getattr(usage, "total_tokens", missing)
+            try:
+                reported_total = usage.get("total_tokens", missing)
+            except AttributeError:
+                reported_total = getattr(usage, "total_tokens", missing)
+        except Exception:
+            # An unreadable *present-or-absent* total is not equivalent to
+            # the legitimately omitted legacy total_tokens field.
+            self.record_unavailable(model)
+            return
         expected_total = prompt_tokens + completion_tokens
         if reported_total is not missing and (
             type(reported_total) is not int or reported_total != expected_total

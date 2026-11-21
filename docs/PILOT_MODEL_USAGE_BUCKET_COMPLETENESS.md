@@ -117,3 +117,28 @@ Synthetic tests cover both paths and producer failures before and after a
 partial input yield; they never access a real provider. This prospective
 measurement-accounting correction does not change frozen treatment outputs,
 paired estimates, exploratory analyses, or pending human-evaluation claims.
+
+## Unreadable provider usage metadata must not discard completed outputs (21 November 2026)
+
+The provider call can complete successfully while a response or token-usage
+object exposes a malformed accessor (for example, a `get` method or attribute
+that raises during reading). Previously, that metadata-only exception escaped
+`UsageTracker.record_response`, so the non-streaming adapter could lose a
+completed report and mark its run failed *because usage extraction failed*.
+
+Capture now treats exceptions raised while reading the response's `usage`,
+either category token count, or the optional reported total as **one model
+call with usage unavailable**. It does not impute any tokens. An unreadable
+total is **not** equivalent to a legitimately absent legacy `total_tokens`
+field; it must not be silently reconstructed. Successful output text remains
+available to the experiment. The tracker still rejects invalid model labels
+before accessing provider metadata, and any actual exception from the
+provider invocation itself continues to propagate under the existing
+attempt-accounting policy.
+
+Synthetic offline regressions exercise mapping and attribute getters,
+each usage field, ledger recovery after malformed metadata, and the actual
+non-streaming adapter's returned text. These tests do not contact a provider
+or modify historical records. This is a prospective measurement-integrity
+guard only; it does not establish true provider billing, original-artifact
+custody, automated confirmatory validity, or human-validation results.

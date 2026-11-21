@@ -3731,3 +3731,87 @@ def test_midstream_provider_failure_has_only_one_unavailable_call(
         ))
     assert tracker.snapshot()["model_calls"] == 1
     assert tracker.snapshot()["unavailable_calls"] == 1
+
+
+@pytest.mark.parametrize("response_style", ["mapping", "attribute"])
+def test_unreadable_provider_response_usage_is_recorded_unavailable(response_style):
+    """A completed provider response with inaccessible metadata remains a call."""
+    class BrokenMapping(dict):
+        def get(self, key):
+            raise RuntimeError("synthetic usage accessor failure")
+
+    class BrokenAttribute:
+        @property
+        def usage(self):
+            raise RuntimeError("synthetic usage attribute failure")
+
+    response = BrokenMapping() if response_style == "mapping" else BrokenAttribute()
+    tracker = UsageTracker()
+    tracker.record_response("synthetic-model", response)
+    assert tracker.snapshot() == {
+        "model_calls": 1, "unavailable_calls": 1,
+        "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+        "by_model": {"synthetic-model": {
+            "model_calls": 1, "unavailable_calls": 1,
+            "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+        }},
+    }
+
+
+@pytest.mark.parametrize("failing_field", [
+    "prompt_tokens", "completion_tokens", "total_tokens",
+])
+def test_unreadable_provider_usage_field_is_not_silently_counted_as_zero(failing_field):
+    """In particular, an unreadable total is not a legitimate omitted total."""
+    class BrokenUsage(dict):
+        def get(self, key, default=None):
+            if key == failing_field:
+                raise RuntimeError("synthetic unreadable provider telemetry")
+            return super().get(key, default)
+
+    usage = BrokenUsage(prompt_tokens=4, completion_tokens=2, total_tokens=6)
+    tracker = UsageTracker()
+    tracker.record_response("synthetic-model", {"usage": usage})
+    snapshot = tracker.snapshot()
+    assert (snapshot["model_calls"], snapshot["unavailable_calls"]) == (1, 1)
+    assert (snapshot["prompt_tokens"], snapshot["completion_tokens"]) == (0, 0)
+    assert snapshot["by_model"]["synthetic-model"]["unavailable_calls"] == 1
+
+    # Later valid provider usage must still reconcile without partial mutation.
+    tracker.record_response(
+        "synthetic-model",
+        {"usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}},
+    )
+    snapshot = tracker.snapshot()
+    assert (snapshot["model_calls"], snapshot["unavailable_calls"]) == (2, 1)
+    assert (snapshot["prompt_tokens"], snapshot["completion_tokens"], snapshot["total_tokens"]) == (3, 1, 4)
+
+
+def test_nonstream_adapter_preserves_completed_text_when_usage_getter_fails(monkeypatch):
+    """Telemetry parsing cannot turn a successful output into a failed run."""
+    class BrokenUsage(dict):
+        def get(self, key, default=None):
+            if key == "total_tokens":
+                raise RuntimeError("synthetic provider usage getter failure")
+            return super().get(key, default)
+
+    calls = []
+    def provider_create(**kwargs):
+        calls.append(kwargs)
+        return {
+            "choices": [{"message": {"content": "synthetic completed report"}}],
+            "usage": BrokenUsage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+        }
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    result = adapter.create_chat_completion(
+        model="synthetic-model",
+        messages=[{"role": "user", "content": "synthetic question"}],
+        usage_tracker=tracker,
+    )
+    assert result == "synthetic completed report"
+    assert len(calls) == 1
+    assert tracker.snapshot()["model_calls"] == 1
+    assert tracker.snapshot()["unavailable_calls"] == 1
+    assert tracker.snapshot()["total_tokens"] == 0
