@@ -44,8 +44,11 @@ if str(REPO_ROOT) not in sys.path:
 
 from logic.search_provenance import (
     SEARCH_TRACE_PROVENANCE_SCHEMA,
+    VERIFIER_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA,
+    MAX_REPORT_ARTIFACT_BYTES,
     validate_search_trace_provenance,
     validate_verifier_artifact,
+    validate_report_artifact,
 )
 
 REQUIRED_ENV = ("OPENAI_API_KEY", "SMART_LLM_MODEL", "FAST_LLM_MODEL", "TEMPERATURE")
@@ -1030,7 +1033,7 @@ def _validated_trace_cost(
     # The trace's verified run ID determines the only permitted local path.
     if (
         completed
-        and trace.get("search_provenance_schema") == SEARCH_TRACE_PROVENANCE_SCHEMA
+        and trace.get("search_provenance_schema", 0) >= VERIFIER_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA
         and trace.get("verification_mode") == "verify"
     ):
         evidence_path = TRACE_ROOT.parent / run_id / "verification.json"
@@ -1278,7 +1281,7 @@ def _snapshot_treatment_traces(
 
 
 
-_MAX_COMPLETED_REPORT_BYTES = 8 * 1024 * 1024
+_MAX_COMPLETED_REPORT_BYTES = MAX_REPORT_ARTIFACT_BYTES
 
 
 def _completed_report_markdown(trace_path: Path) -> Path:
@@ -1346,6 +1349,13 @@ def _require_completed_report(trace_path: Path) -> None:
         raise ValueError(
             f"Completed report content does not match trace report_words: {report}"
         )
+    if trace.get("search_provenance_schema") == SEARCH_TRACE_PROVENANCE_SCHEMA:
+        try:
+            validate_report_artifact(trace, raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"Completed report bytes differ from trace SHA-256: {report}"
+            ) from exc
 
 
 def _snapshot_treatment_reports(

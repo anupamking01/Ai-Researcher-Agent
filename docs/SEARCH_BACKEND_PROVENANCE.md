@@ -344,3 +344,35 @@ The five-task pilot is diagnostic; frozen automated inference retains
 post-collection planning, fixed-order and evaluator-policy limitations;
 retrospective sensitivity analyses remain exploratory; and blinded human
 validation is pending.
+
+
+## Prospective completed-report byte custody (22 November 2026)
+
+Prior prospective checks required a completed Markdown report with the same
+`report_words` count as its treatment trace, but a different report with an
+identical word count could still pass. This matters when the retained Markdown
+is subsequently considered for blinded human evaluation: verification of the
+retrieval ledger or verifier's JSON does not identify which report text was
+actually retained.
+
+New **search provenance schema 6** records the SHA-256 digest of the generated
+UTF-8 report text for all four arms. The noncanonical study runner independently
+reads the bounded, no-follow `outputs/<run-id>/research_report.md` file and
+checks its exact bytes against the completed trace after the preexisting report
+path, UTF-8, and word-count checks. A missing digest, same-word-count
+substitution or byte-level alteration fails before a run can be accepted as
+completed evidence. The existing schema-5 verifier JSON continuity check
+remains enforced for P6V under schema 6; no-verification arms are also subject
+to the new report check. Incomplete traces and historical schema 1–5 records
+retain their previous contracts and are **not retroactively authenticated**.
+
+This checks prospective internal trace-to-report custody, **not** independent
+proof that the saved bytes came from an external LLM, that the text is correct,
+that original 2026 historical treatment reports were recovered, or that blinded
+ratings have occurred. Synthetic offline tests cover all four arms, exact byte
+matches, same-word-count changes, missing/malformed hashes, oversized bytes and
+legacy compatibility. No research treatment, common evaluator or human rater
+was rerun; the five-task pilot remains diagnostic, frozen automated findings
+retain their post-collection planning, fixed-order and evaluator-policy caveats,
+retrospective sensitivity analyses remain exploratory, and genuine blinded
+human-validation results remain pending.

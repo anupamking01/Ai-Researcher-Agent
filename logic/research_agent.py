@@ -64,6 +64,7 @@ class ResearchAgent:
         self.browse_failure_count = 0
         self.verification_result = None
         self.verification_artifact_sha256 = None
+        self.report_artifact_sha256 = None
 
     async def _log(self, output):
         if self.websocket is not None and hasattr(self.websocket, "send_json"):
@@ -395,6 +396,13 @@ class ResearchAgent:
             await self._log(
                 f"⚠️ PDF export failed ({type(exc).__name__}); saved Markdown report."
             )
+
+        # Bind the exact generated UTF-8 text to the retained Markdown in the
+        # independent runner. A substituted report with the same word count
+        # must not pass prospective custody checks.
+        self.report_artifact_sha256 = hashlib.sha256(
+            report_text.encode("utf-8")
+        ).hexdigest()
 
         if self.experiment_config.verification_mode == "verify":
             await self._log("🔬 Verifying report claims against retrieved evidence...")

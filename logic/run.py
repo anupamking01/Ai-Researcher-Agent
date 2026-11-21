@@ -177,6 +177,9 @@ async def run_agent(
         trace_payload["verification_artifact_sha256"] = getattr(
             assistant, "verification_artifact_sha256", None
         )
+        trace_payload["report_artifact_sha256"] = getattr(
+            assistant, "report_artifact_sha256", None
+        )
         trace_payload["search_queries"] = list(assistant.search_queries)
         trace_payload["search_records"] = list(assistant.search_records)
         trace_payload["search_provenance_schema"] = SEARCH_TRACE_PROVENANCE_SCHEMA

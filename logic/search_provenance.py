@@ -181,7 +181,9 @@ def selected_search_sources(
 
 
 # Explicitly prospective; historical traces without the marker are not certified.
-SEARCH_TRACE_PROVENANCE_SCHEMA = 5
+SEARCH_TRACE_PROVENANCE_SCHEMA = 6
+REPORT_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA = 6
+VERIFIER_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA = 5
 # Historical prospective versions retain their original, narrower contracts.
 FACTOR_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA = 4
 TREATMENT_PLAN_SEARCH_TRACE_PROVENANCE_SCHEMA = 3
@@ -205,7 +207,8 @@ def validate_search_trace_provenance(
     """Conserve ordered retrieval ledgers and prospective treatment identity.
 
     Schema 4+ additionally requires the persisted experiment envelope.
-    Schema 5 binds completed verifier treatments to retained verifier receipts.
+    Schema 5+ binds verifier treatments to retained verifier receipts.
+    Schema 6 binds completed report content to exact retained Markdown bytes.
     Earlier schemas are not retroactively certified.
     """
     if type(trace) is not dict or (
@@ -215,6 +218,7 @@ def validate_search_trace_provenance(
             REQUEST_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA,
             TREATMENT_PLAN_SEARCH_TRACE_PROVENANCE_SCHEMA,
             FACTOR_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA,
+            VERIFIER_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA,
             SEARCH_TRACE_PROVENANCE_SCHEMA,
         )
     ):
@@ -290,7 +294,7 @@ def validate_search_trace_provenance(
     # treatments. A verification flag alone cannot establish that the
     # verifier produced any output. Failed/incomplete traces are preserved.
     if (
-        trace["search_provenance_schema"] >= SEARCH_TRACE_PROVENANCE_SCHEMA
+        trace["search_provenance_schema"] >= VERIFIER_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA
         and trace.get("completed") is True
     ):
         status = trace.get("verification_status")
@@ -323,6 +327,17 @@ def validate_search_trace_provenance(
                 or (status == "parse_error" and checked != 0)
             ):
                 raise ValueError("verifier arm missing or contradictory verification receipt")
+
+    # Schema 6 introduces a separate content-addressed report boundary.
+    # A matching word count cannot detect same-length Markdown substitution;
+    # the runner subsequently checks the exact retained report bytes.
+    if (
+        trace["search_provenance_schema"] >= REPORT_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA
+        and trace.get("completed") is True
+    ):
+        digest = trace.get("report_artifact_sha256")
+        if type(digest) is not str or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise ValueError("completed report artifact SHA-256 missing or malformed")
 
     # Schema 2+ binds the requested candidate count to the allocated query
     # slot and remaining browse budget. Schema 1 cannot establish this.
@@ -474,7 +489,10 @@ def validate_verifier_artifact(trace: dict, raw: bytes) -> None:
     """
     if (
         type(trace) is not dict
-        or trace.get("search_provenance_schema") != SEARCH_TRACE_PROVENANCE_SCHEMA
+        or trace.get("search_provenance_schema") not in (
+            VERIFIER_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA,
+            SEARCH_TRACE_PROVENANCE_SCHEMA,
+        )
         or trace.get("completed") is not True
         or trace.get("verification_mode") != "verify"
     ):
@@ -514,3 +532,26 @@ def validate_verifier_artifact(trace: dict, raw: bytes) -> None:
         type(receipt.get("error")) is not str or not receipt["error"].strip()
     ):
         raise ValueError("verifier parse-error artifact needs its error type")
+
+
+# Separate from the verifier JSON receipt: this binds the exact report text
+# given to human-evaluation tooling, not merely its length/word count.
+MAX_REPORT_ARTIFACT_BYTES = 8 * 1024 * 1024
+
+
+def validate_report_artifact(trace: dict, raw: bytes) -> None:
+    """Match a prospective completed trace to the exact retained Markdown bytes.
+
+    This is source-file continuity, not scientific correctness, external
+    archival custody, or independent authentication of provider execution.
+    """
+    if (
+        type(trace) is not dict
+        or trace.get("search_provenance_schema") != REPORT_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA
+        or trace.get("completed") is not True
+    ):
+        raise ValueError("report artifact requires a completed schema-6 trace")
+    if type(raw) is not bytes or not 0 < len(raw) <= MAX_REPORT_ARTIFACT_BYTES:
+        raise ValueError("report artifact must be bounded nonempty bytes")
+    if hashlib.sha256(raw).hexdigest() != trace.get("report_artifact_sha256"):
+        raise ValueError("report artifact SHA-256 differs from trace")

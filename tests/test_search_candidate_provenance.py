@@ -748,10 +748,10 @@ def test_schema3_remains_valid_without_schema4_envelope_certification():
 # treatment has a retained JSON receipt consistent with the trace ledger.
 def _verifier_bound_fixture(variant="P6V", *, status="ok"):
     import hashlib
-    from logic.search_provenance import SEARCH_TRACE_PROVENANCE_SCHEMA
+    from logic.search_provenance import VERIFIER_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA
 
     trace, experiment = _factor_bound_fixture(variant)
-    trace["search_provenance_schema"] = SEARCH_TRACE_PROVENANCE_SCHEMA
+    trace["search_provenance_schema"] = VERIFIER_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA
     counters = {
         "citation_count": 0, "supported_claim_count": 0,
         "partially_supported_claim_count": 0,
@@ -902,3 +902,92 @@ def test_schema5_custody_wired_to_persisted_producer_and_runner():
     assert 'trace_payload["verification_artifact_sha256"] = getattr(' in run
     assert '_read_treatment_trace_bytes(evidence_path)' in runner
     assert 'validate_verifier_artifact(' in runner
+
+
+# Schema 6: a completed report's UTF-8 content is part of its treatment
+# evidence. A same-word-count substitution must fail independently of the
+# verifier JSON (including for the three no-verification arms).
+def _report_bound_fixture(variant="P6V"):
+    import hashlib
+    from logic.search_provenance import SEARCH_TRACE_PROVENANCE_SCHEMA
+
+    trace, experiment, verifier_bytes = _verifier_bound_fixture(variant)
+    report_bytes = b"# Synthetic report\\nalpha beta gamma\\n"
+    trace["search_provenance_schema"] = SEARCH_TRACE_PROVENANCE_SCHEMA
+    trace["report_artifact_sha256"] = hashlib.sha256(report_bytes).hexdigest()
+    return trace, experiment, verifier_bytes, report_bytes
+
+
+@pytest.mark.parametrize("variant", ["D3", "D6", "P6", "P6V"])
+def test_schema6_accepts_content_bound_report_for_all_treatments(variant):
+    from logic.search_provenance import (
+        validate_search_trace_provenance, validate_report_artifact,
+        validate_verifier_artifact,
+    )
+    trace, experiment, verifier_bytes, report_bytes = _report_bound_fixture(variant)
+    validate_search_trace_provenance(trace, experiment=experiment)
+    validate_report_artifact(trace, report_bytes)
+    if verifier_bytes is not None:
+        validate_verifier_artifact(trace, verifier_bytes)
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda t: t.pop("report_artifact_sha256"),
+    lambda t: t.update(report_artifact_sha256=None),
+    lambda t: t.update(report_artifact_sha256=True),
+    lambda t: t.update(report_artifact_sha256="A" * 64),
+    lambda t: t.update(report_artifact_sha256="short"),
+])
+def test_schema6_rejects_missing_or_invalid_completed_report_digest(mutation):
+    from logic.search_provenance import validate_search_trace_provenance
+    trace, experiment, _, _ = _report_bound_fixture("D6")
+    mutation(trace)
+    with pytest.raises(ValueError, match="report artifact SHA-256"):
+        validate_search_trace_provenance(trace, experiment=experiment)
+
+
+def test_schema6_rejects_same_word_count_report_substitution():
+    import hashlib
+    from logic.search_provenance import (
+        validate_search_trace_provenance, validate_report_artifact,
+    )
+    trace, experiment, _, original = _report_bound_fixture("D3")
+    substituted = original.replace(b"alpha", b"omega")
+    assert len(original.split()) == len(substituted.split())
+    validate_search_trace_provenance(trace, experiment=experiment)
+    with pytest.raises(ValueError, match="report artifact SHA-256 differs"):
+        validate_report_artifact(trace, substituted)
+    # Digest rebound to different bytes is internally coherent, but cannot
+    # independently authenticate who produced those bytes.
+    trace["report_artifact_sha256"] = hashlib.sha256(substituted).hexdigest()
+    validate_report_artifact(trace, substituted)
+
+
+@pytest.mark.parametrize("bad_raw", [None, "", b"", b"x" * (8 * 1024 * 1024 + 1)])
+def test_schema6_rejects_missing_or_unbounded_retained_report_bytes(bad_raw):
+    from logic.search_provenance import validate_report_artifact
+    trace, _, _, _ = _report_bound_fixture()
+    with pytest.raises(ValueError, match="report artifact must be bounded"):
+        validate_report_artifact(trace, bad_raw)
+
+
+def test_schema6_does_not_retroactively_strengthen_schema5_or_incomplete_runs():
+    from logic.search_provenance import (
+        SEARCH_TRACE_PROVENANCE_SCHEMA, validate_search_trace_provenance,
+    )
+    trace, experiment, _ = _verifier_bound_fixture()
+    assert "report_artifact_sha256" not in trace
+    validate_search_trace_provenance(trace, experiment=experiment)
+    trace["search_provenance_schema"] = SEARCH_TRACE_PROVENANCE_SCHEMA
+    trace["completed"] = False
+    validate_search_trace_provenance(trace, experiment=experiment)
+
+
+def test_schema6_report_producer_trace_and_reader_are_wired():
+    root = Path(__file__).resolve().parents[1]
+    agent = (root / "logic/research_agent.py").read_text(encoding="utf-8")
+    run = (root / "logic/run.py").read_text(encoding="utf-8")
+    runner = (root / "scripts/run_budget_main_study.py").read_text(encoding="utf-8")
+    assert "self.report_artifact_sha256 = hashlib.sha256(" in agent
+    assert 'trace_payload["report_artifact_sha256"] = getattr(' in run
+    assert "validate_report_artifact(trace, raw)" in runner
