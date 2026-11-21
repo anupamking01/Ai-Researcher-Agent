@@ -26,7 +26,7 @@ CFG = Config()
 OPENAI_REQUEST_TIMEOUT_SECONDS = 150
 
 
-def _validate_finish_reason(choice: Any, *, source: str) -> None:
+def _validate_finish_reason(choice: Any, *, source: str) -> bool:
     """Reject a provider-declared truncated or non-text completion.
 
     A missing/None reason is retained for older provider envelopes, but an
@@ -42,6 +42,7 @@ def _validate_finish_reason(choice: Any, *, source: str) -> None:
         raise ValueError(f"provider {source} finish_reason is unreadable") from exc
     if reason is not None and (type(reason) is not str or reason != "stop"):
         raise ValueError(f"provider {source} finish_reason is not normal completion")
+    return reason == "stop"
 
 
 def _choice_content(response: Any) -> str:
@@ -94,7 +95,13 @@ async def _stream_completion(
         usage_tracker.record_unavailable(model)
 
     parts: list[str] = []
+    saw_frame = False
+    saw_terminal = False
     for chunk in response:
+        # A terminal provider frame ends the response. Treat later frames as
+        # corrupt rather than appending post-completion text to a report.
+        if saw_terminal:
+            raise ValueError("provider stream yielded a frame after normal completion")
         # Role-only and terminal frames legitimately omit content. A broken
         # envelope or a present non-text content field is different: skipping
         # it could turn a truncated stream into a successful research report.
@@ -106,7 +113,8 @@ async def _stream_completion(
 
         if not isinstance(content, str):
             raise ValueError("provider stream delta content must be text")
-        _validate_finish_reason(choice, source="stream")
+        saw_frame = True
+        saw_terminal = _validate_finish_reason(choice, source="stream")
         if not content:
             continue
 
@@ -117,6 +125,10 @@ async def _stream_completion(
             elif hasattr(websocket, "send_json"):
                 await websocket.send_json({"type": "report", "output": content})
 
+    # Zero frames supply no evidence of a completed response, unlike a real
+    # empty-string delta or a valid terminal-only response.
+    if not saw_frame:
+        raise ValueError("provider stream returned no completion frames")
     return "".join(parts)
 
 

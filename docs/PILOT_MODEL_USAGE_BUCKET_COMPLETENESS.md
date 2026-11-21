@@ -268,3 +268,33 @@ post-collection planning and evaluator-policy comparability qualifications;
 retrospective sensitivity findings are exploratory, not prospectively
 confirmatory; independently authenticated original artifacts and genuine
 blinded human ratings remain outstanding.
+
+
+## Streaming completion lifecycle integrity (21 November 2026)
+
+The prospective streaming adapter previously accepted a provider iterator
+that produced **zero frames**, returning an apparent successful empty report
+without evidence that a completion frame had ever arrived. It also accepted
+arbitrary frames after an explicit normal \`finish_reason="stop"\`, potentially
+appending text after the provider had already declared completion.
+
+A stream now requires at least one well-formed frame, and an explicit normal
+terminal frame must be its **last** frame. An empty, terminal-only, or
+explicit-empty-content valid frame is distinguished from an iterator that
+never emitted anything: only the latter fails. A stream with post-terminal
+content, repeated terminal frames, or role-only frames is rejected rather
+than reported as completed. Legacy streams that omit a finish reason remain
+supported; this change does not assert that such streams were independently
+authenticated as complete. Previously forwarded websocket text cannot be
+retracted, but no subsequent frames are forwarded after the declared stop.
+
+A provider invocation remains counted **once** with unavailable streaming
+usage, without invented tokens; untracked legacy calls retain the same
+output-validity checks. Offline synthetic regressions exercise the invalid
+lifecycles and legitimate empty completions without external provider calls.
+This is an outcome-independent safeguard for **future** trace validity, not a
+finding about the frozen pilot or historical main-study reports. The pilot
+remains diagnostic; designated-primary automated results retain
+post-collection planning and evaluator-policy limitations; retrospective
+sensitivity work is exploratory; original report/trace custody and genuine
+blinded human validation remain pending.

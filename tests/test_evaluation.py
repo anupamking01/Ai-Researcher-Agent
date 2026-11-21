@@ -4225,3 +4225,106 @@ def test_chat_adapter_accepts_normal_or_legacy_finish_reason(
     assert (asyncio.run(response) if stream else response) == "complete synthetic report"
     assert tracker.snapshot()["model_calls"] == 1
     assert tracker.snapshot()["unavailable_calls"] == int(stream)
+
+
+# Prospective streaming completion lifecycle: an empty iterator or frames after
+# a terminal 'stop' cannot be reported as a successfully completed research run.
+# All provider responses and websocket deliveries below are synthetic/offline.
+@pytest.mark.parametrize(
+    ("chunks", "delivered"),
+    [
+        ([], []),
+        (
+            [
+                {"choices": [{"delta": {"content": "first"}}]},
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+                {"choices": [{"delta": {"content": "late"}}]},
+            ],
+            ["first"],
+        ),
+        (
+            [
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+            ],
+            [],
+        ),
+        (
+            [
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+                {"choices": [{"delta": {"role": "assistant"}}]},
+            ],
+            [],
+        ),
+    ],
+    ids=["no-frames", "post-stop-text", "duplicate-stop", "post-stop-role"],
+)
+@pytest.mark.parametrize("tracked", [False, True], ids=["legacy", "tracked"])
+def test_stream_adapter_rejects_empty_or_post_terminal_frames(
+    monkeypatch, chunks, delivered, tracked
+):
+    import asyncio
+
+    attempts = []
+
+    def provider_create(**kwargs):
+        attempts.append(kwargs)
+        return iter(chunks)
+
+    class Socket:
+        def __init__(self):
+            self.sent = []
+
+        async def send_text(self, value):
+            self.sent.append(value)
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker() if tracked else None
+    socket = Socket()
+    response = adapter.create_chat_completion(
+        model="synthetic-model", messages=[], stream=True,
+        websocket=socket, usage_tracker=tracker,
+    )
+    with pytest.raises(ValueError, match="provider stream"):
+        asyncio.run(response)
+
+    assert len(attempts) == 1
+    assert attempts[0]["stream"] is True
+    # Only text preceding a valid stop can have been delivered; later frames
+    # do not convert the failed stream into a successful return value.
+    assert socket.sent == delivered
+    if tracked:
+        ledger = tracker.snapshot()
+        assert ledger["model_calls"] == 1
+        assert ledger["unavailable_calls"] == 1
+        assert ledger["total_tokens"] == 0
+        assert ledger["by_model"]["synthetic-model"]["unavailable_calls"] == 1
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        [{"choices": [{"delta": {}, "finish_reason": "stop"}]}],
+        [{"choices": [{"delta": {"content": ""}, "finish_reason": "stop"}]}],
+    ],
+    ids=["terminal-only", "terminal-explicit-empty"],
+)
+def test_stream_adapter_accepts_explicit_empty_completed_stream(monkeypatch, chunks):
+    import asyncio
+
+    attempts = []
+
+    def provider_create(**kwargs):
+        attempts.append(kwargs)
+        return iter(chunks)
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    result = asyncio.run(adapter.create_chat_completion(
+        model="synthetic-model", messages=[], stream=True,
+        usage_tracker=tracker,
+    ))
+    assert result == ""
+    assert len(attempts) == 1
+    assert tracker.snapshot()["model_calls"] == 1
+    assert tracker.snapshot()["unavailable_calls"] == 1
