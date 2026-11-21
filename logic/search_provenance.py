@@ -96,13 +96,22 @@ def _bounded_json_float(token: str) -> float:
     return value
 
 
-def parse_search_candidates(raw: str) -> list[dict[str, str | None]]:
+def parse_search_candidates(
+    raw: str, *, expected_limit: int | None = None
+) -> list[dict[str, str | None]]:
     """Extract ordered candidate URLs and *reported* pools without coercion.
 
     Missing pool labels remain ``None`` for legacy search stubs. Invalid
     response shapes fail the prospective run rather than looking like an
     empty/unsuccessful search. No URLs are sorted, repaired or filtered.
+    When provided, expected_limit pins the size to the actual search request,
+    not merely the broad parser safety ceiling.
     """
+    if expected_limit is not None and (
+        type(expected_limit) is not int
+        or not 1 <= expected_limit <= MAX_SEARCH_CANDIDATES
+    ):
+        raise ValueError("Requested candidate limit must be a positive bounded integer")
     if type(raw) is not str:
         raise ValueError("Search results must be JSON text")
     # Bound UTF-8 bytes, not just code points (a short-looking Unicode payload
@@ -130,6 +139,8 @@ def parse_search_candidates(raw: str) -> list[dict[str, str | None]]:
         raise ValueError("Search results must be a JSON array")
     if len(results) > MAX_SEARCH_CANDIDATES:
         raise ValueError("Search results exceed the candidate count limit")
+    if expected_limit is not None and len(results) > expected_limit:
+        raise ValueError("Search results exceed the requested candidate limit")
 
     candidates = []
     for index, item in enumerate(results, start=1):

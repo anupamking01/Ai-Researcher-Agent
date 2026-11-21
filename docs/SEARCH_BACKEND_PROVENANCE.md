@@ -100,3 +100,28 @@ human rating was generated; the five-task pilot remains diagnostic, frozen
 automated comparisons retain their post-collection and fixed-order caveats,
 retrospective sensitivity remains exploratory, and genuine human validation
 is still pending.
+
+## Search-request result-count fidelity (21 November 2026)
+
+The production `web_search(query, num_results=candidate_limit)` adapter
+normalizes its result list to **at most** the requested count. Earlier
+prospective trace ingestion used only a broad 128-candidate safety ceiling,
+so a malformed or substituted result list could exceed the **actual**
+per-query request (typically much smaller) and still influence candidate
+ordering and scheduled browsing. The agent now passes the exact request bound
+to the candidate parser. An overproduced list fails the **entire query**
+before any URLs are scheduled or source-budget counters are consumed; no
+extra candidates are truncated, reranked, retried, or selected. The broader
+128-candidate absolute bound remains in place for callers without a request
+limit. Strict positive-integer limit validation rejects Boolean and
+noninteger controls instead of silently coercing them.
+
+Offline synthetic regressions verify the exact-boundary behavior, fail-closed
+overproduction across small and maximum current request sizes, invalid limit
+types, preservation of duplicate/order/pool fields, and the agent-to-parser
+wiring. This is prospective search-contract and evidence-selection integrity,
+not proof of the underlying external search engine, DNS/redirect safety, or
+historical page custody. No treatment/evaluator was rerun; frozen automated
+findings retain post-collection, fixed-order and evaluator-policy caveats,
+pilot findings remain diagnostic, retrospective analyses exploratory, and
+genuine independent human ratings pending.

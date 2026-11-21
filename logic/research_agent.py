@@ -157,7 +157,9 @@ class ResearchAgent:
         self.search_call_count += 1
         try:
             raw_results = web_search(query, num_results=candidate_limit)
-            candidate_sources = parse_search_candidates(raw_results)
+            candidate_sources = parse_search_candidates(
+                raw_results, expected_limit=candidate_limit
+            )
         except RuntimeError as exc:
             # A transient metasearch outage should not abort the whole agent
             # before later planned queries are attempted. The artifact validator

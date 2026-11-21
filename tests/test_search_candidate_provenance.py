@@ -1,5 +1,7 @@
 """Synthetic metasearch candidate custody; never contacts a web provider."""
+import ast
 import json
+from pathlib import Path
 
 import pytest
 
@@ -197,3 +199,47 @@ def test_pathologically_nested_provider_json_fails_as_validation_not_recursion_c
     raw = "[" * 1300 + "0" + "]" * 1300
     with pytest.raises(ValueError, match="valid bounded JSON text"):
         parse_search_candidates(raw)
+
+
+def test_search_request_candidate_ceiling_is_lossless_at_boundary():
+    raw = json.dumps([
+        {"href": "https://a.test/1", "_search_backend_pool": "first"},
+        {"href": "https://a.test/1", "_search_backend_pool": "second"},
+        {"href": "https://b.test/2"},
+    ])
+    assert parse_search_candidates(raw, expected_limit=3) == parse_search_candidates(raw)
+
+
+@pytest.mark.parametrize("limit, count", [(1, 2), (3, 4), (20, 21)])
+def test_search_request_overproduction_fails_whole_batch(limit, count):
+    raw = json.dumps([
+        {"href": f"https://a.test/{i}"} for i in range(count)
+    ])
+    with pytest.raises(ValueError, match="requested candidate limit"):
+        parse_search_candidates(raw, expected_limit=limit)
+
+
+@pytest.mark.parametrize("limit", [0, -1, True, False, 2.0, "2", 129])
+def test_invalid_requested_search_limit_fails_before_parsing(limit):
+    with pytest.raises(ValueError, match="positive bounded integer"):
+        parse_search_candidates("not even JSON", expected_limit=limit)
+
+
+def test_actual_agent_search_path_forwards_its_request_limit_to_parser():
+    # Source-level wiring guard avoids importing browser/provider modules in
+    # firewalled lightweight CI; parser behavior is tested independently above.
+    agent_path = Path(__file__).resolve().parents[1] / "logic" / "research_agent.py"
+    tree = ast.parse(agent_path.read_text(encoding="utf-8"))
+    calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "parse_search_candidates"
+    ]
+    assert len(calls) == 1
+    assert any(
+        keyword.arg == "expected_limit"
+        and isinstance(keyword.value, ast.Name)
+        and keyword.value.id == "candidate_limit"
+        for keyword in calls[0].keywords
+    )
