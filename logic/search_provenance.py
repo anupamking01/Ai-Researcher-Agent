@@ -7,6 +7,56 @@ proof of which external search engine produced any individual result.
 from __future__ import annotations
 
 import json
+import re
+from ipaddress import ip_address
+from urllib.parse import urlsplit
+
+
+# Browsers recognize shortened, numeric and hexadecimal IPv4 authorities that
+# ipaddress deliberately does not parse as ordinary dotted-quad literals.
+_AMBIGUOUS_NUMERIC_HOST = re.compile(
+    r"(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+)){0,3}\Z"
+)
+
+
+def _require_external_web_url(url: str, *, index: int) -> None:
+    """Reject non-web and explicitly local URLs before source scheduling.
+
+    This is a syntactic candidate gate, NOT a DNS, redirect or network-egress
+    policy. Preserve accepted URL bytes unchanged for reproducible traces.
+    """
+    message = f"Search candidate {index} must have an external HTTP(S) href"
+    # urlsplit silently strips some ASCII control characters; reject first.
+    if any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in url):
+        raise ValueError(message)
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        port = parts.port  # Forces validation of malformed/out-of-range ports.
+        has_userinfo = parts.username is not None or parts.password is not None
+    except ValueError as exc:
+        raise ValueError(message) from exc
+    if parts.scheme not in ("http", "https") or not host or has_userinfo or port == 0:
+        raise ValueError(message)
+    try:
+        ascii_host = host.rstrip(".").encode("idna").decode("ascii").lower()
+    except UnicodeError as exc:
+        raise ValueError(message) from exc
+    if (
+        not ascii_host
+        or any(char in ascii_host for char in ("%", "/", "\\", "@"))
+        or ascii_host == "localhost"
+        or ascii_host.endswith((".localhost", ".local", ".internal", ".home.arpa"))
+    ):
+        raise ValueError(message)
+    try:
+        address = ip_address(ascii_host)
+    except ValueError:
+        if _AMBIGUOUS_NUMERIC_HOST.fullmatch(ascii_host):
+            raise ValueError(message)
+    else:
+        if not address.is_global or address.is_multicast or address.is_reserved:
+            raise ValueError(message)
 
 
 def _unique_object_members(pairs: list[tuple[str, object]]) -> dict:
@@ -51,6 +101,7 @@ def parse_search_candidates(raw: str) -> list[dict[str, str | None]]:
             0xD800 <= ord(char) <= 0xDFFF for char in url
         ):
             raise ValueError(f"Search candidate {index} must contain a text href")
+        _require_external_web_url(url, index=index)
         pool = item.get("_search_backend_pool")
         if pool is not None and (type(pool) is not str or not pool.strip()):
             raise ValueError(

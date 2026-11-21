@@ -44,3 +44,30 @@ post-collection with fixed treatment-order and evaluator-policy
 limitations; retrospective sensitivities remain exploratory. Original
 source custody, eligible annotators and genuine blinded human ratings
 remain separate, unmet research gates.
+
+## Prospective candidate URL admission (21 November 2026)
+
+Search result URLs now have an explicit **pre-browse, fail-closed** admission
+contract: each returned `href` must be an absolute HTTP(S) URL with a host,
+no embedded credentials or whitespace/control characters, and a usable port.
+Known localhost/local-name suffixes, non-global IP literals and browser-style
+abbreviated or hexadecimal numeric IPv4 authorities are rejected. IDNA
+normalization is used only to evaluate host safety (for example visually
+encoded localhost); accepted URLs are recorded **byte-for-byte**, without
+rewriting query parameters, fragments, ordering, duplicates or selection.
+A mixed valid/invalid result array raises a validation error rather than
+quietly removing candidates, shifting budgets, or choosing replacement
+sources. Both direct and planner query paths use this parser before scheduling
+Selenium browsing. This protects prospective retrieval from plainly
+non-web/local targets and prevents malformed provider result URLs from
+masquerading as valid scheduled sources.
+
+This check is **not** DNS-resolution verification, redirect policing,
+revalidation of in-page navigation, or an egress firewall; a public-looking
+hostname can still resolve privately and a website can redirect. It also
+cannot authenticate search results or missing historical page content.
+Synthetic tests exercise externally shaped IPv4/IPv6/Unicode URLs,
+local/private and ambiguous numeric hosts, dangerous schemes, credentials,
+control characters and batch failure. No historical treatments or evaluator
+calls were rerun; frozen automated estimates and exploratory/human-validation
+claims remain unchanged.

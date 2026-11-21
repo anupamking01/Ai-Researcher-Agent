@@ -85,3 +85,45 @@ def test_selection_copies_metadata_instead_of_aliasing_mutable_candidate():
     chosen = selected_search_sources(entries, ["https://a.test"])
     chosen[0]["backend_pool"] = "changed"
     assert entries[0]["backend_pool"] == "p"
+
+
+@pytest.mark.parametrize("valid_url", [
+    "https://a.test/path?q=α", "http://8.8.8.8/",
+    "https://[2606:4700:4700::1111]/",
+    "https://münchen.de/über", "https://example.org./path",
+])
+def test_external_web_candidate_keeps_exact_original_url(valid_url):
+    entries = parse_search_candidates(json.dumps([{"href": valid_url}]))
+    assert entries == [{"url": valid_url, "backend_pool": None}]
+
+
+@pytest.mark.parametrize("invalid_url", [
+    "file:///etc/passwd", "javascript:alert(1)", "data:text/plain,hello",
+    "//example.org/path", "https:///missing-host", "https://localhost/",
+    "https://sub.localhost/", "http://router.local/",
+    "https://printer.internal/", "https://router.home.arpa/",
+    "http://127.0.0.1/", "http://10.4.5.6/",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://192.168.1.1/", "http://[::1]/",
+    "http://[fe80::1]/", "http://[::ffff:127.0.0.1]/",
+    "http://2130706433/", "http://127.1/",
+    "http://0x7f000001/", "http://0x7f.0.0.1/",
+    "https://ⓛocalhost/", "http://example.org:0/",
+    "http://example.org:99999/",
+    "https://user:pass@example.org/",
+    "https://example.org/has space", "https://example.org/\npath",
+    "https://example.org/\tpath",
+])
+def test_rejects_unsafe_or_nonweb_candidate_before_browser_scheduling(invalid_url):
+    with pytest.raises(ValueError, match=r"external HTTP\(S\) href"):
+        parse_search_candidates(json.dumps([{"href": invalid_url}]))
+
+
+def test_one_unsafe_candidate_fails_entire_batch_without_silent_filtering():
+    raw = json.dumps([
+        {"href": "https://example.org/a", "_search_backend_pool": "pool-a"},
+        {"href": "http://127.1/private", "_search_backend_pool": "pool-a"},
+        {"href": "https://example.org/b", "_search_backend_pool": "pool-a"},
+    ])
+    with pytest.raises(ValueError, match="Search candidate 2"):
+        parse_search_candidates(raw)
