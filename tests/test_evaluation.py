@@ -3975,3 +3975,74 @@ def test_chat_adapter_preserves_valid_finite_request_parameters(
     assert snapshot["model_calls"] == 1
     assert snapshot["unavailable_calls"] == int(stream)
     assert snapshot["total_tokens"] == (0 if stream else 4)
+
+# Prospective output provenance: a malformed completed provider response is
+# not a valid empty report, even when token usage was recorded correctly.
+@pytest.mark.parametrize(
+    "bad_response",
+    [
+        {},
+        {"choices": []},
+        {"choices": [{}]},
+        {"choices": [{"message": {}}]},
+        {"choices": [{"message": {"content": None}}]},
+        {"choices": [{"message": {"content": False}}]},
+        {"choices": [{"message": {"content": 0}}]},
+        {"choices": [{"message": {"content": []}}]},
+        {"choices": [{"message": {"content": {"text": "not a string"}}}]},
+    ],
+    ids=[
+        "no-choices", "empty-choices", "no-message", "no-content",
+        "null-content", "boolean-content", "numeric-content", "list-content",
+        "mapping-content",
+    ],
+)
+def test_nonstream_adapter_rejects_malformed_output_without_losing_usage(
+    monkeypatch, bad_response
+):
+    """Missing/invalid output must not silently become a successful empty report."""
+    attempted = []
+
+    def provider_create(**kwargs):
+        attempted.append(kwargs)
+        return {
+            **bad_response,
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        }
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    with pytest.raises(ValueError, match="provider response"):
+        adapter.create_chat_completion(
+            model="synthetic-model",
+            messages=[{"role": "user", "content": "synthetic prompt"}],
+            usage_tracker=tracker,
+        )
+    assert len(attempted) == 1
+    # The provider returned and reported actual consumption. Reporting an
+    # invalid output must not erase known usage or count a second failed call.
+    snapshot = tracker.snapshot()
+    assert (snapshot["model_calls"], snapshot["unavailable_calls"]) == (1, 0)
+    assert (snapshot["prompt_tokens"], snapshot["completion_tokens"]) == (3, 2)
+    assert snapshot["by_model"]["synthetic-model"]["total_tokens"] == 5
+
+
+@pytest.mark.parametrize("content", ["", "synthetic completed report"])
+def test_nonstream_adapter_keeps_real_empty_and_nonempty_text(monkeypatch, content):
+    """An explicit empty string is different from a missing assistant message."""
+    attempted = []
+
+    def provider_create(**kwargs):
+        attempted.append(kwargs)
+        return {
+            "choices": [{"message": {"content": content}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+        }
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    assert adapter.create_chat_completion(
+        model="synthetic-model", messages=[], usage_tracker=tracker
+    ) == content
+    assert len(attempted) == 1
+    assert (tracker.snapshot()["model_calls"], tracker.snapshot()["unavailable_calls"]) == (1, 0)

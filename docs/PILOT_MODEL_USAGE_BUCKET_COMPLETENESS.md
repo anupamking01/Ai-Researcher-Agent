@@ -190,3 +190,27 @@ unchanged preexisting usage accounting, and successful valid requests. This
 is a *prospective* safety and provenance check, not a change to frozen
 pilot/main-study records or exploratory estimates; independent original
 evidence custody and genuine blinded human validation remain outstanding.
+
+## Malformed completion output is not a recorded empty report (21 November 2026)
+
+The non-streaming OpenAI 0.x adapter previously returned an empty string when
+the completed provider response lacked the expected first choice, assistant
+message or content field, or when non-text content was falsy. In a prospective
+research trace that can make malformed output indistinguishable from a genuine,
+explicit empty-string response. It is an output-validity issue, separate from
+whether the provider reported token consumption.
+
+The adapter now raises a deterministic local validation error for missing or
+non-text assistant content, while continuing to accept a genuine string
+(including an explicitly empty string). Usage is recorded **once before**
+response-text validation: known provider token counts remain known even when
+the output is invalid; unknown counts remain unavailable. No synthetic fallback
+report is created. Offline synthetic regression cases exercise the malformed
+and valid envelopes without contacting a provider.
+
+This prospective safeguard does not alter frozen experiment outputs or imply
+that a missing historical report/trace has been recovered. The pilot remains
+diagnostic, the designated-primary historical automated findings retain their
+post-collection chronology and evaluator-comparability qualifications,
+retrospective sensitivity analyses remain exploratory, and authentic blinded
+human validation has not been completed.

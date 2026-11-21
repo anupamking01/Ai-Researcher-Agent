@@ -27,11 +27,18 @@ OPENAI_REQUEST_TIMEOUT_SECONDS = 150
 
 
 def _choice_content(response: Any) -> str:
-    """Extract assistant text from an OpenAI 0.x ChatCompletion response."""
+    """Require a well-formed textual completion rather than fabricating an empty one.
+
+    A genuinely empty text response is valid, but a missing or non-text
+    response is a failed output, not evidence that the model answered "".
+    """
     try:
-        return response["choices"][0]["message"]["content"] or ""
-    except (KeyError, IndexError, TypeError):
-        return ""
+        content = response["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError, AttributeError) as exc:
+        raise ValueError("provider response missing a textual assistant message") from exc
+    if not isinstance(content, str):
+        raise ValueError("provider response assistant content must be text")
+    return content
 
 
 async def _stream_completion(
