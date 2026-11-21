@@ -704,6 +704,11 @@ def test_completed_marked_trace_checks_source_attribution_before_acceptance(tmp_
     sources = [{"url": u, "backend_pool": "reported-pool"} for u in urls]
     p["trace"].update(
         search_provenance_schema=1,
+        # The production trace publishes this derived fraction on every run.
+        # Legacy unmarked fixture data did not need the prospective field.
+        source_success_rate=(
+            p["trace"]["successful_source_count"] / p["trace"]["source_count"]
+        ),
         search_queries=["synthetic query"],
         search_records=[{
             "query": "synthetic query", "candidate_urls": list(urls),
@@ -716,4 +721,12 @@ def test_completed_marked_trace_checks_source_attribution_before_acceptance(tmp_
     p["trace"]["search_records"][0]["scheduled_sources"][0]["backend_pool"] = "forged"
     path = _write_trace(tmp_path, p)
     with pytest.raises(SystemExit, match="search provenance"):
+        run_budget_main_study._trace_cost_usd(path, PRICING)
+
+    # Correct the attribution, then alter only the derived success fraction.
+    # The prospective cost gate must reject the stale rate too.
+    p["trace"]["search_records"][0]["scheduled_sources"][0]["backend_pool"] = "reported-pool"
+    p["trace"]["source_success_rate"] = 1.0
+    path = _write_trace(tmp_path, p)
+    with pytest.raises(SystemExit, match="browse success rate"):
         run_budget_main_study._trace_cost_usd(path, PRICING)
