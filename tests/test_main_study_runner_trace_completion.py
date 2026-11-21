@@ -25,6 +25,7 @@ def _payload(run_id="run-1", completed=True, task="main-01",
         "trace": {
             "run_id": run_id, "variant_id": variant, "task_set_id": task_set,
             "task_id": task, "completed": completed,
+            "question": "Synthetic question",
             "source_budget": 3 if variant == "D3" else 6,
             "report_path": f"./outputs/{run_id}/research_report.md",
             "source_count": 0, "successful_source_count": 0,
@@ -57,7 +58,7 @@ def _write(root, payload):
 
 def _check(
     root, monkeypatch, old=(), *, prior_fingerprints=None,
-    prior_report_fingerprints=None,
+    prior_report_fingerprints=None, task_question="Synthetic question",
 ):
     monkeypatch.setattr(study, "TRACE_ROOT", root)
     if prior_fingerprints is None:
@@ -68,7 +69,8 @@ def _check(
         tuple(old), prior_fingerprints=prior_fingerprints,
         prior_report_fingerprints=prior_report_fingerprints,
         variant_id="D3", task_set_id="test-tasks",
-        task_id="main-01", pricing=PRICING,
+        task_id="main-01", task_question=task_question,
+        pricing=PRICING,
     )
 
 
@@ -76,6 +78,41 @@ def test_matching_completed_trace_has_verifiable_cost(tmp_path, monkeypatch):
     root = tmp_path / "traces"
     _write(root, _payload())
     assert _check(root, monkeypatch) == pytest.approx(0.000012)
+
+
+@pytest.mark.parametrize("reported", [
+    None, "", "Different study question", "Synthetic question ", True,
+])
+def test_completed_cell_rejects_changed_or_missing_question(
+    tmp_path, monkeypatch, reported,
+):
+    """Matching variant/task IDs must not certify a substituted question."""
+    root = tmp_path / "traces"
+    payload = _payload()
+    if reported is None:
+        del payload["trace"]["question"]
+    else:
+        payload["trace"]["question"] = reported
+    _write(root, payload)
+    with pytest.raises(ValueError, match="task question differs from frozen task file"):
+        _check(root, monkeypatch)
+
+
+def test_completed_cell_accepts_exact_unicode_task_question(tmp_path, monkeypatch):
+    root = tmp_path / "traces"
+    payload = _payload()
+    payload["trace"]["question"] = "Compare HTTP/2 vs HTTP/3 — π?"
+    _write(root, payload)
+    assert _check(
+        root, monkeypatch, task_question="Compare HTTP/2 vs HTTP/3 — π?",
+    ) == pytest.approx(0.000012)
+
+
+def test_task_question_gate_is_wired_from_frozen_runner_task():
+    root = Path(study.__file__).resolve().parents[1]
+    source = (root / "scripts/run_budget_main_study.py").read_text(encoding="utf-8")
+    assert 'task_question=task["question"]' in source
+    assert 'expected_task_question=task_question' in source
 
 
 def test_missing_trace_is_not_a_completed_treatment(tmp_path, monkeypatch):

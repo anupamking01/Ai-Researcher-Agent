@@ -841,6 +841,7 @@ def _trace_cost_usd(
     pricing: dict,
     *,
     expected_completed_cell: tuple[str, str, str] | None = None,
+    expected_task_question: str | None = None,
 ) -> float:
     raw = _read_treatment_trace_bytes(path)
     try:
@@ -854,6 +855,7 @@ def _trace_cost_usd(
     return _validated_trace_cost(
         payload, path=path, pricing=pricing,
         expected_completed_cell=expected_completed_cell,
+        expected_task_question=expected_task_question,
     )
 
 
@@ -863,6 +865,7 @@ def _validated_trace_cost(
     path: Path,
     pricing: dict,
     expected_completed_cell: tuple[str, str, str] | None = None,
+    expected_task_question: str | None = None,
 ) -> float:
     """Validate one captured treatment trace and recompute its frozen cost."""
 
@@ -929,6 +932,19 @@ def _validated_trace_cost(
             raise SystemExit(
                 f"Invalid treatment trace {path}: new completed cell must match "
                 "the requested variant, task set and task"
+            )
+        # The correct task ID is insufficient if this run actually answered
+        # a different question. Use the independent task-file input captured
+        # by the runner, never a value copied from the trace itself.
+        if (
+            type(expected_task_question) is not str
+            or not expected_task_question.strip()
+            or type(trace.get("question")) is not str
+            or trace["question"] != expected_task_question
+        ):
+            raise SystemExit(
+                f"Invalid treatment trace {path}: task question differs "
+                "from frozen task file"
             )
 
     experiment_source_budget = experiment.get("source_budget")
@@ -1378,6 +1394,7 @@ def _require_new_completed_trace(
     variant_id: str,
     task_set_id: str,
     task_id: str,
+    task_question: str,
     pricing: dict,
 ) -> float:
     """Gate the next treatment on one correctly attributed completed trace.
@@ -1439,6 +1456,7 @@ def _require_new_completed_trace(
         cost = _trace_cost_usd(
             new_path, pricing,
             expected_completed_cell=(variant_id, task_set_id, task_id),
+            expected_task_question=task_question,
         )
         _require_completed_report(new_path)
         return cost
@@ -1722,6 +1740,7 @@ async def _run_main_study() -> None:
                     prior_report_fingerprints=prior_report_fingerprints,
                     variant_id=variant_id, task_set_id=task_set_id,
                     task_id=task["id"],
+                    task_question=task["question"],
                     pricing=pricing,
                 )
             except Exception as exc:

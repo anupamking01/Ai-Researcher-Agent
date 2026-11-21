@@ -157,3 +157,26 @@ substitution, an oversized sparse file, a hardlink alias and same-byte
 pathname replacement. This caps a *new replication runner's* source ingestion;
 it does not alter frozen September measurements, assert an atomic snapshot,
 authenticate missing originals or infer a human-validation outcome.
+
+
+### Bind completed treatment to the frozen task question (22 November 2026)
+
+Previously a completed trace could claim the correct variant, task set and
+task ID yet contain a different or absent `trace.question`. Its report and
+cost ledgers could still reconcile, misattributing the report to the wrong
+question in a paired comparison or eventual blinded human handoff.
+
+For each **new** noncanonical completed cell the runner now compares the exact
+trace question to the independently loaded, snapshot-pinned task-file question
+it passed to the agent. Missing or differently typed values and even whitespace
+changes fail closed; valid Unicode and punctuation remain unchanged. No query
+or report is rewritten. General historical spend inspection stays compatible,
+and the original September results are not retroactively certified.
+
+Synthetic offline regressions cover missing, altered and mis-typed questions,
+exact Unicode matching and wiring from the runner's task input. This is local
+task-attribution integrity, not proof of model execution, original historical
+report custody or human validation. The five-task pilot is diagnostic; frozen
+automated results retain post-collection planning, fixed treatment-order and
+evaluator-policy limitations, retrospective sensitivities are exploratory,
+and independent human ratings remain pending. No treatment or evaluator reruns.
