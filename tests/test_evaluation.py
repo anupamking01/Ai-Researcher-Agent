@@ -3855,3 +3855,123 @@ def test_tracked_chat_adapter_validates_model_before_messages_or_provider(
 
     assert attempted == []
     assert tracker.snapshot() == before
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+@pytest.mark.parametrize(
+    "bad_temperature",
+    [float("nan"), float("inf"), float("-inf"), -0.01, 2.01, True, "0.5", 10**400],
+    ids=["nan", "positive-infinity", "negative-infinity", "negative",
+         "above-provider-range", "boolean", "text", "overflow"],
+)
+def test_chat_adapter_fails_closed_on_invalid_temperature_before_provider(
+    monkeypatch, stream, bad_temperature
+):
+    """An invalid controlled setting cannot consume input or spend model budget."""
+    import asyncio
+
+    attempts = []
+
+    def provider_create(**kwargs):
+        attempts.append(kwargs)
+        raise AssertionError("invalid temperature reached provider")
+
+    def unread_messages():
+        raise AssertionError("invalid temperature consumed a message producer")
+        yield {"role": "user", "content": "not to be read"}
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    tracker.record_response(
+        "earlier-model", {"usage": {"prompt_tokens": 2, "completion_tokens": 1}}
+    )
+    before = tracker.snapshot()
+    with pytest.raises(ValueError, match="temperature must be a finite number"):
+        result = adapter.create_chat_completion(
+            model="synthetic-model", messages=unread_messages(),
+            temperature=bad_temperature, stream=stream, usage_tracker=tracker,
+        )
+        if stream:
+            asyncio.run(result)
+    assert attempts == []
+    assert tracker.snapshot() == before
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+@pytest.mark.parametrize(
+    "bad_timeout",
+    [float("nan"), float("inf"), float("-inf"), 0, -1.0, True,
+     "nan", "inf", "not-a-timeout", 10**400],
+    ids=["nan", "positive-infinity", "negative-infinity", "zero", "negative",
+         "boolean", "text-nan", "text-infinity", "unparseable", "overflow"],
+)
+def test_chat_adapter_fails_closed_on_invalid_timeout_before_provider(
+    monkeypatch, stream, bad_timeout
+):
+    """Invalid timeout parameters must not masquerade as provider attempts."""
+    import asyncio
+
+    attempts = []
+
+    def provider_create(**kwargs):
+        attempts.append(kwargs)
+        raise AssertionError("invalid timeout reached provider")
+
+    def unread_messages():
+        raise AssertionError("invalid timeout consumed a message producer")
+        yield {"role": "user", "content": "not to be read"}
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    tracker.record_response(
+        "earlier-model", {"usage": {"prompt_tokens": 2, "completion_tokens": 1}}
+    )
+    before = tracker.snapshot()
+    with pytest.raises(ValueError, match="request_timeout_seconds must be finite"):
+        result = adapter.create_chat_completion(
+            model="synthetic-model", messages=unread_messages(),
+            request_timeout_seconds=bad_timeout,
+            stream=stream, usage_tracker=tracker,
+        )
+        if stream:
+            asyncio.run(result)
+    assert attempts == []
+    assert tracker.snapshot() == before
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+@pytest.mark.parametrize("temperature", [0.0, 2.0])
+@pytest.mark.parametrize("timeout", [1, "2.5"])
+def test_chat_adapter_preserves_valid_finite_request_parameters(
+    monkeypatch, stream, temperature, timeout
+):
+    """Supported explicit numeric controls still reach the provider unchanged."""
+    import asyncio
+
+    attempts = []
+
+    def provider_create(**kwargs):
+        attempts.append(kwargs)
+        if stream:
+            return iter([{"choices": [{"delta": {"content": "synthetic ok"}}]}])
+        return {
+            "choices": [{"message": {"content": "synthetic ok"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+        }
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    result = adapter.create_chat_completion(
+        model="synthetic-model", messages=[{"role": "user", "content": "test"}],
+        temperature=temperature, request_timeout_seconds=timeout,
+        stream=stream, usage_tracker=tracker,
+    )
+    assert (asyncio.run(result) if stream else result) == "synthetic ok"
+    assert len(attempts) == 1
+    assert attempts[0]["temperature"] == temperature
+    assert attempts[0]["request_timeout"] == float(timeout)
+    assert attempts[0]["stream"] is stream if stream else "stream" not in attempts[0]
+    snapshot = tracker.snapshot()
+    assert snapshot["model_calls"] == 1
+    assert snapshot["unavailable_calls"] == int(stream)
+    assert snapshot["total_tokens"] == (0 if stream else 4)

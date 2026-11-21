@@ -164,3 +164,29 @@ that neither the provider stub nor message producer is accessed. This is a
 prospective accounting and budget-integrity safeguard, not evidence of actual
 provider billing or recovery of historical usage. Frozen automated results,
 post-hoc exploratory findings, and pending human validation remain unchanged.
+
+
+## Finite preflight for provider request settings (21 November 2026)
+
+The chat adapter previously used only a positive-sign comparison to validate
+`request_timeout_seconds`. IEEE-754 NaN bypasses that comparison, and
+infinity can also pass through. An explicitly Boolean timeout could become
+`1.0`. Likewise, a nonfinite or out-of-range temperature could reach the
+provider without a local validity check. These malformed settings risk
+undocumented execution behavior, invalid experiment configurations and
+misleading call-attempt accounting.
+
+The public adapter now validates a finite, strictly positive timeout and a
+finite numeric temperature in the pinned OpenAI chat range [0, 2] **before**
+materializing one-pass messages or attempting an external model invocation.
+Finite numeric timeout strings remain accepted for existing callers, and
+valid numeric temperatures retain their original transmitted type/value.
+Invalid settings fail locally without adding a model-call ledger entry.
+This holds for streaming and non-streaming invocations.
+
+The synthetic offline tests verify NaN/infinity, bounds, Boolean/invalid
+types, conversion overflow, no message consumption or provider invocation,
+unchanged preexisting usage accounting, and successful valid requests. This
+is a *prospective* safety and provenance check, not a change to frozen
+pilot/main-study records or exploratory estimates; independent original
+evidence custody and genuine blinded human validation remain outstanding.

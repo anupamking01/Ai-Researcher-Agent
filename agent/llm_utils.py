@@ -8,6 +8,7 @@ usage for controlled experiments.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Iterable
 
 import openai
@@ -102,14 +103,31 @@ def create_chat_completion(
     if usage_tracker is not None:
         UsageTracker._require_model_label(model)
 
+    # Resolve and validate local request parameters before consuming a one-pass
+    # input producer or entering the provider-attempt accounting boundary.
+    # NaN compares neither <= nor >, so a sign-only timeout check is unsafe.
     resolved_temperature = CFG.temperature if temperature is None else temperature
-    resolved_timeout = (
-        OPENAI_REQUEST_TIMEOUT_SECONDS
-        if request_timeout_seconds is None
-        else float(request_timeout_seconds)
-    )
-    if resolved_timeout <= 0:
-        raise ValueError("request_timeout_seconds must be positive")
+    if type(resolved_temperature) not in (int, float):
+        raise ValueError("temperature must be a finite number between 0 and 2")
+    try:
+        temperature_check = float(resolved_temperature)
+    except (OverflowError, ValueError, TypeError) as exc:
+        raise ValueError("temperature must be a finite number between 0 and 2") from exc
+    if not math.isfinite(temperature_check) or not 0 <= temperature_check <= 2:
+        raise ValueError("temperature must be a finite number between 0 and 2")
+
+    if type(request_timeout_seconds) is bool:
+        raise ValueError("request_timeout_seconds must be finite and positive")
+    try:
+        resolved_timeout = (
+            float(OPENAI_REQUEST_TIMEOUT_SECONDS)
+            if request_timeout_seconds is None
+            else float(request_timeout_seconds)
+        )
+    except (OverflowError, ValueError, TypeError) as exc:
+        raise ValueError("request_timeout_seconds must be finite and positive") from exc
+    if not math.isfinite(resolved_timeout) or resolved_timeout <= 0:
+        raise ValueError("request_timeout_seconds must be finite and positive")
 
     if stream:
         return _stream_completion(
