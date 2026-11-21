@@ -149,3 +149,34 @@ both valid and altered ledgers without model, search, evaluator, treatment or
 human-annotation calls. Diagnostic pilot, post-collection frozen automated
 inference, retrospective exploratory sensitivity and pending human validation
 remain separate.
+
+
+## Prospective browse-outcome ledger reconciliation (21 November 2026)
+
+The versioned search-trace validator now binds **observed successful and failed
+browse URLs** back to scheduled attempts, in encounter order, rather than
+relying only on unordered set membership and total counts. It checks that
+each outcome URL belongs to a scheduled attempt, appears once in exactly one
+outcome class, preserves its relative position in the original schedule, and
+matches the recorded class count. A completed run must classify every
+scheduled browse. The recorded `source_success_rate` must also equal the
+observed successful-attempt fraction (or zero when no browsing was scheduled),
+with nonfinite and Boolean values rejected. A non-completed run may retain
+unclassified attempts instead of inventing a success or failure.
+
+This closes a prospective evidence-integrity gap in which reordered outcome
+lists or a stale/forged success ratio could pass set-based source accounting.
+The checker does not reorder, repair, recover, or rerun any sources; it fails
+inconsistent completed traces before the noncanonical runner accepts them.
+Synthetic regression cases include interleaved successes/failures, identity
+and count discrepancies, same-set order swaps, unclassified completed
+attempts, nonfinite rates, and legitimate partial/zero-attempt traces.
+The running agent already records outcomes in scheduling order. The historic
+unmarked September traces are neither revalidated nor authenticated by this
+forward-looking requirement.
+
+This is local trace consistency, not independent proof of external page
+content or the original 40 report/trace pairs. The five-task pilot remains
+diagnostic; frozen automated inference remains post-collection with
+fixed-order and evaluator-policy comparability qualifications; retrospective
+sensitivities are exploratory; and blinded human validation remains pending.

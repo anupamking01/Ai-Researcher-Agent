@@ -256,3 +256,44 @@ def validate_search_trace_provenance(trace: dict) -> None:
         accumulated.extend(su)
     if accumulated != scheduled or len(set(accumulated)) != len(accumulated):
         raise ValueError("per-query and run-level scheduled URLs disagree")
+
+    # A completed report must also conserve which *scheduled* browse attempts
+    # succeeded and failed. Sets alone lose the recorded encounter order:
+    # an altered outcome list could appear valid despite reordered source use.
+    successful = trace.get("successful_urls")
+    failed = trace.get("failed_urls")
+    if type(successful) is not list or type(failed) is not list:
+        raise ValueError("browse outcome URL ledgers must be arrays")
+    for urls, count_name in (
+        (successful, "successful_source_count"),
+        (failed, "failed_source_count"),
+    ):
+        count = trace.get(count_name)
+        if type(count) is not int or count < 0 or len(urls) != count:
+            raise ValueError("browse outcome count ledger mismatch")
+    outcome_urls = successful + failed
+    if any(type(url) is not str for url in outcome_urls):
+        raise ValueError("browse outcomes must reference scheduled URLs")
+    successful_set, failed_set = set(successful), set(failed)
+    scheduled_set = set(scheduled)
+    if (
+        len(successful_set) != len(successful)
+        or len(failed_set) != len(failed)
+        or successful_set & failed_set
+        or not (successful_set | failed_set) <= scheduled_set
+        or [url for url in scheduled if url in successful_set] != successful
+        or [url for url in scheduled if url in failed_set] != failed
+    ):
+        raise ValueError("browse outcomes contradict scheduled source order")
+    if type(trace.get("completed")) is not bool:
+        raise ValueError("browse completion status must be a boolean")
+    if trace["completed"] and (successful_set | failed_set) != scheduled_set:
+        raise ValueError("completed browse outcomes leave unclassified sources")
+    actual_rate = trace.get("source_success_rate")
+    expected_rate = len(successful) / len(scheduled) if scheduled else 0.0
+    if (
+        type(actual_rate) not in (int, float)
+        or not math.isfinite(actual_rate)
+        or actual_rate != expected_rate
+    ):
+        raise ValueError("browse success rate disagrees with source outcomes")

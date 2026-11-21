@@ -249,6 +249,10 @@ def _search_custody_fixture():
     return {
         "search_provenance_schema": 1, "query_count": 2,
         "search_call_count": 2, "source_count": 1,
+        "completed": True,
+        "successful_source_count": 1, "failed_source_count": 0,
+        "source_success_rate": 1.0,
+        "successful_urls": ["https://example.org/one"], "failed_urls": [],
         "search_queries": ["q1", "q2"],
         "scheduled_urls": ["https://example.org/one"],
         "search_records": [
@@ -311,6 +315,84 @@ def test_versioned_search_custody_rejects_inconsistent_sources(mutate):
     mutate(t)
     with pytest.raises(ValueError):
         validate_search_trace_provenance(t)
+
+
+def _mixed_browse_outcomes():
+    """Three ordered attempts with interleaved successes and a failure."""
+    from copy import deepcopy
+    t = deepcopy(_search_custody_fixture())
+    record = t["search_records"][0]
+    extra = [
+        {"url": "https://example.org/two", "backend_pool": "pool-a"},
+        {"url": "https://example.org/three", "backend_pool": "pool-a"},
+    ]
+    record["candidate_sources"].extend(extra)
+    record["candidate_urls"].extend(entry["url"] for entry in extra)
+    record["scheduled_sources"].extend(extra)
+    record["scheduled_urls"].extend(entry["url"] for entry in extra)
+    t["scheduled_urls"].extend(entry["url"] for entry in extra)
+    t["source_count"] = 3
+    t["successful_urls"] = [
+        "https://example.org/one", "https://example.org/three",
+    ]
+    t["failed_urls"] = ["https://example.org/two"]
+    t["successful_source_count"] = 2
+    t["failed_source_count"] = 1
+    t["source_success_rate"] = 2 / 3
+    return t
+
+
+def test_browse_outcome_custody_preserves_interleaved_attempt_order():
+    from logic.search_provenance import validate_search_trace_provenance
+    validate_search_trace_provenance(_mixed_browse_outcomes())
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda t: t["successful_urls"].reverse(),  # same URLs and counts, wrong order
+    lambda t: t["failed_urls"].append("https://example.org/three"),
+    lambda t: t["failed_urls"].append("https://example.org/unselected"),
+    lambda t: t["successful_urls"].append("https://example.org/one"),
+    lambda t: t["successful_urls"].pop(),
+    lambda t: t.update(successful_source_count=3),
+    lambda t: t.update(failed_source_count=True),
+    lambda t: t.update(source_success_rate=1.0),
+    lambda t: t.update(source_success_rate=float("nan")),
+    lambda t: t.update(source_success_rate=True),
+    lambda t: t.pop("source_success_rate"),
+    lambda t: t.pop("successful_urls"),
+    lambda t: t.update(completed="true"),
+])
+def test_browse_outcome_custody_rejects_mismatched_identity_order_or_rate(mutate):
+    from logic.search_provenance import validate_search_trace_provenance
+    t = _mixed_browse_outcomes()
+    mutate(t)
+    with pytest.raises(ValueError, match="browse"):
+        validate_search_trace_provenance(t)
+
+
+def test_incomplete_trace_may_leave_pending_attempt_without_claiming_success():
+    # A future failed/timeout trace can conserve observed classifications
+    # without fabricating completion of unresolved browsing calls.
+    from logic.search_provenance import validate_search_trace_provenance
+    t = _mixed_browse_outcomes()
+    t["completed"] = False
+    t["failed_urls"] = []
+    t["failed_source_count"] = 0
+    validate_search_trace_provenance(t)
+
+
+def test_zero_attempt_incomplete_trace_has_zero_not_nan_success_rate():
+    from logic.search_provenance import validate_search_trace_provenance
+    t = _search_custody_fixture()
+    t.update(
+        completed=False, source_count=0,
+        scheduled_urls=[], successful_urls=[], failed_urls=[],
+        successful_source_count=0, failed_source_count=0,
+        source_success_rate=0.0,
+    )
+    t["search_records"][0]["scheduled_urls"] = []
+    t["search_records"][0]["scheduled_sources"] = []
+    validate_search_trace_provenance(t)
 
 
 def test_versioned_search_trace_is_emitted_and_checked_by_runner():
