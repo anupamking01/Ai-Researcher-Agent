@@ -142,3 +142,25 @@ non-streaming adapter's returned text. These tests do not contact a provider
 or modify historical records. This is a prospective measurement-integrity
 guard only; it does not establish true provider billing, original-artifact
 custody, automated confirmatory validity, or human-validation results.
+
+
+## Early tracked-model validation before provider invocation (21 November 2026)
+
+The tracker already rejects malformed model labels before mutating its ledger.
+That validation occurred *after* the live adapter obtained a successful response,
+however, so a non-string or noncanonical model identity could be rejected only
+after attempting an external completion and discarding its output. A completed
+call would then have no trustworthy per-model accounting.
+
+For calls with a usage tracker, the public chat adapter now validates the
+exact model-label type **before** consuming one-pass messages or invoking
+`ChatCompletion.create`, for both streaming and non-streaming paths. Rejected
+local inputs do not change preexisting usage counters or trigger a provider
+attempt. Untracked legacy calls retain their prior behavior. Existing
+in-tracker validation remains the boundary for direct tracker callers.
+
+Synthetic offline regressions cover invalid labels on both paths and assert
+that neither the provider stub nor message producer is accessed. This is a
+prospective accounting and budget-integrity safeguard, not evidence of actual
+provider billing or recovery of historical usage. Frozen automated results,
+post-hoc exploratory findings, and pending human validation remain unchanged.

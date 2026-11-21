@@ -3815,3 +3815,43 @@ def test_nonstream_adapter_preserves_completed_text_when_usage_getter_fails(monk
     assert tracker.snapshot()["model_calls"] == 1
     assert tracker.snapshot()["unavailable_calls"] == 1
     assert tracker.snapshot()["total_tokens"] == 0
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+@pytest.mark.parametrize(
+    "bad_model", [None, 7, [], _NoncanonicalHashModel("unsafe")],
+    ids=["none", "integer", "unhashable", "str-subclass"],
+)
+def test_tracked_chat_adapter_validates_model_before_messages_or_provider(
+    monkeypatch, stream, bad_model
+):
+    """Invalid model identity must not spend budget before failing locally."""
+    import asyncio
+
+    attempted = []
+
+    def provider_create(**kwargs):
+        attempted.append(kwargs)
+        raise AssertionError("invalid model should not reach provider")
+
+    def messages_not_to_read():
+        raise AssertionError("invalid model should fail before reading messages")
+        yield {"role": "user", "content": "synthetic data"}
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    tracker.record_response(
+        "prior-model", {"usage": {"prompt_tokens": 2, "completion_tokens": 1}}
+    )
+    before = tracker.snapshot()
+
+    with pytest.raises(ValueError, match="model must be an exact string"):
+        result = adapter.create_chat_completion(
+            model=bad_model, messages=messages_not_to_read(),
+            stream=stream, usage_tracker=tracker,
+        )
+        if stream:
+            asyncio.run(result)
+
+    assert attempted == []
+    assert tracker.snapshot() == before

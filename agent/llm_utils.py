@@ -96,6 +96,12 @@ def create_chat_completion(
     request_timeout_seconds: float | None = None,
 ):
     """Create a chat completion using the repository's pinned OpenAI client."""
+    # Reject invalid tracked model identities before preparing messages or
+    # invoking a paid provider. Late rejection by UsageTracker would discard
+    # a completed response and leave its attempted consumption unmeasured.
+    if usage_tracker is not None:
+        UsageTracker._require_model_label(model)
+
     resolved_temperature = CFG.temperature if temperature is None else temperature
     resolved_timeout = (
         OPENAI_REQUEST_TIMEOUT_SECONDS
