@@ -154,7 +154,7 @@ def test_utf8_wire_size_not_character_count_controls_search_batch_limit():
 
 def test_rejects_unencodable_search_response_even_if_url_is_valid():
     with pytest.raises(ValueError, match="UTF-8 JSON text"):
-        parse_search_candidates('[{"href":"https://example.org/","title":"' + "\\ud800" + '"}]')
+        parse_search_candidates('[{"href":"https://example.org/","title":"' + chr(0xD800) + '"}]')
 
 
 def test_overlarge_search_candidate_batch_is_not_silently_truncated():
