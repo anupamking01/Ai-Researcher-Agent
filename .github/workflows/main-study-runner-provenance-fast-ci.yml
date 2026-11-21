@@ -12,6 +12,8 @@ on:
       - .github/workflows/budget-main-study.yml
       - scripts/run_budget_main_study.py
       - logic/experiment.py
+      - logic/planner_queries.py
+      - logic/research_agent.py
       - scripts/validate_main_study_inputs.py
       - docs/MAIN_STUDY_RUNNER_FAST_CI.md
       - scripts/run_offline_pytest_firewalled.sh
@@ -28,12 +30,15 @@ on:
       - tests/test_main_study_pricing_file.py
       - tests/test_main_study_trace_accounting.py
       - tests/test_main_study_runner_fast_ci_workflow.py
+      - tests/test_planner_query_contract.py
   pull_request:
     paths:
       - .github/workflows/main-study-runner-provenance-fast-ci.yml
       - .github/workflows/budget-main-study.yml
       - scripts/run_budget_main_study.py
       - logic/experiment.py
+      - logic/planner_queries.py
+      - logic/research_agent.py
       - scripts/validate_main_study_inputs.py
       - docs/MAIN_STUDY_RUNNER_FAST_CI.md
       - scripts/run_offline_pytest_firewalled.sh
@@ -50,6 +55,7 @@ on:
       - tests/test_main_study_pricing_file.py
       - tests/test_main_study_trace_accounting.py
       - tests/test_main_study_runner_fast_ci_workflow.py
+      - tests/test_planner_query_contract.py
   workflow_dispatch:
 
 permissions:
@@ -141,7 +147,7 @@ jobs:
         run: python -m scripts.verify_ci_python_runtime --phase before-tests
 
       - name: Compile noncanonical runner and safety regressions
-        run: python -m py_compile scripts/run_budget_main_study.py logic/experiment.py scripts/validate_main_study_inputs.py tests/test_main_study_runner_replication_gate.py tests/test_main_study_runner_trace_completion.py tests/test_main_study_task_file.py tests/test_main_study_pricing_file.py tests/test_main_study_trace_accounting.py tests/test_main_study_runner_fast_ci_workflow.py
+        run: python -m py_compile scripts/run_budget_main_study.py logic/experiment.py logic/planner_queries.py scripts/validate_main_study_inputs.py tests/test_main_study_runner_replication_gate.py tests/test_main_study_runner_trace_completion.py tests/test_main_study_task_file.py tests/test_main_study_pricing_file.py tests/test_main_study_trace_accounting.py tests/test_main_study_runner_fast_ci_workflow.py tests/test_planner_query_contract.py
 
       - name: Verify source checkout before targeted tests
         run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
@@ -152,7 +158,7 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |
           set -euo pipefail
-          bash scripts/run_offline_pytest_firewalled.sh tests/test_main_study_runner_replication_gate.py tests/test_main_study_runner_trace_completion.py tests/test_main_study_task_file.py tests/test_main_study_pricing_file.py tests/test_main_study_trace_accounting.py tests/test_main_study_runner_fast_ci_workflow.py 2>&1 | tee "$RUNNER_TEMP/vera-runner-provenance-tests.log"
+          bash scripts/run_offline_pytest_firewalled.sh tests/test_main_study_runner_replication_gate.py tests/test_main_study_runner_trace_completion.py tests/test_main_study_task_file.py tests/test_main_study_pricing_file.py tests/test_main_study_trace_accounting.py tests/test_main_study_runner_fast_ci_workflow.py tests/test_planner_query_contract.py 2>&1 | tee "$RUNNER_TEMP/vera-runner-provenance-tests.log"
 
       - name: Verify source checkout after targeted tests
         run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests

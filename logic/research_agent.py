@@ -8,6 +8,7 @@ import uuid
 from agent.llm_utils import UsageTracker
 from logic import prompts
 from logic.experiment import ExperimentConfig, normalize_verifier_output
+from logic.planner_queries import parse_planned_search_queries
 from scrape.web_search import web_search
 from scrape.web_scrape import async_browse
 from settings import Config
@@ -129,20 +130,7 @@ class ResearchAgent:
         result = await self.call_agent(
             prompts.generate_search_queries_prompt(self.question)
         )
-        try:
-            parsed = json.loads(result)
-        except (json.JSONDecodeError, TypeError) as exc:
-            raise ValueError(
-                "Planner did not return the required JSON list of queries"
-            ) from exc
-
-        if not isinstance(parsed, list):
-            raise ValueError("Planner output must be a JSON list")
-        queries = [str(query).strip() for query in parsed if str(query).strip()]
-        if len(queries) != 4:
-            raise ValueError(
-                f"Planner must return exactly 4 usable queries; got {len(queries)}"
-            )
+        queries = parse_planned_search_queries(result)
 
         await self._log(
             "🧠 Planned research queries: " + json.dumps(queries, ensure_ascii=False)
