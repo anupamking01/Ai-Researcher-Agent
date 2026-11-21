@@ -214,3 +214,28 @@ diagnostic, the designated-primary historical automated findings retain their
 post-collection chronology and evaluator-comparability qualifications,
 retrospective sensitivity analyses remain exploratory, and authentic blinded
 human validation has not been completed.
+
+## Streaming response-frame validity (21 November 2026)
+
+The pinned OpenAI 0.x streaming adapter previously swallowed missing or
+malformed frame envelopes and silently ignored falsey **present** content
+values. A truncated or corrupted stream could therefore be returned as a
+plausibly complete partial report. Truthy non-text deltas could also reach the
+websocket before failing during string assembly.
+
+For prospective calls, a chunk must provide a first-choice `delta` mapping;
+a present `content` must be text. Role-only frames, terminal frames with an
+empty `delta`, and explicit empty-string content remain valid. Invalid frames
+raise a deterministic output-validation error rather than being silently
+skipped. The stream continues to count **exactly one usage-unavailable
+provider attempt**, without inventing billed tokens; any already-sent
+websocket bytes are not retractable, and the adapter does not return the
+partial report as a successfully completed result.
+
+Eleven offline synthetic regressions cover corrupt frames, normal
+role/terminal frames, websocket delivery and single-call ledger continuity.
+This is an adapter robustness/provenance guard, **not** recovery of historical
+traces or proof of provider billing. Pilot findings remain diagnostic;
+historical automated comparisons retain post-collection chronology and
+evaluator-policy comparability qualifications; retrospective sensitivity
+findings remain exploratory; blinded human validation remains pending.

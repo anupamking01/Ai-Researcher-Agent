@@ -4046,3 +4046,104 @@ def test_nonstream_adapter_keeps_real_empty_and_nonempty_text(monkeypatch, conte
     ) == content
     assert len(attempted) == 1
     assert (tracker.snapshot()["model_calls"], tracker.snapshot()["unavailable_calls"]) == (1, 0)
+
+
+# Prospective-only streaming output provenance. Provider content is synthetic;
+# a corrupt frame must not be silently discarded as an empty text delta.
+@pytest.mark.parametrize(
+    "bad_chunk",
+    [
+        {},
+        {"choices": []},
+        {"choices": [{}]},
+        {"choices": [{"delta": None}]},
+        {"choices": [{"delta": []}]},
+        {"choices": [{"delta": {"content": None}}]},
+        {"choices": [{"delta": {"content": False}}]},
+        {"choices": [{"delta": {"content": 0}}]},
+        {"choices": [{"delta": {"content": []}}]},
+        {"choices": [{"delta": {"content": {"text": "not text"}}}]},
+    ],
+    ids=[
+        "missing-choices", "empty-choices", "missing-delta", "null-delta",
+        "nonmapping-delta", "null-content", "boolean-content",
+        "numeric-content", "list-content", "mapping-content",
+    ],
+)
+def test_stream_adapter_rejects_corrupt_chunk_and_preserves_attempt_ledger(
+    monkeypatch, bad_chunk
+):
+    import asyncio
+
+    class Socket:
+        def __init__(self):
+            self.sent = []
+
+        async def send_text(self, value):
+            self.sent.append(value)
+
+    attempts = []
+
+    def provider_create(**kwargs):
+        attempts.append(kwargs)
+        return iter([
+            {"choices": [{"delta": {"content": "partial text"}}]},
+            bad_chunk,
+            {"choices": [{"delta": {"content": "not delivered"}}]},
+        ])
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    socket = Socket()
+    stream = adapter.create_chat_completion(
+        model="synthetic-model",
+        messages=[{"role": "user", "content": "synthetic prompt"}],
+        stream=True, websocket=socket, usage_tracker=tracker,
+    )
+    with pytest.raises(ValueError, match="provider stream"):
+        asyncio.run(stream)
+
+    assert len(attempts) == 1
+    # Earlier websocket output cannot be retracted. No later chunk may be
+    # forwarded and the partial stream must not be returned as a success.
+    assert socket.sent == ["partial text"]
+    ledger = tracker.snapshot()
+    assert ledger["model_calls"] == 1
+    assert ledger["unavailable_calls"] == 1
+    assert ledger["total_tokens"] == 0
+    assert ledger["by_model"]["synthetic-model"]["unavailable_calls"] == 1
+
+
+def test_stream_adapter_accepts_role_terminal_and_empty_content_frames(monkeypatch):
+    import asyncio
+
+    def provider_create(**kwargs):
+        return iter([
+            {"choices": [{"delta": {"role": "assistant"}}]},
+            {"choices": [{"delta": {"content": "first"}}]},
+            {"choices": [{"delta": {"content": ""}}]},
+            {"choices": [{"delta": {"content": " second"}}]},
+            {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+        ])
+
+    class Socket:
+        def __init__(self):
+            self.sent = []
+
+        async def send_json(self, data):
+            self.sent.append(data)
+
+    adapter = _isolated_chat_adapter_for_usage_test(monkeypatch, provider_create)
+    tracker = UsageTracker()
+    socket = Socket()
+    result = asyncio.run(adapter.create_chat_completion(
+        model="synthetic-model", messages=[], stream=True,
+        websocket=socket, usage_tracker=tracker,
+    ))
+    assert result == "first second"
+    assert socket.sent == [
+        {"type": "report", "output": "first"},
+        {"type": "report", "output": " second"},
+    ]
+    assert tracker.snapshot()["model_calls"] == 1
+    assert tracker.snapshot()["unavailable_calls"] == 1

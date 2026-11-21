@@ -75,20 +75,25 @@ async def _stream_completion(
 
     parts: list[str] = []
     for chunk in response:
+        # Role-only and terminal frames legitimately omit content. A broken
+        # envelope or a present non-text content field is different: skipping
+        # it could turn a truncated stream into a successful research report.
         try:
-            delta = chunk["choices"][0]["delta"].get("content", "")
-        except (KeyError, IndexError, AttributeError, TypeError):
-            delta = ""
+            content = chunk["choices"][0]["delta"].get("content", "")
+        except (KeyError, IndexError, AttributeError, TypeError) as exc:
+            raise ValueError("provider stream chunk missing a valid delta") from exc
 
-        if not delta:
+        if not isinstance(content, str):
+            raise ValueError("provider stream delta content must be text")
+        if not content:
             continue
 
-        parts.append(delta)
+        parts.append(content)
         if websocket is not None:
             if hasattr(websocket, "send_text"):
-                await websocket.send_text(delta)
+                await websocket.send_text(content)
             elif hasattr(websocket, "send_json"):
-                await websocket.send_json({"type": "report", "output": delta})
+                await websocket.send_json({"type": "report", "output": content})
 
     return "".join(parts)
 
