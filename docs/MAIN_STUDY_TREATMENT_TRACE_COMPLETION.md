@@ -340,3 +340,33 @@ artifacts, detect malicious filesystem races or guarantee that no other
 unrecorded treatment ever ran. It **never retries** a suspected interrupted
 treatment: investigate and preserve the original evidence instead. It makes
 no confirmatory, pilot-outcome, exploratory-result or human-validation claim.
+
+### Detect untraced treatment side effects after an agent call (22 November 2026)
+
+The startup no-rerun preflight rejects orphaned report and verifier files, but
+previously the **post-treatment** completion gate counted only JSON traces.
+An agent could publish one valid trace and its Markdown report **plus**
+`outputs/<other-run-id>/research_report.md`, `research_report.pdf`, or
+`verification.json` with no corresponding trace. The valid cell could then
+be certified while a potentially billable second output was absent from the
+provider-spend ledger.
+
+For new noncanonical treatments, completion now inventories the one-level
+`outputs/` report directory entries again, allowing report/receipt files
+only beneath run IDs present in the post-call treatment trace inventory.
+Unexpected untraced Markdown/PDF/verifier evidence, including dangling
+symlink directories, fails the cell and records a durable failed attempt;
+the runner reconciles any readable trace spending and **does not** run the
+next treatment. Existing trace-backed reports still undergo their separate
+content, provenance and verifier checks. Unrelated directories without
+recognized research artifacts are permitted.
+
+Offline synthetic cases cover three orphan artifact types, a linked directory,
+valid traced PDF alongside unrelated notes, and full runner failure accounting.
+They invoke no model or evaluator. This is observed local evidence consistency,
+not an atomic filesystem snapshot, proof a second provider call occurred,
+or recovery of the missing original September artifacts. The five-task pilot
+remains diagnostic; frozen automated findings retain post-collection planning
+and fixed-order/evaluator comparability limitations; retrospective sensitivities
+are exploratory, not prospective confirmatory tests; blinded human validation
+remains pending.

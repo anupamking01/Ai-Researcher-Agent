@@ -1496,6 +1496,17 @@ def _require_new_completed_trace(
             f"Treatment {variant_id}/{task_id} must publish exactly one new "
             "trace without removing earlier treatment evidence"
         )
+    # A valid new trace cannot certify the cell while a second, untraced
+    # report or verifier output also appeared. A trace-only inventory would
+    # otherwise omit that possible attempt from provider-spend accounting.
+    try:
+        _require_no_orphaned_treatment_outputs(
+            TRACE_ROOT.parent, traced_run_ids=frozenset(path.stem for path in current),
+        )
+    except SystemExit as exc:
+        raise ValueError(
+            f"Untraced treatment output after execution: {exc}"
+        ) from exc
     for prior_path in prior_paths:
         try:
             current_fingerprint = _trace_file_fingerprint(
@@ -1560,17 +1571,26 @@ def _require_new_completed_trace(
         ) from exc
 
 
-def _require_no_orphaned_treatment_outputs(outputs_root: Path) -> None:
-    """Fail closed if reports survived but their treatment traces did not.
+def _require_no_orphaned_treatment_outputs(
+    outputs_root: Path, *, traced_run_ids: frozenset[str] = frozenset(),
+) -> None:
+    """Require a trace for every retained report/verifier directory.
 
-    The trace inventory alone cannot detect a previously interrupted run
-    that published Markdown/PDF or a verifier receipt before its JSON trace.
-    Do not silently treat those retained outputs as zero prior attempts.
-    This is a bounded one-level inventory of the writer's run directories;
-    it does not follow symlinked directories or read their contents.
+    At study startup there must be no treatment output; after an agent call,
+    a report directory is allowed only when a trace names that run ID. This
+    is a one-level, no-follow directory-entry check, not an atomic snapshot
+    or independent proof of provider billing.
     """
-    if not outputs_root.exists():
+    try:
+        root_stat = os.lstat(outputs_root)
+    except FileNotFoundError:
         return
+    except OSError as exc:
+        raise SystemExit(
+            f"Cannot inspect main-study outputs root: {outputs_root}"
+        ) from exc
+    if not stat.S_ISDIR(root_stat.st_mode):
+        raise SystemExit(f"Invalid main-study outputs root: {outputs_root}")
     try:
         with os.scandir(outputs_root) as entries:
             for entry in entries:
@@ -1586,6 +1606,8 @@ def _require_no_orphaned_treatment_outputs(outputs_root: Path) -> None:
                     )
                 if not entry.is_dir(follow_symlinks=False):
                     continue
+                if entry.name in traced_run_ids:
+                    continue  # Trace-backed run; its report/receipt has separate gates.
                 for filename in (
                     "research_report.md", "research_report.pdf", "verification.json",
                 ):

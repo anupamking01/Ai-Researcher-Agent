@@ -84,6 +84,46 @@ def test_matching_completed_trace_has_verifiable_cost(tmp_path, monkeypatch):
     assert _check(root, monkeypatch) == pytest.approx(0.000012)
 
 
+@pytest.mark.parametrize("filename", [
+    "research_report.md", "research_report.pdf", "verification.json",
+])
+def test_valid_completed_trace_cannot_mask_untraced_treatment_output(
+    tmp_path, monkeypatch, filename,
+):
+    """One valid trace must not hide a second, potentially billable output."""
+    root = tmp_path / "traces"
+    _write(root, _payload())
+    orphan = root.parent / "untraced-run" / filename
+    orphan.parent.mkdir()
+    orphan.write_text("Synthetic retained evidence", encoding="utf-8")
+    with pytest.raises(ValueError, match="Untraced treatment output after execution"):
+        _check(root, monkeypatch)
+
+
+def test_completed_trace_rejects_late_linked_outputs_directory(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "traces"
+    _write(root, _payload())
+    (root.parent / "untraced-link").symlink_to(
+        root.parent / "missing-outputs", target_is_directory=True,
+    )
+    with pytest.raises(ValueError, match="Untraced treatment output after execution"):
+        _check(root, monkeypatch)
+
+
+def test_completed_trace_allows_traced_pdf_and_unrelated_notes(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "traces"
+    _write(root, _payload())
+    (root.parent / "run-1" / "research_report.pdf").write_bytes(b"synthetic PDF")
+    notes = root.parent / "notes" / "README.txt"
+    notes.parent.mkdir()
+    notes.write_text("Unrelated output", encoding="utf-8")
+    assert _check(root, monkeypatch) == pytest.approx(0.000012)
+
+
 @pytest.mark.parametrize("reported", [
     None, "", "Different study question", "Synthetic question ", True,
 ])
@@ -493,6 +533,7 @@ def test_unchanged_prior_verifier_custody_accepts_later_cell(
     "cancelled_missing_trace", "cancelled_malformed_trace",
     "agent_exit_missing_trace", "agent_exit_malformed_trace",
     "pre_agent_inventory_invalid",
+    "orphan_report_after_valid_trace",
 ])
 def test_agent_failure_or_cancellation_records_attempt(
     tmp_path, monkeypatch, failure_mode,
@@ -529,6 +570,11 @@ def test_agent_failure_or_cancellation_records_attempt(
             broken = study.TRACE_ROOT / "D3" / "run-1.json"
             broken.parent.mkdir(parents=True, exist_ok=True)
             broken.write_text("{not valid JSON", encoding="utf-8")
+        if failure_mode == "orphan_report_after_valid_trace":
+            _write(study.TRACE_ROOT, _payload())
+            orphan = study.TRACE_ROOT.parent / "untraced-run" / "research_report.md"
+            orphan.parent.mkdir()
+            orphan.write_text("Synthetic orphan", encoding="utf-8")
         if failure_mode.startswith("cancelled_"):
             raise asyncio.CancelledError("synthetic cancellation; no provider calls")
         if failure_mode.startswith("agent_exit_"):
@@ -591,6 +637,8 @@ def test_agent_failure_or_cancellation_records_attempt(
         assert progress["trace_cost_reconciliation"] == "recomputed_from_retained_traces"
         if failure_mode == "missing_trace":
             assert "exactly one new trace" in progress["events"][0]["error"]
+        if failure_mode == "orphan_report_after_valid_trace":
+            assert "Untraced treatment output after execution" in progress["events"][0]["error"]
 
 
 def test_completed_report_gate_reuses_bounded_trace_capture(
