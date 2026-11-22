@@ -1116,3 +1116,38 @@ def test_descriptive_summary_refuses_corrupt_prior_pair(tmp_path, monkeypatch):
         summarize_budget_main_study.main()
     assert csv_path.read_bytes() == corrupted
 
+
+
+@pytest.mark.parametrize("linked", ("summary", "csv"))
+@pytest.mark.parametrize("direct_verification", (True, False))
+def test_descriptive_summary_rejects_retained_hardlink_alias(
+    tmp_path, monkeypatch, linked, direct_verification
+):
+    """A digest-matched, hard-linked output is not exclusively retained evidence."""
+    _configure_summary(
+        tmp_path, monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    assert summarize_budget_main_study.main() == 0
+    target = (
+        summarize_budget_main_study.OUT_JSON
+        if linked == "summary"
+        else summarize_budget_main_study.OUT_CSV
+    )
+    outside = tmp_path / f"outside-{linked}-hardlink"
+    outside.hardlink_to(target)
+    previous = target.read_bytes()
+    assert target.stat().st_nlink == 2
+
+    with pytest.raises(SystemExit, match="multiple hard links"):
+        if direct_verification:
+            summarize_budget_main_study._verify_main_study_summary_pair(
+                summarize_budget_main_study.OUT_JSON,
+                summarize_budget_main_study.OUT_CSV,
+            )
+        else:
+            summarize_budget_main_study.main()
+
+    assert target.read_bytes() == outside.read_bytes() == previous
+    assert target.stat().st_nlink == 2

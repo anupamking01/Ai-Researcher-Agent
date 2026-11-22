@@ -127,3 +127,26 @@ independently authenticate the missing original treatment and report archive.
 They are prospective safeguards for **noncanonical descriptive** results;
 frozen automated results, exploratory sensitivities, and pending human
 validation remain separate. No treatment/evaluator rerun is needed.
+
+## Retained descriptive output hard-link custody (22 November 2026)
+
+A digest-matched retained JSON/CSV pair is not sufficient for non-destructive
+replay if either regular output file has another filesystem hard link. That
+alias permits in-place modification through a different pathname even though
+the expected published name and file identity remain unchanged. The previous
+no-follow source reader rejected symlinks and pathname swaps but did not reject
+files with a hard-link count greater than one.
+
+The descriptive pair verifier now requires **exactly one hard link** for each
+retained output, after reading and checking its exact CSV digest. This applies
+both to direct verification and to an otherwise byte-identical, read-only
+summary rerun. Four synthetic offline regressions cover hard-linked JSON/CSV
+under both entry points and confirm no published bytes are replaced. The
+normal single-link, digest-matched rerun remains supported.
+
+This is an output custody check, not a guarantee against every concurrent
+filesystem mutation, a multi-file atomic publication scheme, or independent
+authentication of original treatment reports. Historical automated findings
+remain frozen with their post-collection and evaluator-policy qualifications,
+retrospective sensitivity work is exploratory, the pilot is diagnostic, and
+genuine blinded human validation is still outstanding.

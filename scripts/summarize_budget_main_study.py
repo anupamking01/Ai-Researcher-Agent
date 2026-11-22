@@ -68,6 +68,22 @@ def _verify_main_study_summary_pair(summary_path: Path, csv_path: Path) -> None:
             "Main-study descriptive summary/CSV generation mismatch; "
             "preserve both outputs for provenance review"
         )
+    # Matching digests alone do not establish exclusive custody: a regular
+    # output hard-linked elsewhere can be modified through that alias without
+    # changing the published pathname. Check both retained destinations after
+    # reading their bytes, including on byte-identical idempotent replays.
+    for output_path in (summary_path, csv_path):
+        try:
+            link_count = output_path.lstat().st_nlink
+        except OSError as exc:
+            raise SystemExit(
+                f"Cannot inspect retained descriptive output links {output_path}: {exc}"
+            ) from exc
+        if link_count != 1:
+            raise SystemExit(
+                "Retained main-study descriptive output has multiple hard links: "
+                f"{output_path}; preserve evidence for provenance review"
+            )
 
 
 def _publish_main_study_summary_pair(summary: dict, csv_bytes: bytes) -> None:
