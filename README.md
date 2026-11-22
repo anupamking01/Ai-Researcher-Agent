@@ -25,19 +25,21 @@ This project is an end-to-end planner/execution web-research system **and** an e
 | Frozen 10-task paired main-study design | ✅ Implemented |
 | Evaluator-only recovery without replacing treatments | ✅ Implemented |
 | Frozen paired statistical analysis | ✅ Implemented; plan postdates treatment and evaluator recovery |
-| Canonical recovered-study inference | ✅ Completed, provenance-verified, and preserved |
+| Frozen automated-inference artifacts | ✅ Preserved with byte-level input/output checks; original reports/traces **not independently authenticated** |
 | Secret-seeded, reproducible blinded human-evaluation packets | ✅ Implemented |
 | Pre-unblinding human-rating freeze/agreement tooling | ✅ Implemented |
 | Human rubric annotations | ⏳ Pending real annotators |
-| Final paper-level claims | ⏳ Pending human validation and manuscript synthesis |
+| Final paper-level conclusions | ⏳ Pending original-source authentication, two independent human annotators, and automated–human reconciliation |
 
 **Statistical-plan timing:** The exact paired analysis plan was committed after the historical treatment run and common-evaluator recovery. It was frozen before the canonical Git publication, but prospective precollection statistical preregistration and outcome blinding at the freeze are **not established**. See the [source-linked chronology and offline Git audit](docs/MAIN_STUDY_ANALYSIS_FREEZE_CHRONOLOGY.md). This does not alter the frozen estimates or imply that anyone inspected outcomes before writing the plan.
 
-A GitHub Actions workflow or recovery job can fail for operational reasons even when some treatment artifacts were produced. Final results must therefore be tied to the exact canonical artifact set and provenance used for analysis rather than inferred from a workflow label alone.
+**Original-source and human-validation gates:** As of 23 November 2026, the historical treatment and evaluator-recovery Actions artifact inventories have no accessible original files for independently authenticating the 40 report/trace pairs. This is an access and custody gap, **not** proof the original files never existed. Authenticated blinded distribution, two eligible independent human annotators, genuine scores, agreement analysis, and automated–human reconciliation are still outstanding. When quoting automated estimates, accompany the frozen report with the [mandatory reporting cover](paper/MAIN_STUDY_REPORTING_COVER.md) or use the [qualified, noncanonical reading-copy workflow](docs/MAIN_STUDY_QUALIFIED_REPORTING.md). The five-task pilot is diagnostic, later sensitivity analyses are exploratory, and human validation is pending.
+
+A GitHub Actions workflow or recovery job can fail even if some treatment artifacts were produced. Published CSV and retained output fingerprints check consistency of the preserved analysis artifacts; they do **not** independently establish custody of the original 40 treatment reports and traces. Workflow status alone cannot substitute for original-source authentication.
 
 ## Experimental design
 
-The frozen main analysis isolates three stage-wise effects on the same task set:
+The historical design specifies three stage-wise paired comparisons on the same task set. Because treatment always followed the same order within each task, these comparisons **do not isolate causal effects**:
 
 | Variant | Planning | Scheduled browse budget | Treatment verification | Comparison |
 |---|---|---:|---|---|
@@ -81,7 +83,7 @@ supported claims / claims checked
 
 Secondary measurements include broad support, unsupported/contradicted claims, successful sources, total tokens, model calls, latency, report length, and estimated treatment cost.
 
-The frozen main-study analysis uses paired task-level contrasts and reports mean/median differences, deterministic bootstrap confidence intervals, exact sign-flip/randomization p-values where the complete paired matrix exists, standardized paired effects when defined, and Holm adjustment across the three primary contrasts.
+The frozen automated analysis reports paired task-level mean/median differences, deterministic bootstrap confidence intervals, exact sign-flip p-values, standardized paired effects when defined, and Holm adjustment across the three designated primary contrasts. The sign-flip values are assumption-dependent reference calculations, **not design-based randomization-test evidence**: the fixed treatment order provides no randomized assignment and paired-difference sign exchangeability has not been established.
 
 Because the task set is small, the project emphasizes **effect sizes, uncertainty, paired consistency, and transparent limitations** rather than binary significance claims.
 
@@ -122,9 +124,11 @@ A reviewer should be able to trace the project from question → treatment → e
 |---|---|
 | **[paper/RESEARCH_PROTOCOL.md](paper/RESEARCH_PROTOCOL.md)** | Research question, hypotheses, budget principles, threats to validity |
 | **[paper/PILOT_RESULTS.md](paper/PILOT_RESULTS.md)** | Canonical diagnostic pilot and caveats |
-| **[paper/ANALYSIS_PLAN.md](paper/ANALYSIS_PLAN.md)** | Frozen confirmatory main-study inference |
-| **[paper/MAIN_STUDY_INFERENCE.md](paper/MAIN_STUDY_INFERENCE.md)** | Canonical automated main-study results from the verified recovered artifact |
-| **[paper/HUMAN_EVAL_PROTOCOL.md](paper/HUMAN_EVAL_PROTOCOL.md)** | Blinded human-quality evaluation |
+| **[paper/ANALYSIS_PLAN.md](paper/ANALYSIS_PLAN.md)** | Exact paired statistical plan, committed after treatment and evaluator recovery; not prospectively precollection-preregistered |
+| **[paper/MAIN_STUDY_INFERENCE.md](paper/MAIN_STUDY_INFERENCE.md)** | Unchanged historical automated inference; source report/trace custody remains unauthenticated, and reporting requires the qualification cover |
+| **[paper/MAIN_STUDY_REPORTING_COVER.md](paper/MAIN_STUDY_REPORTING_COVER.md)** | Mandatory chronology, fixed-order, inference, and provenance qualifications for automated estimates |
+| **[docs/MAIN_STUDY_QUALIFIED_REPORTING.md](docs/MAIN_STUDY_QUALIFIED_REPORTING.md)** | Source-checked noncanonical reading-copy procedure; historical results stay unchanged |
+| **[paper/HUMAN_EVAL_PROTOCOL.md](paper/HUMAN_EVAL_PROTOCOL.md)** | Blinded human-quality evaluation; real ratings pending |
 | **[docs/EVALUATION.md](docs/EVALUATION.md)** | End-to-end evaluation methodology |
 | `logic/experiment.py` | Experiment configuration / provenance data structures |
 | `scripts/run_budget_main_study.py` | Main-study orchestration |
@@ -228,7 +232,7 @@ Research analysis should be performed from persisted traces/artifacts. Treatment
 
 This project follows several explicit guardrails:
 
-1. **Freeze before looking.** Task sets and confirmatory analysis choices are versioned/frozen before inspecting the outcomes they govern.
+1. **Disclose the actual freeze chronology.** Prospective freezing is the objective, not a property to assume: the exact historical VERA automated analysis plan entered Git after treatment and evaluator recovery. Prospective precollection statistical preregistration and blinding at that freeze are not established. See the [source-linked chronology](docs/MAIN_STUDY_ANALYSIS_FREEZE_CHRONOLOGY.md).
 2. **Preserve failures.** Treatment failures, zero-evidence outcomes, and infrastructure problems are retained rather than silently retried until a favorable result appears.
 3. **Separate treatment from measurement.** Treatment-time verification is distinct from the common evaluator applied across variants.
 4. **Account for resource differences.** More inference/tool usage is reported as cost, not disguised as an equal-budget comparison.

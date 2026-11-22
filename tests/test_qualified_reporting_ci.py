@@ -80,6 +80,8 @@ def test_ci_runs_real_reporter_and_verifier_on_scientific_changes():
         "scripts/assemble_qualified_main_study_report.py",
         "scripts/verify_qualified_reporting_copy.py",
         "tests/test_qualified_main_study_report.py",
+        "tests/test_readme_research_claims.py",
+        "README.md",
         "tests/test_qualified_reporting_ci.py",
         "docs/MAIN_STUDY_QUALIFIED_REPORTING.md",
         "paper/MAIN_STUDY_REPORTING_COVER.md",
@@ -108,6 +110,7 @@ def test_ci_runs_real_reporter_and_verifier_on_scientific_changes():
         "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1"
     )
     script = steps[2]["run"]
+    assert "python -m unittest discover -s tests -p 'test_readme_research_claims.py' -v" in script
     assert "python -m scripts.assemble_qualified_main_study_report" in script
     assert "python -m scripts.verify_qualified_reporting_copy" in script
     assert "git diff --exit-code" in script
