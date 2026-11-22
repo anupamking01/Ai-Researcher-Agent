@@ -156,6 +156,28 @@ def test_fake_independent_authentication_claim_is_rejected(tmp_path, monkeypatch
         _check(metadata_path, archive)
 
 
+def _assert_archive_workflow_steps_do_not_execute_treatments(workflow_text: str) -> None:
+    """Inspect executable steps, not push path filters listing guarded sources.
+
+    An audit must react to edits of the treatment runner without invoking it.
+    The distinction also prevents source-trigger coverage from breaking CI.
+    """
+    import yaml
+
+    definition = yaml.load(workflow_text, Loader=yaml.BaseLoader)
+    for job in definition["jobs"].values():
+        for step in job["steps"]:
+            executable = "\n".join(step.get(key, "") for key in ("run", "uses"))
+            for forbidden in (
+                "run_budget_main_study",
+                "run_pilot",
+                "evaluate_posthoc_support",
+            ):
+                assert forbidden not in executable, (
+                    f"read-only archive audit must not execute {forbidden}"
+                )
+
+
 def test_workflow_is_read_only_and_runs_real_concordance_before_archive_retention():
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/retained-canonical-archive-audit.yml").read_text()
     assert "workflow_dispatch:" in workflow
@@ -163,7 +185,7 @@ def test_workflow_is_read_only_and_runs_real_concordance_before_archive_retentio
     assert "actions: read" in workflow and "contents: read" in workflow
     assert "contents: write" not in workflow
     assert "OPENAI_API_KEY" not in workflow
-    assert "run_budget_main_study" not in workflow
+    _assert_archive_workflow_steps_do_not_execute_treatments(workflow)
     assert "download-artifact" not in workflow  # We need the original ZIP, not extracted files.
     assert (
         workflow.index("Download exact canonical-run artifact metadata")
@@ -173,6 +195,28 @@ def test_workflow_is_read_only_and_runs_real_concordance_before_archive_retentio
     )
     assert "10837878458/zip" in workflow
     assert "if-no-files-found: error" in workflow
+
+
+@pytest.mark.parametrize("command", [
+    "python -m scripts.run_budget_main_study",
+    "python -m scripts.run_pilot",
+    "python -m scripts.evaluate_posthoc_support",
+])
+def test_archive_audit_rejects_treatment_or_evaluator_execution(command):
+    """A read-only audit must not gain executable experiment steps."""
+    source = (
+        Path(__file__).resolve().parents[1]
+        / ".github/workflows/retained-canonical-archive-audit.yml"
+    ).read_text(encoding="utf-8")
+    marker = "      - name: Retain verified provider-observed ZIP and concordance receipt"
+    assert source.count(marker) == 1
+    injected = source.replace(
+        marker,
+        "      - name: Forbidden experiment execution\n"
+        "        run: " + command + "\n\n" + marker,
+    )
+    with pytest.raises(AssertionError, match="must not execute"):
+        _assert_archive_workflow_steps_do_not_execute_treatments(injected)
 
 
 def test_retained_workflow_uses_exact_provenance_bound_revision_and_binds_live_results():
