@@ -188,6 +188,49 @@ def test_unchanged_prior_trace_and_new_completed_trace_accepted(
     ) == pytest.approx(0.000012)
 
 
+@pytest.mark.parametrize("prior_variant", ["D6", "P6", "P6V"])
+def test_new_treatment_rejects_reused_run_id_across_variants(
+    tmp_path, monkeypatch, prior_variant,
+):
+    """Two distinct traces cannot borrow one physical report, even unchanged."""
+    root = tmp_path / "traces"
+    old = _write(root, _payload(run_id="shared", variant=prior_variant))
+    monkeypatch.setattr(study, "TRACE_ROOT", root)
+    trace_pins = study._snapshot_treatment_traces((old,))
+    report_pins = study._snapshot_treatment_reports((old,))
+    receipt_pins = study._snapshot_treatment_verifier_receipts((old,))
+
+    # Publish only a new D3 trace: the original report's bytes, inode and
+    # timestamp remain untouched. Prior-custody fingerprints will still match.
+    new_trace = root / "D3" / "shared.json"
+    new_trace.parent.mkdir(parents=True, exist_ok=True)
+    new_trace.write_text(json.dumps(_payload(run_id="shared")), encoding="utf-8")
+    assert study._snapshot_treatment_reports((old,)) == report_pins
+    with pytest.raises(ValueError, match="reused run_id"):
+        _check(
+            root, monkeypatch, old=(old,), prior_fingerprints=trace_pins,
+            prior_report_fingerprints=report_pins,
+            prior_receipt_fingerprints=receipt_pins,
+        )
+
+
+def test_distinct_cross_variant_run_ids_retain_independent_reports(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "traces"
+    old = _write(root, _payload(run_id="prior-d6", variant="D6"))
+    monkeypatch.setattr(study, "TRACE_ROOT", root)
+    trace_pins = study._snapshot_treatment_traces((old,))
+    report_pins = study._snapshot_treatment_reports((old,))
+    receipt_pins = study._snapshot_treatment_verifier_receipts((old,))
+    _write(root, _payload(run_id="new-d3"))
+    assert _check(
+        root, monkeypatch, old=(old,), prior_fingerprints=trace_pins,
+        prior_report_fingerprints=report_pins,
+        prior_receipt_fingerprints=receipt_pins,
+    ) == pytest.approx(0.000012)
+
+
 @pytest.mark.parametrize("mutation", ["different_bytes", "same_bytes_new_inode"])
 def test_prior_trace_change_cannot_be_hidden_by_new_completed_trace(
     tmp_path, monkeypatch, mutation,

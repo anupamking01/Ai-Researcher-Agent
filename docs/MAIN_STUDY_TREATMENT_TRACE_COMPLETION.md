@@ -302,3 +302,20 @@ billing, original artifact custody or prospective preregistration. The pilot
 remains diagnostic, frozen automated comparisons retain post-collection,
 fixed-order and evaluator-policy limitations, retrospective sensitivities
 remain exploratory, and human validation is pending.
+
+### Distinct report custody across treatment variants (22 November 2026)
+
+The trace inventory records files by treatment variant, but the agent's
+Markdown report directory uses only the trace's `run_id`:
+`outputs/<run_id>/research_report.md`. Two different variant traces with the
+same run ID would therefore refer to **one physical report**, rather than two
+independently produced treatment reports. Earlier trace/report fingerprints
+cannot detect this alias when the preexisting Markdown file remains untouched.
+
+The noncanonical completion gate now rejects a newly created trace whose run ID
+matches **any earlier treatment trace**, even in another variant directory.
+Distinct run IDs remain accepted. Four synthetic offline cases cover D6/P6/P6V
+prior traces followed by D3, plus an independently named cross-variant control.
+This is a prospective identity and evidence-attribution invariant, not proof
+of independent model execution, and it does not retrofit, rerun, or reclassify
+the frozen September treatments or generate human ratings.

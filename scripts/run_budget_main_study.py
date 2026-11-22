@@ -1532,6 +1532,14 @@ def _require_new_completed_trace(
             f"Prior verifier receipt changed during {variant_id}/{task_id}"
         )
     (new_path,) = tuple(created)
+    # The report directory is keyed only by run_id, not by treatment arm.
+    # A second trace under another variant may otherwise reuse an unchanged
+    # earlier Markdown report and incorrectly count it as independent evidence.
+    if any(old_path.stem == new_path.stem for old_path in prior_paths):
+        raise ValueError(
+            f"Treatment {variant_id}/{task_id} reused run_id {new_path.stem!r}; "
+            "each treatment requires a distinct retained report directory"
+        )
     if new_path.parent.name != variant_id:
         raise ValueError(
             f"Treatment {variant_id}/{task_id} published a trace under "
