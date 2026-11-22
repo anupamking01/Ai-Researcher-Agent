@@ -252,3 +252,27 @@ common evaluator was rerun; the five-task pilot is diagnostic, automated
 frozen findings remain post-collection and subject to fixed-order and
 evaluator-policy limitations, retrospective sensitivity analyses remain
 exploratory, and genuine blinded human validation remains pending.
+
+### Prior verification-receipt continuity across later treatments (22 November 2026)
+
+A prospective P6V trace can bind the digest of its retained
+`verification.json`, but that digest alone cannot detect later **same-byte,
+different-inode replacement**. The completed-cell absence gate for D3/D6/P6
+previously checked only when that cell finished: an unexpected verifier
+artifact could appear during a later cell without modifying the earlier trace
+or report.
+
+For schema-5+ completed prior cells, the noncanonical runner now snapshots
+P6V receipts with bounded SHA-256, inode generation, size and timestamps, and
+captures required **absence** in non-verification arms. After the next agent
+attempt it repeats the independent checks. Missing, modified or same-byte
+replaced P6V receipts, and newly present no-verifier entries (including dangling
+symlinks), fail closed. Historical schema-1–4 traces are not retroactively
+strengthened. Observed local filesystem integrity does not establish atomic
+custody, external verifier execution or authenticity of September artifacts.
+
+The synthetic regressions perform no provider calls, treatment/evaluator reruns
+or human ratings. The pilot remains diagnostic; frozen automated comparisons
+retain post-collection analysis and fixed-order/evaluator-policy limitations,
+retrospective sensitivities remain exploratory and genuine human validation is
+pending.

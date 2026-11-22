@@ -1383,19 +1383,71 @@ def _require_completed_report(trace_path: Path) -> None:
         and trace.get("completed") is True
         and trace.get("verification_mode") == "none"
     ):
-        verifier_path = report.parent / "verification.json"
+        _require_absent_verifier_receipt(report.parent / "verification.json")
+
+
+def _require_absent_verifier_receipt(receipt: Path) -> None:
+    """Inspect the directory entry, including dangling symlinks, not exists()."""
+    try:
+        os.lstat(receipt)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise ValueError(
+            f"Cannot establish absence of non-verifier receipt: {receipt}"
+        ) from exc
+    raise ValueError(
+        f"Non-verifier treatment retained a verification artifact: {receipt}"
+    )
+
+
+def _snapshot_treatment_verifier_receipts(
+    prior_paths: tuple[Path, ...],
+) -> dict[Path, tuple[int, int, int, int, int, int, str] | None]:
+    """Pin schema-5+ prior verifier receipts, including required absence.
+
+    The spend validator checks a P6V receipt digest against its trace.
+    This extra snapshot detects later same-byte inode replacement or a
+    new artifact appearing in a previously completed no-verification arm.
+    """
+    receipts = {}
+    for trace_path in prior_paths:
         try:
-            os.lstat(verifier_path)
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
+            payload = json.loads(
+                _read_treatment_trace_bytes(trace_path).decode("utf-8"),
+                object_pairs_hook=_reject_duplicate_json_keys,
+            )
+            trace = payload["trace"]
+            if not isinstance(trace, dict):
+                raise ValueError("trace must be an object")
+        except (
+            SystemExit, OSError, UnicodeDecodeError, ValueError,
+            KeyError, TypeError,
+        ) as exc:
             raise ValueError(
-                f"Cannot establish absence of non-verifier receipt: {verifier_path}"
+                f"Cannot inspect prior verifier provenance: {trace_path}"
             ) from exc
+        schema = trace.get("search_provenance_schema")
+        if (
+            type(schema) is not int
+            or schema < VERIFIER_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA
+            or trace.get("completed") is not True
+        ):
+            continue  # Do not retrofit a physical receipt gate onto legacy traces.
+        receipt = TRACE_ROOT.parent / trace_path.stem / "verification.json"
+        mode = trace.get("verification_mode")
+        if mode == "verify":
+            receipts[receipt] = _trace_file_fingerprint(
+                receipt, max_bytes=_MAX_TREATMENT_TRACE_BYTES,
+            )
+        elif mode == "none":
+            _require_absent_verifier_receipt(receipt)
+            receipts[receipt] = None
         else:
             raise ValueError(
-                f"Non-verifier treatment retained a verification artifact: {verifier_path}"
+                f"Invalid prior verification mode for prospective trace: {trace_path}"
             )
+    return receipts
 
 
 def _snapshot_treatment_reports(
@@ -1415,6 +1467,7 @@ def _require_new_completed_trace(
     *,
     prior_fingerprints: dict[Path, tuple[int, int, int, int, int, int, str]],
     prior_report_fingerprints: dict[Path, tuple[int, int, int, int, int, int, str]],
+    prior_receipt_fingerprints: dict[Path, tuple[int, int, int, int, int, int, str] | None],
     variant_id: str,
     task_set_id: str,
     task_id: str,
@@ -1470,6 +1523,14 @@ def _require_new_completed_trace(
             raise ValueError(f"Prior completed report changed during treatment: {report}")
     if len(prior_report_fingerprints) != len(prior_paths):
         raise ValueError("Prior report fingerprint inventory does not match traces")
+    try:
+        current_receipts = _snapshot_treatment_verifier_receipts(prior_paths)
+    except ValueError as exc:
+        raise ValueError(f"Prior verifier receipt integrity check failed: {exc}") from exc
+    if current_receipts != prior_receipt_fingerprints:
+        raise ValueError(
+            f"Prior verifier receipt changed during {variant_id}/{task_id}"
+        )
     (new_path,) = tuple(created)
     if new_path.parent.name != variant_id:
         raise ValueError(
@@ -1754,6 +1815,9 @@ async def _run_main_study() -> None:
                 prior_report_fingerprints = _snapshot_treatment_reports(
                     prior_trace_paths
                 )
+                prior_receipt_fingerprints = _snapshot_treatment_verifier_receipts(
+                    prior_trace_paths
+                )
                 try:
                     await run_agent(
                         task=task["question"],
@@ -1772,6 +1836,7 @@ async def _run_main_study() -> None:
                 _require_new_completed_trace(
                     prior_trace_paths, prior_fingerprints=prior_trace_fingerprints,
                     prior_report_fingerprints=prior_report_fingerprints,
+                    prior_receipt_fingerprints=prior_receipt_fingerprints,
                     variant_id=variant_id, task_set_id=task_set_id,
                     task_id=task["id"],
                     task_question=task["question"],

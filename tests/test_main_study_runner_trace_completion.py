@@ -58,16 +58,20 @@ def _write(root, payload):
 
 def _check(
     root, monkeypatch, old=(), *, prior_fingerprints=None,
-    prior_report_fingerprints=None, task_question="Synthetic question",
+    prior_report_fingerprints=None, prior_receipt_fingerprints=None,
+    task_question="Synthetic question",
 ):
     monkeypatch.setattr(study, "TRACE_ROOT", root)
     if prior_fingerprints is None:
         prior_fingerprints = study._snapshot_treatment_traces(tuple(old))
     if prior_report_fingerprints is None:
         prior_report_fingerprints = study._snapshot_treatment_reports(tuple(old))
+    if prior_receipt_fingerprints is None:
+        prior_receipt_fingerprints = study._snapshot_treatment_verifier_receipts(tuple(old))
     return study._require_new_completed_trace(
         tuple(old), prior_fingerprints=prior_fingerprints,
         prior_report_fingerprints=prior_report_fingerprints,
+        prior_receipt_fingerprints=prior_receipt_fingerprints,
         variant_id="D3", task_set_id="test-tasks",
         task_id="main-01", task_question=task_question,
         pricing=PRICING,
@@ -339,6 +343,98 @@ def test_prior_report_change_cannot_be_hidden_by_new_completed_trace(
             root, monkeypatch, old=(old,), prior_fingerprints=pins,
             prior_report_fingerprints=report_pins,
         )
+
+
+@pytest.mark.parametrize("mutation", ["changed_bytes", "same_bytes_new_inode", "removed"])
+def test_prior_p6v_receipt_replacement_cannot_be_hidden_by_next_treatment(
+    tmp_path, monkeypatch, mutation,
+):
+    """No provider calls: preserve earlier schema-5 verifier receipt generations."""
+    root = tmp_path / "traces"
+    previous = _payload(run_id="old", variant="P6V")
+    previous["trace"].update(
+        search_provenance_schema=5, verification_mode="verify",
+    )
+    old = _write(root, previous)
+    receipt = root.parent / "old" / "verification.json"
+    receipt.write_bytes(b'{"synthetic":true}')
+    monkeypatch.setattr(study, "TRACE_ROOT", root)
+    trace_pins = study._snapshot_treatment_traces((old,))
+    report_pins = study._snapshot_treatment_reports((old,))
+    receipt_pins = study._snapshot_treatment_verifier_receipts((old,))
+    _write(root, _payload())
+    if mutation == "changed_bytes":
+        receipt.write_bytes(b'{"synthetic":false}')
+    elif mutation == "same_bytes_new_inode":
+        replacement = receipt.with_suffix(".replacement")
+        replacement.write_bytes(receipt.read_bytes())
+        os.replace(replacement, receipt)
+    else:
+        receipt.unlink()
+    with pytest.raises(ValueError, match="Prior verifier receipt"):
+        _check(
+            root, monkeypatch, old=(old,), prior_fingerprints=trace_pins,
+            prior_report_fingerprints=report_pins,
+            prior_receipt_fingerprints=receipt_pins,
+        )
+
+
+@pytest.mark.parametrize("added", ["file", "dangling_symlink", "directory"])
+def test_prior_nonverifier_arm_rejects_late_verifier_receipt(
+    tmp_path, monkeypatch, added,
+):
+    """A prior D3 cell cannot acquire verifier evidence during a later cell."""
+    root = tmp_path / "traces"
+    previous = _payload(run_id="old")
+    previous["trace"].update(
+        search_provenance_schema=5, verification_mode="none",
+    )
+    old = _write(root, previous)
+    monkeypatch.setattr(study, "TRACE_ROOT", root)
+    trace_pins = study._snapshot_treatment_traces((old,))
+    report_pins = study._snapshot_treatment_reports((old,))
+    receipt_pins = study._snapshot_treatment_verifier_receipts((old,))
+    assert receipt_pins[root.parent / "old" / "verification.json"] is None
+    _write(root, _payload())
+    receipt = root.parent / "old" / "verification.json"
+    if added == "file":
+        receipt.write_bytes(b"synthetic")
+    elif added == "dangling_symlink":
+        receipt.symlink_to(tmp_path / "absent-verifier.json")
+    else:
+        receipt.mkdir()
+    with pytest.raises(ValueError, match="Prior verifier receipt"):
+        _check(
+            root, monkeypatch, old=(old,), prior_fingerprints=trace_pins,
+            prior_report_fingerprints=report_pins,
+            prior_receipt_fingerprints=receipt_pins,
+        )
+
+
+@pytest.mark.parametrize("variant,schema", [("P6V", 5), ("D3", 5), ("D3", 4)])
+def test_unchanged_prior_verifier_custody_accepts_later_cell(
+    tmp_path, monkeypatch, variant, schema,
+):
+    root = tmp_path / "traces"
+    previous = _payload(run_id="old", variant=variant)
+    previous["trace"].update(
+        search_provenance_schema=schema,
+        verification_mode="verify" if variant == "P6V" else "none",
+    )
+    old = _write(root, previous)
+    if variant == "P6V":
+        (root.parent / "old" / "verification.json").write_bytes(b"synthetic")
+    monkeypatch.setattr(study, "TRACE_ROOT", root)
+    trace_pins = study._snapshot_treatment_traces((old,))
+    report_pins = study._snapshot_treatment_reports((old,))
+    receipt_pins = study._snapshot_treatment_verifier_receipts((old,))
+    _write(root, _payload())
+    assert _check(
+        root, monkeypatch, old=(old,), prior_fingerprints=trace_pins,
+        prior_report_fingerprints=report_pins,
+        prior_receipt_fingerprints=receipt_pins,
+    ) == pytest.approx(0.000012)
+
 
 @pytest.mark.parametrize("failure_mode", [
     "missing_trace", "malformed_trace",
