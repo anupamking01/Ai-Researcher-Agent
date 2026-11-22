@@ -409,6 +409,68 @@ def test_existing_treatment_trace_blocks_rerun_before_model_imports(
     assert not (tmp_path / "outputs" / "main_study_progress.json").exists()
 
 
+@pytest.mark.parametrize("filename", [
+    "research_report.md", "research_report.pdf", "verification.json",
+])
+@pytest.mark.parametrize("entry_kind", ["regular", "dangling_symlink", "directory"])
+def test_orphaned_treatment_evidence_blocks_before_model_imports(
+    tmp_path, monkeypatch, filename, entry_kind
+):
+    _configure_main(tmp_path, monkeypatch)
+    evidence = tmp_path / "outputs" / "abandoned-run" / filename
+    evidence.parent.mkdir(parents=True)
+    if entry_kind == "regular":
+        evidence.write_bytes(b"retained evidence")
+    elif entry_kind == "dangling_symlink":
+        evidence.symlink_to(tmp_path / "missing-target")
+    else:
+        evidence.mkdir()
+
+    imported = []
+    real_import = builtins.__import__
+
+    def fail_if_model_module_imported(name, *args, **kwargs):
+        if name in {"logic.experiment", "logic.run"}:
+            imported.append(name)
+            raise AssertionError(f"model module imported despite orphan output: {name}")
+        return real_import(name, *args, **kwargs)
+
+    with monkeypatch.context() as import_patch:
+        import_patch.setattr(builtins, "__import__", fail_if_model_module_imported)
+        with pytest.raises(SystemExit, match="Refusing to rerun: untraced treatment output"):
+            asyncio.run(run_budget_main_study.main())
+
+    assert imported == []
+    assert not (tmp_path / "outputs" / "main_study_manifest.json").exists()
+    assert not (tmp_path / "outputs" / "main_study_progress.json").exists()
+    assert evidence.is_symlink() or evidence.exists()
+
+
+def test_linked_previous_output_directory_is_ambiguous_and_blocks(tmp_path, monkeypatch):
+    _configure_main(tmp_path, monkeypatch)
+    outputs = tmp_path / "outputs"
+    outside = tmp_path / "external-run"
+    outside.mkdir()
+    (outside / "research_report.md").write_text("prior evidence", encoding="utf-8")
+    outputs.mkdir(exist_ok=True)
+    (outputs / "earlier-run").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(SystemExit, match="linked outputs entry"):
+        run_budget_main_study._preflight_new_study_state(PRICING)
+    assert not (outputs / "main_study_manifest.json").exists()
+
+
+def test_unrelated_output_directory_without_run_evidence_is_permitted(
+    tmp_path, monkeypatch
+):
+    _configure_main(tmp_path, monkeypatch)
+    cache = tmp_path / "outputs" / "diagnostic-cache"
+    cache.mkdir(parents=True)
+    (cache / "notes.txt").write_text("not a treatment report", encoding="utf-8")
+
+    assert run_budget_main_study._preflight_new_study_state(PRICING) == 0.0
+
+
 def test_symlinked_outputs_root_blocks_before_model_imports(tmp_path, monkeypatch):
     outside = tmp_path / "outside"
     outside.mkdir()

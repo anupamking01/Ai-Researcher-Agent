@@ -1560,6 +1560,56 @@ def _require_new_completed_trace(
         ) from exc
 
 
+def _require_no_orphaned_treatment_outputs(outputs_root: Path) -> None:
+    """Fail closed if reports survived but their treatment traces did not.
+
+    The trace inventory alone cannot detect a previously interrupted run
+    that published Markdown/PDF or a verifier receipt before its JSON trace.
+    Do not silently treat those retained outputs as zero prior attempts.
+    This is a bounded one-level inventory of the writer's run directories;
+    it does not follow symlinked directories or read their contents.
+    """
+    if not outputs_root.exists():
+        return
+    try:
+        with os.scandir(outputs_root) as entries:
+            for entry in entries:
+                if entry.name in (
+                    "experiment_traces", "main_study_manifest.json",
+                    "main_study_progress.json",
+                ):
+                    continue  # Independently checked by the existing gates.
+                if entry.is_symlink():
+                    raise SystemExit(
+                        f"Cannot rule out untraced treatment output behind "
+                        f"linked outputs entry: {entry.path}"
+                    )
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+                for filename in (
+                    "research_report.md", "research_report.pdf", "verification.json",
+                ):
+                    evidence = Path(entry.path) / filename
+                    try:
+                        os.lstat(evidence)  # Includes dangling links and directories.
+                    except FileNotFoundError:
+                        continue
+                    except OSError as exc:
+                        raise SystemExit(
+                            f"Cannot inspect possible untraced treatment output: "
+                            f"{evidence}: {exc}"
+                        ) from exc
+                    raise SystemExit(
+                        f"Refusing to rerun: untraced treatment output exists: "
+                        f"{evidence}"
+                    )
+    except OSError as exc:
+        raise SystemExit(
+            f"Cannot enumerate earlier treatment output directories: "
+            f"{outputs_root}: {exc}"
+        ) from exc
+
+
 def _preflight_new_study_state(pricing: dict) -> float:
     outputs_root = REPO_ROOT / "outputs"
     if outputs_root.is_symlink() or (
@@ -1585,6 +1635,10 @@ def _preflight_new_study_state(pricing: dict) -> float:
         raise SystemExit(
             f"Refusing to rerun treatments: {len(trace_paths)} existing {noun}"
         )
+    # Report or verifier files may survive a crash before a trace is written.
+    # Their presence is evidence of a possible earlier treatment attempt, not
+    # permission to start a new study with an apparently empty cost ledger.
+    _require_no_orphaned_treatment_outputs(outputs_root)
     return treatment_cost
 
 

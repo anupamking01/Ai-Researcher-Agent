@@ -319,3 +319,24 @@ prior traces followed by D3, plus an independently named cross-variant control.
 This is a prospective identity and evidence-attribution invariant, not proof
 of independent model execution, and it does not retrofit, rerun, or reclassify
 the frozen September treatments or generate human ratings.
+
+### Untraced output preflight on noncanonical starts (22 November 2026)
+
+The no-rerun preflight previously rejected existing main-study state and
+treatment JSON traces, but an interrupted writer might leave
+`outputs/<run_id>/research_report.md`, `research_report.pdf`, or
+`verification.json` **without a trace**. In that case the existing trace-only
+spend inventory could appear empty and a new noncanonical study could start,
+even though a previous treatment might already have incurred model usage.
+
+Before importing agent modules or creating its new manifest, the runner now
+performs a one-level, no-follow check of report directories under `outputs/`
+and rejects retained untraced report/verifier entries (including dangling
+symlinks and unexpected directories). A linked output directory is rejected
+as ambiguous; unrelated ordinary output directories remain allowed. Eleven
+offline synthetic regressions cover retained artifacts, links and a benign
+control. The gate cannot prove historical spending, independently authenticate
+artifacts, detect malicious filesystem races or guarantee that no other
+unrecorded treatment ever ran. It **never retries** a suspected interrupted
+treatment: investigate and preserve the original evidence instead. It makes
+no confirmatory, pilot-outcome, exploratory-result or human-validation claim.
