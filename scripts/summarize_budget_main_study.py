@@ -44,14 +44,21 @@ def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str],
         _prepare_evaluator_input,
         _validate_trace_task_contract,
         _validate_cached_evaluation,
+        _inventory_evaluator_cache_tree,
+        _inventory_evaluator_treatment_trace_tree,
     )
     from scripts.run_budget_main_study import _validated_trace_cost
 
     task_set_id, expected_questions = _load_frozen_task_contract(TASK_FILE)
+    # Select the entire observed trace inventory, not a globbed subset that
+    # silently drops additional attempts or renamed source evidence.
+    trace_inventory = _inventory_evaluator_treatment_trace_tree(
+        TRACE_ROOT, variants=VARIANTS
+    )
     traces = []
     trace_by_key = {}
     for variant in VARIANTS:
-        for path in sorted((TRACE_ROOT / variant).glob("*.json")):
+        for path in trace_inventory[variant]:
             payload = _load_json(path)
             experiment = payload.get("experiment")
             trace = payload.get("trace")
@@ -105,8 +112,13 @@ def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str],
             traces.append(record)
             trace_by_key[key] = record
 
+    # A complete cache inventory is required even for locally generated
+    # descriptive summaries; ignored cache files can hide selective measurement.
+    cache_inventory = _inventory_evaluator_cache_tree(
+        EVAL_ROOT, variants=VARIANTS
+    )
     eval_by_key = {}
-    for path in sorted(EVAL_ROOT.glob("*/*.json")):
+    for path in sorted(cache_inventory):
         row = _load_json(path)
         path_variant = path.parent.name
         path_task = path.stem

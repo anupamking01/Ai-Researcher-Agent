@@ -350,7 +350,9 @@ def test_summary_rejects_symlinked_treatment_trace_before_outputs(
     trace_path.unlink()
     trace_path.symlink_to(outside_trace)
 
-    with pytest.raises(SystemExit, match="must be a regular non-symlink file"):
+    with pytest.raises(
+        SystemExit, match="unselected treatment trace files or nonregular trace"
+    ):
         summarize_budget_main_study.main()
 
     assert not summarize_budget_main_study.OUT_JSON.exists()
@@ -695,6 +697,70 @@ def test_summary_rejects_inconsistent_treatment_usage_ledger_before_outputs(
     )
 
     with pytest.raises(SystemExit, match=message):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+@pytest.mark.parametrize(
+    ("inventory", "extra_path", "expected_message"),
+    [
+        ("trace", "D3/retained-run.json.bak", "unselected treatment trace"),
+        ("trace", "P6/unaccounted-run.json", "unselected treatment trace"),
+        ("cache", "D3/retained-cache.json.bak", "unselected evaluator cache"),
+        ("cache", "P6/extra-measurement.json", "unselected evaluator cache"),
+    ],
+)
+def test_summary_rejects_unselected_evidence_before_descriptive_outputs(
+    tmp_path, monkeypatch, inventory, extra_path, expected_message
+):
+    """An extra local attempt or measurement cannot be dropped by glob filters."""
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    root = (
+        summarize_budget_main_study.TRACE_ROOT
+        if inventory == "trace"
+        else summarize_budget_main_study.EVAL_ROOT
+    )
+    extra = root / extra_path
+    extra.parent.mkdir(parents=True, exist_ok=True)
+    extra.write_text('{"unselected": true}', encoding="utf-8")
+
+    with pytest.raises(SystemExit, match=expected_message):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+@pytest.mark.parametrize("inventory", ["trace", "cache"])
+def test_summary_rejects_dangling_unselected_evidence_link(
+    tmp_path, monkeypatch, inventory
+):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    root = (
+        summarize_budget_main_study.TRACE_ROOT
+        if inventory == "trace"
+        else summarize_budget_main_study.EVAL_ROOT
+    )
+    extra = root / "D3" / "unselected.json"
+    extra.symlink_to(tmp_path / "absent-original")
+    match = (
+        "unselected treatment trace"
+        if inventory == "trace"
+        else "unselected evaluator cache"
+    )
+    with pytest.raises(SystemExit, match=match):
         summarize_budget_main_study.main()
 
     assert not summarize_budget_main_study.OUT_JSON.exists()
