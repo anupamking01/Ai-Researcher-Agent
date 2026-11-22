@@ -15,6 +15,7 @@ TARGETS = (
     "tests/test_main_study_diagnostic_input_receipt.py",
     "tests/test_main_study_diagnostic_publication_content.py",
     "tests/test_main_study_diagnostic_fast_ci_workflow.py",
+    "tests/test_main_study_input_preflight.py",
 )
 SOURCE_PATHS = (
     "scripts/analyze_main_study.py",
@@ -31,7 +32,10 @@ def test_local_diagnostic_lane_includes_every_diagnostic_regression_module():
         str(path.relative_to(ROOT))
         for path in (ROOT / "tests").glob("test_main_study_diagnostic_*.py")
     }
-    assert set(TARGETS) == discovered
+    assert set(TARGETS) - {"tests/test_main_study_input_preflight.py"} == discovered
+    # The standalone CSV preflight shares the diagnostic's strict input
+    # validator and must be exercised whenever that module changes.
+    assert "tests/test_main_study_input_preflight.py" in TARGETS
 
 
 def _workflow():
