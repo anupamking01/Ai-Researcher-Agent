@@ -618,7 +618,7 @@ def test_descriptive_summary_rejects_incomplete_csv_pair(tmp_path, monkeypatch):
     )
     assert summarize_budget_main_study.main() == 0
     summarize_budget_main_study.OUT_CSV.unlink()
-    with pytest.raises(SystemExit, match="Cannot read main-study descriptive CSV"):
+    with pytest.raises(SystemExit, match="main-study descriptive CSV must be a regular non-symlink file"):
         summarize_budget_main_study._verify_main_study_summary_pair(
             summarize_budget_main_study.OUT_JSON, summarize_budget_main_study.OUT_CSV
         )
