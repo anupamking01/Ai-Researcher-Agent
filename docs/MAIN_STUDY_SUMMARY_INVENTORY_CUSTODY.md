@@ -52,3 +52,29 @@ plus a positive two-arm case with distinct run IDs. Partial diagnostic
 fixtures remain permitted; no historical source file is modified or recreated.
 This is a local provenance/identity requirement, not source authentication or
 human validation, and does not revise frozen automated outcomes.
+
+## Cryptographic binding of descriptive summary to run table (22 November 2026)
+
+The offline descriptive generator previously wrote its JSON summary and its
+run-level CSV separately, without a digest linking the two generations.
+A partial write or later replacement could leave a plausible summary paired
+with different run rows, without visibly changing the stated aggregate means.
+
+The generator now serializes the CSV once in memory, binds its exact UTF-8
+bytes into the summary as `main_study_runs_sha256` and
+`main_study_runs_size_bytes`, publishes the CSV before the JSON, and
+independently re-reads the retained pair through the existing bounded,
+no-follow source reader. The reusable
+`_verify_main_study_summary_pair` rejects missing, replaced or
+inconsistently fingerprinted output evidence. Four synthetic offline
+regressions cover a valid replay, same-length CSV substitution, missing CSV,
+and missing JSON fingerprint. The table row definitions and measured values
+are unchanged.
+
+This is a **local generation-consistency** check, not an atomic two-file
+commit, a substitute for read-only source archive verification, or a claim
+that any original historical source has been recovered. A crash can still
+leave an incomplete pair; replay then fails closed. Existing frozen analysis
+files and the pilot are not rewritten, automated retrospective sensitivities
+remain exploratory rather than prospectively confirmatory, and genuine
+blinded human-validation results are still absent.

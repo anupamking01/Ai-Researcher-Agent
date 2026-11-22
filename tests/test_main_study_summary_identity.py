@@ -568,6 +568,80 @@ def test_summary_accepts_one_fully_bound_treatment_evaluator_cell(
     assert summary["n_posthoc_evaluations"] == 1
 
 
+def test_descriptive_summary_binds_exact_published_csv_bytes(tmp_path, monkeypatch):
+    """Retained descriptive JSON and CSV can be independently replayed together."""
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+
+    assert summarize_budget_main_study.main() == 0
+    raw = summarize_budget_main_study.OUT_CSV.read_bytes()
+    summary = json.loads(summarize_budget_main_study.OUT_JSON.read_text(encoding="utf-8"))
+    assert summary["main_study_runs_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert summary["main_study_runs_size_bytes"] == len(raw)
+    assert summarize_budget_main_study._verify_main_study_summary_pair(
+        summarize_budget_main_study.OUT_JSON,
+        summarize_budget_main_study.OUT_CSV,
+    ) is None
+
+
+def test_descriptive_summary_rejects_same_length_csv_substitution(tmp_path, monkeypatch):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    assert summarize_budget_main_study.main() == 0
+    csv_path = summarize_budget_main_study.OUT_CSV
+    raw = csv_path.read_bytes()
+    assert b"D3" in raw
+    changed = raw.replace(b"D3", b"D6", 1)
+    assert len(changed) == len(raw)
+    csv_path.write_bytes(changed)
+
+    with pytest.raises(SystemExit, match="summary/CSV generation mismatch"):
+        summarize_budget_main_study._verify_main_study_summary_pair(
+            summarize_budget_main_study.OUT_JSON, csv_path
+        )
+
+
+def test_descriptive_summary_rejects_incomplete_csv_pair(tmp_path, monkeypatch):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    assert summarize_budget_main_study.main() == 0
+    summarize_budget_main_study.OUT_CSV.unlink()
+    with pytest.raises(SystemExit, match="Cannot read main-study descriptive CSV"):
+        summarize_budget_main_study._verify_main_study_summary_pair(
+            summarize_budget_main_study.OUT_JSON, summarize_budget_main_study.OUT_CSV
+        )
+
+
+def test_descriptive_summary_rejects_missing_csv_digest(tmp_path, monkeypatch):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    assert summarize_budget_main_study.main() == 0
+    summary_path = summarize_budget_main_study.OUT_JSON
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    del summary["main_study_runs_sha256"]
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    with pytest.raises(SystemExit, match="valid CSV generation fingerprint"):
+        summarize_budget_main_study._verify_main_study_summary_pair(
+            summary_path, summarize_budget_main_study.OUT_CSV
+        )
+
+
 def test_summary_rejects_mixed_posthoc_aggregate_generation_before_outputs(
     tmp_path, monkeypatch
 ):

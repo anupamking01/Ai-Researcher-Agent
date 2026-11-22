@@ -8,8 +8,10 @@ quality scoring remain separate research steps.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import statistics
+from io import StringIO
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -21,6 +23,8 @@ from scripts.evaluate_posthoc_support import (
     FROZEN_EVALUATOR_MODEL,
     FROZEN_EVALUATOR_TEMPERATURE,
     _verify_aggregate_outputs,
+    _load_json,
+    _read_regular_bytes,
 )
 
 TRACE_ROOT = REPO_ROOT / "outputs" / "experiment_traces"
@@ -35,6 +39,35 @@ VARIANTS = ("D3", "D6", "P6", "P6V")
 def _mean(values):
     values = list(values)
     return statistics.mean(values) if values else None
+
+
+def _verify_main_study_summary_pair(summary_path: Path, csv_path: Path) -> None:
+    """Replay the descriptive JSON-to-CSV generation binding from retained bytes.
+
+    This checks a completed local pair, not atomic publication or independent
+    authentication of original treatment/evaluator sources.
+    """
+    summary = _load_json(summary_path)
+    fingerprint = summary.get("main_study_runs_sha256")
+    byte_size = summary.get("main_study_runs_size_bytes")
+    if (
+        not isinstance(fingerprint, str)
+        or len(fingerprint) != 64
+        or any(char not in "0123456789abcdef" for char in fingerprint)
+        or type(byte_size) is not int
+        or byte_size < 0
+    ):
+        raise SystemExit(
+            "Main-study descriptive summary lacks a valid CSV generation fingerprint"
+        )
+    csv_bytes = _read_regular_bytes(
+        csv_path, label="main-study descriptive CSV", max_bytes=8 * 1024 * 1024
+    )
+    if len(csv_bytes) != byte_size or hashlib.sha256(csv_bytes).hexdigest() != fingerprint:
+        raise SystemExit(
+            "Main-study descriptive summary/CSV generation mismatch; "
+            "preserve both outputs for provenance review"
+        )
 
 
 def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str], dict]]:
@@ -343,12 +376,21 @@ def main() -> int:
             "Live-web source availability can vary across treatment runs.",
         ],
     }
+    # Serialize the run table exactly once and bind its physical UTF-8 bytes to
+    # the final JSON. Publish the CSV first so a pre-existing newer summary
+    # cannot appear consistent with a partially written new CSV.
+    csv_buffer = StringIO(newline="")
+    writer = csv.DictWriter(csv_buffer, fieldnames=list(rows[0].keys()))
+    writer.writeheader()
+    writer.writerows(rows)
+    csv_bytes = csv_buffer.getvalue().encode("utf-8")
+    if len(csv_bytes) > 8 * 1024 * 1024:
+        raise SystemExit("Main-study descriptive CSV exceeds the 8 MiB output bound")
+    summary["main_study_runs_sha256"] = hashlib.sha256(csv_bytes).hexdigest()
+    summary["main_study_runs_size_bytes"] = len(csv_bytes)
+    OUT_CSV.write_bytes(csv_bytes)
     OUT_JSON.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
-    fieldnames = list(rows[0].keys())
-    with OUT_CSV.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
+    _verify_main_study_summary_pair(OUT_JSON, OUT_CSV)
     print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
     return 0
 
