@@ -2,6 +2,7 @@
 import csv
 import hashlib
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +11,7 @@ from scripts import analyze_main_study as frozen
 from scripts import analyze_main_study_with_preflight as diagnostic
 from scripts import verify_main_study_diagnostic as verifier
 from scripts.validate_main_study_inputs import EXPECTED_CELLS, FROZEN_SOURCE_BUDGETS
+from scripts import validate_main_study_inputs as direct_preflight
 
 
 @pytest.fixture
@@ -645,3 +647,89 @@ def test_verifier_detects_identical_byte_member_swap_after_its_read(
     with pytest.raises(ValueError, match="member changed during verification"):
         verifier.verify_diagnostic_bundle(destination)
     assert swapped
+# Direct standalone preflight deserves the same fail-closed custody guarantees
+# as the diagnostic wrapper. These synthetic controls run in targeted offline CI.
+def test_direct_preflight_captures_valid_crlf_csv(tmp_path):
+    path = tmp_path / "valid.csv"
+    path.write_bytes(b"variant_id,task_id\r\nD3,main-01\r\n")
+    assert direct_preflight.read_csv_rows(path) == [
+        {"variant_id": "D3", "task_id": "main-01"}
+    ]
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks unavailable")
+@pytest.mark.parametrize("linked_component", ["file", "parent"])
+def test_direct_preflight_rejects_symlinked_csv_path(tmp_path, linked_component):
+    real_parent = tmp_path / "original"
+    real_parent.mkdir()
+    real_csv = real_parent / "valid.csv"
+    real_csv.write_text("a,b\nx,y\n", encoding="utf-8")
+    if linked_component == "file":
+        requested = tmp_path / "alias.csv"
+        requested.symlink_to(real_csv)
+    else:
+        alias = tmp_path / "alias-dir"
+        alias.symlink_to(real_parent, target_is_directory=True)
+        requested = alias / "valid.csv"
+    with pytest.raises(ValueError, match="cannot be opened safely"):
+        direct_preflight.read_csv_rows(requested)
+
+
+def test_direct_preflight_rejects_parent_traversal(tmp_path):
+    subdir = tmp_path / "inner"
+    subdir.mkdir()
+    source = tmp_path / "study.csv"
+    source.write_text("a\nx\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="traverse parents"):
+        direct_preflight.read_csv_rows(subdir / ".." / source.name)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs unavailable")
+def test_direct_preflight_rejects_fifo_without_blocking(tmp_path):
+    fifo = tmp_path / "pipe.csv"
+    os.mkfifo(fifo)
+    with pytest.raises(ValueError, match="regular file"):
+        direct_preflight.read_csv_rows(fifo)
+
+
+def test_direct_preflight_enforces_exact_byte_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(direct_preflight, "MAX_PREFLIGHT_CSV_BYTES", 16)
+    path = tmp_path / "bounded.csv"
+    path.write_bytes(b"a,b\n" + b"x" * 10 + b",\n")
+    assert len(path.read_bytes()) == 16
+    assert direct_preflight.read_csv_rows(path) == [{"a": "x" * 10, "b": ""}]
+    path.write_bytes(b"a,b\n" + b"x" * 13)
+    with pytest.raises(ValueError, match="byte limit"):
+        direct_preflight.read_csv_rows(path)
+
+
+def test_direct_preflight_rejects_non_utf8_snapshot(tmp_path):
+    path = tmp_path / "invalid.csv"
+    path.write_bytes(b"a\n\xff\n")
+    with pytest.raises(ValueError, match="valid UTF-8"):
+        direct_preflight.read_csv_rows(path)
+
+
+def test_direct_preflight_detects_mutation_during_read(tmp_path, monkeypatch):
+    source = tmp_path / "mutable.csv"
+    source.write_bytes(b"a,b\nx,y\n")
+    original_read = os.read
+    touched = False
+
+    def mutate_after_first_read(descriptor, count):
+        nonlocal touched
+        data = original_read(descriptor, count)
+        if data and not touched:
+            touched = True
+            before = source.stat()
+            os.utime(
+                source,
+                ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000),
+            )
+        return data
+
+    monkeypatch.setattr(direct_preflight.os, "read", mutate_after_first_read)
+    with pytest.raises(ValueError, match="changed during capture"):
+        direct_preflight.read_csv_rows(source)
+    assert touched
+

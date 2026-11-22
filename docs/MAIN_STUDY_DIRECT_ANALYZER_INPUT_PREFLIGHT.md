@@ -221,3 +221,33 @@ diagnostic, the frozen automated analysis retains post-collection planning,
 fixed treatment order and evaluator comparability limitations, exploratory
 sensitivities are not prospective confirmatory findings, and genuine blinded
 human ratings and independent original report custody remain outstanding.
+
+## Standalone CSV preflight capture safety (22 November 2026)
+
+The independent entrypoint \`python -m scripts.validate_main_study_inputs\`
+previously used \`Path.open()\` to parse a CSV without a raw-byte limit or
+source-path custody check. Unlike the local diagnostic wrapper, that direct
+path could follow an ancestor or leaf symlink, hang on a substituted special
+file, or parse a changed source without detecting the replacement. The
+scientific row checks could therefore be run against an unintended input.
+
+The shared \`read_csv_rows()\` reader now captures **at most 8 MiB** per CSV
+through descriptor-relative, no-follow ancestor and leaf opens on supported
+POSIX systems. It rejects \`..\` traversal, symlink components, non-regular
+files (including FIFOs), and observable inode/size/mtime/ctime changes during
+capture. After rechecking the complete visible ancestor chain, it decodes one
+strict UTF-8 snapshot and applies the pre-existing lexical CSV and scientific
+row validation. Direct use no longer needs to trust an upstream snapshot.
+Synthetic offline regressions cover unchanged CRLF input, symlinked leaf and
+ancestor, traversal, FIFO, exact-size boundary, invalid UTF-8 and mutation
+during capture. The diagnostic wrapper retains its own earlier independent
+bounded snapshot, and the frozen historical analyzer is not modified.
+
+This is local input-custody and resource safety—not a substitute for external
+manifest pins, original report/trace recovery, independent historical
+authentication, or a transaction across the two source files. It does not
+change the frozen 40-cell automated estimates or justify prospective
+preregistration, unbiased evaluator comparability, or completed human
+validation. Pilot results remain diagnostic, retrospective sensitivity remains
+exploratory, and real blinded human ratings remain pending.
+

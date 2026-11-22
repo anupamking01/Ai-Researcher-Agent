@@ -7,6 +7,9 @@ matrix without modifying or repairing preserved experiment artifacts.
 from __future__ import annotations
 
 import csv
+import io
+import os
+import stat
 from decimal import Decimal
 from pathlib import Path
 
@@ -106,12 +109,109 @@ def _validate_csv_record(record: str, *, path: Path, line_number: int) -> None:
         )
 
 
-def read_csv_rows(path: Path) -> list[dict[str, str]]:
-    """Read one study CSV only when its table structure is unambiguous."""
-    if not path.is_file():
-        raise ValueError(f"missing required CSV: {path}")
+# This direct/standalone preflight is also used outside the diagnostic wrapper.
+# Bound its own source reads, rather than relying on upstream snapshot callers.
+MAX_PREFLIGHT_CSV_BYTES = 8 * 1024 * 1024
+
+
+def _capture_preflight_csv(path: Path) -> bytes:
+    """Read one bounded CSV through stable, no-follow ancestor and leaf FDs.
+
+    All checked bytes come from the same regular-file descriptor. Reject
+    symlinked path components, FIFOs, oversized inputs, and observable
+    replacement or modification before passing any rows to the validator.
+    This is a local capture guarantee, not historical source authentication.
+    """
+    path = Path(path)
+    if ".." in path.parts:
+        raise ValueError(f"preflight CSV path must not traverse parents: {path}")
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise ValueError("preflight CSV requires no-follow directory descriptors")
+
+    absolute = Path(os.path.abspath(path))
+    directory_flags = (
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    file_flags = (
+        os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    descriptors = []
+    parents = []
+
+    def file_identity(metadata):
+        return (
+            metadata.st_dev, metadata.st_ino, metadata.st_mode,
+            metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns,
+        )
+
     try:
-        with path.open("r", encoding="utf-8", newline="") as handle:
+        parent_fd = os.open(absolute.anchor, directory_flags)
+        descriptors.append(parent_fd)
+        for component in absolute.parts[1:-1]:
+            child_fd = os.open(component, directory_flags, dir_fd=parent_fd)
+            descriptors.append(child_fd)
+            parents.append((parent_fd, component, child_fd))
+            parent_fd = child_fd
+
+        source_fd = os.open(absolute.name, file_flags, dir_fd=parent_fd)
+        descriptors.append(source_fd)
+        before = os.fstat(source_fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"preflight CSV must be a regular file: {path}")
+        if before.st_size > MAX_PREFLIGHT_CSV_BYTES:
+            raise ValueError(f"preflight CSV exceeds byte limit: {path}")
+
+        chunks = []
+        total = 0
+        while True:
+            block = os.read(
+                source_fd, min(1024 * 1024, MAX_PREFLIGHT_CSV_BYTES - total + 1)
+            )
+            if not block:
+                break
+            total += len(block)
+            if total > MAX_PREFLIGHT_CSV_BYTES:
+                raise ValueError(f"preflight CSV exceeds byte limit: {path}")
+            chunks.append(block)
+
+        after = os.fstat(source_fd)
+        visible = os.stat(absolute.name, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            total != after.st_size
+            or file_identity(before) != file_identity(after)
+            or file_identity(after) != file_identity(visible)
+        ):
+            raise ValueError(f"preflight CSV changed during capture: {path}")
+        for ancestor_fd, component, directory_fd in reversed(parents):
+            named = os.stat(component, dir_fd=ancestor_fd, follow_symlinks=False)
+            opened = os.fstat(directory_fd)
+            if (
+                not stat.S_ISDIR(named.st_mode)
+                or (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino)
+            ):
+                raise ValueError(
+                    f"preflight CSV parent directory changed during capture: {path}"
+                )
+        return b"".join(chunks)
+    except OSError as exc:
+        raise ValueError(f"preflight CSV cannot be opened safely: {path}") from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def read_csv_rows(path: Path) -> list[dict[str, str]]:
+    """Parse only one bounded, stable snapshot of a structurally valid CSV."""
+    path = Path(path)
+    raw = _capture_preflight_csv(path)
+    try:
+        source_text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"preflight CSV is not valid UTF-8: {path}") from exc
+    try:
+        with io.StringIO(source_text, newline="") as handle:
             for line_number, record in enumerate(handle, start=1):
                 _validate_csv_record(record, path=path, line_number=line_number)
             handle.seek(0)
