@@ -531,6 +531,7 @@ def test_unchanged_prior_verifier_custody_accepts_later_cell(
 @pytest.mark.parametrize("failure_mode", [
     "missing_trace", "malformed_trace",
     "cancelled_missing_trace", "cancelled_malformed_trace",
+    "keyboard_interrupt_missing_trace", "keyboard_interrupt_malformed_trace",
     "agent_exit_missing_trace", "agent_exit_malformed_trace",
     "pre_agent_inventory_invalid",
     "orphan_report_after_valid_trace",
@@ -579,6 +580,8 @@ def test_agent_failure_or_cancellation_records_attempt(
             orphan.write_text("Synthetic orphan", encoding="utf-8")
         if failure_mode.startswith("cancelled_"):
             raise asyncio.CancelledError("synthetic cancellation; no provider calls")
+        if failure_mode.startswith("keyboard_interrupt_"):
+            raise KeyboardInterrupt("synthetic operator interruption; no provider calls")
         if failure_mode.startswith("agent_exit_"):
             raise SystemExit("synthetic sys.exit during selected cell; no provider calls")
         return "Synthetic report", "synthetic-report.md"
@@ -608,6 +611,9 @@ def test_agent_failure_or_cancellation_records_attempt(
     if failure_mode.startswith("cancelled_"):
         with pytest.raises(asyncio.CancelledError):
             asyncio.run(study._run_main_study())
+    elif failure_mode.startswith("keyboard_interrupt_"):
+        with pytest.raises(KeyboardInterrupt, match="synthetic operator interruption"):
+            asyncio.run(study._run_main_study())
     else:
         with pytest.raises(SystemExit, match="stopped after D3/main-01 status=failed"):
             asyncio.run(study._run_main_study())
@@ -622,6 +628,11 @@ def test_agent_failure_or_cancellation_records_attempt(
     assert progress["events"][0]["status"] == "failed"
     if failure_mode.startswith("cancelled_"):
         assert "CancelledError: treatment interrupted" in progress["events"][0]["error"]
+    if failure_mode.startswith("keyboard_interrupt_"):
+        assert (
+            "KeyboardInterrupt: treatment interrupted; completion not certified"
+            in progress["events"][0]["error"]
+        )
     if failure_mode.startswith("agent_exit_"):
         assert (
             "SystemExit: treatment exited before certified completion"

@@ -374,3 +374,27 @@ remains diagnostic; frozen automated findings retain post-collection planning
 and fixed-order/evaluator comparability limitations; retrospective sensitivities
 are exploratory, not prospective confirmatory tests; blinded human validation
 remains pending.
+
+
+### Operator KeyboardInterrupt accounting on noncanonical attempts (22 November 2026)
+
+The selected-cell runner already records ordinary failures, agent `SystemExit`
+and cooperative `asyncio.CancelledError` before stopping. A synchronous
+`KeyboardInterrupt` raised inside agent execution is another `BaseException`
+that previously bypassed the terminal progress event: `current` could remain
+populated while attempted/failed counts were unchanged. A first SIGINT may be
+translated into coroutine cancellation by `asyncio.run`, but this does not
+cover all synchronous interrupts raised within agent code.
+
+The noncanonical runner now records an interrupted, **failed and uncertified**
+cell, reconciles any bounded retained trace spend (or marks it `unverifiable`
+when the trace cannot be read), clears `current`, durably writes progress, and
+then re-raises the original `KeyboardInterrupt` without attempting the next
+cell. Two offline synthetic regressions exercise interruptions both with no
+trace and with a malformed retained trace. No model or evaluator is invoked.
+This is best-effort failure accounting, not a crash-proof ledger: abrupt
+process termination, failed disk writes and repeated interrupts during cleanup
+remain outside its guarantee. It does not alter frozen outcomes, upgrade the
+diagnostic pilot or retrospective exploratory analyses to prospective
+confirmatory evidence, authenticate original report custody, or imply that
+human validation has occurred.

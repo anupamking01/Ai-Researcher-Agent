@@ -1878,7 +1878,7 @@ async def _run_main_study() -> None:
 
             status = "completed"
             error = None
-            cancelled_task = None
+            interrupted_task = None
             try:
                 # Inventory after the active cell is persisted. A late root
                 # substitution must produce a durable failed-cell event, not
@@ -1932,7 +1932,14 @@ async def _run_main_study() -> None:
                 # otherwise progress remains active with zero attempts.
                 status = "failed"
                 error = "CancelledError: treatment interrupted; completion not certified"
-                cancelled_task = exc
+                interrupted_task = exc
+            except KeyboardInterrupt as exc:
+                # A synchronous Ctrl-C/KeyboardInterrupt inside agent code can
+                # bypass Exception just like SystemExit. Record a terminal
+                # uncertified attempt before preserving the interrupt signal.
+                status = "failed"
+                error = "KeyboardInterrupt: treatment interrupted; completion not certified"
+                interrupted_task = exc
             except SystemExit as exc:
                 # Agent code can terminate via sys.exit(), bypassing Exception.
                 # A selected cell is still an attempted but uncertified
@@ -1989,10 +1996,10 @@ async def _run_main_study() -> None:
             )
             _write_json("main_study_progress.json", progress)
 
-            # Preserve cancellation semantics after the durable failure event.
-            # The next treatment must never run after an interrupted attempt.
-            if cancelled_task is not None:
-                raise cancelled_task
+            # Preserve cancellation/operator-interrupt semantics after the
+            # durable failure event; do not start another treatment.
+            if interrupted_task is not None:
+                raise interrupted_task
             if status != "completed":
                 raise SystemExit(f"Main study stopped after {variant_id}/{task['id']} status={status}: {error}")
 
