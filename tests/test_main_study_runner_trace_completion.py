@@ -534,6 +534,7 @@ def test_unchanged_prior_verifier_custody_accepts_later_cell(
     "agent_exit_missing_trace", "agent_exit_malformed_trace",
     "pre_agent_inventory_invalid",
     "orphan_report_after_valid_trace",
+    "orphan_report_without_trace",
 ])
 def test_agent_failure_or_cancellation_records_attempt(
     tmp_path, monkeypatch, failure_mode,
@@ -570,8 +571,9 @@ def test_agent_failure_or_cancellation_records_attempt(
             broken = study.TRACE_ROOT / "D3" / "run-1.json"
             broken.parent.mkdir(parents=True, exist_ok=True)
             broken.write_text("{not valid JSON", encoding="utf-8")
-        if failure_mode == "orphan_report_after_valid_trace":
-            _write(study.TRACE_ROOT, _payload())
+        if failure_mode in ("orphan_report_after_valid_trace", "orphan_report_without_trace"):
+            if failure_mode == "orphan_report_after_valid_trace":
+                _write(study.TRACE_ROOT, _payload())
             orphan = study.TRACE_ROOT.parent / "untraced-run" / "research_report.md"
             orphan.parent.mkdir()
             orphan.write_text("Synthetic orphan", encoding="utf-8")
@@ -625,21 +627,25 @@ def test_agent_failure_or_cancellation_records_attempt(
             "SystemExit: treatment exited before certified completion"
             in progress["events"][0]["error"]
         )
-    if failure_mode.endswith("malformed_trace") or failure_mode == "pre_agent_inventory_invalid":
+    if (
+        failure_mode.endswith("malformed_trace")
+        or failure_mode == "pre_agent_inventory_invalid"
+        or failure_mode.startswith("orphan_report_")
+    ):
         assert progress["estimated_treatment_cost_usd"] is None
         assert progress["trace_cost_reconciliation"] == "unverifiable"
         assert "post-treatment trace spend cannot be verified" in progress["events"][0]["error"]
         if failure_mode == "pre_agent_inventory_invalid":
             assert len(inventory_calls) >= 4
             assert "Cannot inventory retained treatment traces before D3/main-01" in progress["events"][0]["error"]
+        if failure_mode.startswith("orphan_report_"):
+            assert "untraced treatment output" in progress["events"][0]["error"].lower()
     else:
         assert progress["estimated_treatment_cost_usd"] == 0
         assert progress["trace_cost_reconciliation"] == "recomputed_from_retained_traces"
         if failure_mode == "missing_trace":
             assert "exactly one new trace" in progress["events"][0]["error"]
-        if failure_mode == "orphan_report_after_valid_trace":
-            assert "Untraced treatment output after execution" in progress["events"][0]["error"]
-
+ 
 
 def test_completed_report_gate_reuses_bounded_trace_capture(
     tmp_path, monkeypatch,

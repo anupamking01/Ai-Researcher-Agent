@@ -1947,12 +1947,18 @@ async def _run_main_study() -> None:
                 status = "timeout" if isinstance(exc, TimeoutError) else "failed"
                 error = f"{type(exc).__name__}: {str(exc)[:800]}"
 
-            # Invalid retained trace bytes may make the spend ledger unreadable
-            # after completion verification has already failed. Persist the
-            # attempted treatment and its failure rather than letting a second
-            # SystemExit strand progress with current still populated.
+            # Trace costs alone cannot establish complete spend when an agent
+            # leaves orphaned report/verifier outputs. Even a valid retained
+            # trace must not make a possible untraced attempt look billable-zero.
+            # Recheck output custody on failures as well as normal returns.
             try:
                 reconciled_cost = _current_treatment_cost(pricing)
+                _require_no_orphaned_treatment_outputs(
+                    TRACE_ROOT.parent,
+                    traced_run_ids=frozenset(
+                        path.stem for path in _treatment_trace_paths()
+                    ),
+                )
             except (SystemExit, ValueError) as exc:
                 reconciled_cost = None
                 cost_error = (

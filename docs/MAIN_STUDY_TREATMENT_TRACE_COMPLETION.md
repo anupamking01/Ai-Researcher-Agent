@@ -355,14 +355,18 @@ For new noncanonical treatments, completion now inventories the one-level
 `outputs/` report directory entries again, allowing report/receipt files
 only beneath run IDs present in the post-call treatment trace inventory.
 Unexpected untraced Markdown/PDF/verifier evidence, including dangling
-symlink directories, fails the cell and records a durable failed attempt;
-the runner reconciles any readable trace spending and **does not** run the
-next treatment. Existing trace-backed reports still undergo their separate
+symlink directories, fails the cell and records a durable failed attempt.
+Post-attempt accounting also rechecks for orphan outputs even when the agent
+raises: because their actual provider usage is unknowable, the ledger records
+`estimated_treatment_cost_usd: null` and `trace_cost_reconciliation:
+unverifiable` rather than treating a partial trace inventory as a complete
+spend total. The runner **does not** start another treatment. Existing trace-backed reports still undergo their separate
 content, provenance and verifier checks. Unrelated directories without
 recognized research artifacts are permitted.
 
 Offline synthetic cases cover three orphan artifact types, a linked directory,
-valid traced PDF alongside unrelated notes, and full runner failure accounting.
+valid traced PDF alongside unrelated notes, and full runner failure accounting
+both with and without a readable trace.
 They invoke no model or evaluator. This is observed local evidence consistency,
 not an atomic filesystem snapshot, proof a second provider call occurred,
 or recovery of the missing original September artifacts. The five-task pilot
