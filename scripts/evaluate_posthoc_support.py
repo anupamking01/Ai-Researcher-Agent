@@ -153,7 +153,7 @@ def _read_regular_bytes(
             named = os.stat(component, dir_fd=parent_fd, follow_symlinks=False)
             if not stat.S_ISDIR(named.st_mode):
                 raise SystemExit(
-                    f"{label} ancestor directory must not be a symlink: {path}"
+                    f"Cannot read {label} {path}: ancestor directory must not be a symlink"
                 )
             child_fd = os.open(component, ancestor_flags, dir_fd=parent_fd)
             ancestor_fds.append(child_fd)
