@@ -44,6 +44,8 @@ MAX_EVALUATOR_JSON_NUMBER_TOKEN_CHARS = 128
 MAX_EVALUATOR_JSON_BYTES = 16 * 1024 * 1024
 MAX_EVALUATOR_TEXT_FILE_BYTES = 2 * 1024 * 1024
 MAX_EVALUATOR_EVIDENCE_BYTES = 4 * 1024 * 1024
+# Aggregate CSVs are retained external evidence, not unlimited trusted output.
+MAX_EVALUATOR_AGGREGATE_CSV_BYTES = 16 * 1024 * 1024
 STUDY_ID = "budget-main-v1"
 NONCANONICAL_EVALUATOR_REPLAY_ACK = "NONCANONICAL_EVALUATOR_RECOVERY"
 ORIGINAL_EVALUATOR_RECOVERY_ACTIONS_RUN_ID = 34783525480
@@ -691,7 +693,11 @@ def _verify_aggregate_outputs(summary_path: Path, csv_path: Path) -> None:
             "Post-hoc aggregate summary lacks a valid CSV generation fingerprint"
         )
     observed = hashlib.sha256(
-        _read_regular_bytes(Path(csv_path), label="post-hoc aggregate CSV")
+        _read_regular_bytes(
+            Path(csv_path),
+            label="post-hoc aggregate CSV",
+            max_bytes=MAX_EVALUATOR_AGGREGATE_CSV_BYTES,
+        )
     ).hexdigest()
     if observed != expected:
         raise SystemExit(
@@ -740,7 +746,7 @@ def _snapshot_noncanonical_aggregate_destinations(
     csv_bytes = _read_regular_bytes(
         csv_path,
         label="Existing post-hoc aggregate CSV",
-        max_bytes=MAX_EVALUATOR_JSON_BYTES,
+        max_bytes=MAX_EVALUATOR_AGGREGATE_CSV_BYTES,
     )
     csv_sha256 = hashlib.sha256(csv_bytes).hexdigest()
     if prior.get("posthoc_support_runs_sha256") != csv_sha256:

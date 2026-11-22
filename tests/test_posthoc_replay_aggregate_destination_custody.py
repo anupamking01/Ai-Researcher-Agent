@@ -134,3 +134,32 @@ def test_aggregate_destinations_are_checked_before_provider_calls_and_publicatio
         < main.index("_require_noncanonical_aggregate_destinations_unchanged(")
         < main.index("_publish_aggregate_outputs(summary_path, csv_path, summary, rows)")
     )
+
+
+@pytest.mark.parametrize("reader", ["verify", "destination_snapshot"])
+@pytest.mark.parametrize("oversize", [False, True])
+def test_digest_valid_aggregate_csv_has_exact_byte_ceiling(
+    tmp_path, monkeypatch, reader, oversize
+):
+    """A correctly digested CSV must not bypass the aggregate read limit.
+
+    Both read paths are offline; no historical outputs or evaluator calls.
+    """
+    summary, csv = _destinations(tmp_path)
+    csv_bytes = b"variant_id,task_id\\nD3,main-01\\n"
+    _write_pair(summary, csv, csv=csv_bytes)
+    cap = len(csv_bytes) - int(oversize)
+    monkeypatch.setattr(evaluator, "MAX_EVALUATOR_AGGREGATE_CSV_BYTES", cap)
+    read_pair = (
+        (lambda: evaluator._verify_aggregate_outputs(summary, csv))
+        if reader == "verify"
+        else (lambda: _snapshot(summary, csv))
+    )
+    if oversize:
+        with pytest.raises(
+            SystemExit, match=r"post-hoc aggregate CSV exceeds maximum|"
+            r"Existing post-hoc aggregate CSV exceeds maximum"
+        ):
+            read_pair()
+    else:
+        read_pair()

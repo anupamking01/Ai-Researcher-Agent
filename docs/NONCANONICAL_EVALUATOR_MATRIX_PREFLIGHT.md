@@ -421,3 +421,22 @@ before blinded distribution. The five-task pilot remains diagnostic; frozen
 automated findings remain post-collection and qualified by fixed order and
 historical evaluator-policy differences; retrospective analyses remain
 exploratory, and human ratings remain uncollected.
+
+
+## Bounded post-hoc aggregate CSV verification (22 November 2026)
+
+The aggregate verifier previously read the complete CSV without a byte limit,
+despite applying a bounded JSON read to its digest-bearing summary. A valid
+SHA-256 fingerprint alone did not bound how much untrusted retained CSV data
+the offline descriptive preflight could load into memory. The noncanonical
+aggregate destination snapshot used a bound, but its verifier did not.
+
+Both verification and prior-destination snapshot now cap the exact CSV capture
+at **16 MiB**, independently of the JSON limit. The read allows exactly the
+bound and rejects one additional byte before computing a digest, even when the
+summary correctly hashes the oversized file. An oversized original must be
+retained for custody review, never truncated or automatically replaced.
+Synthetic offline boundary tests exercise both paths and deliberately use
+self-consistent CSV digests. This is an operational resource and provenance
+guard, not authentication of unavailable historical source artifacts or
+permission to rerun any research treatment or evaluator.
