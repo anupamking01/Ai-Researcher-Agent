@@ -78,3 +78,25 @@ leave an incomplete pair; replay then fails closed. Existing frozen analysis
 files and the pilot are not rewritten, automated retrospective sensitivities
 remain exploratory rather than prospectively confirmatory, and genuine
 blinded human-validation results are still absent.
+
+
+## Optional post-hoc aggregate pair presence (22 November 2026)
+
+A noncanonical descriptive summary does **not** require previously published
+post-hoc aggregate JSON/CSV files: a local replay can use validated treatment
+traces and per-cell evaluator caches directly. But if either optional aggregate
+output is present, **both** must exist as independently readable regular,
+non-symlink files and the JSON's recorded CSV digest must match the retained
+CSV. Previously, a dangling `posthoc_support_summary.json` was silently
+treated as absent by `Path.exists()`, and an orphaned
+`posthoc_support_runs.csv` was never examined. These states could mask an
+interrupted or mixed-generation upstream publication while producing a fresh
+plausible descriptive report.
+
+The preflight now detects both one-sided artifacts with `lstat`, including
+dangling links, and refuses publication until source provenance is reviewed.
+An absent pair remains allowed; a complete digest-matched pair is accepted.
+Seven synthetic offline regressions cover incomplete/dangling pairs, linked
+sources and the intact pair. This only strengthens local descriptive evidence
+custody; it does not authenticate the inaccessible historical research
+artifacts, alter the frozen outcomes or establish human validation.

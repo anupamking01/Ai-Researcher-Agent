@@ -70,6 +70,35 @@ def _verify_main_study_summary_pair(summary_path: Path, csv_path: Path) -> None:
         )
 
 
+def _verify_optional_posthoc_aggregate_pair(summary_path: Path, csv_path: Path) -> None:
+    """Refuse partial upstream aggregate evidence before publishing a summary.
+
+    The aggregate is optional for a local descriptive run, but either both
+    outputs are absent or both must be verifiably bound. lstat detects dangling
+    symlinks that Path.exists() silently treats as missing.
+    """
+    def present(path: Path) -> bool:
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            raise SystemExit(
+                f"Cannot inspect optional post-hoc aggregate path {path}: {exc}"
+            ) from exc
+        return True
+
+    has_summary = present(summary_path)
+    has_csv = present(csv_path)
+    if has_summary != has_csv:
+        raise SystemExit(
+            "Incomplete post-hoc aggregate summary/CSV pair; preserve retained "
+            "evidence for provenance review instead of publishing a description"
+        )
+    if has_summary:
+        _verify_aggregate_outputs(summary_path, csv_path)
+
+
 def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str], dict]]:
     from scripts.evaluate_posthoc_support import (
         _load_frozen_task_contract,
@@ -232,12 +261,10 @@ def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str],
 def main() -> int:
     from scripts.run_budget_main_study import _load_pricing
 
-    posthoc_summary = REPO_ROOT / "outputs" / "posthoc_support_summary.json"
-    if posthoc_summary.exists():
-        _verify_aggregate_outputs(
-            posthoc_summary,
-            REPO_ROOT / "outputs" / "posthoc_support_runs.csv",
-        )
+    _verify_optional_posthoc_aggregate_pair(
+        REPO_ROOT / "outputs" / "posthoc_support_summary.json",
+        REPO_ROOT / "outputs" / "posthoc_support_runs.csv",
+    )
 
     pricing, pricing_snapshot = _load_pricing(PRICING_FILE)
     traces, eval_by_key = _load_bound_inputs(pricing)

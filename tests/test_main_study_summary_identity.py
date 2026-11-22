@@ -672,6 +672,89 @@ def test_summary_rejects_mixed_posthoc_aggregate_generation_before_outputs(
     assert not summarize_budget_main_study.OUT_CSV.exists()
 
 
+
+@pytest.mark.parametrize(
+    "orphan",
+    ("summary_only", "csv_only", "dangling_summary", "dangling_csv"),
+)
+def test_summary_rejects_unpaired_posthoc_aggregate_evidence(
+    tmp_path, monkeypatch, orphan
+):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    outputs = tmp_path / "outputs"
+    summary_path = outputs / "posthoc_support_summary.json"
+    csv_path = outputs / "posthoc_support_runs.csv"
+    if orphan == "summary_only":
+        summary_path.write_text("{}", encoding="utf-8")
+    elif orphan == "csv_only":
+        csv_path.write_bytes(b"orphan evaluator run evidence\n")
+    elif orphan == "dangling_summary":
+        summary_path.symlink_to("missing-summary.json")
+    else:
+        csv_path.symlink_to("missing-runs.csv")
+
+    with pytest.raises(SystemExit, match="Incomplete post-hoc aggregate summary/CSV pair"):
+        summarize_budget_main_study.main()
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+@pytest.mark.parametrize("linked", ("summary", "csv"))
+def test_summary_rejects_linked_posthoc_aggregate_source(
+    tmp_path, monkeypatch, linked
+):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    outputs = tmp_path / "outputs"
+    summary_path = outputs / "posthoc_support_summary.json"
+    csv_path = outputs / "posthoc_support_runs.csv"
+    csv_content = b"generation\\nretained\\n".replace(b"\\n", b"\n")
+    csv_path.write_bytes(csv_content)
+    summary_path.write_text(
+        json.dumps({"posthoc_support_runs_sha256": hashlib.sha256(csv_content).hexdigest()}),
+        encoding="utf-8",
+    )
+    selected = summary_path if linked == "summary" else csv_path
+    original = outputs / ("prior-summary.json" if linked == "summary" else "prior-runs.csv")
+    selected.rename(original)
+    selected.symlink_to(original.name)
+
+    with pytest.raises(SystemExit, match="regular non-symlink"):
+        summarize_budget_main_study.main()
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+def test_summary_accepts_complete_matching_optional_posthoc_aggregate_pair(
+    tmp_path, monkeypatch
+):
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    outputs = tmp_path / "outputs"
+    csv_content = b"generation\\nretained\\n".replace(b"\\n", b"\n")
+    (outputs / "posthoc_support_runs.csv").write_bytes(csv_content)
+    (outputs / "posthoc_support_summary.json").write_text(
+        json.dumps({"posthoc_support_runs_sha256": hashlib.sha256(csv_content).hexdigest()}),
+        encoding="utf-8",
+    )
+    assert summarize_budget_main_study.main() == 0
+    assert summarize_budget_main_study.OUT_JSON.is_file()
+    assert summarize_budget_main_study.OUT_CSV.is_file()
+
+
 def test_summary_binds_costs_to_validated_pricing_snapshot(tmp_path, monkeypatch):
     _configure_summary(
         tmp_path,
