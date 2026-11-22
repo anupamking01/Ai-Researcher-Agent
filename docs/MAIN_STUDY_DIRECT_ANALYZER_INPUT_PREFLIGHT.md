@@ -251,3 +251,32 @@ preregistration, unbiased evaluator comparability, or completed human
 validation. Pilot results remain diagnostic, retrospective sensitivity remains
 exploratory, and real blinded human ratings remain pending.
 
+
+
+## Two-input generation continuity before diagnostic inference (22 November 2026)
+
+The optional diagnostic wrapper opens the treatment and evaluator CSVs in
+sequence; its per-file no-follow/size checks previously did not detect an
+earlier CSV changing **after its capture** while the other CSV was being
+captured or while the pair underwent scientific validation. That could permit
+a temporally mixed, internally consistent pair to be reported without a
+warning, even though those two source revisions were not observed together.
+
+The diagnostic gate now **re-captures both original CSV paths after both
+initial reads and the frozen 40-cell preflight**, comparing exact source bytes
+with the two retained snapshots before the original analyzer is invoked.
+An observed mismatch aborts before output publication; it never replaces
+the first values with later measurements or reruns treatment/evaluator work.
+Two synthetic regressions simulate a treatment-file change between the two
+captures and an evaluator-file change during validation. Unchanged valid
+inputs retain the existing positive-path coverage. This is an observational
+two-pass continuity check, **not an atomic two-file snapshot**, proof of
+historical input authenticity, or detection of mutations restored between
+observations. Edits after this gate are harmless to the diagnostic inference
+because the analyzer consumes only the validated, retained in-memory rows.
+
+The canonical manifest-pinned analyzer and its frozen outputs are untouched.
+The five-task pilot remains diagnostic, frozen automated analysis retains
+its post-collection plan-timing and evaluator-policy qualifications, later
+sensitivity checks remain exploratory, and real blinded human ratings remain
+pending independent original-evidence custody and eligible annotators.

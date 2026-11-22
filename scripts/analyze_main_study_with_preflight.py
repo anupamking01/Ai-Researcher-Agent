@@ -159,6 +159,20 @@ def _bound_validated_inputs():
         evaluator_rows = read_csv_rows(evaluator_copy)
         validate_rows(treatment_rows, evaluator_rows, require_canonical_matrix=True)
 
+    # The two independently opened CSVs are not an atomic filesystem
+    # snapshot. Re-observe both source byte streams after BOTH captures and
+    # the scientific validation, before exposing the in-memory pair to the
+    # frozen analyzer. This detects observable cross-file generation drift
+    # without ever selecting a new treatment/evaluator value.
+    for label, source in (
+        (DIAGNOSTIC_MAIN_INPUT, main_path),
+        (DIAGNOSTIC_SUPPORT_INPUT, support_path),
+    ):
+        if _capture_csv_input(source) != retained[label]:
+            raise ValueError(
+                f"diagnostic input changed between capture and validation: {label}"
+            )
+
     original_reader = frozen._read_csv
 
     def validated_reader(path: Path):

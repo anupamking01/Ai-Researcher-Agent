@@ -82,6 +82,50 @@ def test_diagnostic_retains_precise_analyzed_csv_and_fingerprints(inputs):
     assert receipt["files_verified"] == 4
 
 
+def test_diagnostic_rejects_treatment_changed_between_independent_csv_captures(
+    inputs, monkeypatch,
+):
+    """A valid first capture must not be paired with a later evaluator read."""
+    main, _, destination = inputs
+    original_capture = diagnostic._capture_csv_input
+    changed = False
+
+    def mutate_after_first_treatment_capture(path):
+        nonlocal changed
+        raw = original_capture(path)
+        if path == main and not changed:
+            changed = True
+            # Change the original after its valid bytes have been captured,
+            # while keeping the saved diagnostic treatment snapshot unchanged.
+            main.write_bytes(raw + b"\\n")
+        return raw
+
+    monkeypatch.setattr(diagnostic, "_capture_csv_input", mutate_after_first_treatment_capture)
+    with pytest.raises(ValueError, match="input changed between capture and validation"):
+        diagnostic.main(output_dir=destination)
+    assert changed
+    assert not destination.exists()
+
+
+def test_diagnostic_rejects_evaluator_changed_during_cross_csv_validation(
+    inputs, monkeypatch,
+):
+    """Even a post-parse edit cannot be endorsed as the same input pair."""
+    _, support, destination = inputs
+    original_validate = diagnostic.validate_rows
+
+    def mutate_after_validating_rows(*args, **kwargs):
+        result = original_validate(*args, **kwargs)
+        with support.open("ab") as handle:
+            handle.write(b"\\n")
+        return result
+
+    monkeypatch.setattr(diagnostic, "validate_rows", mutate_after_validating_rows)
+    with pytest.raises(ValueError, match="input changed between capture and validation"):
+        diagnostic.main(output_dir=destination)
+    assert not destination.exists()
+
+
 def test_source_mutation_after_capture_does_not_retarget_analyzer(inputs, monkeypatch):
     main, _, destination = inputs
     original = main.read_bytes()
