@@ -280,3 +280,28 @@ The five-task pilot remains diagnostic, frozen automated analysis retains
 its post-collection plan-timing and evaluator-policy qualifications, later
 sensitivity checks remain exploratory, and real blinded human ratings remain
 pending independent original-evidence custody and eligible annotators.
+
+## Standalone paired-source continuity check (23 November 2026)
+
+The direct `python -m scripts.validate_main_study_inputs` command now
+captures **both** 40-cell treatment/evaluator CSVs as bounded, no-follow
+raw-byte snapshots, parses and scientifically validates precisely those
+snapshots, and re-captures **each original pathname** before printing its
+success marker. It rejects a changed source rather than silently validating
+a temporally mixed pair or accepting a byte-different but semantically
+equivalent CSV. This closes a standalone CLI gap distinct from the optional
+diagnostic analyzer's already protected in-memory input handoff.
+
+Four synthetic offline cases cover a stable pair, either CSV rewritten after
+real matrix validation, and the first CSV rewritten during the second CSV's
+initial capture. The retained frozen analyzer and its canonical output bytes
+are not changed; the preflight never runs inference, treatments, or evaluators.
+
+These are two **observable local capture windows**, not an atomic snapshot,
+external provenance attestation, or a guarantee against changes restored
+between observations. The standalone command does not retain or independently
+pin original inputs; manuscript-facing canonical provenance still requires
+the manifest-bound verified workflow. The five-task pilot is diagnostic,
+frozen automated results retain post-collection plan-timing, fixed-order and
+evaluator-policy qualifications, post-hoc sensitivities remain exploratory,
+and original-report custody and real blinded human validation remain blocked.

@@ -202,10 +202,8 @@ def _capture_preflight_csv(path: Path) -> bytes:
             os.close(descriptor)
 
 
-def read_csv_rows(path: Path) -> list[dict[str, str]]:
-    """Parse only one bounded, stable snapshot of a structurally valid CSV."""
-    path = Path(path)
-    raw = _capture_preflight_csv(path)
+def _parse_captured_csv_rows(raw: bytes, *, path: Path) -> list[dict[str, str]]:
+    """Parse the exact bounded source bytes already captured by the caller."""
     try:
         source_text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -242,6 +240,12 @@ def read_csv_rows(path: Path) -> list[dict[str, str]]:
             return rows
     except csv.Error as exc:
         raise ValueError(f"malformed CSV in {path}: {exc}") from exc
+
+
+def read_csv_rows(path: Path) -> list[dict[str, str]]:
+    """Parse one bounded, no-follow source snapshot as before."""
+    path = Path(path)
+    return _parse_captured_csv_rows(_capture_preflight_csv(path), path=path)
 
 
 def _rows(path: Path) -> list[dict[str, str]]:
@@ -683,7 +687,22 @@ def validate_rows(
 
 
 def main() -> int:
-    validate_rows(_rows(MAIN_CSV), _rows(SUPPORT_CSV), require_canonical_matrix=True)
+    """Validate one observed CSV pair and reject source drift before success.
+
+    This independent CLI does not retain an input archive or run inference.
+    Two observations detect observable source changes across sequential reads;
+    they do not make the two filesystem snapshots atomic.
+    """
+    paths = (Path(MAIN_CSV), Path(SUPPORT_CSV))
+    snapshots = tuple(_capture_preflight_csv(path) for path in paths)
+    main_rows = _parse_captured_csv_rows(snapshots[0], path=paths[0])
+    support_rows = _parse_captured_csv_rows(snapshots[1], path=paths[1])
+    validate_rows(main_rows, support_rows, require_canonical_matrix=True)
+    for path, original in zip(paths, snapshots):
+        if _capture_preflight_csv(path) != original:
+            raise ValueError(
+                f"main-study CSV changed between paired source captures: {path}"
+            )
     print("main-study identity/numeric/matrix preflight: OK")
     return 0
 

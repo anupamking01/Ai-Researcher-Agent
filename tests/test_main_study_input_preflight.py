@@ -1,4 +1,8 @@
+import csv
+
 import pytest
+
+from scripts import validate_main_study_inputs as preflight
 
 from scripts.validate_main_study_inputs import (
     EXPECTED_CELLS,
@@ -615,3 +619,68 @@ def test_canonical_preflight_rejects_positive_evidence_labels_from_zero_sources(
 
     with pytest.raises(ValueError, match="zero-source evaluator must classify all claims unsupported"):
         validate_rows(main, support, require_canonical_matrix=True)
+
+
+def _standalone_study_csv_pair(tmp_path, monkeypatch):
+    """Construct a complete synthetic pair; never touch frozen study CSVs."""
+    main_rows, support_rows = _canonical_rows()
+    paths = (tmp_path / "synthetic-main.csv", tmp_path / "synthetic-support.csv")
+    for path, rows in zip(paths, (main_rows, support_rows)):
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        assert b"\r\n" in path.read_bytes()
+    monkeypatch.setattr(preflight, "MAIN_CSV", paths[0])
+    monkeypatch.setattr(preflight, "SUPPORT_CSV", paths[1])
+    return paths
+
+
+def test_standalone_preflight_accepts_stable_synthetic_pair(tmp_path, monkeypatch, capsys):
+    _standalone_study_csv_pair(tmp_path, monkeypatch)
+    assert preflight.main() == 0
+    assert "preflight: OK" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("changed_side", (0, 1))
+def test_standalone_preflight_rejects_source_mutation_during_validation(
+    tmp_path, monkeypatch, capsys, changed_side
+):
+    paths = _standalone_study_csv_pair(tmp_path, monkeypatch)
+    original_validate = preflight.validate_rows
+
+    def validate_then_rewrite(*args, **kwargs):
+        original_validate(*args, **kwargs)  # real frozen 40-cell scientific checks
+        target = paths[changed_side]
+        original = target.read_bytes()
+        target.write_bytes(original.replace(b"\r\n", b"\n"))
+        assert target.read_bytes() != original  # semantic rows unchanged
+
+    monkeypatch.setattr(preflight, "validate_rows", validate_then_rewrite)
+    with pytest.raises(ValueError, match="changed between paired source captures"):
+        preflight.main()
+    assert "preflight: OK" not in capsys.readouterr().out
+
+
+def test_standalone_preflight_rejects_first_csv_drift_during_second_csv_capture(
+    tmp_path, monkeypatch, capsys
+):
+    main_path, evaluator_path = _standalone_study_csv_pair(tmp_path, monkeypatch)
+    original_capture = preflight._capture_preflight_csv
+    altered = False
+
+    def capture_and_mutate(path):
+        nonlocal altered
+        captured = original_capture(path)
+        if path == evaluator_path and not altered:
+            altered = True
+            original = main_path.read_bytes()
+            main_path.write_bytes(original.replace(b"\r\n", b"\n"))
+            assert main_path.read_bytes() != original
+        return captured
+
+    monkeypatch.setattr(preflight, "_capture_preflight_csv", capture_and_mutate)
+    with pytest.raises(ValueError, match="changed between paired source captures"):
+        preflight.main()
+    assert altered
+    assert "preflight: OK" not in capsys.readouterr().out
