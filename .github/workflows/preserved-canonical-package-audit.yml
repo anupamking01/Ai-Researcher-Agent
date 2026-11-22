@@ -20,8 +20,11 @@ on:
       - scripts/analyze_main_study.py
       - scripts/analyze_main_study_task_influence.py
       - scripts/build_analysis_provenance.py
+      - scripts/evaluate_posthoc_support.py
       - scripts/fingerprint_research_artifacts.py
       - scripts/preflight_recovered_artifact_zip.py
+      - scripts/run_budget_main_study.py
+      - scripts/summarize_pilot.py
       - scripts/verify_analysis_provenance.py
       - scripts/verify_canonical_archive_checkout.py
       - scripts/verify_main_study_execution.py
