@@ -276,3 +276,29 @@ or human ratings. The pilot remains diagnostic; frozen automated comparisons
 retain post-collection analysis and fixed-order/evaluator-policy limitations,
 retrospective sensitivities remain exploratory and genuine human validation is
 pending.
+
+
+### Durable accounting of agent-originated process exits (22 November 2026)
+
+The noncanonical runner already records ordinary exceptions, cooperative
+`asyncio.CancelledError`, and pre-agent trace-inventory failures. An agent
+invoking `sys.exit()` raises `SystemExit`, which is outside `Exception`:
+after the selected cell has been persisted as active, this previously bypassed
+the terminal progress event altogether. A zero exit code still cannot certify
+a completed treatment.
+
+The selected-cell handler now catches `SystemExit` narrowly, records a
+**failed, uncertified attempt**, reconciles bounded retained-trace cost when
+possible (or explicitly records `unverifiable`), clears the active marker
+and stops the study without attempting another cell. The failure event records
+the exit, not an invented provider outcome or zero-cost assumption.
+
+Two synthetic offline regressions model exit with no trace and with malformed
+retained trace bytes; they assert the failed attempt ledger and distinguish
+verifiable-zero retained spend from unverified spend. No agent providers,
+historical treatments, evaluator runs, or human ratings are invoked. This is
+not a crash-/SIGKILL-proof transaction log or independent proof of model
+billing, original artifact custody or prospective preregistration. The pilot
+remains diagnostic, frozen automated comparisons retain post-collection,
+fixed-order and evaluator-policy limitations, retrospective sensitivities
+remain exploratory, and human validation is pending.

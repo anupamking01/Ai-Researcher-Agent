@@ -1849,6 +1849,16 @@ async def _run_main_study() -> None:
                 status = "failed"
                 error = "CancelledError: treatment interrupted; completion not certified"
                 cancelled_task = exc
+            except SystemExit as exc:
+                # Agent code can terminate via sys.exit(), bypassing Exception.
+                # A selected cell is still an attempted but uncertified
+                # treatment even when the exit code is zero. Persist its failure
+                # and any verifiable trace spend before stopping the study.
+                status = "failed"
+                error = (
+                    "SystemExit: treatment exited before certified completion: "
+                    f"{str(exc)[:700]}"
+                )
             except Exception as exc:
                 status = "timeout" if isinstance(exc, TimeoutError) else "failed"
                 error = f"{type(exc).__name__}: {str(exc)[:800]}"

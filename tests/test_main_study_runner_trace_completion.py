@@ -448,6 +448,7 @@ def test_unchanged_prior_verifier_custody_accepts_later_cell(
 @pytest.mark.parametrize("failure_mode", [
     "missing_trace", "malformed_trace",
     "cancelled_missing_trace", "cancelled_malformed_trace",
+    "agent_exit_missing_trace", "agent_exit_malformed_trace",
     "pre_agent_inventory_invalid",
 ])
 def test_agent_failure_or_cancellation_records_attempt(
@@ -487,6 +488,8 @@ def test_agent_failure_or_cancellation_records_attempt(
             broken.write_text("{not valid JSON", encoding="utf-8")
         if failure_mode.startswith("cancelled_"):
             raise asyncio.CancelledError("synthetic cancellation; no provider calls")
+        if failure_mode.startswith("agent_exit_"):
+            raise SystemExit("synthetic sys.exit during selected cell; no provider calls")
         return "Synthetic report", "synthetic-report.md"
 
     actual_import = study.importlib.import_module
@@ -528,6 +531,11 @@ def test_agent_failure_or_cancellation_records_attempt(
     assert progress["events"][0]["status"] == "failed"
     if failure_mode.startswith("cancelled_"):
         assert "CancelledError: treatment interrupted" in progress["events"][0]["error"]
+    if failure_mode.startswith("agent_exit_"):
+        assert (
+            "SystemExit: treatment exited before certified completion"
+            in progress["events"][0]["error"]
+        )
     if failure_mode.endswith("malformed_trace") or failure_mode == "pre_agent_inventory_invalid":
         assert progress["estimated_treatment_cost_usd"] is None
         assert progress["trace_cost_reconciliation"] == "unverifiable"
