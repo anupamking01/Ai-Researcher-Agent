@@ -160,11 +160,20 @@ def test_completion_gate_rejects_bad_trace(
 def test_disappeared_prior_trace_rejected(tmp_path, monkeypatch):
     root = tmp_path / "traces"
     old = _write(root, _payload(run_id="old"))
+    monkeypatch.setattr(study, "TRACE_ROOT", root)
+    # Capture all prior evidence *before* simulating its disappearance, just
+    # as the production runner does before the next agent invocation.
     pins = study._snapshot_treatment_traces((old,))
+    report_pins = study._snapshot_treatment_reports((old,))
+    receipt_pins = study._snapshot_treatment_verifier_receipts((old,))
     old.unlink()
     _write(root, _payload())
     with pytest.raises(ValueError, match="without removing earlier"):
-        _check(root, monkeypatch, old=(old,), prior_fingerprints=pins)
+        _check(
+            root, monkeypatch, old=(old,), prior_fingerprints=pins,
+            prior_report_fingerprints=report_pins,
+            prior_receipt_fingerprints=receipt_pins,
+        )
 
 
 def test_unchanged_prior_trace_and_new_completed_trace_accepted(
