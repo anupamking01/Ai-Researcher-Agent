@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from scripts.audit_workflow_read_only import assert_read_only_workflow_steps
+
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = (
@@ -57,6 +59,34 @@ def test_real_retained_audits_reject_frozen_design_drift(path):
     assert compared == BOUND
     assert workflow.index("for relative in \\") < workflow.index("cmp --")
     assert workflow.index("cmp --") < workflow.index("      - name: Download")
-    assert "run_budget_main_study" not in workflow
-    assert "run_pilot" not in workflow
+    assert_read_only_workflow_steps(workflow)
     assert "OPENAI_API_KEY" not in workflow
+
+
+@pytest.mark.parametrize("path", WORKFLOWS)
+@pytest.mark.parametrize("command", (
+    "python -m scripts.run_budget_main_study",
+    "python -m scripts.run_pilot",
+    "python -m scripts.evaluate_posthoc_support",
+    "./scripts/run_budget_main_study.py",
+))
+def test_real_retained_audits_reject_injected_research_execution(path, command):
+    """Watching research source is allowed; executing it in either audit is not."""
+    workflow = (ROOT / path).read_text(encoding="utf-8")
+    marker = "      - name: Set up pinned Python"
+    assert workflow.count(marker) == 1
+    injected = workflow.replace(
+        marker,
+        "      - name: Forbidden research execution\n"
+        + ("        uses: " if command.startswith("./") else "        run: ")
+        + command + "\n\n" + marker,
+    )
+    with pytest.raises(AssertionError, match="must not execute"):
+        assert_read_only_workflow_steps(injected)
+
+
+@pytest.mark.parametrize("path", WORKFLOWS)
+def test_guard_allows_required_runner_source_trigger_without_execution(path):
+    workflow = (ROOT / path).read_text(encoding="utf-8")
+    assert "      - scripts/run_budget_main_study.py\n" in workflow
+    assert_read_only_workflow_steps(workflow)

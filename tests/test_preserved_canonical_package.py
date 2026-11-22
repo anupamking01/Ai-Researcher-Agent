@@ -8,6 +8,7 @@ import zipfile
 
 import pytest
 
+from scripts.audit_workflow_read_only import assert_read_only_workflow_steps
 from scripts import verify_preserved_canonical_package as package
 from scripts import verify_preserved_canonical_bundle as preserved
 from scripts import verify_retained_canonical_download as source
@@ -186,8 +187,7 @@ def test_workflow_verifies_actual_retained_package_without_rerunning_treatments(
     assert "actions: read" in workflow and "contents: read" in workflow
     assert "contents: write" not in workflow
     assert "OPENAI_API_KEY" not in workflow
-    assert "run_budget_main_study" not in workflow
-    assert "run_pilot" not in workflow
+    assert_read_only_workflow_steps(workflow)
     assert "12865837714/zip" in workflow
     assert "ea4930f9b897de86785ab12ccf0cab9d3781feb5e1d735f7aafa232c405b65f1" in workflow
     assert "f333623380526fa05dcb14110e7ec1fb72d2d0e2" in workflow
