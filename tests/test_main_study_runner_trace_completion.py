@@ -223,6 +223,59 @@ def test_completion_gate_requires_source_bound_markdown_report(
         _check(root, monkeypatch)
 
 
+@pytest.mark.parametrize("schema", [4, 5, 6])
+@pytest.mark.parametrize("kind", ["absent", "regular", "dangling_symlink", "directory"])
+def test_nonverifier_receipt_absence_is_prospective_and_checks_directory_entries(
+    tmp_path, monkeypatch, schema, kind,
+):
+    """Synthetic file custody: a no-verifier arm may not retain verification.json."""
+    root = tmp_path / "traces"
+    payload = _payload()
+    payload["trace"].update(
+        search_provenance_schema=schema,
+        verification_mode="none", verification_status="not_requested",
+        verification_artifact_sha256=None,
+    )
+    if schema >= 6:
+        payload["trace"]["report_artifact_sha256"] = hashlib.sha256(
+            b"Synthetic report"
+        ).hexdigest()
+    trace_path = _write(root, payload)
+    receipt = root.parent / "run-1" / "verification.json"
+    if kind == "regular":
+        receipt.write_text('{"status":"ok"}', encoding="utf-8")
+    elif kind == "dangling_symlink":
+        receipt.symlink_to(tmp_path / "nonexistent.json")
+        assert not receipt.exists()  # An exists()-only check would miss it.
+    elif kind == "directory":
+        receipt.mkdir()
+    monkeypatch.setattr(study, "TRACE_ROOT", root)
+    if schema >= 5 and kind != "absent":
+        with pytest.raises(ValueError, match="Non-verifier treatment retained"):
+            study._require_completed_report(trace_path)
+    else:
+        # Schema 4 predates verifier receipt custody and is not retroactively
+        # certified by this prospective physical-absence rule.
+        study._require_completed_report(trace_path)
+
+
+def test_verifier_arm_remains_subject_to_separate_receipt_validation(
+    tmp_path, monkeypatch,
+):
+    """This check must not reject legitimate P6V receipts by mere presence."""
+    root = tmp_path / "traces"
+    payload = _payload(variant="P6V")
+    payload["trace"].update(
+        search_provenance_schema=5, verification_mode="verify",
+    )
+    trace_path = _write(root, payload)
+    (root.parent / "run-1" / "verification.json").write_text(
+        '{"status":"ok"}', encoding="utf-8",
+    )
+    monkeypatch.setattr(study, "TRACE_ROOT", root)
+    study._require_completed_report(trace_path)
+
+
 @pytest.mark.skipif(
     not hasattr(os, "mkfifo") or not hasattr(os, "O_NONBLOCK"),
     reason="requires POSIX nonblocking FIFO open",

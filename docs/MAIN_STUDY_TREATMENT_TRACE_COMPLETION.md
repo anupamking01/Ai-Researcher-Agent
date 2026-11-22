@@ -226,3 +226,29 @@ and the spend guard have succeeded, verifies no agent invocation, and checks the
 durable failure event and unverified spend designation. This does not recover
 September source artifacts, authenticate provider billing, make the local
 filesystem atomic, or create confirmatory or human-evaluation evidence.
+
+### Prospective absence of verifier artifacts in non-verifier arms (22 November 2026)
+
+Schema-5+ metadata already rejects a D3/D6/P6 trace that *claims* verification
+counts or a verifier digest. That did not detect a contradictory physical
+`outputs/<run-id>/verification.json` file left in the report directory despite
+`verification_mode: none`. In a future replication this could obscure whether
+the no-verification treatment remained distinct from P6V.
+
+After the completed Markdown report's existing validation, the noncanonical
+runner now performs a no-follow directory-entry inspection using `os.lstat`
+for schema-5+ completed no-verification arms. Any retained verifier receipt,
+directory, or dangling symlink at that exact path causes the cell to fail
+closed; an unexpected inspection error also fails rather than silently
+assuming absence. P6V retains its separate positive receipt/content check.
+Historical schemas 1–4 are not retroactively strengthened. Offline synthetic
+tests distinguish missing, regular-file, dangling-link, and directory cases
+across schema 4/5/6, plus the verifier-arm exception.
+
+This is a **local evidence-consistency gate**, not independent proof that a
+verification model did or did not execute, an atomic filesystem snapshot, or
+authentication of the September 2026 original artifacts. No treatment or
+common evaluator was rerun; the five-task pilot is diagnostic, automated
+frozen findings remain post-collection and subject to fixed-order and
+evaluator-policy limitations, retrospective sensitivity analyses remain
+exploratory, and genuine blinded human validation remains pending.

@@ -1373,6 +1373,30 @@ def _require_completed_report(trace_path: Path) -> None:
                 f"Completed report bytes differ from trace SHA-256: {report}"
             ) from exc
 
+    # A no-verification arm must not leave behind the verifier's physical
+    # receipt while reporting that verification was never requested.
+    # Inspect the directory entry itself: lstat sees dangling symlinks too,
+    # and unexpected inspection failures must not be treated as absence.
+    if (
+        type(trace.get("search_provenance_schema")) is int
+        and trace["search_provenance_schema"] >= VERIFIER_BOUND_SEARCH_TRACE_PROVENANCE_SCHEMA
+        and trace.get("completed") is True
+        and trace.get("verification_mode") == "none"
+    ):
+        verifier_path = report.parent / "verification.json"
+        try:
+            os.lstat(verifier_path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise ValueError(
+                f"Cannot establish absence of non-verifier receipt: {verifier_path}"
+            ) from exc
+        else:
+            raise ValueError(
+                f"Non-verifier treatment retained a verification artifact: {verifier_path}"
+            )
+
 
 def _snapshot_treatment_reports(
     prior_paths: tuple[Path, ...],
