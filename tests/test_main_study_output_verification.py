@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts import analyze_main_study
+from scripts import analyze_main_study, verify_main_study_outputs
 from scripts.verify_main_study_outputs import verify_outputs
 
 
@@ -157,3 +157,41 @@ def test_rejects_renderer_consistent_non_finite_json_numbers(tmp_path, token):
 def test_rejects_missing_result_artifact(tmp_path):
     with pytest.raises(ValueError, match="JSON is missing"):
         verify_outputs(root=tmp_path, json_path=Path("missing.json"), markdown_path=Path("missing.md"))
+
+
+def test_rejects_crlf_rewrite_even_when_decoded_text_is_unchanged(tmp_path):
+    """Text-mode read_text() normalized CRLF and previously hid this substitution."""
+    json_path, md_path = _write_pair(tmp_path, _payload())
+    original = md_path.read_bytes()
+    assert b"\n" in original
+    md_path.write_bytes(original.replace(b"\n", b"\r\n"))
+
+    with pytest.raises(ValueError, match="does not match canonical JSON"):
+        verify_outputs(root=tmp_path, json_path=json_path, markdown_path=md_path)
+
+
+@pytest.mark.parametrize("linked_artifact", ["json", "markdown"])
+def test_rejects_symlinked_canonical_artifact(tmp_path, linked_artifact):
+    json_path, md_path = _write_pair(tmp_path, _payload())
+    selected = json_path if linked_artifact == "json" else md_path
+    alternate = tmp_path / f"external-{selected.name}"
+    selected.replace(alternate)
+    selected.symlink_to(alternate)
+
+    with pytest.raises(ValueError, match="regular non-symlink file"):
+        verify_outputs(root=tmp_path, json_path=json_path, markdown_path=md_path)
+
+
+def test_rejects_oversized_canonical_json_before_parsing(tmp_path, monkeypatch):
+    json_path, md_path = _write_pair(tmp_path, _payload())
+    monkeypatch.setattr(verify_main_study_outputs, "MAX_CANONICAL_RESULT_BYTES", 32)
+    with pytest.raises(ValueError, match="exceeds maximum 32 bytes"):
+        verify_outputs(root=tmp_path, json_path=json_path, markdown_path=md_path)
+
+
+def test_rejects_invalid_utf8_canonical_json(tmp_path):
+    json_path, md_path = _write_pair(tmp_path, _payload())
+    json_path.write_bytes(b"\xff")
+
+    with pytest.raises(ValueError, match="canonical inference JSON must contain valid UTF-8"):
+        verify_outputs(root=tmp_path, json_path=json_path, markdown_path=md_path)

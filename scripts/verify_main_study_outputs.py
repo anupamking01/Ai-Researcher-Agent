@@ -14,10 +14,13 @@ import math
 from pathlib import Path
 
 from scripts import analyze_main_study
+from scripts.evaluate_posthoc_support import _read_regular_bytes
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_JSON = Path("outputs/main_study_inference.json")
 DEFAULT_MARKDOWN = Path("paper/MAIN_STUDY_INFERENCE.md")
+# Fail closed on unexpectedly large local artifacts, not just malformed JSON.
+MAX_CANONICAL_RESULT_BYTES = 8 * 1024 * 1024
 
 
 def _parse_canonical_json(content: str) -> dict:
@@ -71,8 +74,25 @@ def verify_outputs(
     if not markdown_file.is_file():
         raise ValueError(f"manuscript inference Markdown is missing: {markdown_file}")
 
+    # Capture the exact bytes from bounded, non-symlink regular sources. Path.read_text()
+    # performs universal-newline translation and would accept a CRLF rewrite of
+    # the manuscript as byte-identical to the frozen LF-only renderer output.
     try:
-        payload = _parse_canonical_json(json_file.read_text(encoding="utf-8"))
+        json_bytes = _read_regular_bytes(
+            json_file, label="canonical inference JSON",
+            max_bytes=MAX_CANONICAL_RESULT_BYTES,
+        )
+        markdown_bytes = _read_regular_bytes(
+            markdown_file, label="canonical inference Markdown",
+            max_bytes=MAX_CANONICAL_RESULT_BYTES,
+        )
+    except SystemExit as exc:
+        raise ValueError(f"unsafe canonical inference artifact: {exc}") from exc
+
+    try:
+        payload = _parse_canonical_json(json_bytes.decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise ValueError("canonical inference JSON must contain valid UTF-8") from exc
     except json.JSONDecodeError as exc:
         raise ValueError(f"canonical inference JSON is malformed: {exc}") from exc
 
@@ -81,10 +101,9 @@ def verify_outputs(
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"canonical inference JSON does not satisfy the renderer schema: {exc}") from exc
 
-    actual = markdown_file.read_text(encoding="utf-8")
-    # Keep this byte-for-byte aligned with analyze_main_study.main(), which writes
-    # _markdown(payload) directly without appending or stripping whitespace.
-    if actual != expected:
+    # Compare the exact on-disk UTF-8 stream, including line endings and BOMs.
+    # This is local source consistency, not an external custody attestation.
+    if markdown_bytes != expected.encode("utf-8"):
         raise ValueError(
             "manuscript inference Markdown does not match canonical JSON; "
             "regenerate it with scripts/analyze_main_study.py rather than editing results by hand"

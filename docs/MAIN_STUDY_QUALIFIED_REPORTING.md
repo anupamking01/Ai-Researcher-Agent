@@ -173,3 +173,27 @@ authenticate original treatment reports/traces, or authorize blinded ratings.
 Preserve an out-of-band checksum and original archive when independent
 distribution custody is needed. Do not substitute this reporting ZIP for
 the unavailable historical experimental archives.
+
+## Byte-exact canonical manuscript verification (22 November 2026)
+
+The standalone renderer-consistency verifier previously loaded both JSON and
+Markdown with `Path.read_text()`. Python's default universal-newline
+translation could quietly normalize a CRLF-rewritten manuscript back to LF
+and accept it as equal to the frozen renderer, despite changed on-disk bytes.
+It also followed symlinked artifacts and read unbounded files.
+
+`scripts.verify_main_study_outputs` now captures each local file through
+the existing descriptor-bound, no-follow regular-file reader, limits each to
+8 MiB, decodes the JSON explicitly as UTF-8, and compares the **raw Markdown
+bytes** to the deterministic renderer's UTF-8 bytes. Source symlinks, oversized
+inputs, invalid JSON UTF-8, and otherwise identical CRLF substitutions fail
+without rewriting the historical JSON or manuscript. Five offline regression
+cases cover these outcomes; the existing exact-LF rendering remains valid.
+
+This is a **local artifact-consistency safeguard**, not an independent
+fingerprint of the original 40 treatment reports or a substitute for the
+separate retained canonical output hashes and reporting cover. Input files
+are captured individually, not as one atomic multi-file snapshot. The pilot
+remains diagnostic; the frozen automated analysis retains its post-collection
+and fixed-order/evaluator-policy caveats, later sensitivities are exploratory,
+and human validation remains uncollected.
