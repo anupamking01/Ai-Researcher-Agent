@@ -100,3 +100,30 @@ Seven synthetic offline regressions cover incomplete/dangling pairs, linked
 sources and the intact pair. This only strengthens local descriptive evidence
 custody; it does not authenticate the inaccessible historical research
 artifacts, alter the frozen outcomes or establish human validation.
+
+## Non-destructive descriptive publication (22 November 2026)
+
+The local summarizer previously rewrote its JSON/CSV destinations on every
+successful run. That could silently replace an earlier valid descriptive
+generation after a treatment trace, pricing input, or evaluator cache changed.
+A cryptographic binding **within** a new output pair cannot by itself preserve
+what the earlier pair contained.
+
+Publication now refuses to replace retained evidence. If both destinations
+exist, the summarizer first verifies the retained JSON-to-CSV digest and reads
+both through the bounded, no-follow reader. It returns successfully **without
+rewriting either file** only when both retained byte sequences match the newly
+computed output exactly. Any different generation requires human archival and
+provenance review outside the summarizer. A one-sided existing pair, even
+a dangling symlink, fails closed. First-time publication uses exclusive file
+creation rather than overwrite: an interrupted write leaves a partial pair
+to inspect instead of silently repairing it on a later run.
+
+Offline synthetic regressions cover byte-identical idempotent replay,
+changed-trace refusal with prior bytes preserved, incomplete/dangling
+destinations, symlinked destinations, and a digest-corrupted prior CSV.
+These checks do not create atomic multi-file filesystem transactions or
+independently authenticate the missing original treatment and report archive.
+They are prospective safeguards for **noncanonical descriptive** results;
+frozen automated results, exploratory sensitivities, and pending human
+validation remain separate. No treatment/evaluator rerun is needed.

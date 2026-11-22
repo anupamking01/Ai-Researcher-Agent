@@ -1011,3 +1011,108 @@ def test_summary_rejects_dangling_unselected_evidence_link(
 
     assert not summarize_budget_main_study.OUT_JSON.exists()
     assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+def test_descriptive_summary_identical_rerun_keeps_original_files(tmp_path, monkeypatch):
+    """Idempotent regeneration must not rewrite even a valid existing pair."""
+    _configure_summary(
+        tmp_path, monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    assert summarize_budget_main_study.main() == 0
+    paths = (summarize_budget_main_study.OUT_CSV, summarize_budget_main_study.OUT_JSON)
+    originals = [(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths]
+
+    assert summarize_budget_main_study.main() == 0
+    assert [(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths] == originals
+
+
+def test_descriptive_summary_refuses_new_generation_over_retained_pair(tmp_path, monkeypatch):
+    """Local trace changes must not silently replace earlier published results."""
+    _configure_summary(
+        tmp_path, monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    assert summarize_budget_main_study.main() == 0
+    csv_path = summarize_budget_main_study.OUT_CSV
+    json_path = summarize_budget_main_study.OUT_JSON
+    old_csv, old_json = csv_path.read_bytes(), json_path.read_bytes()
+    trace_path = summarize_budget_main_study.TRACE_ROOT / "D3" / "run-d3-main-01.json"
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    payload["trace"]["latency_seconds"] = 2.0
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="Refusing to overwrite retained main-study descriptive outputs"):
+        summarize_budget_main_study.main()
+    assert csv_path.read_bytes() == old_csv
+    assert json_path.read_bytes() == old_json
+
+
+@pytest.mark.parametrize("retained", ("summary", "csv", "dangling_summary", "dangling_csv"))
+def test_descriptive_summary_refuses_partial_prior_pair(tmp_path, monkeypatch, retained):
+    _configure_summary(
+        tmp_path, monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    output = (
+        summarize_budget_main_study.OUT_JSON
+        if "summary" in retained
+        else summarize_budget_main_study.OUT_CSV
+    )
+    if retained.startswith("dangling"):
+        output.symlink_to("unavailable-prior-artifact")
+    else:
+        output.write_bytes(b"retained prior artifact\n")
+
+    with pytest.raises(SystemExit, match="Refusing to replace incomplete prior main-study descriptive output pair"):
+        summarize_budget_main_study.main()
+    assert output.is_symlink() or output.read_bytes() == b"retained prior artifact\n"
+    other = (
+        summarize_budget_main_study.OUT_CSV
+        if "summary" in retained
+        else summarize_budget_main_study.OUT_JSON
+    )
+    assert not other.exists()
+
+
+@pytest.mark.parametrize("linked", ("summary", "csv"))
+def test_descriptive_summary_refuses_linked_prior_pair(tmp_path, monkeypatch, linked):
+    _configure_summary(
+        tmp_path, monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    assert summarize_budget_main_study.main() == 0
+    target = (
+        summarize_budget_main_study.OUT_JSON
+        if linked == "summary"
+        else summarize_budget_main_study.OUT_CSV
+    )
+    outside = tmp_path / "retained-outside"
+    outside.write_bytes(target.read_bytes())
+    target.unlink()
+    target.symlink_to(outside)
+
+    with pytest.raises(SystemExit, match="regular non-symlink file"):
+        summarize_budget_main_study.main()
+    assert target.is_symlink()
+    assert outside.read_bytes()
+
+
+def test_descriptive_summary_refuses_corrupt_prior_pair(tmp_path, monkeypatch):
+    _configure_summary(
+        tmp_path, monkeypatch,
+        traces=[("run-d3-main-01.json", _trace_payload())],
+        evaluations=[("D3", "main-01.json", _evaluation_payload())],
+    )
+    assert summarize_budget_main_study.main() == 0
+    csv_path = summarize_budget_main_study.OUT_CSV
+    corrupted = csv_path.read_bytes().replace(b"D3", b"D6", 1)
+    csv_path.write_bytes(corrupted)
+    with pytest.raises(SystemExit, match="summary/CSV generation mismatch"):
+        summarize_budget_main_study.main()
+    assert csv_path.read_bytes() == corrupted
+

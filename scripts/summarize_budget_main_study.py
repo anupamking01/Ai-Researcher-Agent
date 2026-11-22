@@ -70,6 +70,68 @@ def _verify_main_study_summary_pair(summary_path: Path, csv_path: Path) -> None:
         )
 
 
+def _publish_main_study_summary_pair(summary: dict, csv_bytes: bytes) -> None:
+    """Refuse to replace retained descriptive evidence with a new generation.
+
+    If a complete pair already exists, require a valid digest and byte-for-byte
+    agreement with this run. Identical replay is read-only. Never silently
+    overwrite a different, partial, or linked pair, even for a local analysis.
+    This does not make first-time two-file publication atomic.
+    """
+    json_bytes = json.dumps(summary, indent=2, sort_keys=True).encode("utf-8")
+
+    def present(path: Path) -> bool:
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            raise SystemExit(
+                f"Cannot inspect retained descriptive output {path}: {exc}"
+            ) from exc
+        return True
+
+    has_json = present(OUT_JSON)
+    has_csv = present(OUT_CSV)
+    if has_json != has_csv:
+        raise SystemExit(
+            "Refusing to replace incomplete prior main-study descriptive "
+            "output pair; preserve retained evidence for provenance review"
+        )
+    if has_json:
+        _verify_main_study_summary_pair(OUT_JSON, OUT_CSV)
+        prior_json = _read_regular_bytes(
+            OUT_JSON, label="retained main-study descriptive JSON",
+            max_bytes=8 * 1024 * 1024,
+        )
+        prior_csv = _read_regular_bytes(
+            OUT_CSV, label="retained main-study descriptive CSV",
+            max_bytes=8 * 1024 * 1024,
+        )
+        if prior_json != json_bytes or prior_csv != csv_bytes:
+            raise SystemExit(
+                "Refusing to overwrite retained main-study descriptive outputs "
+                "with a different generation; archive and review the earlier "
+                "pair before a new noncanonical summary"
+            )
+        return
+
+    # Exclusive creation refuses a pre-existing file or symlink even if it
+    # appears after the presence check. A crash between files leaves an
+    # incomplete pair that the next run refuses to overwrite.
+    try:
+        with OUT_CSV.open("xb") as handle:
+            handle.write(csv_bytes)
+        with OUT_JSON.open("xb") as handle:
+            handle.write(json_bytes)
+    except OSError as exc:
+        raise SystemExit(
+            "Cannot exclusively publish main-study descriptive output pair; "
+            "preserve any retained artifacts for provenance review"
+        ) from exc
+    _verify_main_study_summary_pair(OUT_JSON, OUT_CSV)
+
+
 def _verify_optional_posthoc_aggregate_pair(summary_path: Path, csv_path: Path) -> None:
     """Refuse partial upstream aggregate evidence before publishing a summary.
 
@@ -415,9 +477,7 @@ def main() -> int:
         raise SystemExit("Main-study descriptive CSV exceeds the 8 MiB output bound")
     summary["main_study_runs_sha256"] = hashlib.sha256(csv_bytes).hexdigest()
     summary["main_study_runs_size_bytes"] = len(csv_bytes)
-    OUT_CSV.write_bytes(csv_bytes)
-    OUT_JSON.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
-    _verify_main_study_summary_pair(OUT_JSON, OUT_CSV)
+    _publish_main_study_summary_pair(summary, csv_bytes)
     print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
     return 0
 
