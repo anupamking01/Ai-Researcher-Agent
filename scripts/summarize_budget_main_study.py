@@ -57,6 +57,7 @@ def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str],
     )
     traces = []
     trace_by_key = {}
+    run_id_owner = {}
     for variant in VARIANTS:
         for path in trace_inventory[variant]:
             payload = _load_json(path)
@@ -91,6 +92,14 @@ def _load_bound_inputs(pricing: dict) -> tuple[list[dict], dict[tuple[str, str],
             key = (variant, task_id)
             if key in trace_by_key:
                 raise SystemExit(f"duplicate treatment cell: {variant}/{task_id}")
+            prior_cell = run_id_owner.get(run_id)
+            if prior_cell is not None:
+                raise SystemExit(
+                    "Repeated treatment run_id across distinct cells: "
+                    f"{run_id} ({prior_cell[0]}/{prior_cell[1]} and "
+                    f"{variant}/{task_id}); shared report provenance is ambiguous"
+                )
+            run_id_owner[run_id] = key
             treatment_cost = _validated_trace_cost(
                 payload,
                 path=path,

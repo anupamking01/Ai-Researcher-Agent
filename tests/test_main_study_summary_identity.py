@@ -109,7 +109,7 @@ def _configure_summary(tmp_path, monkeypatch, *, traces, evaluations):
     trace_root = tmp_path / "outputs" / "experiment_traces"
     eval_root = tmp_path / "outputs" / "posthoc_evaluations"
     for filename, payload in traces:
-        path = trace_root / "D3" / filename
+        path = trace_root / payload["experiment"]["variant_id"] / filename
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload), encoding="utf-8")
     for variant, filename, payload in evaluations:
@@ -152,7 +152,11 @@ def _configure_summary(tmp_path, monkeypatch, *, traces, evaluations):
     monkeypatch.setattr(summarize_budget_main_study, "EVAL_ROOT", eval_root)
     monkeypatch.setattr(summarize_budget_main_study, "PRICING_FILE", pricing_file)
     monkeypatch.setattr(summarize_budget_main_study, "TASK_FILE", task_file)
-    monkeypatch.setattr(summarize_budget_main_study, "VARIANTS", ("D3",))
+    monkeypatch.setattr(
+        summarize_budget_main_study,
+        "VARIANTS",
+        tuple(dict.fromkeys(payload["experiment"]["variant_id"] for _, payload in traces)),
+    )
     monkeypatch.setattr(
         summarize_budget_main_study,
         "FROZEN_EVALUATOR_MODEL",
@@ -433,6 +437,91 @@ def test_summary_rejects_duplicate_treatment_cell_before_outputs(
 
     assert not summarize_budget_main_study.OUT_JSON.exists()
     assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+
+def _other_arm_trace(variant, *, run_id):
+    """Build a second synthetic cell with the variant's frozen browse budget."""
+    payload = _trace_payload(task_id="main-02", run_id=run_id)
+    payload["experiment"]["variant_id"] = variant
+    payload["trace"]["variant_id"] = variant
+    payload["experiment"]["source_budget"] = 6
+    payload["trace"]["source_budget"] = 6
+    return payload
+
+
+@pytest.mark.parametrize("other_variant", ["D6", "P6", "P6V"])
+def test_summary_rejects_reused_report_run_id_across_variants_before_outputs(
+    tmp_path, monkeypatch, other_variant
+):
+    """A shared run ID can reference the same Markdown report in two arms."""
+    shared_run_id = "shared-report-run"
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[
+            (f"{shared_run_id}.json", _trace_payload(run_id=shared_run_id)),
+            (
+                f"{shared_run_id}.json",
+                _other_arm_trace(other_variant, run_id=shared_run_id),
+            ),
+        ],
+        evaluations=[
+            ("D3", "main-01.json", _evaluation_payload(run_id=shared_run_id)),
+            (
+                other_variant,
+                "main-02.json",
+                _evaluation_payload(
+                    variant_id=other_variant,
+                    task_id="main-02",
+                    run_id=shared_run_id,
+                ),
+            ),
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="Repeated treatment run_id.*shared report provenance"):
+        summarize_budget_main_study.main()
+
+    assert not summarize_budget_main_study.OUT_JSON.exists()
+    assert not summarize_budget_main_study.OUT_CSV.exists()
+
+
+def test_summary_accepts_distinct_report_run_ids_across_variants(
+    tmp_path, monkeypatch
+):
+    """A partial diagnostic fixture with distinct run IDs remains valid."""
+    _configure_summary(
+        tmp_path,
+        monkeypatch,
+        traces=[
+            ("run-d3-main-01.json", _trace_payload()),
+            (
+                "run-d6-main-02.json",
+                _other_arm_trace("D6", run_id="run-d6-main-02"),
+            ),
+        ],
+        evaluations=[
+            ("D3", "main-01.json", _evaluation_payload()),
+            (
+                "D6",
+                "main-02.json",
+                _evaluation_payload(
+                    variant_id="D6",
+                    task_id="main-02",
+                    run_id="run-d6-main-02",
+                ),
+            ),
+        ],
+    )
+
+    assert summarize_budget_main_study.main() == 0
+    summary = json.loads(
+        summarize_budget_main_study.OUT_JSON.read_text(encoding="utf-8")
+    )
+    assert summary["n_runs"] == 2
+    assert summary["variant_summary"]["D3"]["n"] == 1
+    assert summary["variant_summary"]["D6"]["n"] == 1
 
 
 def test_summary_rejects_orphan_evaluator_cache_before_outputs(tmp_path, monkeypatch):

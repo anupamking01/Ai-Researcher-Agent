@@ -34,3 +34,21 @@ comparisons carry their post-collection planning, fixed-order and
 evaluator-policy limitations. Exploratory sensitivity analyses are not
 prospectively confirmatory, and blinded human validation remains pending.
 No treatments, post-hoc evaluators or annotators need be rerun.
+
+## Distinct run-ID custody across treatment arms (22 November 2026)
+
+The offline summary also requires **one unique `run_id` per treatment cell,
+across all variants**. Two independently labelled trace files in different
+variant directories could previously name the same `outputs/<run_id>/research_report.md`.
+Their individually validated evaluator caches and trace-ledger costs do not
+make one physical report into two independent treatment outputs. Reuse now
+stops descriptive publication before JSON or CSV writes, with both implicated
+cells identified. This closes the summarizer path independently of the
+prospective noncanonical runner's new-completion gate and the separate
+40-cell evaluator replay preflight.
+
+Offline synthetic cases exercise collisions for D3 against D6, P6 and P6V,
+plus a positive two-arm case with distinct run IDs. Partial diagnostic
+fixtures remain permitted; no historical source file is modified or recreated.
+This is a local provenance/identity requirement, not source authentication or
+human validation, and does not revise frozen automated outcomes.
