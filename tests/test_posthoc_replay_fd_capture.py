@@ -178,3 +178,65 @@ def test_regular_parent_directory_swap_during_read_is_rejected(
         evaluator._read_regular_bytes(
             path, label="Evaluator evidence", max_bytes=64
         )
+
+
+def test_nested_ordinary_source_ancestors_remain_readable(tmp_path):
+    nested = tmp_path / "retained" / "run" / "evidence"
+    nested.mkdir(parents=True)
+    path = nested / "report.md"
+    path.write_bytes(b"synthetic offline report")
+    assert evaluator._read_regular_bytes(
+        path, label="Evaluator evidence", max_bytes=32
+    ) == b"synthetic offline report"
+
+
+def test_intermediate_symlink_cannot_redirect_source_capture(tmp_path):
+    real = tmp_path / "real"
+    nested = real / "run"
+    nested.mkdir(parents=True)
+    (nested / "report.md").write_bytes(b"external source")
+    (tmp_path / "alias").symlink_to(real, target_is_directory=True)
+    # The immediate parent (alias/run) is a regular directory. It was
+    # previously accepted even though its grandparent was a symlink.
+    selected = tmp_path / "alias" / "run" / "report.md"
+    assert not selected.parent.is_symlink()
+    with pytest.raises(SystemExit, match="ancestor directory must not be a symlink"):
+        evaluator._read_regular_bytes(
+            selected, label="Evaluator evidence", max_bytes=64
+        )
+
+
+def test_rebound_intermediate_ancestor_is_rejected_during_read(
+    tmp_path, monkeypatch
+):
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    nested = selected / "run"
+    nested.mkdir()
+    path = nested / "report.md"
+    path.write_bytes(b"original")
+    replacement = tmp_path / "replacement"
+    (replacement / "run").mkdir(parents=True)
+    (replacement / "run" / "report.md").write_bytes(b"original")
+    original_fdopen = evaluator.os.fdopen
+
+    def swap_intermediate_before_read(fd, *args, **kwargs):
+        selected.rename(tmp_path / "moved")
+        replacement.rename(selected)
+        return original_fdopen(fd, *args, **kwargs)
+
+    monkeypatch.setattr(evaluator.os, "fdopen", swap_intermediate_before_read)
+    with pytest.raises(
+        SystemExit, match="ancestor directory pathname changed during read"
+    ):
+        evaluator._read_regular_bytes(
+            path, label="Evaluator evidence", max_bytes=64
+        )
+
+
+def test_explicit_parent_traversal_is_not_normalized_into_evidence(tmp_path):
+    path = tmp_path / "run" / ".." / "report.md"
+    with pytest.raises(SystemExit, match="source path contains parent traversal"):
+        evaluator._read_regular_bytes(
+            path, label="Evaluator evidence", max_bytes=64
+        )

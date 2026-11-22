@@ -117,6 +117,9 @@ def _read_regular_bytes(
     This is not an atomic multi-file experiment snapshot.
     """
     path = Path(path)
+    # Do not normalize caller-supplied parent traversals into a new source.
+    if ".." in path.parts:
+        raise SystemExit(f"{label} source path contains parent traversal: {path}")
     _require_regular_file(path, label=label)
     if not all(
         hasattr(os, flag) for flag in ("O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK")
@@ -136,7 +139,31 @@ def _read_regular_bytes(
 
     directory_fd: int | None = None
     input_fd: int | None = None
+    ancestor_fds: list[int] = []
+    ancestor_links: list[tuple[int, str, int]] = []
     try:
+        # O_NOFOLLOW on path.parent protects only its final component.
+        # Pin each intermediate ancestor separately so a grandparent alias
+        # cannot redirect evidence outside the selected source pathname.
+        absolute = path.absolute()
+        ancestor_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        parent_fd = os.open(absolute.anchor, ancestor_flags)
+        ancestor_fds.append(parent_fd)
+        for component in absolute.parts[1:-1]:
+            named = os.stat(component, dir_fd=parent_fd, follow_symlinks=False)
+            if not stat.S_ISDIR(named.st_mode):
+                raise SystemExit(
+                    f"{label} ancestor directory must not be a symlink: {path}"
+                )
+            child_fd = os.open(component, ancestor_flags, dir_fd=parent_fd)
+            ancestor_fds.append(child_fd)
+            if not same_identity(named, os.fstat(child_fd)):
+                raise SystemExit(
+                    f"{label} ancestor directory changed before read: {path}"
+                )
+            ancestor_links.append((parent_fd, component, child_fd))
+            parent_fd = child_fd
+
         selected_parent = os.stat(path.parent, follow_symlinks=False)
         selected_file = os.stat(path, follow_symlinks=False)
         if not stat.S_ISDIR(selected_parent.st_mode) or not stat.S_ISREG(
@@ -150,6 +177,10 @@ def _read_regular_bytes(
             path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         )
         opened_parent = os.fstat(directory_fd)
+        if not same_identity(os.fstat(parent_fd), opened_parent):
+            raise SystemExit(
+                f"{label} ancestor directory changed before read: {path}"
+            )
         if not same_identity(selected_parent, opened_parent):
             raise SystemExit(
                 f"{label} directory pathname changed before read: {path}"
@@ -178,6 +209,14 @@ def _read_regular_bytes(
             path.name, dir_fd=directory_fd, follow_symlinks=False
         )
         visible_parent = os.stat(path.parent, follow_symlinks=False)
+        for ancestor_parent, component, opened_child in ancestor_links:
+            named = os.stat(
+                component, dir_fd=ancestor_parent, follow_symlinks=False
+            )
+            if not same_identity(named, os.fstat(opened_child)):
+                raise SystemExit(
+                    f"{label} ancestor directory pathname changed during read: {path}"
+                )
     except OSError as exc:
         raise SystemExit(f"Cannot read {label} {path}: {exc}") from exc
     finally:
@@ -185,6 +224,8 @@ def _read_regular_bytes(
             os.close(input_fd)
         if directory_fd is not None:
             os.close(directory_fd)
+        for ancestor_fd in reversed(ancestor_fds):
+            os.close(ancestor_fd)
 
     if not same_identity(before, after):
         raise SystemExit(

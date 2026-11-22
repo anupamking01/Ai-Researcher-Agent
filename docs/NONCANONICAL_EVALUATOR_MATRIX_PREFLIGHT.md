@@ -390,3 +390,34 @@ Missing historical treatment archives and independently selected blinded
 human raters remain separate publication blockers. Diagnostic pilot, frozen
 automated confirmatory, exploratory, and pending human-evaluation claims
 remain unchanged.
+
+
+## Full ancestor custody for local evaluator evidence (22 November 2026)
+
+The shared noncanonical evaluator source reader previously guarded the input
+file and its immediate parent with no-follow descriptor opens. On POSIX,
+`O_NOFOLLOW` applies only to the **last** pathname component: a symlinked
+grandparent could still redirect a source to an unselected tree. Likewise,
+an intermediate ordinary directory could be exchanged between source
+selection and the bounded read without being compared to the captured parent.
+
+The reader now rejects explicit `..` traversal components; walks every
+ancestor from the filesystem root using descriptor-relative, no-follow
+directory opens; compares each directory entry to its opened descriptor;
+requires the existing selected parent to match that chain; and checks all
+ancestor links again before accepting the bytes. It preserves the existing
+file/parent identity, nonblocking regular-file, and byte-limit checks.
+
+Four synthetic offline regressions cover valid nested trees, an intermediate
+directory alias, replacement of an intermediate directory while the file
+descriptor is held, and explicit parent traversal. No provider/model calls
+or historical treatment/evaluator reruns are involved.
+
+This establishes observable *local read-window pathname custody*, not an
+atomic multi-file snapshot, an independently authenticated original archive,
+or protection against changes transiently made and restored between checks.
+The original 40 report/trace pairs still require independent source custody
+before blinded distribution. The five-task pilot remains diagnostic; frozen
+automated findings remain post-collection and qualified by fixed order and
+historical evaluator-policy differences; retrospective analyses remain
+exploratory, and human ratings remain uncollected.
