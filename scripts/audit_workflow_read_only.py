@@ -42,16 +42,40 @@ def _check_optional_mapping(context: dict, key: str, *, location: str) -> None:
     _assert_no_research_execution(value, location=f"{location}.{key}")
 
 
+def _check_optional_shell(context: dict, *, location: str) -> None:
+    """A custom Actions shell template can execute code outside its run body."""
+    if "shell" not in context:
+        return
+    shell = context["shell"]
+    assert isinstance(shell, str) and shell.strip(), f"{location}: malformed shell"
+    _assert_no_research_execution(shell, location=f"{location}.shell")
+
+
+def _check_default_run_shell(context: dict, *, location: str) -> None:
+    """Inspect workflow/job shell defaults, not unrelated source-watch metadata."""
+    if "defaults" not in context:
+        return
+    defaults = context["defaults"]
+    assert isinstance(defaults, dict), f"{location}: malformed defaults mapping"
+    if "run" not in defaults:
+        return
+    run = defaults["run"]
+    assert isinstance(run, dict), f"{location}: malformed defaults.run mapping"
+    _check_optional_shell(run, location=f"{location}.defaults.run")
+
+
 def assert_read_only_workflow_steps(workflow_text: str) -> None:
-    """Reject forbidden scripts in runnable steps, their env, or action inputs."""
+    """Reject forbidden research execution in commands, shells, env and inputs."""
     workflow = yaml.load(workflow_text, Loader=yaml.BaseLoader)
     assert isinstance(workflow, dict), "audit workflow must be a YAML mapping"
     _check_optional_mapping(workflow, "env", location="workflow")
+    _check_default_run_shell(workflow, location="workflow")
     jobs = workflow.get("jobs")
     assert isinstance(jobs, dict) and jobs, "audit workflow needs jobs"
     for job_name, job in jobs.items():
         assert isinstance(job, dict), f"{job_name}: malformed job"
         _check_optional_mapping(job, "env", location=f"job {job_name}")
+        _check_default_run_shell(job, location=f"job {job_name}")
         steps = job.get("steps")
         assert isinstance(steps, list) and steps, f"{job_name}: missing steps"
         for index, step in enumerate(steps):
@@ -61,5 +85,6 @@ def assert_read_only_workflow_steps(workflow_text: str) -> None:
             for key in ("run", "uses"):
                 if key in step:
                     _assert_no_research_execution(step[key], location=f"{label}.{key}")
+            _check_optional_shell(step, location=label)
             _check_optional_mapping(step, "env", location=label)
             _check_optional_mapping(step, "with", location=label)

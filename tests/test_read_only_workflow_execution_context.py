@@ -87,3 +87,70 @@ def test_source_watch_filters_are_not_execution():
 @pytest.mark.parametrize("workflow", ARCHIVE_AUDITS)
 def test_actual_archive_audit_execution_contexts_remain_read_only(workflow):
     assert_read_only_workflow_steps((ROOT / workflow).read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("scope", ("workflow-defaults", "job-defaults", "step-shell"))
+@pytest.mark.parametrize("command", (
+    "python -m scripts.run_budget_main_study",
+    "python -m scripts.run_pilot",
+    "python -m scripts.evaluate_posthoc_support",
+))
+def test_guard_rejects_research_execution_in_shell_templates(scope, command):
+    # GitHub invokes a custom shell with the run body as {0}; execution may
+    # occur in the shell prefix even when run itself only prints a receipt.
+    custom_shell = f'bash -c "{command}; bash {{0}}"'
+    if scope == "workflow-defaults":
+        source = BASE.replace(
+            "jobs:\n",
+            f"defaults:\n  run:\n    shell: {custom_shell}\njobs:\n",
+        )
+    elif scope == "job-defaults":
+        source = BASE.replace(
+            "    runs-on: ubuntu-24.04\n",
+            f"    defaults:\n      run:\n        shell: {custom_shell}\n"
+            "    runs-on: ubuntu-24.04\n",
+        )
+    else:
+        source = BASE.replace(
+            "        run: echo verified\n",
+            f"        shell: {custom_shell}\n        run: echo verified\n",
+        )
+    with pytest.raises(AssertionError, match="must not execute"):
+        assert_read_only_workflow_steps(source)
+
+
+@pytest.mark.parametrize("invalid", (
+    "defaults: invalid-scalar\n",
+    "defaults:\n  run: invalid-scalar\n",
+    "defaults:\n  run:\n    shell:\n      nested: value\n",
+))
+def test_guard_rejects_malformed_workflow_run_shell_defaults(invalid):
+    with pytest.raises(AssertionError, match="malformed"):
+        assert_read_only_workflow_steps(BASE.replace("jobs:\n", invalid + "jobs:\n"))
+
+
+@pytest.mark.parametrize("scope", ("job", "step"))
+def test_guard_rejects_non_scalar_job_or_step_shell(scope):
+    if scope == "job":
+        source = BASE.replace(
+            "    runs-on: ubuntu-24.04\n",
+            "    defaults:\n      run:\n        shell: []\n"
+            "    runs-on: ubuntu-24.04\n",
+        )
+    else:
+        source = BASE.replace(
+            "        run: echo verified\n",
+            "        shell: []\n        run: echo verified\n",
+        )
+    with pytest.raises(AssertionError, match="malformed"):
+        assert_read_only_workflow_steps(source)
+
+
+def test_valid_actions_shells_and_watched_runner_paths_are_accepted():
+    source = BASE.replace(
+        "jobs:\n", "defaults:\n  run:\n    shell: bash\njobs:\n",
+    ).replace(
+        "        run: echo verified\n",
+        "        shell: bash\n        run: echo verified\n",
+    )
+    assert_read_only_workflow_steps(source)
