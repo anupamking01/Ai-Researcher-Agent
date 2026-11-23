@@ -20,3 +20,21 @@ Exit code 0 means every shard job and the full replay job report success; 1 mean
 The previously inspected [run 45089271290](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45089271290) recorded nine successful shards, seven cancelled shards and a skipped full-set replay. Some cancelled jobs printed passing pytest summaries before cancellation; those are **not** certified shard successes.
 
 The five-task pilot remains diagnostic. Frozen automated results retain post-collection statistical-plan timing, fixed-order and evaluator-policy limitations. Retrospective sensitivity analyses remain exploratory, not prospective confirmation. Independent source authentication of original report/trace files and genuine human validation remain pending. This tool runs no treatments, evaluators, or human ratings.
+
+## Source-bound fast CI for this metadata auditor
+
+The `full-ci-job-completion-fast-ci` workflow runs the synthetic auditor
+regression module plus a separate workflow-contract test in a short, firewalled,
+exact-commit GitHub Actions lane. It is triggered by changes to the auditor,
+its tests, the workflow under audit, or its source/evidence dependencies.
+It checks that mandatory auditor step labels still exist in the actual
+sixteen-shard workflow and that critical test, replay and artifact-upload
+steps still point to their expected implementations. The lane retains a
+source-bound test transcript and independently replayed receipt for 90 days.
+
+**Scope limitation:** A green fast lane certifies the *auditor's synthetic
+regressions and current source contract*, not completion of the sixteen-shard
+workflow, authenticity of the supplied job metadata, verification of actual
+retained shard evidence, authentication of original experiment artifacts,
+prospective confirmation, or human evaluation. A cancelled full suite remains
+uncertified, even when this fast lane passes.
