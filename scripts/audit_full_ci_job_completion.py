@@ -119,7 +119,9 @@ def load_jobs_json(path: Path) -> dict:
     return payload
 
 
-def _require_successful_steps(\n    job: dict, *, required: tuple[str, ...], auxiliary: frozenset[str]\n) -> None:
+def _require_successful_steps(
+    job: dict, *, required: tuple[str, ...], auxiliary: frozenset[str]
+) -> None:
     """Every mandatory step in a green job must succeed in declared workflow order."""
     name = job["name"]
     steps = job.get("steps")
@@ -197,7 +199,9 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
             raise ValueError(f"{name}: unfinished job with conclusion")
         if name == REPLAY_JOB:
             if conclusion == "success":
-                _require_successful_steps(\n                    job, required=REQUIRED_REPLAY_STEPS, auxiliary=REPLAY_AUXILIARY_STEPS\n                )
+                _require_successful_steps(
+                    job, required=REQUIRED_REPLAY_STEPS, auxiliary=REPLAY_AUXILIARY_STEPS
+                )
             replay_conclusion = conclusion
         else:
             match = SHARD_RE.fullmatch(name)
@@ -207,7 +211,9 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
             if index in shard_conclusions:
                 raise ValueError(f"duplicate shard index {index}")
             if conclusion == "success":
-                _require_successful_steps(\n                    job, required=REQUIRED_SHARD_STEPS, auxiliary=SHARD_AUXILIARY_STEPS\n                )
+                _require_successful_steps(
+                    job, required=REQUIRED_SHARD_STEPS, auxiliary=SHARD_AUXILIARY_STEPS
+                )
             shard_conclusions[index] = conclusion or "in_progress"
     if REPLAY_JOB not in seen_names:
         raise ValueError("missing full-set replay job metadata")
