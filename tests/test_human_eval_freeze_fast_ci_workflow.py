@@ -12,6 +12,7 @@ WORKFLOW = ROOT / ".github/workflows/human-eval-freeze-fast-ci.yml"
 FREEZE_SCRIPTS = (
     "scripts/freeze_human_eval_ratings.py",
     "scripts/verify_human_eval_freeze.py",
+    "scripts/verify_human_eval_correction_custody.py",
     "scripts/human_eval_analysis_core.py",
     "scripts/build_human_eval_packet.py",
     "scripts/verify_human_eval_packet.py",
@@ -31,12 +32,14 @@ FREEZE_MODULES = (
     "tests/test_human_eval_freeze_verification.py",
     "tests/test_human_eval_freeze_fast_ci_workflow.py",
     "tests/test_human_eval_analysis_ancestor_custody.py",
+    "tests/test_human_eval_correction_custody.py",
 )
 SOURCE_TRIGGER_PATHS = (
     "tests/human_eval_test_support.py",
     "paper/HUMAN_EVAL_PROTOCOL.md",
     "paper/HUMAN_EVAL_ASSIGNMENT_PLAN.md",
     "paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md",
+    "docs/HUMAN_EVAL_CORRECTION_CUSTODY.md",
     "scripts/run_offline_pytest_firewalled.sh",
     "scripts/verify_ci_python_runtime.py",
     "scripts/verify_ci_source_checkout.py",
