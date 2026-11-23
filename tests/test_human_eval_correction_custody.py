@@ -116,3 +116,68 @@ def test_rejects_duplicate_ledger_keys(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="duplicate"):
         custody.audit_corrections(
             ledger=ledger, submissions_root=root, freeze_root=frozen)
+
+
+def _replace_blind_rows(root: Path, filename: str, blind_ids: list[str]) -> str:
+    """Write synthetic rows only; never use real annotator ratings."""
+    path = root / filename
+    with path.open("r", newline="", encoding="utf-8") as handle:
+        template = next(csv.DictReader(handle))
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=freeze.RATING_FIELDS)
+        writer.writeheader()
+        for blind_id in blind_ids:
+            writer.writerow({**template, "blind_id": blind_id})
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("reason,original,final,accepted", [
+    ("clerical_transcription", ["H001"], ["H001"], True),
+    ("clerical_transcription", ["H001"], ["H002"], False),
+    ("file_format_correction", ["H001"], ["H001", "H002"], False),
+    ("other_predeclared_validity_correction", ["H001", "H002"], ["H001"], False),
+    ("missing_row_completion", ["H001"], ["H001", "H002"], True),
+    ("missing_row_completion", ["H001", "H002"], ["H001"], False),
+    ("missing_row_completion", ["H001"], ["H002"], False),
+])
+def test_corrected_versions_preserve_blinded_report_coverage(
+    tmp_path, monkeypatch, reason, original, final, accepted
+):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    chain = data["chains"][0]
+    chain["reason"] = reason
+    chain["versions"][0]["sha256"] = _replace_blind_rows(
+        root, "r001_v001.csv", original
+    )
+    chain["versions"][1]["sha256"] = _replace_blind_rows(
+        root, "r001_v002.csv", final
+    )
+    store()
+    if accepted:
+        result = custody.audit_corrections(
+            ledger=ledger, submissions_root=root, freeze_root=frozen
+        )
+        assert result["n_accepted_versions_bound_to_verified_freeze"] == 1
+    else:
+        with pytest.raises(ValueError, match="report"):
+            custody.audit_corrections(
+                ledger=ledger, submissions_root=root, freeze_root=frozen
+            )
+
+
+@pytest.mark.parametrize("original_ids,pattern", [
+    ([""], "blank blinded report ID"),
+    (["H001", "H001"], "duplicate blinded report ID"),
+])
+def test_rejects_ambiguous_superseded_report_identity(
+    tmp_path, monkeypatch, original_ids, pattern
+):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    data["chains"][0]["versions"][0]["sha256"] = _replace_blind_rows(
+        root, "r001_v001.csv", original_ids
+    )
+    store()
+    with pytest.raises(ValueError, match=pattern):
+        custody.audit_corrections(
+            ledger=ledger, submissions_root=root, freeze_root=frozen
+        )

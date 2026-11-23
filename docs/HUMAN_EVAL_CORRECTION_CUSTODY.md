@@ -13,7 +13,14 @@ blinded freeze first, then SHA-256 checks *every* original and replacement
 CSV, enforces one stable pseudonymous annotator per chain, distinct complete
 files, bounded neutral filenames, a reason code, and exactly the last version
 in the verified freeze input inventory. A superseded file appearing in the
-freeze is rejected. Scores are neither compared nor reported.
+freeze is rejected. Every parseable version must also have distinct, nonblank
+blinded report IDs: ordinary clerical/format/validity corrections preserve the
+*exact* report-ID set across whole-file revisions; a documented
+`missing_row_completion` correction may only add IDs, never silently drop or
+substitute previously submitted reports. This prevents a correction chain
+from masking selective deletion or substitution of unfavorable report rows.
+The check compares **identities only**; scores are neither compared nor
+reported.
 
 Coordinator-only ledger example (use only nonidentifying pseudonyms and neutral
 filenames in a private directory, not actual annotation values here):
@@ -50,6 +57,15 @@ python -m scripts.verify_human_eval_correction_custody \
 
 This check is **only necessary if corrections actually occurred**.
 Its receipt is limited to counts and explicit non-attestation of timing.
+The identity-set rule is deliberately conservative: an original with an
+empty/duplicate blinded ID, or a version that needs to replace an incorrect
+blinded ID rather than only add a missing row, is **not** automatically
+certified. Preserve both unchanged files and obtain a separately recorded,
+pre-unblinding protocol-validity decision/deviation instead of silently
+relaxing this gate. Matching row identities cannot prove that changes to
+scores or notes were genuinely clerical, nor that every historical submission
+was disclosed to the ledger.
+
 The `phase` declaration is not an independent timestamp, consent/eligibility
 record, proof of human independence, or proof of when an annotator saw other
 ratings. Preserve approval/timing evidence separately under applicable
