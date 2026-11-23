@@ -223,6 +223,26 @@ def _completed_job_window(job: dict) -> tuple[datetime, datetime]:
     return times[0], times[1]
 
 
+def _require_step_windows(job: dict, job_window: tuple[datetime, datetime]) -> None:
+    """Check actual mandatory step chronology for a claim of full completion."""
+    required = REQUIRED_REPLAY_STEPS if job["name"] == REPLAY_JOB else REQUIRED_SHARD_STEPS
+    previous_end = job_window[0]
+    for step in job["steps"]:
+        if step["name"] not in required:
+            continue
+        # Reuse strict UTC parsing, but include the parent job in diagnostics.
+        start, end = _completed_job_window({
+            "name": f"{job['name']}: {step['name']}",
+            "started_at": step.get("started_at"),
+            "completed_at": step.get("completed_at"),
+        })
+        if start < job_window[0] or end > job_window[1]:
+            raise ValueError(f"{job['name']}: required step lies outside job time window")
+        if start < previous_end:
+            raise ValueError(f"{job['name']}: required step overlaps previous required step")
+        previous_end = end
+
+
 def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> dict:
     """Classify exact-run jobs without upgrading partial pytest to verified CI."""
     run_id = _positive_int(run_id, "run_id")
@@ -303,6 +323,8 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
         if replay_start < max(windows[f"unit-tests ({i})"][1]
                               for i in range(EXPECTED_SHARDS)):
             raise ValueError("full-set replay started before all successful shards completed")
+        for job in jobs:
+            _require_step_windows(job, windows[job["name"]])
     return {
         "schema_version": 1,
         "run_id": run_id,

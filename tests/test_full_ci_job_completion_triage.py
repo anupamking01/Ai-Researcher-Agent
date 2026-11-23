@@ -50,9 +50,10 @@ REPLAY_STEPS = (
 )
 
 
-def _steps(labels):
+def _steps(labels, timestamp="2026-11-23T00:00:00Z"):
     return [
-        {"name": label, "status": "completed", "conclusion": "success", "number": n}
+        {"name": label, "status": "completed", "conclusion": "success", "number": n,
+         "started_at": timestamp, "completed_at": timestamp}
         for n, label in enumerate(labels, start=1)
     ]
 
@@ -79,7 +80,7 @@ def _inventory(shard_overrides=None, replay="success"):
         "head_sha": SHA, "name": "replay-complete-shard-set",
         "status": "completed" if replay else "in_progress",
         "conclusion": replay,
-        "steps": _steps(REPLAY_STEPS),
+        "steps": _steps(REPLAY_STEPS, "2026-11-23T00:11:00Z"),
         "started_at": "2026-11-23T00:11:00Z",
         "completed_at": "2026-11-23T00:12:00Z",
     })
@@ -427,7 +428,9 @@ def test_known_provider_setup_and_post_steps_remain_acceptable():
     ):
         steps = payload["jobs"][index]["steps"]
         names = ["Set up job", *(step["name"] for step in steps), *post_steps, "Complete job"]
-        payload["jobs"][index]["steps"] = _steps(names)
+        payload["jobs"][index]["steps"] = _steps(
+            names, payload["jobs"][index]["started_at"]
+        )
     assert _audit(payload)["full_job_gate_completed"] is True
 
 def test_cancelled_job_still_classifiable_with_incomplete_step_numbers():
@@ -644,3 +647,38 @@ def test_cli_rejects_duplicate_key_workflow_run_snapshot(tmp_path, capsys):
     ])
     assert result == 2
     assert "duplicate jobs JSON key" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("job_index", [0, -1])
+@pytest.mark.parametrize("mutation,pattern", [
+    ({"started_at": None}, "missing or malformed started_at"),
+    ({"completed_at": "2026-02-30T00:00:00Z"}, "invalid completed_at"),
+    ({"started_at": "2026-11-22T23:59:00Z"}, "outside job time window"),
+    ({"completed_at": "2026-11-24T00:00:00Z"}, "outside job time window"),
+    ({"completed_at": "2026-11-22T23:59:00Z"}, "completed_at precedes started_at"),
+])
+def test_complete_gate_requires_valid_step_windows(job_index, mutation, pattern):
+    payload = _inventory()
+    payload["jobs"][job_index]["steps"][1].update(mutation)
+    with pytest.raises(ValueError, match=pattern):
+        _audit(payload)
+
+
+@pytest.mark.parametrize("job_index,overlap_end", [
+    (0, "2026-11-23T00:00:01Z"),
+    (-1, "2026-11-23T00:11:01Z"),
+])
+def test_complete_gate_rejects_overlapping_required_steps(job_index, overlap_end):
+    payload = _inventory()
+    payload["jobs"][job_index]["steps"][0]["completed_at"] = overlap_end
+    with pytest.raises(ValueError, match="overlaps previous required step"):
+        _audit(payload)
+
+
+def test_incomplete_run_does_not_require_step_timing():
+    payload = _inventory({2: "cancelled"}, replay="skipped")
+    for job in payload["jobs"]:
+        for step in job["steps"]:
+            step.pop("started_at")
+            step.pop("completed_at")
+    assert _audit(payload)["cancelled_shards"] == [2]
