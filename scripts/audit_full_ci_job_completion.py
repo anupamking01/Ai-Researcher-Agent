@@ -20,6 +20,31 @@ SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 SHARD_RE = re.compile(r"unit-tests \(([0-9]+)\)\Z")
 
 
+# These are the essential steps in the pinned offline tests.yml workflow.
+# Checking Actions step metadata is not equivalent to authenticating receipt bytes.
+REQUIRED_SHARD_STEPS = frozenset({
+    "Verify exact checkout before dependency-free diagnostic gate",
+    "Run dependency-free diagnostic invariants before pip installation",
+    "Bind dependency-free test transcript to commit and run",
+    "Independently replay dependency-free evidence before retention",
+    "Retain pre-install diagnostic evidence (90 days)",
+    "Verify exact source checkout before tests",
+    "Run offline unit tests",
+    "Verify exact source checkout after tests",
+    "Bind exact-commit offline test evidence",
+    "Replay exact-commit offline test evidence before upload",
+    "Retain source-bound offline test evidence (90 days)",
+})
+REQUIRED_REPLAY_STEPS = frozenset({
+    "Download current-attempt shard evidence",
+    "Stage exact-attempt shard directories",
+    "Download exact-attempt pre-install diagnostic evidence",
+    "Stage complete early diagnostic evidence set",
+    "Independently replay all sixteen downloaded shard receipts",
+    "Retain verified sixteen-shard replay (90 days)",
+})
+
+
 def _positive_int(value: object, name: str) -> int:
     if type(value) is not int or value <= 0:
         raise ValueError(f"{name} must be a positive integer")
@@ -56,6 +81,28 @@ def load_jobs_json(path: Path) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("jobs JSON must be an object")
     return payload
+
+
+def _require_successful_steps(job: dict, *, required: frozenset[str]) -> None:
+    """A job-level success cannot override a skipped essential evidence gate."""
+    name = job["name"]
+    steps = job.get("steps")
+    if not isinstance(steps, list):
+        raise ValueError(f"{name}: successful job has no steps inventory")
+    seen: dict[str, dict] = {}
+    for step in steps:
+        if not isinstance(step, dict) or not isinstance(step.get("name"), str) or not step["name"]:
+            raise ValueError(f"{name}: malformed job step")
+        label = step["name"]
+        if label in seen:
+            raise ValueError(f"{name}: duplicate job step {label!r}")
+        seen[label] = step
+    for label in sorted(required):
+        step = seen.get(label)
+        if step is None:
+            raise ValueError(f"{name}: missing required successful step {label!r}")
+        if step.get("status") != "completed" or step.get("conclusion") != "success":
+            raise ValueError(f"{name}: required step did not succeed: {label!r}")
 
 
 def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> dict:
@@ -100,6 +147,8 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
         if job["status"] != "completed" and conclusion is not None:
             raise ValueError(f"{name}: unfinished job with conclusion")
         if name == REPLAY_JOB:
+            if conclusion == "success":
+                _require_successful_steps(job, required=REQUIRED_REPLAY_STEPS)
             replay_conclusion = conclusion
         else:
             match = SHARD_RE.fullmatch(name)
@@ -108,6 +157,8 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
             index = int(match.group(1))
             if index in shard_conclusions:
                 raise ValueError(f"duplicate shard index {index}")
+            if conclusion == "success":
+                _require_successful_steps(job, required=REQUIRED_SHARD_STEPS)
             shard_conclusions[index] = conclusion or "in_progress"
     if REPLAY_JOB not in seen_names:
         raise ValueError("missing full-set replay job metadata")
