@@ -59,3 +59,21 @@ two-endpoint **metadata-consistency** safeguard, not independent source
 authentication or retained-artifact verification. Frozen automated results,
 the diagnostic pilot, exploratory sensitivities and pending human validation
 are unchanged; no treatments, evaluators or ratings are rerun.
+
+
+## Exact input snapshot fingerprints
+
+For both complete-success (exit 0) and valid incomplete (exit 1) CLI
+receipts, `jobs_json_sha256` and `run_json_sha256` identify the **exact raw
+bytes parsed by this invocation** for the jobs inventory and matching
+workflow-run envelope, respectively. Preserve both original JSON files
+alongside the receipt. Even whitespace-only changes produce a different
+fingerprint; JSON is not reserialized or reopened for hashing. The existing
+in-memory audit functions do not claim raw-file fingerprints.
+
+A later reviewer can compare the two files' SHA-256 digests to the receipt
+and replay the same command. These fingerprints identify captured bytes;
+they neither authenticate the GitHub source nor prove that the files still
+contain those bytes after the read. They do not certify independently
+retained CI artifacts or any experimental or human-evaluation outcome.
+Invalid input still produces no success or incomplete receipt.

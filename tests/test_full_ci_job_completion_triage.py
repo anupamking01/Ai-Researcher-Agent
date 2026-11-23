@@ -1,4 +1,5 @@
 """Synthetic offline CI job metadata; no GitHub, treatments or ratings."""
+import hashlib
 import json
 
 import pytest
@@ -682,3 +683,69 @@ def test_incomplete_run_does_not_require_step_timing():
             step.pop("started_at")
             step.pop("completed_at")
     assert _audit(payload)["cancelled_shards"] == [2]
+
+
+@pytest.mark.parametrize("incomplete", [False, True])
+def test_cli_binds_exact_metadata_snapshot_bytes(tmp_path, capsys, incomplete):
+    jobs_path = tmp_path / "jobs.json"
+    run_path = tmp_path / "run.json"
+    jobs = _inventory({6: "cancelled"}, "skipped") if incomplete else _inventory()
+    run = _run_snapshot(conclusion="cancelled" if incomplete else "success")
+    args = [
+        "--jobs-json", str(jobs_path), "--run-json", str(run_path),
+        "--run-id", str(RUN), "--run-attempt", str(ATTEMPT), "--commit", SHA,
+    ]
+    expected_exit = 1 if incomplete else 0
+
+    def invoke(jobs_raw, run_raw):
+        jobs_path.write_bytes(jobs_raw)
+        run_path.write_bytes(run_raw)
+        assert main(args) == expected_exit
+        result = json.loads(capsys.readouterr().out)
+        assert result["jobs_json_sha256"] == hashlib.sha256(jobs_raw).hexdigest()
+        assert result["run_json_sha256"] == hashlib.sha256(run_raw).hexdigest()
+        assert result["retained_evidence_verified_by_this_tool"] is False
+        return result
+
+    jobs_raw = json.dumps(jobs).encode("utf-8")
+    run_raw = json.dumps(run).encode("utf-8")
+    first = invoke(jobs_raw, run_raw)
+    second = invoke(jobs_raw + b"\n", run_raw)
+    third = invoke(jobs_raw, run_raw + b"\n")
+    assert first["jobs_json_sha256"] != second["jobs_json_sha256"]
+    assert first["run_json_sha256"] == second["run_json_sha256"]
+    assert first["jobs_json_sha256"] == third["jobs_json_sha256"]
+    assert first["run_json_sha256"] != third["run_json_sha256"]
+    for result in (first, second, third):
+        result.pop("jobs_json_sha256")
+        result.pop("run_json_sha256")
+    assert first == second == third
+
+
+def test_cli_fingerprints_captured_jobs_even_if_path_changes_after_parsing(
+    tmp_path, capsys, monkeypatch
+):
+    import scripts.audit_full_ci_job_completion as auditor
+
+    jobs_path = tmp_path / "jobs.json"
+    run_path = tmp_path / "run.json"
+    original = json.dumps(_inventory()).encode("utf-8")
+    replacement = json.dumps(_inventory({0: "cancelled"}, "skipped")).encode("utf-8")
+    jobs_path.write_bytes(original)
+    run_path.write_text(json.dumps(_run_snapshot()), encoding="utf-8")
+    real_audit = auditor.audit_jobs
+
+    def mutate_after_capture(payload, **kwargs):
+        jobs_path.write_bytes(replacement)
+        return real_audit(payload, **kwargs)
+
+    monkeypatch.setattr(auditor, "audit_jobs", mutate_after_capture)
+    assert main([
+        "--jobs-json", str(jobs_path), "--run-json", str(run_path),
+        "--run-id", str(RUN), "--run-attempt", str(ATTEMPT), "--commit", SHA,
+    ]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert jobs_path.read_bytes() == replacement
+    assert result["jobs_json_sha256"] == hashlib.sha256(original).hexdigest()
+    assert result["jobs_json_sha256"] != hashlib.sha256(replacement).hexdigest()
+    assert result["full_workflow_job_gate_completed"] is True

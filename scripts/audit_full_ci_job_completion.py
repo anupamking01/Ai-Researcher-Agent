@@ -8,6 +8,7 @@ No network calls, treatments, evaluator calls, or experimental data are used.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -137,8 +138,8 @@ def _require_json_container_depth(raw: bytes) -> None:
         raise ValueError("jobs JSON has an incomplete container or string")
 
 
-def load_jobs_json(path: Path) -> dict:
-    """Read one bounded JSON snapshot; caller must independently trust its source."""
+def _load_metadata_snapshot(path: Path) -> tuple[dict, str]:
+    """Parse and fingerprint the same bounded raw bytes, without reopening the input."""
     with Path(path).open("rb") as stream:
         raw = stream.read(MAX_JSON_BYTES + 1)
     if len(raw) > MAX_JSON_BYTES:
@@ -154,6 +155,12 @@ def load_jobs_json(path: Path) -> dict:
         raise ValueError("jobs input must be UTF-8 JSON") from exc
     if not isinstance(payload, dict):
         raise ValueError("jobs JSON must be an object")
+    return payload, hashlib.sha256(raw).hexdigest()
+
+
+def load_jobs_json(path: Path) -> dict:
+    """Read one bounded JSON snapshot; caller must independently trust its source."""
+    payload, _ = _load_metadata_snapshot(path)
     return payload
 
 
@@ -399,19 +406,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--commit", required=True)
     args = parser.parse_args(argv)
     try:
+        jobs, jobs_sha256 = _load_metadata_snapshot(args.jobs_json)
         job_audit = audit_jobs(
-            load_jobs_json(args.jobs_json),
+            jobs,
             run_id=args.run_id,
             run_attempt=args.run_attempt,
             commit=args.commit,
         )
+        run, run_sha256 = _load_metadata_snapshot(args.run_json)
         audit = audit_run_envelope(
-            load_jobs_json(args.run_json), job_audit,
+            run, job_audit,
             run_id=args.run_id, run_attempt=args.run_attempt, commit=args.commit,
         )
     except (OSError, ValueError) as exc:
         print(f"CI job completion audit invalid: {exc}", file=sys.stderr)
         return 2
+    # A receipt binds the exact parsed snapshots, not reserialized JSON or a
+    # second read that might capture different bytes. This is identification,
+    # not independent authentication of the source or retained evidence.
+    audit.update({
+        "jobs_json_sha256": jobs_sha256,
+        "run_json_sha256": run_sha256,
+    })
     print(json.dumps(audit, sort_keys=True, indent=2))
     return 0 if audit["full_workflow_job_gate_completed"] else 1
 
