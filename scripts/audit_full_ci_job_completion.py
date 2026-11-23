@@ -11,6 +11,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 EXPECTED_SHARDS = 16
@@ -18,6 +19,7 @@ REPLAY_JOB = "replay-complete-shard-set"
 MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_JSON_DEPTH = 32
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
+UTC_JOB_TIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 SHARD_RE = re.compile(r"unit-tests \(([0-9]+)\)\Z")
 
 
@@ -191,6 +193,22 @@ def _require_successful_steps(
         raise ValueError(f"{name}: required evidence steps out of execution order")
 
 
+def _completed_job_window(job: dict) -> tuple[datetime, datetime]:
+    """Parse provider UTC job times; a green replay must follow the shards."""
+    times: list[datetime] = []
+    for field in ("started_at", "completed_at"):
+        value = job.get(field)
+        if not isinstance(value, str) or not UTC_JOB_TIME_RE.fullmatch(value):
+            raise ValueError(f"{job['name']}: missing or malformed {field} UTC timestamp")
+        try:
+            times.append(datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ"))
+        except ValueError as exc:
+            raise ValueError(f"{job['name']}: invalid {field} UTC timestamp") from exc
+    if times[1] < times[0]:
+        raise ValueError(f"{job['name']}: completed_at precedes started_at")
+    return times[0], times[1]
+
+
 def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> dict:
     """Classify exact-run jobs without upgrading partial pytest to verified CI."""
     run_id = _positive_int(run_id, "run_id")
@@ -262,6 +280,15 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
         and not missing
         and replay_conclusion == "success"
     )
+    if complete:
+        # Step-by-step green conclusions must not certify a replay that
+        # started before all sixteen shard jobs had finished and uploaded.
+        # Incomplete/cancelled runs remain triageable without full timestamps.
+        windows = {job["name"]: _completed_job_window(job) for job in jobs}
+        replay_start = windows[REPLAY_JOB][0]
+        if replay_start < max(windows[f"unit-tests ({i})"][1]
+                              for i in range(EXPECTED_SHARDS)):
+            raise ValueError("full-set replay started before all successful shards completed")
     return {
         "schema_version": 1,
         "run_id": run_id,

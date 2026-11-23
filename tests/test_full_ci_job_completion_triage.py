@@ -71,6 +71,8 @@ def _inventory(shard_overrides=None, replay="success"):
             "status": "completed" if conclusion else "in_progress",
             "conclusion": conclusion,
             "steps": _steps(SHARD_STEPS),
+            "started_at": "2026-11-23T00:00:00Z",
+            "completed_at": "2026-11-23T00:10:00Z",
         })
     jobs.append({
         "id": 17, "run_id": RUN, "run_attempt": ATTEMPT,
@@ -78,6 +80,8 @@ def _inventory(shard_overrides=None, replay="success"):
         "status": "completed" if replay else "in_progress",
         "conclusion": replay,
         "steps": _steps(REPLAY_STEPS),
+        "started_at": "2026-11-23T00:11:00Z",
+        "completed_at": "2026-11-23T00:12:00Z",
     })
     return {"total_count": len(jobs), "jobs": jobs}
 
@@ -422,3 +426,57 @@ def test_successful_replay_cannot_omit_checkout_step():
                                    if s["name"] != "Checkout exact tested sources for full-set replay"]
     with pytest.raises(ValueError, match="missing required successful step"):
         _audit(payload)
+
+
+@pytest.mark.parametrize(("job_index", "field", "value", "pattern"), [
+    (0, "completed_at", None, "missing or malformed completed_at"),
+    (-1, "started_at", "2026-11-23T00:11:00+00:00", "missing or malformed started_at"),
+    (8, "started_at", "2026-02-30T00:00:00Z", "invalid started_at"),
+    (3, "completed_at", "2026-11-22T23:59:00Z", "completed_at precedes started_at"),
+    (-1, "completed_at", "2026-11-23T00:09:00Z", "completed_at precedes started_at"),
+])
+def test_green_ci_job_gate_rejects_invalid_provider_time_windows(
+    job_index, field, value, pattern
+):
+    payload = _inventory()
+    if value is None:
+        payload["jobs"][job_index].pop(field)
+    else:
+        payload["jobs"][job_index][field] = value
+    with pytest.raises(ValueError, match=pattern):
+        _audit(payload)
+
+
+def test_green_ci_job_gate_rejects_replay_before_last_shard_finishes():
+    payload = _inventory()
+    payload["jobs"][12]["completed_at"] = "2026-11-23T00:11:30Z"
+    with pytest.raises(ValueError, match="replay started before all successful shards completed"):
+        _audit(payload)
+
+
+def test_green_ci_job_gate_allows_same_second_replay_after_last_shard():
+    payload = _inventory()
+    payload["jobs"][-1]["started_at"] = "2026-11-23T00:10:00Z"
+    assert _audit(payload)["full_job_gate_completed"] is True
+
+
+def test_incomplete_run_triage_needs_no_cross_job_timestamp_claim():
+    payload = _inventory({8: "cancelled"}, replay="skipped")
+    for job in payload["jobs"]:
+        job.pop("started_at")
+        job.pop("completed_at")
+    result = _audit(payload)
+    assert result["cancelled_shards"] == [8]
+    assert result["full_job_gate_completed"] is False
+
+
+def test_green_ci_cli_rejects_replay_before_shards_as_invalid(tmp_path, capsys):
+    payload = _inventory()
+    payload["jobs"][-1]["started_at"] = "2026-11-23T00:09:59Z"
+    path = tmp_path / "out-of-order-ci.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert main([
+        "--jobs-json", str(path), "--run-id", str(RUN),
+        "--run-attempt", str(ATTEMPT), "--commit", SHA,
+    ]) == 2
+    assert "replay started before" in capsys.readouterr().err
