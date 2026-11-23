@@ -28,7 +28,7 @@ MAX_ROWS_PER_FILE = 4096
 # stricter budgets prevent a bounded ledger from requiring enormous replay.
 MAX_VERSION_BYTES = 4 * 1024 * 1024
 MAX_TOTAL_VERSION_BYTES = 64 * 1024 * 1024
-SAFE_FILE = re.compile(r"r[0-9]{3}_v[0-9]{3}\.csv\Z")
+SAFE_FILE = re.compile(r"r(?P<series>[0-9]{3})_v(?P<revision>[0-9]{3})\.csv\Z")
 HASH = re.compile(r"[0-9a-f]{64}\Z")
 REASONS = frozenset({
     "clerical_transcription",
@@ -174,6 +174,7 @@ def audit_corrections(*, ledger: Path, submissions_root: Path,
         versions = chain["versions"]
         previous_blind_ids: frozenset[str] | None = None
         previous_blinded_rows: dict[str, tuple[str, ...]] | None = None
+        chain_series: str | None = None
         if type(versions) is not list or not 2 <= len(versions) <= MAX_VERSIONS:
             raise ValueError("corrections require original and entire replacement file")
         for version_index, version in enumerate(versions, start=1):
@@ -182,8 +183,21 @@ def audit_corrections(*, ledger: Path, submissions_root: Path,
             }:
                 raise ValueError("correction version schema mismatch")
             filename, expected = version["file"], version["sha256"]
-            if type(filename) is not str or not SAFE_FILE.fullmatch(filename):
+            matched_file = SAFE_FILE.fullmatch(filename) if type(filename) is str else None
+            if matched_file is None:
                 raise ValueError("correction files require neutral basename-only names")
+            # The neutral filename sequence is a custody convention, not an
+            # independent timestamp. It must agree with the ledger's asserted
+            # original -> replacement order, and stay in one rNNN series.
+            if chain_series is None:
+                chain_series = matched_file["series"]
+            elif matched_file["series"] != chain_series:
+                raise ValueError("correction chain mixes unrelated filename series")
+            if int(matched_file["revision"]) != version_index:
+                raise ValueError(
+                    "correction filename revision disagrees with ledger order "
+                    "(expected contiguous v001, v002, ...)"
+                )
             if type(expected) is not str or not HASH.fullmatch(expected):
                 raise ValueError("correction version needs lowercase SHA-256")
             if filename in seen_files or expected in seen_hashes:

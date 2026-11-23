@@ -60,6 +60,15 @@ Supported reason codes: `clerical_transcription`, `missing_row_completion`,
 Copy full unchanged files under neutral names `rNNN_vNNN.csv` in a
 coordinator-controlled submissions directory, retaining the original
 submission and any contemporaneous coordinator-private approval record.
+Within each annotator's correction chain, use **one stable `rNNN` series**
+and label every retained whole-file revision **contiguously in ledger order**
+(`v001` original, `v002` first replacement, `v003` second replacement,
+etc.). The offline auditor now fails closed on mixed series, skipped revision
+numbers, and an inverted ledger order, even when hashes and accepted final
+freeze inputs match. This prevents a misleading or fragmented version chain
+from passing as complete. Filename ordinals document the submitted custody
+sequence; they do **not** independently authenticate real-world submission
+times or prove that unlisted files never existed.
 Invoke after the blinded freeze and before unblinding:
 
 ```bash

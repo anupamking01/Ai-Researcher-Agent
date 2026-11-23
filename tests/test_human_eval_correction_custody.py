@@ -497,3 +497,56 @@ def test_correction_ledger_capture_is_bounded_before_parsing(
         ledger=ledger, submissions_root=root, freeze_root=frozen)
     assert ("blinded correction ledger", custody.MAX_LEDGER_BYTES) in seen
     assert ("verified freeze manifest", 1024 * 1024) in seen
+
+
+@pytest.mark.parametrize("replacement_name,pattern", [
+    ("r002_v002.csv", "unrelated filename series"),
+    ("r001_v003.csv", "filename revision disagrees"),
+    ("r001_v000.csv", "filename revision disagrees"),
+])
+def test_correction_chain_rejects_mixed_or_missing_filename_revisions(
+    tmp_path, monkeypatch, replacement_name, pattern
+):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    (root / "r001_v002.csv").rename(root / replacement_name)
+    data["chains"][0]["versions"][1]["file"] = replacement_name
+    store()
+    with pytest.raises(ValueError, match=pattern):
+        custody.audit_corrections(
+            ledger=ledger, submissions_root=root, freeze_root=frozen
+        )
+
+
+def test_correction_chain_rejects_ledger_order_reversal(tmp_path, monkeypatch):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    versions = data["chains"][0]["versions"]
+    versions.reverse()
+    store()
+    with pytest.raises(ValueError, match="filename revision disagrees"):
+        custody.audit_corrections(
+            ledger=ledger, submissions_root=root, freeze_root=frozen
+        )
+
+
+def test_correction_chain_accepts_three_contiguous_versions(
+    tmp_path, monkeypatch
+):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    third = root / "r001_v003.csv"
+    with third.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=freeze.RATING_FIELDS)
+        writer.writeheader()
+        writer.writerow({
+            "annotator_id": "Rater-A", "blind_id": "H001",
+            **{field: "4" for field in freeze.SCORE_FIELDS},
+            "notes": "synthetic-only",
+        })
+    data["chains"][0]["versions"].append({
+        "file": third.name, "sha256": hashlib.sha256(third.read_bytes()).hexdigest()
+    })
+    store()
+    result = custody.audit_corrections(
+        ledger=ledger, submissions_root=root, freeze_root=frozen
+    )
+    assert result["n_retained_versions"] == 3
+    assert result["n_accepted_versions_bound_to_verified_freeze"] == 1
