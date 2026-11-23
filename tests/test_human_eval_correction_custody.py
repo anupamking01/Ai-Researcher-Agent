@@ -454,3 +454,46 @@ def test_correction_custody_accepts_exact_byte_budget(
         ledger=ledger, submissions_root=root, freeze_root=frozen
     )
     assert receipt["n_retained_versions"] == 2
+
+
+def test_correction_aggregate_remaining_budget_is_passed_into_safe_capture(
+    tmp_path, monkeypatch
+):
+    """Reject the second file at descriptor-open, not after reading its bytes."""
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    sizes = [
+        (root / filename).stat().st_size
+        for filename in ("r001_v001.csv", "r001_v002.csv")
+    ]
+    monkeypatch.setattr(custody, "MAX_TOTAL_VERSION_BYTES", sum(sizes) - 1)
+    captured_caps = []
+    original_capture = custody.capture._read_regular_file_captured
+
+    def spy_capture(path, *, label, max_bytes=None, **kwargs):
+        if label == "blinded correction version":
+            captured_caps.append(max_bytes)
+        return original_capture(path, label=label, max_bytes=max_bytes, **kwargs)
+
+    monkeypatch.setattr(custody.capture, "_read_regular_file_captured", spy_capture)
+    with pytest.raises(ValueError, match="total byte budget"):
+        custody.audit_corrections(
+            ledger=ledger, submissions_root=root, freeze_root=frozen)
+    assert captured_caps == [sum(sizes) - 1, sizes[1] - 1]
+
+
+def test_correction_ledger_capture_is_bounded_before_parsing(
+    tmp_path, monkeypatch
+):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    seen = []
+    original_capture = custody.capture._read_regular_file_captured
+
+    def spy_capture(path, *, label, max_bytes=None, **kwargs):
+        seen.append((label, max_bytes))
+        return original_capture(path, label=label, max_bytes=max_bytes, **kwargs)
+
+    monkeypatch.setattr(custody.capture, "_read_regular_file_captured", spy_capture)
+    custody.audit_corrections(
+        ledger=ledger, submissions_root=root, freeze_root=frozen)
+    assert ("blinded correction ledger", custody.MAX_LEDGER_BYTES) in seen
+    assert ("verified freeze manifest", 1024 * 1024) in seen

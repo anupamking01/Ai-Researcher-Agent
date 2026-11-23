@@ -50,7 +50,8 @@ def _unique_pairs(pairs):
 def _load_json(path: Path, *, limit: int, label: str,
                expected_sha256: str | None = None,
                captured_sha256_out: list[str] | None = None) -> dict:
-    raw = capture._read_regular_file_captured(path, label=label)
+    raw = capture._read_regular_file_captured(
+        path, label=label, max_bytes=limit)
     if len(raw) > limit:
         raise ValueError(f"{label} exceeds size bound")
     captured_digest = hashlib.sha256(raw).hexdigest()
@@ -189,8 +190,26 @@ def audit_corrections(*, ledger: Path, submissions_root: Path,
                 raise ValueError("correction revisions cannot reuse files or bytes")
             seen_files.add(filename)
             seen_hashes.add(expected)
-            raw = capture._read_regular_file_captured(
-                Path(submissions_root) / filename, label="blinded correction version")
+            # Enforce the tighter of the per-version and remaining aggregate
+            # budgets on the securely opened file *before* its bytes are read.
+            # Post-capture checks below remain a defense in depth.
+            remaining_bytes = MAX_TOTAL_VERSION_BYTES - total_version_bytes
+            if remaining_bytes < 0:
+                raise ValueError("retained correction versions exceed total byte budget")
+            try:
+                raw = capture._read_regular_file_captured(
+                    Path(submissions_root) / filename,
+                    label="blinded correction version",
+                    max_bytes=min(MAX_VERSION_BYTES, remaining_bytes),
+                )
+            except ValueError as exc:
+                if "exceeds requested capture byte limit" not in str(exc):
+                    raise
+                if MAX_VERSION_BYTES <= remaining_bytes:
+                    raise ValueError(
+                        "correction version exceeds per-file byte budget") from exc
+                raise ValueError(
+                    "retained correction versions exceed total byte budget") from exc
             if len(raw) > MAX_VERSION_BYTES:
                 raise ValueError("correction version exceeds per-file byte budget")
             total_version_bytes += len(raw)

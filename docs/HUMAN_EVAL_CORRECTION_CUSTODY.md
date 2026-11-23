@@ -70,9 +70,14 @@ python -m scripts.verify_human_eval_correction_custody \
 ```
 
 This check rejects retained CSV versions larger than **4 MiB each**, or
-more than **64 MiB total** across all versions in the ledger. The limit
-applies to the unchanged captured bytes before digest and CSV processing;
-it does not silently truncate long submissions or drop correction history.
+more than **64 MiB total** across all versions in the ledger. The stricter
+per-file and remaining aggregate limits are checked against the securely
+opened file descriptor **before reading or allocating the CSV bytes**, not
+merely after a general packet-capture read. Ledger (64 KiB) and verified
+manifest (1 MiB) captures also receive caller-specific pre-read bounds.
+Unchanged captured bytes are still checked again after capture before
+digest and CSV processing; the auditor does not silently truncate long
+submissions or drop correction history.
 Ordinary 40-report ratings CSVs should be substantially smaller. If
 legitimate historical submissions exceed this offline resource budget,
 preserve every original unchanged and document the exception for

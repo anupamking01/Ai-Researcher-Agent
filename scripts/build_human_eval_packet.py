@@ -487,9 +487,10 @@ def _stat_contract(value: os.stat_result) -> tuple[int, int, int, int, int, int,
 
 
 def _read_regular_file_captured(
-    path: Path, *, label: str, identity_out: list[tuple[int, int]] | None = None
+    path: Path, *, label: str, identity_out: list[tuple[int, int]] | None = None,
+    max_bytes: int | None = None,
 ) -> bytes:
-    """Read one regular file while retaining and revalidating its descriptors."""
+    """Read one regular file with optional pre-read size cap and descriptor custody."""
     path = Path(os.path.abspath(Path(path)))
     directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
@@ -534,6 +535,14 @@ def _read_regular_file_captured(
                 f"{label} must have exactly one filesystem link: {path}"
             )
         _require_packet_byte_limit(file_before.st_size, label=label)
+        # Callers with stricter limits must reject the descriptor-pinned size
+        # *before* allocating/reading up to the general 64 MiB packet ceiling.
+        # This is checked on the opened inode, never a racy pathname stat.
+        if max_bytes is not None:
+            if type(max_bytes) is not int or max_bytes < 0:
+                raise ValueError(f"{label} has invalid requested capture byte limit")
+            if file_before.st_size > max_bytes:
+                raise ValueError(f"{label} exceeds requested capture byte limit")
 
         # Capture only the stat-pinned generation, with one growth probe.
         chunks = []

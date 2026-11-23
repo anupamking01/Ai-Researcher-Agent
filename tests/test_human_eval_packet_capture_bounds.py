@@ -144,3 +144,25 @@ def test_packet_preflight_rejects_unverifiable_output_without_reservation(
     with pytest.raises(ValueError, match="packet-capture limit"):
         packet.build_packet(tmp_path / "traces", output, task_manifest_path=tmp_path / "tasks")
     assert not output.exists()
+
+
+def test_caller_capture_limit_rejects_sparse_file_before_read(tmp_path, monkeypatch):
+    """A stricter caller ceiling must take effect on the opened inode."""
+    path = tmp_path / "oversized.csv"
+    with path.open("wb") as handle:
+        handle.truncate(257)
+
+    def forbidden_read(*args, **kwargs):
+        raise AssertionError("oversized file was read before rejection")
+
+    monkeypatch.setattr(packet.os, "read", forbidden_read)
+    with pytest.raises(ValueError, match="requested capture byte limit"):
+        packet._read_regular_file_captured(
+            path, label="synthetic bounded file", max_bytes=256)
+
+
+def test_caller_capture_limit_accepts_exact_bytes(tmp_path):
+    path = tmp_path / "exact.csv"
+    path.write_bytes(b"x" * 257)
+    assert packet._read_regular_file_captured(
+        path, label="synthetic bounded file", max_bytes=257) == b"x" * 257
