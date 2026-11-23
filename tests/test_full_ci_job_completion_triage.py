@@ -12,24 +12,40 @@ ATTEMPT = 2
 # Independent from implementation constants: tests fail if required step names
 # are silently removed from the auditor.
 SHARD_STEPS = (
+    "Checkout repository",
+    "Set up Python",
+    "Verify pinned CI Python runtime before tests",
+    "Verify pinned Python before dependency-free diagnostic gate",
     "Verify exact checkout before dependency-free diagnostic gate",
     "Run dependency-free diagnostic invariants before pip installation",
+    "Verify exact checkout after dependency-free diagnostic gate",
     "Bind dependency-free test transcript to commit and run",
     "Independently replay dependency-free evidence before retention",
     "Retain pre-install diagnostic evidence (90 days)",
+    "Install application and test dependencies",
+    "Verify installed CI dependencies before tests",
+    "Compile research code",
     "Verify exact source checkout before tests",
     "Run offline unit tests",
     "Verify exact source checkout after tests",
+    "Verify installed CI dependencies after tests",
+    "Verify pinned CI Python runtime after tests",
     "Bind exact-commit offline test evidence",
     "Replay exact-commit offline test evidence before upload",
     "Retain source-bound offline test evidence (90 days)",
 )
 REPLAY_STEPS = (
+    "Checkout exact tested sources for full-set replay",
+    "Set up pinned Python for full-set replay",
+    "Verify Python and checkout before full-set replay",
+    "Install exact pinned replay dependencies",
+    "Verify pinned replay dependencies",
     "Download current-attempt shard evidence",
     "Stage exact-attempt shard directories",
     "Download exact-attempt pre-install diagnostic evidence",
     "Stage complete early diagnostic evidence set",
     "Independently replay all sixteen downloaded shard receipts",
+    "Verify exact checkout after full-set replay",
     "Retain verified sixteen-shard replay (90 days)",
 )
 
@@ -259,3 +275,56 @@ def test_cancelled_job_still_classifiable_with_incomplete_step_numbers():
     payload = _inventory({4: "cancelled"}, replay="skipped")
     payload["jobs"][4]["steps"][0].pop("number")
     assert _audit(payload)["cancelled_shards"] == [4]
+
+
+@pytest.mark.parametrize("step_name", [
+    "Checkout repository",
+    "Set up Python",
+    "Verify pinned CI Python runtime before tests",
+    "Verify pinned Python before dependency-free diagnostic gate",
+    "Verify exact checkout after dependency-free diagnostic gate",
+    "Install application and test dependencies",
+    "Verify installed CI dependencies before tests",
+    "Compile research code",
+    "Verify installed CI dependencies after tests",
+    "Verify pinned CI Python runtime after tests",
+])
+def test_successful_shard_rejects_skipped_execution_prerequisite(step_name):
+    # Every unconditional step matters; a green pytest alone is insufficient.
+    payload = _inventory()
+    step = next(s for s in payload["jobs"][6]["steps"] if s["name"] == step_name)
+    step.update(status="completed", conclusion="skipped")
+    with pytest.raises(ValueError, match="required step did not succeed"):
+        _audit(payload)
+
+
+@pytest.mark.parametrize("step_name", [
+    "Checkout exact tested sources for full-set replay",
+    "Set up pinned Python for full-set replay",
+    "Verify Python and checkout before full-set replay",
+    "Install exact pinned replay dependencies",
+    "Verify pinned replay dependencies",
+    "Verify exact checkout after full-set replay",
+])
+def test_successful_replay_rejects_skipped_execution_prerequisite(step_name):
+    payload = _inventory()
+    step = next(s for s in payload["jobs"][-1]["steps"] if s["name"] == step_name)
+    step.update(status="completed", conclusion="skipped")
+    with pytest.raises(ValueError, match="required step did not succeed"):
+        _audit(payload)
+
+
+def test_successful_shard_cannot_omit_dependency_install_step():
+    payload = _inventory()
+    payload["jobs"][4]["steps"] = [s for s in payload["jobs"][4]["steps"]
+                                   if s["name"] != "Install application and test dependencies"]
+    with pytest.raises(ValueError, match="missing required successful step"):
+        _audit(payload)
+
+
+def test_successful_replay_cannot_omit_checkout_step():
+    payload = _inventory()
+    payload["jobs"][-1]["steps"] = [s for s in payload["jobs"][-1]["steps"]
+                                   if s["name"] != "Checkout exact tested sources for full-set replay"]
+    with pytest.raises(ValueError, match="missing required successful step"):
+        _audit(payload)

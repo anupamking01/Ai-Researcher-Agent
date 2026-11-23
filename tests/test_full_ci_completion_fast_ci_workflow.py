@@ -106,7 +106,13 @@ def test_completion_auditor_essential_step_labels_match_actual_full_ci_contract(
                             (replay_steps, REQUIRED_REPLAY_STEPS)):
         names = [step["name"] for step in steps]
         assert len(names) == len(set(names))
-        assert set(required) <= set(names)
+        # The metadata auditor must track EVERY unconditional workflow step,
+        # not merely the tests/receipt/upload gates. A new skipped dependency
+        # or runtime prerequisite cannot silently become invisible to audit.
+        if steps is unit_steps:
+            names = [name for name in names if name !=
+                     "Retain unverified diagnostics on CI failure or cancellation (90 days)"]
+        assert tuple(names) == required
         # Couple the metadata auditor to actual test / receipt / replay order.
         positions = [names.index(label) for label in required]
         assert positions == sorted(positions)

@@ -20,27 +20,45 @@ SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 SHARD_RE = re.compile(r"unit-tests \(([0-9]+)\)\Z")
 
 
-# These are the essential steps in the pinned offline tests.yml workflow.
-# Checking Actions step metadata is not equivalent to authenticating receipt bytes.
+# Require every unconditional step in the pinned offline tests.yml jobs.
+# A green pytest/receipt/upload chain cannot certify skipped runtime, dependency,
+# compilation, or checkout prerequisites. Failure-only diagnostic upload remains
+# optional. These are still same-provider step reports, not authenticated bytes.
 REQUIRED_SHARD_STEPS = (
+    "Checkout repository",
+    "Set up Python",
+    "Verify pinned CI Python runtime before tests",
+    "Verify pinned Python before dependency-free diagnostic gate",
     "Verify exact checkout before dependency-free diagnostic gate",
     "Run dependency-free diagnostic invariants before pip installation",
+    "Verify exact checkout after dependency-free diagnostic gate",
     "Bind dependency-free test transcript to commit and run",
     "Independently replay dependency-free evidence before retention",
     "Retain pre-install diagnostic evidence (90 days)",
+    "Install application and test dependencies",
+    "Verify installed CI dependencies before tests",
+    "Compile research code",
     "Verify exact source checkout before tests",
     "Run offline unit tests",
     "Verify exact source checkout after tests",
+    "Verify installed CI dependencies after tests",
+    "Verify pinned CI Python runtime after tests",
     "Bind exact-commit offline test evidence",
     "Replay exact-commit offline test evidence before upload",
     "Retain source-bound offline test evidence (90 days)",
 )
 REQUIRED_REPLAY_STEPS = (
+    "Checkout exact tested sources for full-set replay",
+    "Set up pinned Python for full-set replay",
+    "Verify Python and checkout before full-set replay",
+    "Install exact pinned replay dependencies",
+    "Verify pinned replay dependencies",
     "Download current-attempt shard evidence",
     "Stage exact-attempt shard directories",
     "Download exact-attempt pre-install diagnostic evidence",
     "Stage complete early diagnostic evidence set",
     "Independently replay all sixteen downloaded shard receipts",
+    "Verify exact checkout after full-set replay",
     "Retain verified sixteen-shard replay (90 days)",
 )
 
@@ -84,7 +102,7 @@ def load_jobs_json(path: Path) -> dict:
 
 
 def _require_successful_steps(job: dict, *, required: tuple[str, ...]) -> None:
-    """Successful evidence gates must be reported in their actual execution order."""
+    """Every mandatory step in a green job must succeed in declared workflow order."""
     name = job["name"]
     steps = job.get("steps")
     if not isinstance(steps, list):
@@ -110,8 +128,8 @@ def _require_successful_steps(job: dict, *, required: tuple[str, ...]) -> None:
             raise ValueError(f"{name}: missing required successful step {label!r}")
         if step.get("status") != "completed" or step.get("conclusion") != "success":
             raise ValueError(f"{name}: required step did not succeed: {label!r}")
-    # Names and green conclusions alone cannot certify replay-before-test or
-    # upload-before-receipt metadata, even if each step is individually green.
+    # Names and green conclusions alone cannot certify that dependencies, tests,
+    # replay, and retention appear in the actual required workflow sequence.
     if [positions[label] for label in required] != sorted(positions[label] for label in required):
         raise ValueError(f"{name}: required evidence steps out of execution order")
 
