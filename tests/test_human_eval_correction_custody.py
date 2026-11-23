@@ -236,9 +236,10 @@ def test_missing_row_reason_requires_an_actual_added_report(tmp_path, monkeypatc
     chain = data["chains"][0]
     chain["reason"] = "missing_row_completion"
     chain["versions"][1]["sha256"] = _edit_report(
-        root, "r001_v002.csv", "H001",
+        root, "r001_v002.csv", "H001", annotator_id="rater-a",
         **{field: "2" for field in freeze.SCORE_FIELDS},
     )
+    # Canonically same annotator/row, but distinct file bytes from v001.
     store()
     with pytest.raises(ValueError, match="did not add a blinded report"):
         custody.audit_corrections(
