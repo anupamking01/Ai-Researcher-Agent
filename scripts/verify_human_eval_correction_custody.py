@@ -11,7 +11,9 @@ import csv
 import hashlib
 import io
 import json
+import os
 import re
+import stat
 import unicodedata
 from pathlib import Path
 
@@ -108,6 +110,43 @@ def _file_annotator_and_blind_ids(raw: bytes) -> tuple[str, dict[str, tuple[str,
     return next(iter(annotators)), blinded_rows
 
 
+def _submissions_directory_state(root: Path) -> tuple[int, ...]:
+    metadata = root.lstat()
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise ValueError("correction submissions root must be a non-symlink directory")
+    return capture._stat_contract(metadata)
+
+
+def _verify_submissions_inventory(root: Path, expected: set[str],
+                                  initial_state: tuple[int, ...]) -> None:
+    """Reject omitted visible files without reading any undeclared submission."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(root, flags)
+    try:
+        if capture._stat_contract(os.fstat(descriptor)) != initial_state:
+            raise ValueError("correction submissions directory changed during audit")
+        observed: set[str] = set()
+        # Stop on the first undeclared entry, so enumeration is bounded by the
+        # already validated ledger size (at most MAX_CHAINS * MAX_VERSIONS).
+        with os.scandir(descriptor) as entries:
+            for entry in entries:
+                if entry.name not in expected or entry.name in observed:
+                    raise ValueError("correction submissions contain an unlisted entry")
+                metadata = entry.stat(follow_symlinks=False)
+                if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                    raise ValueError("correction inventory requires single-link regular files")
+                observed.add(entry.name)
+        if (
+            capture._stat_contract(os.fstat(descriptor)) != initial_state
+            or _submissions_directory_state(root) != initial_state
+        ):
+            raise ValueError("correction submissions directory changed during audit")
+        if observed != expected:
+            raise ValueError("correction submissions inventory lacks a ledger entry")
+    finally:
+        os.close(descriptor)
+
+
 def audit_corrections(*, ledger: Path, submissions_root: Path,
                       freeze_root: Path) -> dict:
     """Validate preserved whole-file revisions without comparing scores."""
@@ -157,6 +196,8 @@ def audit_corrections(*, ledger: Path, submissions_root: Path,
     seen_hashes: set[str] = set()
     accepted_hashes: set[str] = set()
     total_version_bytes = 0
+    submissions_root = Path(submissions_root)
+    initial_directory_state = _submissions_directory_state(submissions_root)
     for chain in chains:
         if type(chain) is not dict or set(chain) != {
             "annotator_id", "reason", "versions"
@@ -281,6 +322,7 @@ def audit_corrections(*, ledger: Path, submissions_root: Path,
             elif expected in frozen_hashes:
                 raise ValueError("superseded correction was included in verified freeze")
 
+    _verify_submissions_inventory(submissions_root, seen_files, initial_directory_state)
     if len(accepted_hashes) != len(chains):
         raise ValueError("corrected annotators must have distinct final submissions")
     return {

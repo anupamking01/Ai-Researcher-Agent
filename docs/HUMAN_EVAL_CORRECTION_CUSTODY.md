@@ -69,6 +69,18 @@ freeze inputs match. This prevents a misleading or fragmented version chain
 from passing as complete. Filename ordinals document the submitted custody
 sequence; they do **not** independently authenticate real-world submission
 times or prove that unlisted files never existed.
+
+Use a dedicated, flat submissions directory containing **only** the retained
+correction CSV versions declared by the ledger. Keep the ledger, unrelated
+submissions, approval evidence, and other files outside this directory. The
+auditor now requires exact visible directory membership after checking the
+ledger: even a hash-consistent chain fails if a retained but unlisted version
+(or any other undeclared entry) is present. It stops at the first extra entry
+without reading it and rejects observed directory metadata changes during
+audit. This checks the supplied directory, not the completeness of historical
+custody outside that directory, and is not an atomic filesystem snapshot.
+Preserve all versions unchanged if the gate fails; reconcile the inventory
+under blinded coordinator review rather than deleting extra evidence.
 Invoke after the blinded freeze and before unblinding:
 
 ```bash

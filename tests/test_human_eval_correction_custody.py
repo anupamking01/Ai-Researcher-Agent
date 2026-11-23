@@ -550,3 +550,38 @@ def test_correction_chain_accepts_three_contiguous_versions(
     )
     assert result["n_retained_versions"] == 3
     assert result["n_accepted_versions_bound_to_verified_freeze"] == 1
+
+
+@pytest.mark.parametrize("extra_name", [
+    "r001_v003.csv", "r002_v001.csv", "unclassified.csv", ".hidden",
+])
+def test_custody_rejects_visible_unlisted_files(tmp_path, monkeypatch, extra_name):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    (root / extra_name).write_bytes(b"synthetic unlisted version")
+    with pytest.raises(ValueError, match="unlisted entry"):
+        custody.audit_corrections(
+            ledger=ledger, submissions_root=root, freeze_root=frozen)
+
+
+def test_custody_rejects_unlisted_directory(tmp_path, monkeypatch):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    (root / "extra").mkdir()
+    with pytest.raises(ValueError, match="unlisted entry"):
+        custody.audit_corrections(
+            ledger=ledger, submissions_root=root, freeze_root=frozen)
+
+
+def test_custody_detects_directory_change_during_capture(tmp_path, monkeypatch):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    original_capture = custody.capture._read_regular_file_captured
+
+    def add_unlisted_version(path, *, label, **kwargs):
+        result = original_capture(path, label=label, **kwargs)
+        if label == "blinded correction version" and path.name == "r001_v002.csv":
+            (root / "r001_v003.csv").write_bytes(b"synthetic late arrival")
+        return result
+
+    monkeypatch.setattr(custody.capture, "_read_regular_file_captured", add_unlisted_version)
+    with pytest.raises(ValueError, match="directory changed during audit"):
+        custody.audit_corrections(
+            ledger=ledger, submissions_root=root, freeze_root=frozen)
