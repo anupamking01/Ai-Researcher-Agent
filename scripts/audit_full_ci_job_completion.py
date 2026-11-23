@@ -95,13 +95,13 @@ def _require_successful_steps(job: dict, *, required: tuple[str, ...]) -> None:
     for position, step in enumerate(steps):
         if not isinstance(step, dict) or not isinstance(step.get("name"), str) or not step["name"]:
             raise ValueError(f"{name}: malformed job step")
+        label = step["name"]
+        if label in seen:
+            raise ValueError(f"{name}: duplicate job step {label!r}")
         number = step.get("number")
         if type(number) is not int or number <= last_number:
             raise ValueError(f"{name}: malformed or out-of-order step number")
         last_number = number
-        label = step["name"]
-        if label in seen:
-            raise ValueError(f"{name}: duplicate job step {label!r}")
         seen[label] = step
         positions[label] = position
     for label in required:
