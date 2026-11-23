@@ -10,6 +10,29 @@ from __future__ import annotations
 import yaml
 
 
+class _UniqueMappingBaseLoader(yaml.BaseLoader):
+    """Retain BaseLoader's textual YAML keys without accepting duplicates."""
+
+
+def _unique_mapping(loader: _UniqueMappingBaseLoader, node: yaml.MappingNode) -> dict:
+    """Reject ambiguous executable YAML at every mapping depth."""
+    assert isinstance(node, yaml.MappingNode), "audit YAML mapping expected"
+    result = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=True)
+        assert isinstance(key, str), "audit YAML mapping keys must be strings"
+        assert key not in result, (
+            f"duplicate YAML mapping key {key!r} at line {key_node.start_mark.line + 1}"
+        )
+        result[key] = loader.construct_object(value_node, deep=True)
+    return result
+
+
+_UniqueMappingBaseLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _unique_mapping
+)
+
+
 FORBIDDEN_EXECUTABLE_MARKERS = (
     "run_budget_main_study",
     "run_pilot",
@@ -66,7 +89,7 @@ def _check_default_run_shell(context: dict, *, location: str) -> None:
 
 def assert_read_only_workflow_steps(workflow_text: str) -> None:
     """Reject forbidden research execution in commands, shells, env and inputs."""
-    workflow = yaml.load(workflow_text, Loader=yaml.BaseLoader)
+    workflow = yaml.load(workflow_text, Loader=_UniqueMappingBaseLoader)
     assert isinstance(workflow, dict), "audit workflow must be a YAML mapping"
     _check_optional_mapping(workflow, "env", location="workflow")
     _check_default_run_shell(workflow, location="workflow")

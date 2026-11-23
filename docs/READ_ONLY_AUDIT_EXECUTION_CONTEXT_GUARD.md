@@ -52,3 +52,29 @@ constructed commands, compromised third-party actions, or malicious container
 images. It does not certify historical report/trace custody or constitute
 automated, confirmatory, exploratory, pilot or human-evaluation evidence.
 No research treatment, evaluator or human rating is executed by these tests.
+
+
+## Reject ambiguous duplicate YAML mapping keys (23 November 2026)
+
+The read-only workflow checker previously used PyYAML's permissive
+`BaseLoader`, which silently keeps the last occurrence of a duplicate
+mapping key. A workflow with two `run`, `uses`, `env`, `steps`,
+`jobs`, or `defaults.run.shell` entries could therefore receive a
+read-only verdict based only on the last parsed value. YAML consumers need
+not agree about the meaning of ambiguous duplicate mappings.
+
+The checker now uses a `BaseLoader` subclass that rejects duplicate
+mapping keys at **every nesting depth**, including trigger metadata. It
+preserves the existing string-key interpretation of `on` and other
+Actions keys, and still permits the intended experiment-source
+`push.paths` watch. Eight synthetic duplicates exercise executable
+steps, delegated inputs, defaults, top-level jobs and source filters,
+plus an accepted unique-key case. No treatments or evaluators run.
+
+This strengthens the local static audit's interpretation of workflow
+source. It does **not** prove GitHub would execute a first duplicate entry,
+nor sandbox third-party actions, guarantee full CI completion, or
+authenticate missing historical treatment artifacts. The pilot remains
+diagnostic, frozen automated results retain post-collection, fixed-order
+and evaluator-policy limitations, retrospective analyses remain
+exploratory, and blinded human validation remains pending.
