@@ -42,10 +42,13 @@ def _unique_pairs(pairs):
     return result
 
 
-def _load_json(path: Path, *, limit: int, label: str) -> dict:
+def _load_json(path: Path, *, limit: int, label: str,
+               expected_sha256: str | None = None) -> dict:
     raw = capture._read_regular_file_captured(path, label=label)
     if len(raw) > limit:
         raise ValueError(f"{label} exceeds size bound")
+    if expected_sha256 is not None and hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise ValueError(f"{label} differs from independently verified manifest bytes")
     try:
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_pairs,
                            parse_constant=lambda token: (_ for _ in ()).throw(
@@ -99,10 +102,18 @@ def audit_corrections(*, ledger: Path, submissions_root: Path,
                       freeze_root: Path) -> dict:
     """Validate preserved whole-file revisions without comparing scores."""
     # Require the existing independent verifier before trusting freeze metadata.
-    freeze_verifier.verify_frozen_snapshot(
-        freeze_root=Path(freeze_root), use_retained_inputs=True)
+    freeze_receipt = freeze_verifier.verify_frozen_snapshot(
+        freeze_root=Path(freeze_root), use_retained_inputs=True,
+        include_verified_manifest_sha256=True)
+    verified_manifest_sha = (
+        freeze_receipt.get("verified_manifest_sha256")
+        if type(freeze_receipt) is dict else None
+    )
+    if type(verified_manifest_sha) is not str or not HASH.fullmatch(verified_manifest_sha):
+        raise ValueError("independent freeze verifier did not bind manifest fingerprint")
     manifest = _load_json(Path(freeze_root) / "freeze_manifest.json",
-                          limit=1024 * 1024, label="verified freeze manifest")
+                          limit=1024 * 1024, label="verified freeze manifest",
+                          expected_sha256=verified_manifest_sha)
     if manifest.get("study_id") != "budget-main-v1" or type(
         manifest.get("rating_inputs")) is not list:
         raise ValueError("verified freeze lacks rated input inventory")

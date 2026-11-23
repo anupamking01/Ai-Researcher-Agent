@@ -15,9 +15,18 @@ def _fixture(tmp_path, monkeypatch):
     root.mkdir()
     frozen = tmp_path / "frozen"
     frozen.mkdir()
+    def verified_manifest_receipt(**kwargs):
+        assert kwargs["use_retained_inputs"] is True
+        assert kwargs["include_verified_manifest_sha256"] is True
+        return {
+            "status": "blinded_human_ratings_verified",
+            "verified_manifest_sha256": hashlib.sha256(
+                (frozen / "freeze_manifest.json").read_bytes()
+            ).hexdigest(),
+        }
     monkeypatch.setattr(
         custody.freeze_verifier, "verify_frozen_snapshot",
-        lambda **kwargs: {"status": "blinded_human_ratings_verified"})
+        verified_manifest_receipt)
     def make(filename, score):
         path = root / filename
         with path.open("w", newline="", encoding="utf-8") as handle:
@@ -269,3 +278,42 @@ def test_missing_row_completion_accepts_reordered_unchanged_rows(
         ledger=ledger, submissions_root=root, freeze_root=frozen
     )
     assert result["n_accepted_versions_bound_to_verified_freeze"] == 1
+
+
+def test_correction_custody_rejects_manifest_swap_after_verified_freeze(
+    tmp_path, monkeypatch
+):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    manifest_path = frozen / "freeze_manifest.json"
+    original_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
+    def verify_then_swap(**kwargs):
+        assert kwargs["include_verified_manifest_sha256"] is True
+        # Simulate an independently valid snapshot whose manifest is replaced
+        # after verification, before correction-ledger inventory consumption.
+        changed = json.loads(manifest_path.read_text(encoding="utf-8"))
+        changed["rating_inputs"] = [{"sha256": "0" * 64}]
+        manifest_path.write_text(json.dumps(changed), encoding="utf-8")
+        return {"verified_manifest_sha256": original_digest}
+
+    monkeypatch.setattr(
+        custody.freeze_verifier, "verify_frozen_snapshot", verify_then_swap
+    )
+    with pytest.raises(ValueError, match="independently verified manifest bytes"):
+        custody.audit_corrections(
+            ledger=ledger, submissions_root=root, freeze_root=frozen
+        )
+
+
+@pytest.mark.parametrize("receipt", [{}, {"verified_manifest_sha256": "bad"}])
+def test_correction_custody_requires_verified_manifest_fingerprint(
+    tmp_path, monkeypatch, receipt
+):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        custody.freeze_verifier, "verify_frozen_snapshot", lambda **kwargs: receipt
+    )
+    with pytest.raises(ValueError, match="did not bind manifest fingerprint"):
+        custody.audit_corrections(
+            ledger=ledger, submissions_root=root, freeze_root=frozen
+        )

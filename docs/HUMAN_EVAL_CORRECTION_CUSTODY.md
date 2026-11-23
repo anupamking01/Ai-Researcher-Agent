@@ -12,8 +12,15 @@ post-freeze, pre-unblinding** reconciliation. It requires the existing verified
 blinded freeze first, then SHA-256 checks *every* original and replacement
 CSV, enforces one stable pseudonymous annotator per chain, distinct complete
 files, bounded neutral filenames, a reason code, and exactly the last version
-in the verified freeze input inventory. A superseded file appearing in the
-freeze is rejected. Every parseable version must also have distinct, nonblank
+in the verified freeze input inventory. The custody checker now obtains an
+**opt-in SHA-256 fingerprint of the exact freeze-manifest bytes authenticated by
+the independent freeze verifier** and compares that fingerprint to its own
+later manifest capture before using any accepted-submission inventory. If the
+manifest changes between verification and correction reconciliation, the
+custody check fails closed rather than trusting a different, possibly
+self-consistent inventory. Existing standalone verifier receipts remain
+unchanged unless the fingerprint is explicitly requested. A superseded file
+appearing in the freeze is rejected. Every parseable version must also have distinct, nonblank
 blinded report IDs: ordinary clerical/format/validity corrections preserve the
 *exact* report-ID set across whole-file revisions; a documented
 `missing_row_completion` correction must add at least one new ID at each
@@ -68,7 +75,10 @@ certified. Preserve both unchanged files and obtain a separately recorded,
 pre-unblinding protocol-validity decision/deviation instead of silently
 relaxing this gate. Matching row identities or unchanged rows cannot prove that other permitted
 clerical edits were legitimate, nor that every historical submission was
-disclosed to the ledger. If completing missing rows also requires editing
+disclosed to the ledger. The source-bound manifest digest also cannot prove
+historical submission time or prevent changes *after* audit completion; it only
+prevents an unverified manifest revision being substituted at the consumption
+boundary. If completing missing rows also requires editing
 an existing score or note, preserve the originals and obtain a separate
 blinded protocol-validity decision/deviation instead of calling it
 missing-row completion.

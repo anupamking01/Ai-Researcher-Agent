@@ -777,8 +777,13 @@ def verify_frozen_snapshot(
     assignment_plan_path: Path = DEFAULT_ASSIGNMENT_PLAN,
     annotator_guide_path: Path = DEFAULT_ANNOTATOR_GUIDE,
     use_retained_inputs: bool = False,
+    include_verified_manifest_sha256: bool = False,
 ) -> dict:
-    """Verify a frozen blinded snapshot and its retained pre-unblinding inputs."""
+    """Verify a frozen blinded snapshot and its retained pre-unblinding inputs.
+
+    Opt-in manifest fingerprint binds downstream audits to the exact manifest
+    bytes that passed this verifier, not a later pathname reread.
+    """
     freeze_root = Path(freeze_root)
     packet_path = Path(packet_path)
     protocol_path = Path(protocol_path)
@@ -1210,7 +1215,7 @@ def verify_frozen_snapshot(
     if _capture_freeze_inventory(freeze_root) != initial_inventory:
         raise ValueError("freeze root changed while it was being verified")
 
-    return {
+    receipt = {
         "schema_version": 1,
         "study_id": "budget-main-v1",
         "status": "blinded_human_ratings_verified",
@@ -1224,6 +1229,9 @@ def verify_frozen_snapshot(
         ],
         "annotator_attestations_verified": True,
     }
+    if include_verified_manifest_sha256:
+        receipt["verified_manifest_sha256"] = _fingerprint(manifest_content)["sha256"]
+    return receipt
 
 
 def main() -> int:

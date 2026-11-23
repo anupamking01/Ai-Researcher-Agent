@@ -672,3 +672,22 @@ def test_cli_can_verify_from_freeze_bundle_without_external_ratings(frozen_case)
     assert result.returncode == 0
     assert "HUMAN EVAL VERIFY: PASS (ratings remain blinded)" in result.stdout
     assert result.stderr == ""
+
+
+def test_optional_manifest_fingerprint_binds_verified_snapshot_bytes(frozen_case):
+    case = frozen_case
+    expected = hashlib.sha256(
+        (case["freeze_root"] / "freeze_manifest.json").read_bytes()
+    ).hexdigest()
+    ordinary = _verify(case)
+    assert "verified_manifest_sha256" not in ordinary
+    bound = verify_frozen_snapshot(
+        case["ratings"],
+        freeze_root=case["freeze_root"],
+        packet_path=case["packet_path"],
+        protocol_path=case["protocol_path"],
+        assignment_plan_path=case["assignment_plan_path"],
+        include_verified_manifest_sha256=True,
+    )
+    assert bound.pop("verified_manifest_sha256") == expected
+    assert bound == ordinary
