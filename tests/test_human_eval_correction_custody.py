@@ -83,7 +83,7 @@ def test_receipt_binds_captured_sources_without_exposing_ratings(tmp_path, monke
 
     # Both ledgers are valid and produce identical counts, but their
     # provenance receipts must not be interchangeable.
-    data["chains"][0]["reason"] = "file_format_correction"
+    data["chains"][0]["reason"] = "other_predeclared_validity_correction"
     store()
     changed = custody.audit_corrections(
         ledger=ledger, submissions_root=root, freeze_root=frozen)
@@ -265,6 +265,72 @@ def test_missing_row_addition_cannot_rewrite_existing_rating_or_note(
         custody.audit_corrections(
             ledger=ledger, submissions_root=root, freeze_root=frozen
         )
+
+
+
+@pytest.mark.parametrize("edited_field,edited_value", [
+    ("correctness_1_5", "4"),
+    ("notes", "synthetic changed explanation"),
+])
+def test_format_only_correction_cannot_rewrite_rating_or_note(
+    tmp_path, monkeypatch, edited_field, edited_value
+):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    chain = data["chains"][0]
+    chain["reason"] = "file_format_correction"
+    preserved = {field: "2" for field in freeze.SCORE_FIELDS}
+    preserved[edited_field] = edited_value
+    chain["versions"][1]["sha256"] = _edit_report(
+        root, "r001_v002.csv", "H001", **preserved
+    )
+    store()
+    with pytest.raises(ValueError, match="file-format correction changed"):
+        custody.audit_corrections(
+            ledger=ledger, submissions_root=root, freeze_root=frozen
+        )
+
+
+def test_format_only_correction_accepts_csv_line_ending_change(
+    tmp_path, monkeypatch
+):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    original = (root / "r001_v001.csv").read_bytes()
+    assert b"\r\n" in original
+    reformatted = original.replace(b"\r\n", b"\n")
+    assert reformatted != original
+    (root / "r001_v002.csv").write_bytes(reformatted)
+    chain = data["chains"][0]
+    chain["reason"] = "file_format_correction"
+    chain["versions"][1]["sha256"] = hashlib.sha256(reformatted).hexdigest()
+    store()
+    receipt = custody.audit_corrections(
+        ledger=ledger, submissions_root=root, freeze_root=frozen
+    )
+    assert receipt["n_accepted_versions_bound_to_verified_freeze"] == 1
+
+
+def test_format_only_correction_accepts_reordered_identical_rows(
+    tmp_path, monkeypatch
+):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    chain = data["chains"][0]
+    chain["reason"] = "file_format_correction"
+    chain["versions"][0]["sha256"] = _replace_blind_rows(
+        root, "r001_v001.csv", ["H001", "H002"]
+    )
+    chain["versions"][1]["sha256"] = _replace_blind_rows(
+        root, "r001_v002.csv", ["H002", "H001"]
+    )
+    for blind_id in ("H001", "H002"):
+        chain["versions"][1]["sha256"] = _edit_report(
+            root, "r001_v002.csv", blind_id,
+            **{field: "2" for field in freeze.SCORE_FIELDS},
+        )
+    store()
+    receipt = custody.audit_corrections(
+        ledger=ledger, submissions_root=root, freeze_root=frozen
+    )
+    assert receipt["n_accepted_versions_bound_to_verified_freeze"] == 1
 
 
 def test_missing_row_reason_requires_an_actual_added_report(tmp_path, monkeypatch):

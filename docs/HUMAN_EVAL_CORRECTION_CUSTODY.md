@@ -24,14 +24,17 @@ appearing in the freeze is rejected. Every parseable version must also have dist
 blinded report IDs: ordinary clerical/format/validity corrections preserve the
 *exact* report-ID set across whole-file revisions; a documented
 `missing_row_completion` correction must add at least one new ID at each
-version and cannot drop or substitute an existing one. For that reason code
-alone, every previously submitted row must retain identical **five
-rubric-field values and notes** after CSV parsing (row order may change).
-This prevents missing-row completion from quietly rewriting previous ratings.
-The verifier checks equality, **not score direction**, and does not emit
-scores or report-level data. Other permitted correction reasons retain the
-existing whole-file custody rule; it does not decide whether their changes
-were clerical.
+version and cannot drop or substitute an existing one. For `missing_row_completion`, every previously submitted row must retain
+identical **five rubric-field values and notes** after CSV parsing. For
+`file_format_correction`, the **entire** parsed blind-ID-to-ratings-and-notes
+mapping must remain identical, allowing harmless changes such as CSV line
+endings or row order but rejecting any changed score or note. This closes
+the possibility of disguising a substantive score revision as a format-only
+fix. The verifier checks equality, **not score direction**, and does not emit
+scores or report-level data. `clerical_transcription` and
+`other_predeclared_validity_correction` retain the whole-file custody rule
+without automatic value equality; their legitimacy still requires
+independently retained, blinded coordinator approval evidence.
 
 Coordinator-only ledger example (use only nonidentifying pseudonyms and neutral
 filenames in a private directory, not actual annotation values here):

@@ -194,7 +194,9 @@ def audit_corrections(*, ledger: Path, submissions_root: Path,
             # Whole-submission corrections must not silently swap or drop
             # assigned reports. Missing-row completion must add report IDs
             # without rewriting any previously submitted rating or note.
-            # Other correction reasons do not compare score values.
+            # Format-only corrections must preserve all parsed ratings/notes;
+            # transcription and predeclared-validity corrections can change
+            # them only under separately retained blinded approval evidence.
             if previous_blind_ids is not None:
                 if chain["reason"] == "missing_row_completion":
                     if not previous_blind_ids.issubset(blind_ids):
@@ -217,6 +219,14 @@ def audit_corrections(*, ledger: Path, submissions_root: Path,
                     raise ValueError(
                         "correction changed blinded report coverage without "
                         "a missing-row completion reason"
+                    )
+                elif chain["reason"] == "file_format_correction" and (
+                    previous_blinded_rows is None
+                    or blinded_rows != previous_blinded_rows
+                ):
+                    raise ValueError(
+                        "file-format correction changed a previously submitted "
+                        "report rating or note"
                     )
             previous_blind_ids = blind_ids
             previous_blinded_rows = blinded_rows
