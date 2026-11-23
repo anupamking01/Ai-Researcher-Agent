@@ -300,6 +300,54 @@ def test_optional_failure_diagnostic_may_be_skipped():
     })
     assert _audit(payload)["full_job_gate_completed"] is True
 
+@pytest.mark.parametrize(
+    "status,conclusion",
+    [
+        ("completed", "success"),
+        ("completed", "failure"),
+        ("completed", "cancelled"),
+        ("in_progress", None),
+    ],
+)
+def test_green_shard_rejects_executed_failure_only_diagnostics(status, conclusion):
+    # The workflow uses failure() || cancelled() for this step.
+    # It must not appear to execute within an otherwise successful shard.
+    payload = _inventory()
+    payload["jobs"][0]["steps"].append({
+        "name": "Retain unverified diagnostics on CI failure or cancellation (90 days)",
+        "status": status, "conclusion": conclusion, "number": 99,
+    })
+    with pytest.raises(ValueError, match="failure-only diagnostics must be skipped"):
+        _audit(payload)
+
+
+@pytest.mark.parametrize(
+    "job_index,label",
+    [
+        (0, "Set up job"),
+        (0, "Post Set up Python"),
+        (0, "Complete job"),
+        (-1, "Set up job"),
+        (-1, "Post Set up pinned Python for full-set replay"),
+        (-1, "Complete job"),
+    ],
+)
+@pytest.mark.parametrize("status,conclusion", [
+    ("completed", "skipped"),
+    ("completed", "failure"),
+    ("in_progress", None),
+])
+def test_green_job_rejects_incomplete_provider_housekeeping(
+    job_index, label, status, conclusion
+):
+    payload = _inventory()
+    payload["jobs"][job_index]["steps"].append({
+        "name": label, "status": status, "conclusion": conclusion, "number": 99,
+    })
+    with pytest.raises(ValueError, match="provider housekeeping step did not succeed"):
+        _audit(payload)
+
+
 @pytest.mark.parametrize("job_index,first,second", [
     (0, "Run offline unit tests", "Bind exact-commit offline test evidence"),
     (5, "Replay exact-commit offline test evidence before upload",

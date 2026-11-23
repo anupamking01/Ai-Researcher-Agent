@@ -69,12 +69,13 @@ REQUIRED_REPLAY_STEPS = (
 # failure-only diagnostic upload), not additional user-defined research steps.
 # A successful job that reports any other unrecognized step cannot satisfy
 # the source-bound workflow execution inventory.
+SHARD_FAILURE_ONLY_STEP = "Retain unverified diagnostics on CI failure or cancellation (90 days)"
 SHARD_AUXILIARY_STEPS = frozenset({
     "Set up job",
     "Complete job",
     "Post Checkout repository",
     "Post Set up Python",
-    "Retain unverified diagnostics on CI failure or cancellation (90 days)",
+    SHARD_FAILURE_ONLY_STEP,
 })
 REPLAY_AUXILIARY_STEPS = frozenset({
     "Set up job",
@@ -181,6 +182,19 @@ def _require_successful_steps(
         last_number = number
         seen[label] = step
         positions[label] = position
+    # The shard diagnostic upload is guarded by "failure() || cancelled()"
+    # in tests.yml. A successful shard cannot execute that conditional step.
+    # Provider-managed setup/cleanup, when present, must also have succeeded:
+    # green user-defined steps cannot mask skipped or failed housekeeping.
+    for label in auxiliary:
+        step = seen.get(label)
+        if step is None:
+            continue
+        if label == SHARD_FAILURE_ONLY_STEP:
+            if step.get("status") != "completed" or step.get("conclusion") != "skipped":
+                raise ValueError(f"{name}: failure-only diagnostics must be skipped in successful job")
+        elif step.get("status") != "completed" or step.get("conclusion") != "success":
+            raise ValueError(f"{name}: provider housekeeping step did not succeed: {label!r}")
     for label in required:
         step = seen.get(label)
         if step is None:
