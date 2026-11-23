@@ -23,6 +23,11 @@ MAX_LEDGER_BYTES = 64 * 1024
 MAX_CHAINS = 64
 MAX_VERSIONS = 16
 MAX_ROWS_PER_FILE = 4096
+# Cap the cumulative burden of retained whole-submission corrections. The
+# shared safe file-capture helper has its own larger per-read ceiling; these
+# stricter budgets prevent a bounded ledger from requiring enormous replay.
+MAX_VERSION_BYTES = 4 * 1024 * 1024
+MAX_TOTAL_VERSION_BYTES = 64 * 1024 * 1024
 SAFE_FILE = re.compile(r"r[0-9]{3}_v[0-9]{3}\.csv\Z")
 HASH = re.compile(r"[0-9a-f]{64}\Z")
 REASONS = frozenset({
@@ -150,6 +155,7 @@ def audit_corrections(*, ledger: Path, submissions_root: Path,
     seen_files: set[str] = set()
     seen_hashes: set[str] = set()
     accepted_hashes: set[str] = set()
+    total_version_bytes = 0
     for chain in chains:
         if type(chain) is not dict or set(chain) != {
             "annotator_id", "reason", "versions"
@@ -185,6 +191,11 @@ def audit_corrections(*, ledger: Path, submissions_root: Path,
             seen_hashes.add(expected)
             raw = capture._read_regular_file_captured(
                 Path(submissions_root) / filename, label="blinded correction version")
+            if len(raw) > MAX_VERSION_BYTES:
+                raise ValueError("correction version exceeds per-file byte budget")
+            total_version_bytes += len(raw)
+            if total_version_bytes > MAX_TOTAL_VERSION_BYTES:
+                raise ValueError("retained correction versions exceed total byte budget")
             if hashlib.sha256(raw).hexdigest() != expected:
                 raise ValueError("retained correction version digest mismatch")
             version_annotator, blinded_rows = _file_annotator_and_blind_ids(raw)

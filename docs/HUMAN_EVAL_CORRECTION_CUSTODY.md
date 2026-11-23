@@ -69,6 +69,16 @@ python -m scripts.verify_human_eval_correction_custody \
   --freeze-root outputs/human_eval/frozen-v1
 ```
 
+This check rejects retained CSV versions larger than **4 MiB each**, or
+more than **64 MiB total** across all versions in the ledger. The limit
+applies to the unchanged captured bytes before digest and CSV processing;
+it does not silently truncate long submissions or drop correction history.
+Ordinary 40-report ratings CSVs should be substantially smaller. If
+legitimate historical submissions exceed this offline resource budget,
+preserve every original unchanged and document the exception for
+coordinator review; do not split, trim, or selectively omit submissions
+just to obtain a passing receipt.
+
 This check is **only necessary if corrections actually occurred**.
 Its receipt contains only counts, explicit non-attestation of timing, the
 SHA-256 of the **exact frozen manifest bytes verified independently**, and

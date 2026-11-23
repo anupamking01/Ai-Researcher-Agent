@@ -410,3 +410,47 @@ def test_correction_custody_requires_verified_manifest_fingerprint(
         custody.audit_corrections(
             ledger=ledger, submissions_root=root, freeze_root=frozen
         )
+
+
+def test_correction_custody_rejects_per_version_byte_budget(
+    tmp_path, monkeypatch
+):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    first_size = (root / "r001_v001.csv").stat().st_size
+    monkeypatch.setattr(custody, "MAX_VERSION_BYTES", first_size - 1)
+    with pytest.raises(ValueError, match="per-file byte budget"):
+        custody.audit_corrections(
+            ledger=ledger, submissions_root=root, freeze_root=frozen
+        )
+
+
+def test_correction_custody_rejects_aggregate_byte_budget(
+    tmp_path, monkeypatch
+):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    sizes = [
+        (root / name).stat().st_size
+        for name in ("r001_v001.csv", "r001_v002.csv")
+    ]
+    monkeypatch.setattr(custody, "MAX_VERSION_BYTES", max(sizes))
+    monkeypatch.setattr(custody, "MAX_TOTAL_VERSION_BYTES", sum(sizes) - 1)
+    with pytest.raises(ValueError, match="total byte budget"):
+        custody.audit_corrections(
+            ledger=ledger, submissions_root=root, freeze_root=frozen
+        )
+
+
+def test_correction_custody_accepts_exact_byte_budget(
+    tmp_path, monkeypatch
+):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    sizes = [
+        (root / name).stat().st_size
+        for name in ("r001_v001.csv", "r001_v002.csv")
+    ]
+    monkeypatch.setattr(custody, "MAX_VERSION_BYTES", max(sizes))
+    monkeypatch.setattr(custody, "MAX_TOTAL_VERSION_BYTES", sum(sizes))
+    receipt = custody.audit_corrections(
+        ledger=ledger, submissions_root=root, freeze_root=frozen
+    )
+    assert receipt["n_retained_versions"] == 2
