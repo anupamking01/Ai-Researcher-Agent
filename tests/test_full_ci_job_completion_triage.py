@@ -156,6 +156,59 @@ def test_loaded_job_json_rejects_duplicate_keys_and_nonfinite_numbers(tmp_path):
         load_jobs_json(path)
 
 
+
+@pytest.mark.parametrize("nested", [
+    '{"jobs":' + '[' * 40 + '0' + ']' * 40 + ',"total_count":0}',
+    '{"jobs":' + '{"child":' * 40 + '0' + '}' * 40 + ',"total_count":0}',
+])
+def test_jobs_json_rejects_excessive_nesting_before_decoding(tmp_path, monkeypatch, nested):
+    path = tmp_path / "jobs.json"
+    path.write_text(nested, encoding="utf-8")
+
+    def should_not_decode(*args, **kwargs):
+        raise AssertionError("deep JSON must be rejected before json.loads")
+
+    monkeypatch.setattr("scripts.audit_full_ci_job_completion.json.loads", should_not_decode)
+    with pytest.raises(ValueError, match="nesting limit"):
+        load_jobs_json(path)
+
+
+def test_jobs_json_depth_scanner_ignores_brackets_in_escaped_strings(tmp_path):
+    path = tmp_path / "jobs.json"
+    payload = {
+        "total_count": 0,
+        "jobs": [],
+        "note": ('[{"quoted": "[[]]"}]' * 80),
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert load_jobs_json(path) == payload
+
+
+@pytest.mark.parametrize("invalid", [
+    '{"jobs":[]}}',
+    '{"jobs":[],"total_count":0',
+    '{"jobs":[],"note":"unfinished}',
+])
+def test_jobs_json_rejects_unbalanced_containers_or_strings(tmp_path, invalid):
+    path = tmp_path / "jobs.json"
+    path.write_text(invalid, encoding="utf-8")
+    with pytest.raises(ValueError, match="container or string|unmatched closing"):
+        load_jobs_json(path)
+
+
+def test_jobs_json_excessive_nesting_has_explicit_invalid_cli_exit(tmp_path, capsys):
+    path = tmp_path / "deep.json"
+    path.write_text('[' * 40 + '0' + ']' * 40, encoding="utf-8")
+    result = main([
+        "--jobs-json", str(path),
+        "--run-id", str(RUN),
+        "--run-attempt", str(ATTEMPT),
+        "--commit", SHA,
+    ])
+    assert result == 2
+    assert "nesting limit" in capsys.readouterr().err
+
+
 def test_cli_exit_codes_are_explicit(tmp_path, capsys):
     path = tmp_path / "jobs.json"
     args = ["--jobs-json", str(path), "--run-id", str(RUN),

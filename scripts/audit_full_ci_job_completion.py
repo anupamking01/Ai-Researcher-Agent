@@ -16,6 +16,7 @@ from pathlib import Path
 EXPECTED_SHARDS = 16
 REPLAY_JOB = "replay-complete-shard-set"
 MAX_JSON_BYTES = 2 * 1024 * 1024
+MAX_JSON_DEPTH = 32
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 SHARD_RE = re.compile(r"unit-tests \(([0-9]+)\)\Z")
 
@@ -100,19 +101,53 @@ def _reject_constant(value: str) -> None:
     raise ValueError(f"nonstandard JSON number {value!r}")
 
 
+
+def _require_json_container_depth(raw: bytes) -> None:
+    """Bound JSON nesting before decoding externally supplied job metadata.
+
+    Brackets inside quoted strings, including escaped quotes, are not nesting.
+    This avoids uncontrolled parser recursion on byte-bounded hostile input.
+    It does not authenticate GitHub job metadata or retained artifacts.
+    """
+    depth = 0
+    quoted = False
+    escaped = False
+    for char in raw:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == 92:  # Backslash.
+                escaped = True
+            elif char == 34:  # Closing double quote.
+                quoted = False
+        elif char == 34:
+            quoted = True
+        elif char in (91, 123):  # Opening square/curly bracket.
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                raise ValueError("jobs JSON exceeds nesting limit")
+        elif char in (93, 125):  # Closing square/curly bracket.
+            depth -= 1
+            if depth < 0:
+                raise ValueError("jobs JSON has unmatched closing container")
+    if depth != 0 or quoted:
+        raise ValueError("jobs JSON has an incomplete container or string")
+
+
 def load_jobs_json(path: Path) -> dict:
     """Read one bounded JSON snapshot; caller must independently trust its source."""
     with Path(path).open("rb") as stream:
         raw = stream.read(MAX_JSON_BYTES + 1)
     if len(raw) > MAX_JSON_BYTES:
         raise ValueError("jobs JSON exceeds two-megabyte limit")
+    _require_json_container_depth(raw)
     try:
         payload = json.loads(
             raw.decode("utf-8"),
             object_pairs_hook=_json_pairs,
             parse_constant=_reject_constant,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ValueError("jobs input must be UTF-8 JSON") from exc
     if not isinstance(payload, dict):
         raise ValueError("jobs JSON must be an object")
