@@ -489,6 +489,7 @@ def _stat_contract(value: os.stat_result) -> tuple[int, int, int, int, int, int,
 def _read_regular_file_captured(
     path: Path, *, label: str, identity_out: list[tuple[int, int]] | None = None,
     max_bytes: int | None = None,
+    stat_contract_out: list[tuple[int, ...]] | None = None,
 ) -> bytes:
     """Read one regular file with optional pre-read size cap and descriptor custody."""
     path = Path(os.path.abspath(Path(path)))
@@ -587,6 +588,8 @@ def _read_regular_file_captured(
         # An independent pathname stat after close would reopen a race window.
         if identity_out is not None:
             identity_out.append((file_before.st_dev, file_before.st_ino))
+        if stat_contract_out is not None:
+            stat_contract_out.append(_stat_contract(file_after))
         return b"".join(chunks)
     except (FileNotFoundError, NotADirectoryError) as exc:
         raise ValueError(f"{label} was replaced during capture: {path}") from exc

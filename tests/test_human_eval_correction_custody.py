@@ -2,6 +2,7 @@
 import csv
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -583,5 +584,34 @@ def test_custody_detects_directory_change_during_capture(tmp_path, monkeypatch):
 
     monkeypatch.setattr(custody.capture, "_read_regular_file_captured", add_unlisted_version)
     with pytest.raises(ValueError, match="directory changed during audit"):
+        custody.audit_corrections(
+            ledger=ledger, submissions_root=root, freeze_root=frozen)
+
+
+@pytest.mark.parametrize("target_name", ["r001_v001.csv", "r001_v002.csv"])
+def test_custody_detects_in_place_edit_after_capture(tmp_path, monkeypatch, target_name):
+    """Same-size edits do not update directory metadata; detect file generation changes."""
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    original_capture = custody.capture._read_regular_file_captured
+    initial_directory = custody._submissions_directory_state(root)
+
+    def edit_after_capture(path, *, label, **kwargs):
+        result = original_capture(path, label=label, **kwargs)
+        if label == "blinded correction version" and path.name == "r001_v002.csv":
+            target = root / target_name
+            before = target.stat()
+            # Same inode, same size, changed contents; restore mtime to ensure
+            # that checking size/mtime or the parent directory alone is insufficient.
+            with target.open("r+b") as handle:
+                handle.seek(-3, 2)
+                handle.write(b"X")
+            os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+            assert target.stat().st_size == before.st_size
+            assert target.stat().st_ino == before.st_ino
+            assert custody._submissions_directory_state(root) == initial_directory
+        return result
+
+    monkeypatch.setattr(custody.capture, "_read_regular_file_captured", edit_after_capture)
+    with pytest.raises(ValueError, match="correction version changed after capture"):
         custody.audit_corrections(
             ledger=ledger, submissions_root=root, freeze_root=frozen)

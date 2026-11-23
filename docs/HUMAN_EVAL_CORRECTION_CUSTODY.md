@@ -77,8 +77,13 @@ auditor now requires exact visible directory membership after checking the
 ledger: even a hash-consistent chain fails if a retained but unlisted version
 (or any other undeclared entry) is present. It stops at the first extra entry
 without reading it and rejects observed directory metadata changes during
-audit. This checks the supplied directory, not the completeness of historical
-custody outside that directory, and is not an atomic filesystem snapshot.
+audit. The final inventory also compares each file's device, inode, mode,
+link count, size, mtime and ctime against the exact descriptor generation
+that supplied the hashed CSV bytes. This detects observable in-place edits
+after capture even when directory metadata is unchanged; it does not reread
+or reinterpret the ratings. This checks the supplied directory, not the
+completeness of historical custody outside that directory, and is not an
+atomic filesystem snapshot. Use quiescent, coordinator-controlled storage.
 Preserve all versions unchanged if the gate fails; reconcile the inventory
 under blinded coordinator review rather than deleting extra evidence.
 Invoke after the blinded freeze and before unblinding:
