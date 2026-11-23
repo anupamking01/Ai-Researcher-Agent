@@ -2,7 +2,7 @@
 
 GitHub Actions can show a successful pytest transcript while the **job** is subsequently cancelled and the exact-run replay gate is skipped. A passing test transcript does not establish that its source-bound receipt was retained or all sixteen shards passed. Do not mix successes across run IDs, attempts, or commit SHAs.
 
-`scripts/audit_full_ci_job_completion.py` performs offline, read-only triage of a complete GitHub Actions 17-job inventory (16 shards and one replay). It enforces a single run ID, attempt, and SHA; rejects duplicate jobs, unexpected job names, inconsistent pagination counts, and malformed statuses; and separates successful, cancelled, failed, pending, and missing shards. For each successful shard it additionally checks that the provider job-step inventory reports successful offline tests, checkout verification, receipt replay and artifact retention. A successful full-set replay job must report successful evidence downloads, staging, sixteen-shard replay and retained replay upload. All **21 unconditional shard steps** and **12 unconditional aggregate-replay steps** must report completed/success—including checkout, pinned runtime, dependency installation/verification, compilation, evidence gates and post-test integrity checks. The single failure-only diagnostic upload is optional and may be skipped in a successful job. A skipped, missing, failed or duplicate mandatory step fails closed despite a successful job conclusion. The job-step inventory must also carry strictly increasing positive integer step numbers, and the required test, receipt, replay and retention gates must appear in the exact declared execution order. Otherwise a superficially green inventory could place evidence retention before the evidence it is supposed to certify. A green job must also contain **no undeclared extra execution steps**: only the reviewed mandatory workflow steps, the shard's known failure-only diagnostic upload, and explicit GitHub-managed setup/post/complete labels are permitted. An unknown extra step fails closed even when every required test and evidence step reports success. Cancelled jobs remain classifiable without complete step inventories.
+`scripts/audit_full_ci_job_completion.py` performs offline, read-only triage of a complete GitHub Actions 17-job inventory (16 shards and one replay), cross-checked against the original matching workflow-run response. It enforces a single run ID, attempt, and SHA; rejects duplicate jobs, unexpected job names, inconsistent pagination counts, and malformed statuses; and separates successful, cancelled, failed, pending, and missing shards. For each successful shard it additionally checks that the provider job-step inventory reports successful offline tests, checkout verification, receipt replay and artifact retention. A successful full-set replay job must report successful evidence downloads, staging, sixteen-shard replay and retained replay upload. All **21 unconditional shard steps** and **12 unconditional aggregate-replay steps** must report completed/success—including checkout, pinned runtime, dependency installation/verification, compilation, evidence gates and post-test integrity checks. The single failure-only diagnostic upload is optional and may be skipped in a successful job. A skipped, missing, failed or duplicate mandatory step fails closed despite a successful job conclusion. The job-step inventory must also carry strictly increasing positive integer step numbers, and the required test, receipt, replay and retention gates must appear in the exact declared execution order. Otherwise a superficially green inventory could place evidence retention before the evidence it is supposed to certify. A green job must also contain **no undeclared extra execution steps**: only the reviewed mandatory workflow steps, the shard's known failure-only diagnostic upload, and explicit GitHub-managed setup/post/complete labels are permitted. An unknown extra step fails closed even when every required test and evidence step reports success. Cancelled jobs remain classifiable without complete step inventories.
 
 **Evidence boundary:** These are same-provider **job-step conclusions**, not independently verified execution or archive bytes. This tool audits provided metadata only. It never independently authenticates the GitHub API snapshot, the executable workflow definition, or retained test artifacts. Required step names **and order** are intentionally coupled to `tests.yml`: legitimate renames or reordered gates require matching auditor and synthetic-test updates. The ordering and extra-step checks are metadata-consistency safeguards, not independent attestation of which commands actually executed. Provider housekeeping labels are an explicit compatibility allowlist; new legitimate provider labels require a reviewed update rather than an implicit wildcard. A claimed **fully successful** seventeen-job inventory now also requires valid UTC `started_at`/`completed_at` job windows: each successful job must finish no earlier than it starts, and the full-set replay may not start before the last of the sixteen shard jobs has completed. This checks the cross-job dependency ordering implied by `replay-complete-shard-set: needs: unit-tests`, so internally green jobs cannot certify an impossible replay chronology. GitHub timestamps have whole-second resolution; an equal-second boundary is permitted. Missing or malformed times invalidate **only a claim of complete success**; cancelled/incomplete runs can still be triaged without their complete timestamp inventories. This is a same-provider metadata consistency test, **not** evidence that the artifact bytes were retrieved or independently authenticated. The loader also bounds supplied JSON to 2 MiB and 32 container levels. Quote-aware scanning before decoding rejects pathological nesting or malformed container boundaries with a controlled invalid-input verdict without mistaking bracket characters inside quoted job metadata for nesting. A defensive decoder recursion fallback is also treated as invalid input. These resource safeguards do **not** authenticate job metadata. The existing `verify_full_ci_shard_set` source-bound receipt replay remains necessary for independently verified sixteen-shard certification.
 
@@ -11,11 +11,12 @@ Obtain original JSON via [GitHub's jobs API](https://docs.github.com/en/rest/act
 ```bash
 python -m scripts.audit_full_ci_job_completion \
   --jobs-json /path/to/original-run-jobs.json \
+  --run-json /path/to/original-workflow-run.json \
   --run-id 45089271290 --run-attempt 1 \
   --commit ada5a719ae9692ef2d69599e8f87bda57b0d7ddf
 ```
 
-Exit code 0 means every shard job and the full replay job report success; 1 means valid metadata but an incomplete/failed job gate; 2 means invalid/inconsistent input. Exit 0 does **not** independently attest to the evidence archive.
+Exit code 0 requires all seventeen jobs and the matching `tests.yml` workflow to report success; 1 means valid but incomplete/cancelled/failed metadata; 2 means invalid or contradictory input. Exit 0 does **not** independently attest to the evidence archive.
 
 The previously inspected [run 45089271290](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45089271290) recorded nine successful shards, seven cancelled shards and a skipped full-set replay. Some cancelled jobs printed passing pytest summaries before cancellation; those are **not** certified shard successes.
 
@@ -38,3 +39,23 @@ workflow, authenticity of the supplied job metadata, verification of actual
 retained shard evidence, authentication of original experiment artifacts,
 prospective confirmation, or human evaluation. A cancelled full suite remains
 uncertified, even when this fast lane passes.
+
+## Cross-endpoint workflow-run completion gate
+
+The GitHub jobs endpoint omits the **overall workflow conclusion**. Obtain
+the original run JSON from
+`GET /repos/{owner}/{repo}/actions/runs/{run_id}`, and the original jobs
+inventory from `GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs?per_page=100`.
+The CLI requires both snapshots: it binds the run ID, attempt, tested commit SHA,
+workflow name, exact `tests.yml` path, event, status and conclusion. A
+cancelled or unfinished run cannot be certified even if a synthetic jobs
+snapshot reports all green. A green workflow envelope contradicting incomplete
+jobs fails closed rather than claiming completion.
+
+The original `full_job_gate_completed` field remains the **job-only** check;
+the new `full_workflow_job_gate_completed` also requires a completed,
+successful workflow-run verdict and determines the CLI exit code. This is a
+two-endpoint **metadata-consistency** safeguard, not independent source
+authentication or retained-artifact verification. Frozen automated results,
+the diagnostic pilot, exploratory sensitivities and pending human validation
+are unchanged; no treatments, evaluators or ratings are rerun.

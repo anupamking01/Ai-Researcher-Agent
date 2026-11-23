@@ -1,7 +1,7 @@
 """Offline, fail-closed completion triage for a single VERA 16-shard CI run.
 
-This audits GitHub Actions *job metadata*, not pytest output or retained test
-receipts. A successful replay job is necessary for completion, but inspecting
+This audits GitHub Actions *job and workflow-run metadata*, not pytest output
+or retained test receipts. A successful replay job is necessary for completion, but inspecting
 metadata alone never independently verifies the replay artifact's contents.
 No network calls, treatments, evaluator calls, or experimental data are used.
 """
@@ -307,25 +307,77 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
     }
 
 
+def audit_run_envelope(
+    run: dict, job_audit: dict, *, run_id: int, run_attempt: int, commit: str
+) -> dict:
+    """Bind a complete job inventory to the overall GitHub workflow verdict.
+
+    Job-step conclusions alone cannot certify a cancelled or unfinished run.
+    Both inputs remain unauthenticated same-provider metadata, not evidence bytes.
+    """
+    if not isinstance(run, dict):
+        raise ValueError("workflow run JSON must be an object")
+    if (
+        type(run.get("id")) is not int
+        or type(run.get("run_attempt")) is not int
+        or run["id"] != run_id
+        or run["run_attempt"] != run_attempt
+        or run.get("head_sha") != commit
+    ):
+        raise ValueError("workflow run metadata has mixed ID, attempt, or checkout SHA")
+    if run.get("name") != "tests" or run.get("path") != ".github/workflows/tests.yml":
+        raise ValueError("unexpected workflow identity; expected tests.yml")
+    if run.get("event") not in {"pull_request", "push", "workflow_dispatch"}:
+        raise ValueError("unexpected workflow trigger")
+    status = run.get("status")
+    conclusion = run.get("conclusion")
+    if status not in {"requested", "waiting", "queued", "pending", "in_progress", "completed"}:
+        raise ValueError("unsupported workflow status")
+    if conclusion is not None and conclusion not in {
+        "success", "failure", "cancelled", "skipped", "timed_out",
+        "action_required", "neutral", "startup_failure", "stale",
+    }:
+        raise ValueError("unsupported workflow conclusion")
+    if (status == "completed") != (conclusion is not None):
+        raise ValueError("inconsistent workflow status and conclusion")
+    if conclusion == "success" and not job_audit["full_job_gate_completed"]:
+        raise ValueError("successful workflow contradicts incomplete job inventory")
+    result = dict(job_audit)
+    result.update({
+        "workflow_status": status,
+        "workflow_conclusion": conclusion or "in_progress",
+        "workflow_source": "provided GitHub workflow-run metadata; authenticity not independently attested",
+        "full_workflow_job_gate_completed": (
+            job_audit["full_job_gate_completed"] and conclusion == "success"
+        ),
+    })
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--jobs-json", type=Path, required=True)
+    parser.add_argument("--run-json", type=Path, required=True)
     parser.add_argument("--run-id", type=int, required=True)
     parser.add_argument("--run-attempt", type=int, required=True)
     parser.add_argument("--commit", required=True)
     args = parser.parse_args(argv)
     try:
-        audit = audit_jobs(
+        job_audit = audit_jobs(
             load_jobs_json(args.jobs_json),
             run_id=args.run_id,
             run_attempt=args.run_attempt,
             commit=args.commit,
         )
+        audit = audit_run_envelope(
+            load_jobs_json(args.run_json), job_audit,
+            run_id=args.run_id, run_attempt=args.run_attempt, commit=args.commit,
+        )
     except (OSError, ValueError) as exc:
         print(f"CI job completion audit invalid: {exc}", file=sys.stderr)
         return 2
     print(json.dumps(audit, sort_keys=True, indent=2))
-    return 0 if audit["full_job_gate_completed"] else 1
+    return 0 if audit["full_workflow_job_gate_completed"] else 1
 
 
 if __name__ == "__main__":

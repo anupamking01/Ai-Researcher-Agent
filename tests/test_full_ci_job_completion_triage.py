@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from scripts.audit_full_ci_job_completion import audit_jobs, load_jobs_json, main
+from scripts.audit_full_ci_job_completion import audit_jobs, audit_run_envelope, load_jobs_json, main
 
 SHA = "a" * 40
 RUN = 12345
@@ -200,11 +200,21 @@ def test_jobs_json_rejects_unbalanced_containers_or_strings(tmp_path, invalid):
         load_jobs_json(path)
 
 
+def _run_snapshot(status="completed", conclusion="success"):
+    return {
+        "id": RUN, "run_attempt": ATTEMPT, "head_sha": SHA,
+        "name": "tests", "path": ".github/workflows/tests.yml",
+        "event": "pull_request", "status": status, "conclusion": conclusion,
+    }
+
+
 def test_jobs_json_excessive_nesting_has_explicit_invalid_cli_exit(tmp_path, capsys):
     path = tmp_path / "deep.json"
     path.write_text('[' * 40 + '0' + ']' * 40, encoding="utf-8")
+    run_path = tmp_path / "workflow-run.json"
+    run_path.write_text(json.dumps(_run_snapshot()), encoding="utf-8")
     result = main([
-        "--jobs-json", str(path),
+        "--jobs-json", str(path), "--run-json", str(run_path),
         "--run-id", str(RUN),
         "--run-attempt", str(ATTEMPT),
         "--commit", SHA,
@@ -215,12 +225,15 @@ def test_jobs_json_excessive_nesting_has_explicit_invalid_cli_exit(tmp_path, cap
 
 def test_cli_exit_codes_are_explicit(tmp_path, capsys):
     path = tmp_path / "jobs.json"
-    args = ["--jobs-json", str(path), "--run-id", str(RUN),
-            "--run-attempt", str(ATTEMPT), "--commit", SHA]
+    run_path = tmp_path / "workflow-run.json"
+    run_path.write_text(json.dumps(_run_snapshot()), encoding="utf-8")
+    args = ["--jobs-json", str(path), "--run-json", str(run_path),
+            "--run-id", str(RUN), "--run-attempt", str(ATTEMPT), "--commit", SHA]
     path.write_text(json.dumps(_inventory()), encoding="utf-8")
     assert main(args) == 0
     assert json.loads(capsys.readouterr().out)["full_job_gate_completed"] is True
     path.write_text(json.dumps(_inventory({6: "cancelled"}, "skipped")), encoding="utf-8")
+    run_path.write_text(json.dumps(_run_snapshot(conclusion="cancelled")), encoding="utf-8")
     assert main(args) == 1
     assert json.loads(capsys.readouterr().out)["cancelled_shards"] == [6]
 
@@ -475,8 +488,111 @@ def test_green_ci_cli_rejects_replay_before_shards_as_invalid(tmp_path, capsys):
     payload["jobs"][-1]["started_at"] = "2026-11-23T00:09:59Z"
     path = tmp_path / "out-of-order-ci.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
+    run_path = tmp_path / "workflow-run.json"
+    run_path.write_text(json.dumps(_run_snapshot()), encoding="utf-8")
     assert main([
-        "--jobs-json", str(path), "--run-id", str(RUN),
-        "--run-attempt", str(ATTEMPT), "--commit", SHA,
+        "--jobs-json", str(path), "--run-json", str(run_path),
+        "--run-id", str(RUN), "--run-attempt", str(ATTEMPT), "--commit", SHA,
     ]) == 2
     assert "replay started before" in capsys.readouterr().err
+
+
+def test_matching_workflow_run_is_required_to_certify_all_green_jobs():
+    result = audit_run_envelope(
+        _run_snapshot(), _audit(_inventory()),
+        run_id=RUN, run_attempt=ATTEMPT, commit=SHA,
+    )
+    assert result["full_workflow_job_gate_completed"] is True
+    assert result["retained_evidence_verified_by_this_tool"] is False
+
+
+@pytest.mark.parametrize("status,conclusion", [
+    ("completed", "cancelled"),
+    ("completed", "failure"),
+    ("completed", "timed_out"),
+    ("in_progress", None),
+])
+def test_green_job_inventory_cannot_upgrade_non_successful_workflow(status, conclusion):
+    result = audit_run_envelope(
+        _run_snapshot(status, conclusion), _audit(_inventory()),
+        run_id=RUN, run_attempt=ATTEMPT, commit=SHA,
+    )
+    assert result["full_job_gate_completed"] is True
+    assert result["full_workflow_job_gate_completed"] is False
+
+
+@pytest.mark.parametrize("field,value,pattern", [
+    ("id", RUN + 1, "mixed ID"),
+    ("id", True, "mixed ID"),
+    ("run_attempt", 1, "mixed ID"),
+    ("head_sha", "b" * 40, "mixed ID"),
+    ("name", "evaluator-recovery", "unexpected workflow identity"),
+    ("path", ".github/workflows/evaluator-recovery.yml", "unexpected workflow identity"),
+    ("event", "schedule", "unexpected workflow trigger"),
+    ("status", "unknown", "unsupported workflow status"),
+    ("conclusion", "unknown", "unsupported workflow conclusion"),
+])
+def test_run_envelope_rejects_mixed_or_unrelated_workflows(field, value, pattern):
+    snapshot = _run_snapshot()
+    snapshot[field] = value
+    with pytest.raises(ValueError, match=pattern):
+        audit_run_envelope(
+            snapshot, _audit(_inventory()),
+            run_id=RUN, run_attempt=ATTEMPT, commit=SHA,
+        )
+
+
+@pytest.mark.parametrize("status,conclusion", [
+    ("completed", None),
+    ("in_progress", "success"),
+])
+def test_run_envelope_rejects_inconsistent_status_conclusion(status, conclusion):
+    with pytest.raises(ValueError, match="inconsistent workflow"):
+        audit_run_envelope(
+            _run_snapshot(status, conclusion), _audit(_inventory()),
+            run_id=RUN, run_attempt=ATTEMPT, commit=SHA,
+        )
+
+
+def test_workflow_success_cannot_hide_failed_jobs():
+    with pytest.raises(ValueError, match="contradicts incomplete job"):
+        audit_run_envelope(
+            _run_snapshot(), _audit(_inventory({7: "cancelled"}, replay="skipped")),
+            run_id=RUN, run_attempt=ATTEMPT, commit=SHA,
+        )
+
+
+def test_cancelled_run_and_cancelled_shard_are_valid_incomplete_triage():
+    result = audit_run_envelope(
+        _run_snapshot(conclusion="cancelled"),
+        _audit(_inventory({7: "cancelled"}, replay="skipped")),
+        run_id=RUN, run_attempt=ATTEMPT, commit=SHA,
+    )
+    assert result["cancelled_shards"] == [7]
+    assert result["full_workflow_job_gate_completed"] is False
+
+
+def test_cli_does_not_claim_success_when_workflow_run_is_cancelled(tmp_path, capsys):
+    jobs_path, run_path = tmp_path / "jobs.json", tmp_path / "run.json"
+    jobs_path.write_text(json.dumps(_inventory()), encoding="utf-8")
+    run_path.write_text(json.dumps(_run_snapshot(conclusion="cancelled")), encoding="utf-8")
+    result = main([
+        "--jobs-json", str(jobs_path), "--run-json", str(run_path),
+        "--run-id", str(RUN), "--run-attempt", str(ATTEMPT), "--commit", SHA,
+    ])
+    assert result == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["full_job_gate_completed"] is True
+    assert output["full_workflow_job_gate_completed"] is False
+
+
+def test_cli_rejects_duplicate_key_workflow_run_snapshot(tmp_path, capsys):
+    jobs_path, run_path = tmp_path / "jobs.json", tmp_path / "run.json"
+    jobs_path.write_text(json.dumps(_inventory()), encoding="utf-8")
+    run_path.write_text('{"id":1,"id":2}', encoding="utf-8")
+    result = main([
+        "--jobs-json", str(jobs_path), "--run-json", str(run_path),
+        "--run-id", str(RUN), "--run-attempt", str(ATTEMPT), "--commit", SHA,
+    ])
+    assert result == 2
+    assert "duplicate jobs JSON key" in capsys.readouterr().err
