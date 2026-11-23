@@ -271,6 +271,47 @@ def test_green_job_allows_provider_cleanup_step_number_gaps():
     assert _audit(payload)["full_job_gate_completed"] is True
 
 
+
+@pytest.mark.parametrize(
+    ("job_index", "unreviewed_label"),
+    [
+        (0, "Execute unreviewed experiment runner"),
+        (7, "Run offline unit tests (unreviewed retry)"),
+        (-1, "Recompute historical evaluators"),
+        (-1, "Post unexpected third-party action"),
+    ],
+)
+def test_green_jobs_reject_unreviewed_extra_execution_steps(job_index, unreviewed_label):
+    # A completely successful mandatory chain must not certify additional
+    # user-controlled workflow steps that were never reviewed in tests.yml.
+    payload = _inventory()
+    steps = payload["jobs"][job_index]["steps"]
+    steps.insert(1, {
+        "name": unreviewed_label,
+        "status": "completed",
+        "conclusion": "success",
+        "number": 0,
+    })
+    for number, step in enumerate(steps, start=1):
+        step["number"] = number
+    with pytest.raises(ValueError, match="unexpected successful-job step"):
+        _audit(payload)
+
+
+def test_known_provider_setup_and_post_steps_remain_acceptable():
+    # These labels come from the real provider job-step metadata, rather
+    # than from the workflow's user-defined steps.
+    payload = _inventory()
+    for index, post_steps in (
+        (0, ("Post Set up Python", "Post Checkout repository")),
+        (-1, ("Post Set up pinned Python for full-set replay",
+              "Post Checkout exact tested sources for full-set replay")),
+    ):
+        steps = payload["jobs"][index]["steps"]
+        names = ["Set up job", *(step["name"] for step in steps), *post_steps, "Complete job"]
+        payload["jobs"][index]["steps"] = _steps(names)
+    assert _audit(payload)["full_job_gate_completed"] is True
+
 def test_cancelled_job_still_classifiable_with_incomplete_step_numbers():
     payload = _inventory({4: "cancelled"}, replay="skipped")
     payload["jobs"][4]["steps"][0].pop("number")

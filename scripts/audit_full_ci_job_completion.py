@@ -62,6 +62,24 @@ REQUIRED_REPLAY_STEPS = (
     "Retain verified sixteen-shard replay (90 days)",
 )
 
+# These labels are GitHub-managed setup/cleanup steps (plus the declared
+# failure-only diagnostic upload), not additional user-defined research steps.
+# A successful job that reports any other unrecognized step cannot satisfy
+# the source-bound workflow execution inventory.
+SHARD_AUXILIARY_STEPS = frozenset({
+    "Set up job",
+    "Complete job",
+    "Post Checkout repository",
+    "Post Set up Python",
+    "Retain unverified diagnostics on CI failure or cancellation (90 days)",
+})
+REPLAY_AUXILIARY_STEPS = frozenset({
+    "Set up job",
+    "Complete job",
+    "Post Checkout exact tested sources for full-set replay",
+    "Post Set up pinned Python for full-set replay",
+})
+
 
 def _positive_int(value: object, name: str) -> int:
     if type(value) is not int or value <= 0:
@@ -101,7 +119,7 @@ def load_jobs_json(path: Path) -> dict:
     return payload
 
 
-def _require_successful_steps(job: dict, *, required: tuple[str, ...]) -> None:
+def _require_successful_steps(\n    job: dict, *, required: tuple[str, ...], auxiliary: frozenset[str]\n) -> None:
     """Every mandatory step in a green job must succeed in declared workflow order."""
     name = job["name"]
     steps = job.get("steps")
@@ -116,6 +134,8 @@ def _require_successful_steps(job: dict, *, required: tuple[str, ...]) -> None:
         label = step["name"]
         if label in seen:
             raise ValueError(f"{name}: duplicate job step {label!r}")
+        if label not in required and label not in auxiliary:
+            raise ValueError(f"{name}: unexpected successful-job step {label!r}")
         number = step.get("number")
         if type(number) is not int or number <= last_number:
             raise ValueError(f"{name}: malformed or out-of-order step number")
@@ -177,7 +197,7 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
             raise ValueError(f"{name}: unfinished job with conclusion")
         if name == REPLAY_JOB:
             if conclusion == "success":
-                _require_successful_steps(job, required=REQUIRED_REPLAY_STEPS)
+                _require_successful_steps(\n                    job, required=REQUIRED_REPLAY_STEPS, auxiliary=REPLAY_AUXILIARY_STEPS\n                )
             replay_conclusion = conclusion
         else:
             match = SHARD_RE.fullmatch(name)
@@ -187,7 +207,7 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
             if index in shard_conclusions:
                 raise ValueError(f"duplicate shard index {index}")
             if conclusion == "success":
-                _require_successful_steps(job, required=REQUIRED_SHARD_STEPS)
+                _require_successful_steps(\n                    job, required=REQUIRED_SHARD_STEPS, auxiliary=SHARD_AUXILIARY_STEPS\n                )
             shard_conclusions[index] = conclusion or "in_progress"
     if REPLAY_JOB not in seen_names:
         raise ValueError("missing full-set replay job metadata")
