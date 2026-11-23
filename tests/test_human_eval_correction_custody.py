@@ -44,7 +44,7 @@ def _fixture(tmp_path, monkeypatch):
         ledger.write_text(json.dumps(data), encoding="utf-8")
         (frozen / "freeze_manifest.json").write_text(
             json.dumps({"study_id": "budget-main-v1",
-                        "rating_inputs": [{"sha256": final}]}),
+                        "rating_inputs": [{"sha256": data["chains"][0]["versions"][-1]["sha256"]}]}),
             encoding="utf-8")
     store()
     return root, frozen, ledger, data, store
