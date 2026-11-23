@@ -131,6 +131,21 @@ def _replace_blind_rows(root: Path, filename: str, blind_ids: list[str]) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _edit_report(root: Path, filename: str, blind_id: str, **changes: str) -> str:
+    """Edit synthetic fixture rows and rehash; no real human ratings."""
+    path = root / filename
+    with path.open("r", newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    matching = [row for row in rows if row["blind_id"] == blind_id]
+    assert len(matching) == 1
+    matching[0].update(changes)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=freeze.RATING_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 @pytest.mark.parametrize("reason,original,final,accepted", [
     ("clerical_transcription", ["H001"], ["H001"], True),
     ("clerical_transcription", ["H001"], ["H002"], False),
@@ -153,6 +168,13 @@ def test_corrected_versions_preserve_blinded_report_coverage(
         root, "r001_v002.csv", final
     )
     store()
+    if accepted and reason == "missing_row_completion":
+        # Preserve every previously submitted score; only H002 is new.
+        chain["versions"][1]["sha256"] = _edit_report(
+            root, "r001_v002.csv", "H001",
+            **{field: "2" for field in freeze.SCORE_FIELDS},
+        )
+        store()
     if accepted:
         result = custody.audit_corrections(
             ledger=ledger, submissions_root=root, freeze_root=frozen
@@ -181,3 +203,68 @@ def test_rejects_ambiguous_superseded_report_identity(
         custody.audit_corrections(
             ledger=ledger, submissions_root=root, freeze_root=frozen
         )
+
+
+@pytest.mark.parametrize("change", [
+    {"correctness_1_5": "5"},
+    {"correctness_1_5": "1"},
+    {"notes": "edited a previously submitted explanation"},
+])
+def test_missing_row_addition_cannot_rewrite_existing_rating_or_note(
+    tmp_path, monkeypatch, change
+):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    chain = data["chains"][0]
+    chain["reason"] = "missing_row_completion"
+    chain["versions"][1]["sha256"] = _replace_blind_rows(
+        root, "r001_v002.csv", ["H001", "H002"]
+    )
+    existing = {field: "2" for field in freeze.SCORE_FIELDS}
+    existing.update(change)
+    chain["versions"][1]["sha256"] = _edit_report(
+        root, "r001_v002.csv", "H001", **existing
+    )
+    store()
+    with pytest.raises(ValueError, match="previously submitted report rating or note"):
+        custody.audit_corrections(
+            ledger=ledger, submissions_root=root, freeze_root=frozen
+        )
+
+
+def test_missing_row_reason_requires_an_actual_added_report(tmp_path, monkeypatch):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    chain = data["chains"][0]
+    chain["reason"] = "missing_row_completion"
+    chain["versions"][1]["sha256"] = _edit_report(
+        root, "r001_v002.csv", "H001",
+        **{field: "2" for field in freeze.SCORE_FIELDS},
+    )
+    store()
+    with pytest.raises(ValueError, match="did not add a blinded report"):
+        custody.audit_corrections(
+            ledger=ledger, submissions_root=root, freeze_root=frozen
+        )
+
+
+def test_missing_row_completion_accepts_reordered_unchanged_rows(
+    tmp_path, monkeypatch
+):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    chain = data["chains"][0]
+    chain["reason"] = "missing_row_completion"
+    chain["versions"][0]["sha256"] = _replace_blind_rows(
+        root, "r001_v001.csv", ["H001", "H003"]
+    )
+    chain["versions"][1]["sha256"] = _replace_blind_rows(
+        root, "r001_v002.csv", ["H003", "H002", "H001"]
+    )
+    for report_id in ("H001", "H003"):
+        chain["versions"][1]["sha256"] = _edit_report(
+            root, "r001_v002.csv", report_id,
+            **{field: "2" for field in freeze.SCORE_FIELDS},
+        )
+    store()
+    result = custody.audit_corrections(
+        ledger=ledger, submissions_root=root, freeze_root=frozen
+    )
+    assert result["n_accepted_versions_bound_to_verified_freeze"] == 1

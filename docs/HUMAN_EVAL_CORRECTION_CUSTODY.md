@@ -16,11 +16,15 @@ in the verified freeze input inventory. A superseded file appearing in the
 freeze is rejected. Every parseable version must also have distinct, nonblank
 blinded report IDs: ordinary clerical/format/validity corrections preserve the
 *exact* report-ID set across whole-file revisions; a documented
-`missing_row_completion` correction may only add IDs, never silently drop or
-substitute previously submitted reports. This prevents a correction chain
-from masking selective deletion or substitution of unfavorable report rows.
-The check compares **identities only**; scores are neither compared nor
-reported.
+`missing_row_completion` correction must add at least one new ID at each
+version and cannot drop or substitute an existing one. For that reason code
+alone, every previously submitted row must retain identical **five
+rubric-field values and notes** after CSV parsing (row order may change).
+This prevents missing-row completion from quietly rewriting previous ratings.
+The verifier checks equality, **not score direction**, and does not emit
+scores or report-level data. Other permitted correction reasons retain the
+existing whole-file custody rule; it does not decide whether their changes
+were clerical.
 
 Coordinator-only ledger example (use only nonidentifying pseudonyms and neutral
 filenames in a private directory, not actual annotation values here):
@@ -62,9 +66,12 @@ empty/duplicate blinded ID, or a version that needs to replace an incorrect
 blinded ID rather than only add a missing row, is **not** automatically
 certified. Preserve both unchanged files and obtain a separately recorded,
 pre-unblinding protocol-validity decision/deviation instead of silently
-relaxing this gate. Matching row identities cannot prove that changes to
-scores or notes were genuinely clerical, nor that every historical submission
-was disclosed to the ledger.
+relaxing this gate. Matching row identities or unchanged rows cannot prove that other permitted
+clerical edits were legitimate, nor that every historical submission was
+disclosed to the ledger. If completing missing rows also requires editing
+an existing score or note, preserve the originals and obtain a separate
+blinded protocol-validity decision/deviation instead of calling it
+missing-row completion.
 
 The `phase` declaration is not an independent timestamp, consent/eligibility
 record, proof of human independence, or proof of when an annotator saw other

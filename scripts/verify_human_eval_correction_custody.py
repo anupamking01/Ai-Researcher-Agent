@@ -61,14 +61,14 @@ def _canonical_id(value: str) -> str:
     return unicodedata.normalize("NFC", value).casefold()
 
 
-def _file_annotator_and_blind_ids(raw: bytes) -> tuple[str, frozenset[str]]:
+def _file_annotator_and_blind_ids(raw: bytes) -> tuple[str, dict[str, tuple[str, ...]]]:
     try:
         reader = csv.DictReader(io.StringIO(raw.decode("utf-8"), newline=""),
                                 strict=True)
         if reader.fieldnames != list(freeze.RATING_FIELDS):
             raise ValueError("correction CSV header differs from frozen rating schema")
         annotators = set()
-        blind_ids: set[str] = set()
+        blinded_rows: dict[str, tuple[str, ...]] = {}
         n = 0
         for row in reader:
             n += 1
@@ -80,16 +80,19 @@ def _file_annotator_and_blind_ids(raw: bytes) -> tuple[str, frozenset[str]]:
             blind_id = row["blind_id"]
             if not blind_id.strip():
                 raise ValueError("correction version contains a blank blinded report ID")
-            if blind_id in blind_ids:
+            if blind_id in blinded_rows:
                 raise ValueError("correction version contains a duplicate blinded report ID")
-            blind_ids.add(blind_id)
+            # Compare submitted fields, never score direction or treatment IDs.
+            blinded_rows[blind_id] = tuple(
+                row[field] for field in (*freeze.SCORE_FIELDS, "notes")
+            )
             if len(annotators) > 1:
                 raise ValueError("one correction version contains multiple annotators")
     except (UnicodeDecodeError, csv.Error) as exc:
         raise ValueError("correction version is not a readable ratings CSV") from exc
     if n == 0 or not next(iter(annotators)):
         raise ValueError("correction version has no annotator rows")
-    return next(iter(annotators)), frozenset(blind_ids)
+    return next(iter(annotators)), blinded_rows
 
 
 def audit_corrections(*, ledger: Path, submissions_root: Path,
@@ -144,6 +147,7 @@ def audit_corrections(*, ledger: Path, submissions_root: Path,
             raise ValueError("correction needs an allowed, pre-unblinding reason code")
         versions = chain["versions"]
         previous_blind_ids: frozenset[str] | None = None
+        previous_blinded_rows: dict[str, tuple[str, ...]] | None = None
         if type(versions) is not list or not 2 <= len(versions) <= MAX_VERSIONS:
             raise ValueError("corrections require original and entire replacement file")
         for version_index, version in enumerate(versions, start=1):
@@ -164,17 +168,31 @@ def audit_corrections(*, ledger: Path, submissions_root: Path,
                 Path(submissions_root) / filename, label="blinded correction version")
             if hashlib.sha256(raw).hexdigest() != expected:
                 raise ValueError("retained correction version digest mismatch")
-            version_annotator, blind_ids = _file_annotator_and_blind_ids(raw)
+            version_annotator, blinded_rows = _file_annotator_and_blind_ids(raw)
+            blind_ids = frozenset(blinded_rows)
             if version_annotator != canonical:
                 raise ValueError("correction version changed annotator identity")
             # Whole-submission corrections must not silently swap or drop
-            # assigned reports. Missing-row completion may ADD report IDs,
-            # never remove previously submitted ones. Scores are not compared.
+            # assigned reports. Missing-row completion must add report IDs
+            # without rewriting any previously submitted rating or note.
+            # Other correction reasons do not compare score values.
             if previous_blind_ids is not None:
                 if chain["reason"] == "missing_row_completion":
                     if not previous_blind_ids.issubset(blind_ids):
                         raise ValueError(
                             "missing-row correction removed a submitted blinded report"
+                        )
+                    if blind_ids == previous_blind_ids:
+                        raise ValueError(
+                            "missing-row correction did not add a blinded report"
+                        )
+                    if previous_blinded_rows is None or any(
+                        blinded_rows[report_id] != previous_blinded_rows[report_id]
+                        for report_id in previous_blind_ids
+                    ):
+                        raise ValueError(
+                            "missing-row correction changed a previously submitted "
+                            "report rating or note"
                         )
                 elif blind_ids != previous_blind_ids:
                     raise ValueError(
@@ -182,6 +200,7 @@ def audit_corrections(*, ledger: Path, submissions_root: Path,
                         "a missing-row completion reason"
                     )
             previous_blind_ids = blind_ids
+            previous_blinded_rows = blinded_rows
             if version_index == len(versions):
                 if expected not in frozen_hashes:
                     raise ValueError("final correction is absent from verified freeze")
