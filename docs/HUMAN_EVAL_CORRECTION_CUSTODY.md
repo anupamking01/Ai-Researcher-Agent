@@ -67,7 +67,17 @@ python -m scripts.verify_human_eval_correction_custody \
 ```
 
 This check is **only necessary if corrections actually occurred**.
-Its receipt is limited to counts and explicit non-attestation of timing.
+Its receipt contains only counts, explicit non-attestation of timing, the
+SHA-256 of the **exact frozen manifest bytes verified independently**, and
+the SHA-256 of the **same correction-ledger bytes captured for parsing**.
+These fingerprints distinguish equally sized but different custody ledgers,
+bind a later replay to the checked source files, and do not include report
+IDs, annotator pseudonyms, rubric values, or private file paths. Preserve the
+unchanged ledger, frozen snapshot, and complete retained submissions in
+coordinator-controlled storage; a receipt alone is neither the original
+evidence nor a trusted timestamp and cannot prove that every correction was
+reported. The ledger digest is taken from the single captured read, not from
+a second potentially changed pathname.
 The identity-set rule is deliberately conservative: an original with an
 empty/duplicate blinded ID, or a version that needs to replace an incorrect
 blinded ID rather than only add a missing row, is **not** automatically

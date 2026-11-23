@@ -68,6 +68,33 @@ def test_success_is_only_blinded_custody(tmp_path, monkeypatch):
     assert "rating" not in result
 
 
+
+def test_receipt_binds_captured_sources_without_exposing_ratings(tmp_path, monkeypatch):
+    root, frozen, ledger, data, store = _fixture(tmp_path, monkeypatch)
+    original = custody.audit_corrections(
+        ledger=ledger, submissions_root=root, freeze_root=frozen)
+    manifest_digest = hashlib.sha256(
+        (frozen / "freeze_manifest.json").read_bytes()).hexdigest()
+    assert original["verified_freeze_manifest_sha256"] == manifest_digest
+    assert original["captured_correction_ledger_sha256"] == hashlib.sha256(
+        ledger.read_bytes()).hexdigest()
+    assert "Rater-A" not in json.dumps(original)
+    assert "H001" not in json.dumps(original)
+
+    # Both ledgers are valid and produce identical counts, but their
+    # provenance receipts must not be interchangeable.
+    data["chains"][0]["reason"] = "file_format_correction"
+    store()
+    changed = custody.audit_corrections(
+        ledger=ledger, submissions_root=root, freeze_root=frozen)
+    assert changed["n_retained_versions"] == original["n_retained_versions"]
+    assert changed["verified_freeze_manifest_sha256"] == manifest_digest
+    assert changed["captured_correction_ledger_sha256"] == hashlib.sha256(
+        ledger.read_bytes()).hexdigest()
+    assert (changed["captured_correction_ledger_sha256"]
+            != original["captured_correction_ledger_sha256"])
+
+
 @pytest.mark.parametrize("mutation", [
     lambda d: d.update(phase="after_unblinding"),
     lambda d: d["chains"][0].update(reason="favorable_score"),

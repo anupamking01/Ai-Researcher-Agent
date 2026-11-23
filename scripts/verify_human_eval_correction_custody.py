@@ -43,11 +43,13 @@ def _unique_pairs(pairs):
 
 
 def _load_json(path: Path, *, limit: int, label: str,
-               expected_sha256: str | None = None) -> dict:
+               expected_sha256: str | None = None,
+               captured_sha256_out: list[str] | None = None) -> dict:
     raw = capture._read_regular_file_captured(path, label=label)
     if len(raw) > limit:
         raise ValueError(f"{label} exceeds size bound")
-    if expected_sha256 is not None and hashlib.sha256(raw).hexdigest() != expected_sha256:
+    captured_digest = hashlib.sha256(raw).hexdigest()
+    if expected_sha256 is not None and captured_digest != expected_sha256:
         raise ValueError(f"{label} differs from independently verified manifest bytes")
     try:
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_pairs,
@@ -57,6 +59,8 @@ def _load_json(path: Path, *, limit: int, label: str,
         raise ValueError(f"{label} is not valid JSON") from exc
     if type(value) is not dict:
         raise ValueError(f"{label} must be a JSON object")
+    if captured_sha256_out is not None:
+        captured_sha256_out.append(captured_digest)
     return value
 
 
@@ -126,8 +130,12 @@ def audit_corrections(*, ledger: Path, submissions_root: Path,
     ) or len(frozen_hashes) != len(set(frozen_hashes)):
         raise ValueError("verified freeze input hashes are invalid")
 
+    # Bind the receipt to the SAME captured ledger bytes that were parsed and
+    # validated; rereading the pathname later would permit a TOCTOU mismatch.
+    ledger_digest_capture: list[str] = []
     data = _load_json(Path(ledger), limit=MAX_LEDGER_BYTES,
-                      label="blinded correction ledger")
+                      label="blinded correction ledger",
+                      captured_sha256_out=ledger_digest_capture)
     if set(data) != {"schema_version", "study_id", "phase", "chains"} or (
         type(data["schema_version"]) is not int or data["schema_version"] != 1
         or data["study_id"] != "budget-main-v1"
@@ -228,6 +236,8 @@ def audit_corrections(*, ledger: Path, submissions_root: Path,
         "n_corrected_annotators": len(chains),
         "n_retained_versions": len(seen_files),
         "n_accepted_versions_bound_to_verified_freeze": len(accepted_hashes),
+        "verified_freeze_manifest_sha256": verified_manifest_sha,
+        "captured_correction_ledger_sha256": ledger_digest_capture[0],
         "historical_timing_independently_authenticated": False,
         "blinding_key_used": False,
     }
