@@ -106,7 +106,10 @@ def test_completion_auditor_essential_step_labels_match_actual_full_ci_contract(
                             (replay_steps, REQUIRED_REPLAY_STEPS)):
         names = [step["name"] for step in steps]
         assert len(names) == len(set(names))
-        assert required <= set(names)
+        assert set(required) <= set(names)
+        # Couple the metadata auditor to actual test / receipt / replay order.
+        positions = [names.index(label) for label in required]
+        assert positions == sorted(positions)
     assert "scripts/run_offline_pytest_firewalled.sh" in _step(
         unit_steps, "Run offline unit tests"
     )["run"]

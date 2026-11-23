@@ -213,3 +213,49 @@ def test_optional_failure_diagnostic_may_be_skipped():
         "status": "completed", "conclusion": "skipped", "number": 99
     })
     assert _audit(payload)["full_job_gate_completed"] is True
+
+@pytest.mark.parametrize("job_index,first,second", [
+    (0, "Run offline unit tests", "Bind exact-commit offline test evidence"),
+    (5, "Replay exact-commit offline test evidence before upload",
+        "Retain source-bound offline test evidence (90 days)"),
+    (-1, "Independently replay all sixteen downloaded shard receipts",
+        "Retain verified sixteen-shard replay (90 days)"),
+])
+def test_green_jobs_cannot_reorder_required_execution_gates(job_index, first, second):
+    payload = _inventory()
+    steps = payload["jobs"][job_index]["steps"]
+    first_step = next(step for step in steps if step["name"] == first)
+    second_step = next(step for step in steps if step["name"] == second)
+    first_step["name"], second_step["name"] = second_step["name"], first_step["name"]
+    with pytest.raises(ValueError, match="required evidence steps out of execution order"):
+        _audit(payload)
+
+
+@pytest.mark.parametrize("bad_number", [None, True, 0, -3, "2", 2.5])
+def test_green_jobs_require_strictly_increasing_integer_step_numbers(bad_number):
+    payload = _inventory()
+    payload["jobs"][0]["steps"][1]["number"] = bad_number
+    with pytest.raises(ValueError, match="malformed or out-of-order step number"):
+        _audit(payload)
+
+
+def test_green_replay_rejects_repeated_step_number():
+    payload = _inventory()
+    payload["jobs"][-1]["steps"][2]["number"] = 2
+    with pytest.raises(ValueError, match="malformed or out-of-order step number"):
+        _audit(payload)
+
+
+def test_green_job_allows_provider_cleanup_step_number_gaps():
+    payload = _inventory()
+    payload["jobs"][0]["steps"].append({
+        "name": "Post Checkout repository", "status": "completed",
+        "conclusion": "success", "number": 45,
+    })
+    assert _audit(payload)["full_job_gate_completed"] is True
+
+
+def test_cancelled_job_still_classifiable_with_incomplete_step_numbers():
+    payload = _inventory({4: "cancelled"}, replay="skipped")
+    payload["jobs"][4]["steps"][0].pop("number")
+    assert _audit(payload)["cancelled_shards"] == [4]

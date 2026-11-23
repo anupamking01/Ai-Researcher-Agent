@@ -22,7 +22,7 @@ SHARD_RE = re.compile(r"unit-tests \(([0-9]+)\)\Z")
 
 # These are the essential steps in the pinned offline tests.yml workflow.
 # Checking Actions step metadata is not equivalent to authenticating receipt bytes.
-REQUIRED_SHARD_STEPS = frozenset({
+REQUIRED_SHARD_STEPS = (
     "Verify exact checkout before dependency-free diagnostic gate",
     "Run dependency-free diagnostic invariants before pip installation",
     "Bind dependency-free test transcript to commit and run",
@@ -34,15 +34,15 @@ REQUIRED_SHARD_STEPS = frozenset({
     "Bind exact-commit offline test evidence",
     "Replay exact-commit offline test evidence before upload",
     "Retain source-bound offline test evidence (90 days)",
-})
-REQUIRED_REPLAY_STEPS = frozenset({
+)
+REQUIRED_REPLAY_STEPS = (
     "Download current-attempt shard evidence",
     "Stage exact-attempt shard directories",
     "Download exact-attempt pre-install diagnostic evidence",
     "Stage complete early diagnostic evidence set",
     "Independently replay all sixteen downloaded shard receipts",
     "Retain verified sixteen-shard replay (90 days)",
-})
+)
 
 
 def _positive_int(value: object, name: str) -> int:
@@ -83,26 +83,37 @@ def load_jobs_json(path: Path) -> dict:
     return payload
 
 
-def _require_successful_steps(job: dict, *, required: frozenset[str]) -> None:
-    """A job-level success cannot override a skipped essential evidence gate."""
+def _require_successful_steps(job: dict, *, required: tuple[str, ...]) -> None:
+    """Successful evidence gates must be reported in their actual execution order."""
     name = job["name"]
     steps = job.get("steps")
     if not isinstance(steps, list):
         raise ValueError(f"{name}: successful job has no steps inventory")
     seen: dict[str, dict] = {}
-    for step in steps:
+    positions: dict[str, int] = {}
+    last_number = 0
+    for position, step in enumerate(steps):
         if not isinstance(step, dict) or not isinstance(step.get("name"), str) or not step["name"]:
             raise ValueError(f"{name}: malformed job step")
+        number = step.get("number")
+        if type(number) is not int or number <= last_number:
+            raise ValueError(f"{name}: malformed or out-of-order step number")
+        last_number = number
         label = step["name"]
         if label in seen:
             raise ValueError(f"{name}: duplicate job step {label!r}")
         seen[label] = step
-    for label in sorted(required):
+        positions[label] = position
+    for label in required:
         step = seen.get(label)
         if step is None:
             raise ValueError(f"{name}: missing required successful step {label!r}")
         if step.get("status") != "completed" or step.get("conclusion") != "success":
             raise ValueError(f"{name}: required step did not succeed: {label!r}")
+    # Names and green conclusions alone cannot certify replay-before-test or
+    # upload-before-receipt metadata, even if each step is individually green.
+    if [positions[label] for label in required] != sorted(positions[label] for label in required):
+        raise ValueError(f"{name}: required evidence steps out of execution order")
 
 
 def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> dict:
