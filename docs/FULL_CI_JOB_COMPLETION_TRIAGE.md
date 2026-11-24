@@ -25,16 +25,20 @@ The five-task pilot remains diagnostic. Frozen automated results retain post-col
 ## Source-bound fast CI for this metadata auditor
 
 The `full-ci-job-completion-fast-ci` workflow runs the synthetic auditor
-regression module plus a separate workflow-contract test in a short, firewalled,
-exact-commit GitHub Actions lane. It is triggered by changes to the auditor,
+regression module plus its workflow-contract test, the shard selector tests,
+synthetic complete shard-set/retained aggregate receipt replay tests, and the
+full replay workflow contract in a short, firewalled, exact-commit GitHub
+Actions lane. These five modules run together, including on changes to the
+replay implementation or its direct evidence dependencies. This avoids relying
+on a successful full matrix to exercise the verifier's synthetic regressions. It is triggered by changes to the auditor,
 its tests, the workflow under audit, or its source/evidence dependencies.
 It checks that the full ordered mandatory-step inventory exactly matches the actual
 sixteen-shard workflow and that critical test, replay and artifact-upload
 steps still point to their expected implementations. The lane retains a
 source-bound test transcript and independently replayed receipt for 90 days.
 
-**Scope limitation:** A green fast lane certifies the *auditor's synthetic
-regressions and current source contract*, not completion of the sixteen-shard
+**Scope limitation:** A green fast lane certifies the *auditor and shard replay
+synthetic regressions and current source contracts*, not completion of the sixteen-shard
 workflow, authenticity of the supplied job metadata, verification of actual
 retained shard evidence, authentication of original experiment artifacts,
 prospective confirmation, or human evaluation. A cancelled full suite remains

@@ -1,6 +1,6 @@
 """Keep offline CI completion triage independently testable and source-bound.
 
-A passing fast lane tests metadata classification only. It cannot certify
+A passing fast lane tests metadata classification and synthetic shard replay. It cannot certify
 a cancelled sixteen-shard run, historical treatment custody, or human ratings.
 """
 from pathlib import Path
@@ -18,8 +18,20 @@ FULL = ".github/workflows/tests.yml"
 TESTS = (
     "tests/test_full_ci_job_completion_triage.py",
     "tests/test_full_ci_completion_fast_ci_workflow.py",
+    "tests/test_full_ci_shard_selection.py",
+    "tests/test_full_ci_shard_set_verification.py",
+    "tests/test_full_ci_shard_set_ci_workflow.py",
 )
 AUDITOR = "scripts/audit_full_ci_job_completion.py"
+REPLAY_DEPENDENCIES = (
+    "scripts/select_full_ci_shard.py",
+    "scripts/verify_full_ci_shard_set.py",
+    "scripts/verify_ci_early_gate_evidence.py",
+    "logic/evaluation.py",
+    "tests/test_evaluation_stdlib_gate.py",
+    "tests/conftest.py",
+    "docs/FULL_OFFLINE_CI_SHARD_SET_REPLAY.md",
+)
 
 
 def _load(path):
@@ -38,7 +50,7 @@ def test_completion_auditor_fast_lane_is_pinned_offline_and_source_triggered():
     assert "workflow_dispatch" in flow["on"]
     for event in ("push", "pull_request"):
         paths = set(flow["on"][event]["paths"])
-        assert {FAST, FULL, AUDITOR, *TESTS,
+        assert {FAST, FULL, AUDITOR, *TESTS, *REPLAY_DEPENDENCIES,
                 "scripts/run_offline_pytest_firewalled.sh",
                 "scripts/verify_ci_source_checkout.py",
                 "scripts/verify_ci_test_evidence.py",
@@ -56,6 +68,11 @@ def test_completion_auditor_fast_lane_is_pinned_offline_and_source_triggered():
     for token in ("--no-deps", "--only-binary=:all:", "--constraint requirements-ci.lock",
                   "--constraint requirements.txt"):
         assert token in install
+    compile_command = _step(steps, "Compile auditor and targeted tests")["run"]
+    for module in (*TESTS, AUDITOR, "scripts/select_full_ci_shard.py",
+                   "scripts/verify_full_ci_shard_set.py",
+                   "scripts/verify_ci_early_gate_evidence.py"):
+        assert module in compile_command.split()
     run = _step(steps, "Run firewalled completion-auditor regressions")
     assert run["env"]["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
     assert run["run"].strip().splitlines() == [

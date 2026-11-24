@@ -1,6 +1,6 @@
 name: full-ci-job-completion-fast-ci
 
-# Offline, synthetic-only certification of the job-completion metadata guard.
+# Offline, synthetic-only regressions for job-completion and shard-set evidence.
 # A green result is NOT a substitute for the sixteen-shard aggregate replay.
 on:
   push:
@@ -12,6 +12,16 @@ on:
       - scripts/audit_full_ci_job_completion.py
       - tests/test_full_ci_job_completion_triage.py
       - tests/test_full_ci_completion_fast_ci_workflow.py
+      - tests/test_full_ci_shard_selection.py
+      - tests/test_full_ci_shard_set_verification.py
+      - tests/test_full_ci_shard_set_ci_workflow.py
+      - scripts/select_full_ci_shard.py
+      - scripts/verify_full_ci_shard_set.py
+      - scripts/verify_ci_early_gate_evidence.py
+      - logic/evaluation.py
+      - tests/test_evaluation_stdlib_gate.py
+      - tests/conftest.py
+      - docs/FULL_OFFLINE_CI_SHARD_SET_REPLAY.md
       - docs/FULL_CI_JOB_COMPLETION_TRIAGE.md
       - scripts/run_offline_pytest_firewalled.sh
       - scripts/verify_ci_python_runtime.py
@@ -28,6 +38,16 @@ on:
       - scripts/audit_full_ci_job_completion.py
       - tests/test_full_ci_job_completion_triage.py
       - tests/test_full_ci_completion_fast_ci_workflow.py
+      - tests/test_full_ci_shard_selection.py
+      - tests/test_full_ci_shard_set_verification.py
+      - tests/test_full_ci_shard_set_ci_workflow.py
+      - scripts/select_full_ci_shard.py
+      - scripts/verify_full_ci_shard_set.py
+      - scripts/verify_ci_early_gate_evidence.py
+      - logic/evaluation.py
+      - tests/test_evaluation_stdlib_gate.py
+      - tests/conftest.py
+      - docs/FULL_OFFLINE_CI_SHARD_SET_REPLAY.md
       - docs/FULL_CI_JOB_COMPLETION_TRIAGE.md
       - scripts/run_offline_pytest_firewalled.sh
       - scripts/verify_ci_python_runtime.py
@@ -82,7 +102,13 @@ jobs:
           python -m py_compile \
             scripts/audit_full_ci_job_completion.py \
             tests/test_full_ci_job_completion_triage.py \
-            tests/test_full_ci_completion_fast_ci_workflow.py
+            tests/test_full_ci_completion_fast_ci_workflow.py \
+            tests/test_full_ci_shard_selection.py \
+            tests/test_full_ci_shard_set_verification.py \
+            tests/test_full_ci_shard_set_ci_workflow.py \
+            scripts/select_full_ci_shard.py \
+            scripts/verify_full_ci_shard_set.py \
+            scripts/verify_ci_early_gate_evidence.py
 
       - name: Verify exact checkout before targeted tests
         run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
@@ -93,7 +119,7 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |
           set -euo pipefail
-          bash scripts/run_offline_pytest_firewalled.sh tests/test_full_ci_job_completion_triage.py tests/test_full_ci_completion_fast_ci_workflow.py 2>&1 | tee "$RUNNER_TEMP/vera-ci-completion-tests.log"
+          bash scripts/run_offline_pytest_firewalled.sh tests/test_full_ci_job_completion_triage.py tests/test_full_ci_completion_fast_ci_workflow.py tests/test_full_ci_shard_selection.py tests/test_full_ci_shard_set_verification.py tests/test_full_ci_shard_set_ci_workflow.py 2>&1 | tee "$RUNNER_TEMP/vera-ci-completion-tests.log"
 
       - name: Verify runtime and checkout after targeted tests
         run: |
