@@ -121,6 +121,7 @@ def _fake_iptables(family: str) -> str:
         + 'chain=$(cat "$VERA_FAKE_CHAIN_FILE" 2>/dev/null || true)\n'
         + 'policy="${VERA_FAKE_POLICY:-}"\n'
         + 'if [[ -n "${VERA_FAKE_POST_POLICY_FILE:-}" && -f "$VERA_FAKE_POST_POLICY_FILE" ]]; then policy="$(cat "$VERA_FAKE_POST_POLICY_FILE")"; fi\n'
+        + 'if [[ "$policy" == "cleanup_failure" && "' + family + '" == "v4" && "$3" == "-D" ]]; then exit 44; fi\n'
         + 'if [[ "$*" == "-w 5 -S $chain" && -n "$chain" ]]; then\n'
         + '  if [[ "$policy" == "' + family + '_query_failure" ]]; then exit 44; fi\n'
         + '  printf -- "-N %s\\n-A %s -o lo -j RETURN\\n" "$chain" "$chain"\n'
@@ -314,7 +315,6 @@ def test_pytest_transcript_separates_teardown_without_masking_failures(
             '  printf "sudo: synthetic hostname warning\\n" >&2\n'
             '  if [ "$1" = iptables ] && [ "$4" = -D ]; then\n'
             '    printf "synthetic teardown stdout\\n"\n'
-            '    [ "$VERA_FAKE_POST_PYTEST_POLICY" != cleanup_failure ] || exit 44\n'
             '  fi\n'
             'fi\nexec "$@"\n'
         ),
