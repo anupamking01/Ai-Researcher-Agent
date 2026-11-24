@@ -44,8 +44,9 @@ uncertified, even when this fast lane passes.
 
 The GitHub jobs endpoint omits the **overall workflow conclusion**. Obtain
 the original run JSON from
-`GET /repos/{owner}/{repo}/actions/runs/{run_id}`, and the original jobs
-inventory from `GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs?per_page=100`.
+`GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}`, and the original jobs
+inventory from `GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs?per_page=100`.
+Use attempt-specific endpoints rather than latest-attempt responses when preserving historical evidence.
 The CLI requires both snapshots: it binds the run ID, attempt, tested commit SHA,
 workflow name, exact `tests.yml` path, event, status and conclusion. A
 cancelled or unfinished run cannot be certified even if a synthetic jobs
@@ -110,3 +111,23 @@ being converted into an index that later fails during replay chronology checks.
 Malformed input produces a controlled diagnostic and no receipt, not an
 uncaught exception or a valid incomplete classification. These are offline
 schema checks, not evidence that the provider snapshot is authentic.
+
+
+## Distinguish unsettled snapshots from terminal incomplete runs
+
+The receipt's `pending_shards` field lists observed unfinished shard jobs
+(explicit null conclusion); `other_incomplete_shards` lists terminal
+skipped/neutral shards, not pending jobs. A completed workflow envelope
+paired with any unfinished observed shard or replay job is inconsistent and
+returns exit 2 without a receipt. Re-capture both original attempt-specific
+API responses; do not edit an old snapshot to make its status agree.
+Missing shard jobs remain distinguishable from observed unfinished jobs:
+an incomplete cancelled attempt can legitimately lack scheduled jobs.
+An in-progress workflow with pending jobs remains valid incomplete triage.
+
+The attempt-specific endpoints for [run 45305773051](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45305773051)
+reported a completed/cancelled workflow, three successful shards, thirteen
+cancelled shards and skipped replay, with no unfinished observed jobs. This
+is terminal incomplete metadata, not a full-suite certificate. No cause of
+cancellation or authenticity of the retained artifacts follows from these
+status fields.

@@ -119,7 +119,8 @@ def test_successful_shards_without_replay_are_not_complete():
 
 def test_pending_and_failed_shards_remain_separate():
     result = _audit(_inventory({0: None, 5: "failure", 8: "timed_out"}, replay=None))
-    assert result["other_incomplete_shards"] == [0]
+    assert result["pending_shards"] == [0]
+    assert result["other_incomplete_shards"] == []
     assert result["failed_shards"] == [5, 8]
     assert result["full_job_gate_completed"] is False
 
@@ -860,3 +861,53 @@ def test_noncanonical_shard_labels_fail_closed_instead_of_aliasing_indices(label
     jobs["jobs"][int(label.removeprefix("unit-tests (").removesuffix(")"))]["name"] = label
     with pytest.raises(ValueError, match="unexpected CI job"):
         _audit(jobs)
+
+
+@pytest.mark.parametrize("conclusion", ["cancelled", "failure", "timed_out"])
+@pytest.mark.parametrize("pending", ["shard", "replay"])
+def test_completed_workflow_rejects_unfinished_job_snapshot(conclusion, pending):
+    jobs = _inventory({0: None} if pending == "shard" else {},
+                      replay=None if pending == "replay" else "skipped")
+    with pytest.raises(ValueError, match="completed workflow contradicts unfinished job"):
+        audit_run_envelope(
+            _run_snapshot(conclusion=conclusion), _audit(jobs),
+            run_id=RUN, run_attempt=ATTEMPT, commit=SHA,
+        )
+
+
+def test_pending_and_terminal_other_shards_are_distinct():
+    jobs = _inventory({0: None, 1: "skipped", 2: "neutral"}, replay=None)
+    result = audit_run_envelope(
+        _run_snapshot(status="in_progress", conclusion=None), _audit(jobs),
+        run_id=RUN, run_attempt=ATTEMPT, commit=SHA,
+    )
+    assert result["pending_shards"] == [0]
+    assert result["other_incomplete_shards"] == [1, 2]
+    assert result["full_workflow_job_gate_completed"] is False
+
+
+def test_completed_cancelled_run_can_have_missing_or_terminal_other_shards():
+    jobs = _inventory({0: "skipped", 1: "neutral", 2: "cancelled"}, replay="skipped")
+    jobs["jobs"].pop(3)
+    jobs["total_count"] -= 1
+    result = audit_run_envelope(
+        _run_snapshot(conclusion="cancelled"), _audit(jobs),
+        run_id=RUN, run_attempt=ATTEMPT, commit=SHA,
+    )
+    assert result["pending_shards"] == []
+    assert result["other_incomplete_shards"] == [0, 1]
+    assert result["missing_shards"] == [3]
+    assert result["full_workflow_job_gate_completed"] is False
+
+
+def test_cli_stale_job_snapshot_emits_no_receipt(tmp_path, capsys):
+    jobs_path, run_path = tmp_path / "jobs.json", tmp_path / "run.json"
+    jobs_path.write_text(json.dumps(_inventory({0: None}, "skipped")), encoding="utf-8")
+    run_path.write_text(json.dumps(_run_snapshot(conclusion="cancelled")), encoding="utf-8")
+    assert main([
+        "--jobs-json", str(jobs_path), "--run-json", str(run_path),
+        "--run-id", str(RUN), "--run-attempt", str(ATTEMPT), "--commit", SHA,
+    ]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "recapture both snapshots" in captured.err

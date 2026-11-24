@@ -332,7 +332,8 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
     passed = sorted(i for i, value in shard_conclusions.items() if value == "success")
     failed = sorted(i for i, value in shard_conclusions.items() if value in {"failure", "timed_out", "action_required"})
     cancelled = sorted(i for i, value in shard_conclusions.items() if value == "cancelled")
-    other = sorted(i for i, value in shard_conclusions.items() if value not in {"success", "failure", "timed_out", "action_required", "cancelled"})
+    pending = sorted(i for i, value in shard_conclusions.items() if value == "in_progress")
+    other = sorted(i for i, value in shard_conclusions.items() if value not in {"success", "failure", "timed_out", "action_required", "cancelled", "in_progress"})
     missing = sorted(set(range(EXPECTED_SHARDS)) - shard_conclusions.keys())
     complete = (
         len(passed) == EXPECTED_SHARDS
@@ -360,6 +361,7 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
         "successful_shards": passed,
         "failed_shards": failed,
         "cancelled_shards": cancelled,
+        "pending_shards": pending,
         "other_incomplete_shards": other,
         "missing_shards": missing,
         "replay_job_conclusion": replay_conclusion or "in_progress",
@@ -420,6 +422,12 @@ def audit_run_envelope(
         raise ValueError("inconsistent workflow status and conclusion")
     if conclusion == "success" and not job_audit["full_job_gate_completed"]:
         raise ValueError("successful workflow contradicts incomplete job inventory")
+    # Separately captured endpoint snapshots can disagree while GitHub is
+    # settling a run. Do not issue a settled-run receipt from stale job states.
+    if status == "completed" and (
+        job_audit["pending_shards"] or job_audit["replay_job_conclusion"] == "in_progress"
+    ):
+        raise ValueError("completed workflow contradicts unfinished job metadata; recapture both snapshots")
     result = dict(job_audit)
     result.update({
         "workflow_status": status,
