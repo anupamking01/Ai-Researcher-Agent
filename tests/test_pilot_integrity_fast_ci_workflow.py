@@ -78,9 +78,9 @@ def test_pilot_lane_selected_modules_and_trigger_paths_are_complete():
     modules, sink = command.strip().split(" | tee ", 1)
     assert shlex.split(modules) == TESTS
     assert sink == '"$RUNNER_TEMP/vera-pilot-integrity-tests.log"'
-    assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD" in str(
-        next(step["env"] for step in steps if step["name"].startswith("Run firewalled"))
-    )
+    env = next(step["env"] for step in steps if step["name"].startswith("Run firewalled"))
+    assert env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+    assert env["VERA_CI_PRIVATE_NETNS"] == "1"
 
 
 def test_pilot_ci_is_read_only_pinned_and_source_bound():

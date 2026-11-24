@@ -85,6 +85,7 @@ def test_human_analysis_lane_covers_production_verification_and_triggers():
 
     invocation = next(s for s in steps if s["name"] == "Run firewalled human-analysis regressions")
     assert invocation["env"]["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+    assert invocation["env"]["VERA_CI_PRIVATE_NETNS"] == "1"
     assert invocation["run"].strip().splitlines() == [
         "set -euo pipefail",
         'bash scripts/run_offline_pytest_firewalled.sh '

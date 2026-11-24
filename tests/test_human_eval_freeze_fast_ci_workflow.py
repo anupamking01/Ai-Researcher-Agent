@@ -90,6 +90,7 @@ def test_freeze_lane_selects_entire_declared_regression_scope_and_triggers():
         assert path in compile_step["run"]
     test_step = next(s for s in steps if s["name"] == "Run firewalled blinded-freeze regressions")
     assert test_step["env"]["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+    assert test_step["env"]["VERA_CI_PRIVATE_NETNS"] == "1"
     assert test_step["run"].strip().splitlines() == ["set -euo pipefail", SCOPE]
     assert len(FREEZE_MODULES) == len(set(FREEZE_MODULES))
     for event in ("push", "pull_request"):

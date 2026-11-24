@@ -71,6 +71,7 @@ def test_runner_lane_is_read_only_firewalled_and_source_triggered():
     assert "--constraint requirements.txt" in install
     test = _step(steps, "Run firewalled noncanonical runner regressions")
     assert test["env"]["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+    assert test["env"]["VERA_CI_PRIVATE_NETNS"] == "1"
     assert test["run"].strip().splitlines() == [
         "set -euo pipefail",
         "bash scripts/run_offline_pytest_firewalled.sh "

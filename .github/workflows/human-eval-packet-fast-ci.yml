@@ -166,6 +166,7 @@ jobs:
         shell: bash
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+          VERA_CI_PRIVATE_NETNS: "1"
         run: |
           set -euo pipefail
           bash scripts/run_offline_pytest_firewalled.sh tests/test_human_eval.py tests/test_human_eval_submission_preflight.py tests/test_human_eval_packet_capture_bounds.py tests/test_human_eval_packet_record_boundaries.py tests/test_human_eval_packet_source_numeric_integrity.py tests/test_human_eval_packet_verification.py tests/test_human_eval_packet_window_custody.py tests/test_human_eval_annotator_bundle_contract.py tests/test_human_eval_annotator_export_capture_bounds.py tests/test_human_eval_annotator_export.py tests/test_human_eval_counterbalanced_handoff.py tests/test_human_eval_counterbalanced_submission_pair.py tests/test_human_eval_counterbalanced_freeze_link.py tests/test_human_eval_automated_run_lineage.py tests/test_human_eval_automated_handoff.py tests/test_human_eval_archive_readiness.py tests/test_human_eval_expected_recovery_paths.py tests/test_historical_archive_candidate_triage.py tests/test_historical_archive_triage_receipt_replay.py tests/test_historical_archive_triage_receipt_schema_preflight.py tests/test_recovered_artifact_zip_preflight.py tests/test_human_eval_packet_fast_ci_workflow.py | tee "$RUNNER_TEMP/vera-human-packet-tests.log"

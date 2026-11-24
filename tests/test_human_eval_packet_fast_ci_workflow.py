@@ -97,6 +97,7 @@ def test_packet_lane_is_narrow_pinned_and_offline():
         assert path in compile_step["run"]
     test = next(s for s in steps if s["name"] == "Run firewalled blinded-packet regressions")
     assert test["env"]["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+    assert test["env"]["VERA_CI_PRIVATE_NETNS"] == "1"
     assert test["run"].strip().splitlines() == ["set -euo pipefail", SCOPE]
     for event in ("push", "pull_request"):
         paths = workflow["on"][event]["paths"]

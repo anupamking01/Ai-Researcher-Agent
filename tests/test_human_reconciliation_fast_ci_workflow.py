@@ -84,6 +84,7 @@ def test_reconciliation_lane_covers_readiness_producer_and_independent_verifier(
 
     command = next(s for s in steps if s["name"] == "Run firewalled reconciliation regressions")
     assert command["env"]["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+    assert command["env"]["VERA_CI_PRIVATE_NETNS"] == "1"
     assert command["run"].strip().splitlines() == [
         "set -euo pipefail",
         'bash scripts/run_offline_pytest_firewalled.sh '

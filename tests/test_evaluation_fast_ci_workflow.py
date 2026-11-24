@@ -128,6 +128,7 @@ def test_fast_diagnostic_ci_bootstraps_only_pinned_minimal_dependencies():
         if s.get("name") == "Run firewalled diagnostic evaluation regressions"
     )
     assert run["env"]["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+    assert run["env"]["VERA_CI_PRIVATE_NETNS"] == "1"
 
 
 def test_dependency_free_gate_runs_before_pip_and_retains_partial_test_evidence():
