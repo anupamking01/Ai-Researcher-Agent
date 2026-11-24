@@ -181,3 +181,30 @@ printed 364 passing tests before reporting operation cancellation; this is not a
 successful shard or proof of the cancellation cause. The metadata dependency
 check neither authenticates the provider response nor verifies retained bytes,
 scientific provenance, or human validation.
+
+
+## Cancellation progress, not cancellation cause
+
+For cancelled shards only, the receipt now includes
+`cancelled_shard_progress`, sorted by shard index. It reports the last
+contiguous mandatory step marked completed/success, the first mandatory step
+without that confirmation and its reported conclusion (null if absent or not
+settled), and the list of mandatory steps explicitly marked cancelled.
+Cleanup and failure-only diagnostic uploads do not advance the mandatory
+progress boundary. A missing, malformed or out-of-order step inventory yields
+`step_inventory_usable: false` with no progress claim; the job remains
+cancelled. A gap in a partial inventory is never bridged by later green steps.
+Even when all mandatory steps are reported successful, a cancelled job cannot
+count toward full-suite certification.
+
+This is an operational triage aid to locate missing evidence and prioritize
+log inspection; neither a first unconfirmed step nor a reported cancelled
+step identifies the cancellation cause or independently establishes artifact
+retention. For example, [run 45327092483](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45327092483)
+reported six successful shards, ten cancelled shards and skipped replay.
+Nine cancelled shard inventories explicitly marked `Run offline unit tests`
+cancelled; shard 0 last reported success at `Verify installed CI dependencies
+before tests`, with no explicit cancelled mandatory step. These observations
+are not proof that pytest or dependency installation caused the cancellations.
+No scientific outcomes, original evidence authentication, or human-validation
+claims change.

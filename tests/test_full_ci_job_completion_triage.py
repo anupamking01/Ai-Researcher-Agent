@@ -998,3 +998,77 @@ def test_successful_replay_with_cancelled_dependency_emits_no_cli_receipt(tmp_pa
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "successful full-set replay contradicts" in captured.err
+
+
+def test_cancelled_progress_distinguishes_test_cancellation_from_unreported_boundary():
+    payload = _inventory({2: "cancelled", 0: "cancelled"}, replay="skipped")
+    for shard, boundary, conclusion in (
+        (2, "Run offline unit tests", "cancelled"),
+        (0, "Compile research code", None),
+    ):
+        steps = payload["jobs"][shard]["steps"]
+        index = SHARD_STEPS.index(boundary)
+        steps[index].update(status="completed" if conclusion else "queued", conclusion=conclusion)
+        for step in steps[index + 1:]:
+            step.update(status="completed", conclusion="skipped")
+        steps.append({"name": "Retain unverified diagnostics on CI failure or cancellation (90 days)",
+                      "number": 99, "status": "completed", "conclusion": "success"})
+    result = _audit(payload)
+    assert result["full_job_gate_completed"] is False
+    assert result["cancelled_shard_progress"] == [
+        {"shard": 0, "step_inventory_usable": True,
+         "last_contiguous_successful_step": "Verify installed CI dependencies before tests",
+         "first_unconfirmed_step": "Compile research code",
+         "first_unconfirmed_step_conclusion": None,
+         "reported_cancelled_required_steps": []},
+        {"shard": 2, "step_inventory_usable": True,
+         "last_contiguous_successful_step": "Verify exact source checkout before tests",
+         "first_unconfirmed_step": "Run offline unit tests",
+         "first_unconfirmed_step_conclusion": "cancelled",
+         "reported_cancelled_required_steps": ["Run offline unit tests"]},
+    ]
+
+
+def test_cancelled_progress_does_not_bridge_missing_required_step():
+    payload = _inventory({5: "cancelled"}, replay="skipped")
+    payload["jobs"][5]["steps"].pop(SHARD_STEPS.index("Run offline unit tests"))
+    progress = _audit(payload)["cancelled_shard_progress"][0]
+    assert progress["last_contiguous_successful_step"] == "Verify exact source checkout before tests"
+    assert progress["first_unconfirmed_step"] == "Run offline unit tests"
+    assert progress["first_unconfirmed_step_conclusion"] is None
+
+
+def test_cancelled_progress_all_steps_reported_success_does_not_promote_job():
+    result = _audit(_inventory({4: "cancelled"}, replay="skipped"))
+    progress = result["cancelled_shard_progress"][0]
+    assert progress["last_contiguous_successful_step"] == SHARD_STEPS[-1]
+    assert progress["first_unconfirmed_step"] is None
+    assert 4 not in result["successful_shards"]
+    assert result["full_job_gate_completed"] is False
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda job: job.pop("steps"),
+    lambda job: job.update(steps=[]),
+    lambda job: job["steps"].append(dict(job["steps"][0])),
+    lambda job: job["steps"][0].pop("number"),
+    lambda job: job["steps"][0].update(conclusion=[]),
+    lambda job: job["steps"][0].update(status="completed", conclusion=None),
+    lambda job: job["steps"][0].pop("conclusion"),
+    lambda job: job["steps"][0].update(name=SHARD_STEPS[-1]) or job["steps"].pop(),
+])
+def test_unusable_cancelled_step_inventory_does_not_invent_progress(mutation):
+    payload = _inventory({9: "cancelled"}, replay="skipped")
+    mutation(payload["jobs"][9])
+    result = _audit(payload)
+    assert result["cancelled_shards"] == [9]
+    assert result["cancelled_shard_progress"] == [
+        {"shard": 9, "step_inventory_usable": False,
+         "last_contiguous_successful_step": None, "first_unconfirmed_step": None,
+         "first_unconfirmed_step_conclusion": None, "reported_cancelled_required_steps": []}
+    ]
+    assert result["full_job_gate_completed"] is False
+
+
+def test_successful_inventory_has_no_cancelled_progress():
+    assert _audit(_inventory())["cancelled_shard_progress"] == []

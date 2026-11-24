@@ -256,6 +256,74 @@ def _require_step_windows(job: dict, job_window: tuple[datetime, datetime]) -> N
         previous_end = end
 
 
+def _cancelled_shard_progress(job: dict) -> dict:
+    """Summarize reported mandatory-step progress, never infer cancellation cause.
+
+    Cancelled jobs may have partial or missing step inventories. Malformed
+    inventories remain classifiable as cancelled but yield no progress claim.
+    Cleanup and diagnostic uploads are not mandatory execution progress.
+    """
+    unavailable = {
+        "step_inventory_usable": False,
+        "last_contiguous_successful_step": None,
+        "first_unconfirmed_step": None,
+        "first_unconfirmed_step_conclusion": None,
+        "reported_cancelled_required_steps": [],
+    }
+    steps = job.get("steps")
+    if not isinstance(steps, list) or not steps:
+        return unavailable
+    seen: dict[str, dict] = {}
+    last_number = 0
+    required_positions = []
+    for step in steps:
+        if not isinstance(step, dict):
+            return unavailable
+        label, number = step.get("name"), step.get("number")
+        if (not isinstance(label, str) or not label or label in seen
+                or type(number) is not int or number <= last_number):
+            return unavailable
+        last_number = number
+        seen[label] = step
+        if label in REQUIRED_SHARD_STEPS:
+            required_positions.append(REQUIRED_SHARD_STEPS.index(label))
+            conclusion, status = step.get("conclusion"), step.get("status")
+            if "conclusion" not in step or not isinstance(status, str):
+                return unavailable
+            if conclusion is not None and (
+                not isinstance(conclusion, str) or conclusion not in {
+                    "success", "failure", "cancelled", "skipped", "timed_out",
+                    "action_required", "neutral",
+                }
+            ):
+                return unavailable
+            if status not in {"queued", "in_progress", "completed", "waiting", "pending"}:
+                return unavailable
+            if (status == "completed") != (conclusion is not None):
+                return unavailable
+    if not required_positions or required_positions != sorted(required_positions):
+        return unavailable
+
+    last_success = first_unconfirmed = first_conclusion = None
+    for label in REQUIRED_SHARD_STEPS:
+        step = seen.get(label)
+        if step is None or step["conclusion"] != "success":
+            first_unconfirmed = label
+            first_conclusion = step["conclusion"] if step is not None else None
+            break
+        last_success = label
+    return {
+        "step_inventory_usable": True,
+        "last_contiguous_successful_step": last_success,
+        "first_unconfirmed_step": first_unconfirmed,
+        "first_unconfirmed_step_conclusion": first_conclusion,
+        "reported_cancelled_required_steps": [
+            label for label in REQUIRED_SHARD_STEPS
+            if label in seen and seen[label]["conclusion"] == "cancelled"
+        ],
+    }
+
+
 def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> dict:
     """Classify exact-run jobs without upgrading partial pytest to verified CI."""
     run_id = _positive_int(run_id, "run_id")
@@ -270,6 +338,7 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
     seen_names: set[str] = set()
     seen_ids: set[int] = set()
     shard_conclusions: dict[int, str] = {}
+    cancelled_progress: dict[int, dict] = {}
     replay_conclusion: str | None = None
     jobs_run_url: str | None = None
     for job in jobs:
@@ -329,6 +398,8 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
                     job, required=REQUIRED_SHARD_STEPS, auxiliary=SHARD_AUXILIARY_STEPS
                 )
             shard_conclusions[index] = conclusion or "in_progress"
+            if conclusion == "cancelled":
+                cancelled_progress[index] = _cancelled_shard_progress(job)
     if REPLAY_JOB not in seen_names:
         raise ValueError("missing full-set replay job metadata")
     passed = sorted(i for i, value in shard_conclusions.items() if value == "success")
@@ -371,6 +442,9 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
         "successful_shards": passed,
         "failed_shards": failed,
         "cancelled_shards": cancelled,
+        "cancelled_shard_progress": [
+            {"shard": index, **cancelled_progress[index]} for index in cancelled
+        ],
         "pending_shards": pending,
         "other_incomplete_shards": other,
         "missing_shards": missing,
