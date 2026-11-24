@@ -8,6 +8,7 @@ import pytest
 from logic.search_provenance import (
     MAX_SEARCH_CANDIDATES,
     MAX_SEARCH_JSON_NUMBER_TOKEN_CHARS,
+    MAX_SEARCH_JSON_NESTING_DEPTH,
     MAX_SEARCH_RESULTS_JSON_BYTES,
     parse_search_candidates,
     selected_search_sources,
@@ -199,6 +200,54 @@ def test_pathologically_nested_provider_json_fails_as_validation_not_recursion_c
     raw = "[" * 1300 + "0" + "]" * 1300
     with pytest.raises(ValueError, match="valid bounded JSON text"):
         parse_search_candidates(raw)
+
+
+@pytest.mark.parametrize("container_kind", ["array", "object", "mixed"])
+def test_search_json_explicit_nesting_ceiling(container_kind, monkeypatch):
+    # The root array and candidate object already consume two levels.
+    def nested_metadata(levels):
+        raw = "0"
+        for i in range(levels):
+            if container_kind == "array" or (container_kind == "mixed" and i % 2):
+                raw = "[" + raw + "]"
+            else:
+                raw = '{"value":' + raw + "}"
+        return '[{"href":"https://example.org/","metadata":' + raw + "}]"
+
+    exact = nested_metadata(MAX_SEARCH_JSON_NESTING_DEPTH - 2)
+    assert parse_search_candidates(exact) == [
+        {"url": "https://example.org/", "backend_pool": None}
+    ]
+
+    def unexpected_decode(*args, **kwargs):
+        pytest.fail("over-depth JSON must be rejected before decoding")
+
+    monkeypatch.setattr(json, "loads", unexpected_decode)
+    with pytest.raises(ValueError, match="nesting depth limit"):
+        parse_search_candidates(nested_metadata(MAX_SEARCH_JSON_NESTING_DEPTH - 1))
+
+
+def test_search_json_nesting_ignores_delimiters_and_escapes_in_strings():
+    # Escaped quotes, runs of backslashes, and bracket-like characters in
+    # metadata must not consume container depth or alter candidate custody.
+    metadata = ('[{"\\' + '\\\\"' + '}]') * (MAX_SEARCH_JSON_NESTING_DEPTH + 1)
+    raw = json.dumps([
+        {"href": "https://example.org/a", "title": metadata},
+        {"href": "https://example.org/a", "_search_backend_pool": "pool-b"},
+    ])
+    assert parse_search_candidates(raw) == [
+        {"url": "https://example.org/a", "backend_pool": None},
+        {"url": "https://example.org/a", "backend_pool": "pool-b"},
+    ]
+
+
+def test_search_json_nesting_releases_depth_between_siblings():
+    raw = json.dumps([
+        {"href": "https://example.org/", "metadata": [[0]] * 200},
+    ])
+    assert parse_search_candidates(raw) == [
+        {"url": "https://example.org/", "backend_pool": None}
+    ]
 
 
 def test_search_request_candidate_ceiling_is_lossless_at_boundary():

@@ -80,9 +80,11 @@ resource/number bounds **before candidate selection**: at most
 query, and at most `128` characters per JSON numeric token. A finite
 JSON floating-point value is required, including for otherwise ignored
 metadata (a JSON exponent that overflows to infinity is not silently
-accepted). Deeply nested input produces a bounded validation failure rather
-than propagating an uncaught Python recursion error; unencodable text is
-rejected before JSON parsing.
+accepted). A fixed **128-container nesting ceiling** (including the root)
+is checked lexically before decoding, independently of Python's recursion
+limit; brackets and escaped quotes inside strings do not count toward depth.
+The JSON decoder still validates syntax and recursion errors are translated
+into bounded validation failures. Unencodable text is rejected before parsing.
 
 These ceilings substantially exceed the frozen metasearch adapter's
 four-result-per-query contract. Within the limits, original candidate URL
@@ -94,8 +96,9 @@ provider execution time, a DNS/redirect security policy, or a verification
 of historical evidence.
 
 Offline regression tests cover both ASCII and multibyte UTF-8 wire sizes,
-candidate ceilings, abnormal JSON exponent/number tokens, recursive JSON
-nesting and valid finite metadata. No live search, treatment, evaluator or
+candidate ceilings, abnormal JSON exponent/number tokens, exact array/object/
+mixed nesting boundaries, escaped string delimiters, sibling depth release,
+pre-decode over-depth rejection and valid finite metadata. No live search, treatment, evaluator or
 human rating was generated; the five-task pilot remains diagnostic, frozen
 automated comparisons retain their post-collection and fixed-order caveats,
 retrospective sensitivity remains exploratory, and genuine human validation

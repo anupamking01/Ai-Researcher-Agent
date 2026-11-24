@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 MAX_SEARCH_RESULTS_JSON_BYTES = 1024 * 1024
 MAX_SEARCH_CANDIDATES = 128
 MAX_SEARCH_JSON_NUMBER_TOKEN_CHARS = 128
+MAX_SEARCH_JSON_NESTING_DEPTH = 128
 
 
 _AMBIGUOUS_NUMERIC_HOST = re.compile(
@@ -97,6 +98,37 @@ def _bounded_json_float(token: str) -> float:
     return value
 
 
+def _require_bounded_json_nesting(raw: str) -> None:
+    """Enforce an input-depth ceiling independent of the Python stack limit.
+
+    Count JSON containers, including the root, only outside quoted strings.
+    This is a linear lexical guard; json.loads still validates JSON syntax.
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    for char in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char in "[{":
+            depth += 1
+            if depth > MAX_SEARCH_JSON_NESTING_DEPTH:
+                raise ValueError(
+                    "Search results must be valid bounded JSON text: nesting depth limit"
+                )
+        elif char in "]}":
+            depth -= 1
+            if depth < 0:
+                raise ValueError("Search results must be valid bounded JSON text")
+
+
 def parse_search_candidates(
     raw: str, *, expected_limit: int | None = None
 ) -> list[dict[str, str | None]]:
@@ -126,6 +158,7 @@ def parse_search_candidates(
         raise ValueError("Search results must be valid UTF-8 JSON text") from exc
     if byte_count > MAX_SEARCH_RESULTS_JSON_BYTES:
         raise ValueError("Search results exceed the JSON byte limit")
+    _require_bounded_json_nesting(raw)
     try:
         results = json.loads(
             raw,
