@@ -24,6 +24,7 @@ TESTS = (
     "tests/test_full_ci_shard_selection.py",
     "tests/test_full_ci_shard_set_verification.py",
     "tests/test_full_ci_shard_set_ci_workflow.py",
+    "tests/test_offline_ci_network_firewall.py",
 )
 AUDITOR = "scripts/audit_full_ci_job_completion.py"
 REPLAY_DEPENDENCIES = (
@@ -34,6 +35,8 @@ REPLAY_DEPENDENCIES = (
     "tests/test_evaluation_stdlib_gate.py",
     "tests/conftest.py",
     "docs/FULL_OFFLINE_CI_SHARD_SET_REPLAY.md",
+    ".github/workflows/live-pilot.yml",
+    ".github/workflows/live-app-smoke.yml",
 )
 
 
@@ -83,7 +86,7 @@ def test_completion_auditor_fast_lane_is_pinned_offline_and_source_triggered():
         "set -euo pipefail",
         "bash scripts/run_offline_pytest_firewalled.sh "
         + " ".join(TESTS)
-        + ' 2>&1 | tee "$RUNNER_TEMP/vera-ci-completion-tests.log"',
+        + ' | tee "$RUNNER_TEMP/vera-ci-completion-tests.log"',
     ]
 
 

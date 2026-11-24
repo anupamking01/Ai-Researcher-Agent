@@ -136,7 +136,9 @@ cleanup() {
   fi
   exit "$status"
 }
-trap cleanup EXIT
+# Keep teardown diagnostics on the wrapper's stderr; receipt-bearing CI
+# captures the pytest transcript on stdout, but still gates on this exit status.
+trap 'cleanup >&2' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -213,4 +215,4 @@ echo "Offline pytest egress isolation active (IPv4 + IPv6; loopback allowed; pol
 # one passing test while a class/function silently fails pytest discovery.
 # Treat those specific warnings as errors without promoting unrelated benign
 # warnings to test failures. Preserve explicit selected modules and other flags.
-python -m pytest -vv --durations=10 --strict-markers --strict-config -W error::pytest.PytestCollectionWarning "$@"
+python -m pytest -vv --durations=10 --strict-markers --strict-config -W error::pytest.PytestCollectionWarning "$@" 2>&1

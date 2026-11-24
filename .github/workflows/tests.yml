@@ -118,7 +118,7 @@ jobs:
           (( ${#test_modules[@]} > 0 ))
           printf 'VERA full-suite shard %s/16; selected %s modules; checkout %s\n' "$VERA_SHARD" "${#test_modules[@]}" "$GITHUB_SHA" | tee "$RUNNER_TEMP/vera-offline-tests.log"
           cat "$RUNNER_TEMP/vera-offline-test-modules.txt" | tee -a "$RUNNER_TEMP/vera-offline-tests.log"
-          bash scripts/run_offline_pytest_firewalled.sh "${test_modules[@]}" 2>&1 | tee -a "$RUNNER_TEMP/vera-offline-tests.log"
+          bash scripts/run_offline_pytest_firewalled.sh "${test_modules[@]}" | tee -a "$RUNNER_TEMP/vera-offline-tests.log"
 
       - name: Verify exact source checkout after tests
         run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests

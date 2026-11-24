@@ -40,7 +40,7 @@ def test_offline_ci_uses_only_firewalled_pytest_entrypoint():
     assert any('mapfile -t test_modules' in line for line in run)
     assert run[-1] == (
         'bash scripts/run_offline_pytest_firewalled.sh "${test_modules[@]}" '
-        '2>&1 | tee -a "$RUNNER_TEMP/vera-offline-tests.log"'
+        '| tee -a "$RUNNER_TEMP/vera-offline-tests.log"'
     )
     assert sum("scripts/run_offline_pytest_firewalled.sh" in line for line in run) == 1
     assert not any("python -m pytest" in line for line in run)
@@ -299,21 +299,32 @@ def test_firewalled_pytest_disables_ambient_plugins(
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux-only firewall wrapper")
 @pytest.mark.parametrize("drift", [
     "v4_missing_reject", "v6_missing_reject",
-    "v4_shadowed_output", "v6_shadowed_output",
+    "v4_shadowed_output", "v6_shadowed_output", "", "cleanup_failure",
 ])
-def test_successful_pytest_cannot_certify_post_run_firewall_drift(
+def test_pytest_transcript_separates_teardown_without_masking_failures(
     tmp_path: Path, drift: str,
 ):
-    """A clean pytest summary is not a PASS if its firewall was altered."""
+    """Receipt stdout stays complete, but teardown drift/failure still fails pipefail."""
     fake = tmp_path / "fake-bin"
     fake.mkdir()
     scripts = {
-        "sudo": '#!/bin/sh\n[ "$1" = "-n" ] || exit 80\nshift\nexec "$@"\n',
+        "sudo": (
+            '#!/bin/sh\n[ "$1" = "-n" ] || exit 80\nshift\n'
+            'if [ -f "$VERA_FAKE_POST_POLICY_FILE" ]; then\n'
+            '  printf "sudo: synthetic hostname warning\\n" >&2\n'
+            '  if [ "$1" = iptables ] && [ "$4" = -D ]; then\n'
+            '    printf "synthetic teardown stdout\\n"\n'
+            '    [ "$VERA_FAKE_POST_PYTEST_POLICY" != cleanup_failure ] || exit 44\n'
+            '  fi\n'
+            'fi\nexec "$@"\n'
+        ),
         "iptables": _fake_iptables("v4"),
         "ip6tables": _fake_iptables("v6"),
         "python": (
             '#!/usr/bin/env bash\n'
             'printf "pytest %s\\n" "$*" >> "$VERA_FAKE_FIREWALL_LOG"\n'
+            'printf "pytest stderr probe\\n" >&2\n'
+            'printf "================ 1 passed in 0.01s ================\\n"\n'
             'printf "%s" "$VERA_FAKE_POST_PYTEST_POLICY" > "$VERA_FAKE_POST_POLICY_FILE"\n'
             'exit 0\n'
         ),
@@ -337,19 +348,31 @@ def test_successful_pytest_cannot_certify_post_run_firewall_drift(
         "VERA_FAKE_POLICY": "",
         "VERA_FAIL_V6_LINK": "0",
     })
+    transcript = tmp_path / "pytest.log"
     result = subprocess.run(
-        ["bash", str(WRAPPER)], cwd=ROOT, env=env,
+        ["bash", "-o", "pipefail", "-c", 'bash "$1" | tee "$2"',
+         "vera-stream-probe", str(WRAPPER), str(transcript)], cwd=ROOT, env=env,
         text=True, capture_output=True, timeout=15, check=False,
     )
-    assert result.returncode == 1, result.stderr
-    assert "offline test firewall policy changed before teardown" in result.stderr
+    assert result.returncode == (1 if drift else 0), result.stderr
+    assert transcript.read_text(encoding="utf-8") == result.stdout
+    assert "pytest stderr probe" in result.stdout
+    assert result.stdout.splitlines()[-1] == "================ 1 passed in 0.01s ================"
+    assert "sudo: synthetic hostname warning" in result.stderr
+    assert "synthetic teardown stdout" in result.stderr
+    assert "synthetic hostname warning" not in result.stdout
+    assert "synthetic teardown stdout" not in result.stdout
+    if drift == "cleanup_failure":
+        assert "offline test firewall cleanup failed" in result.stderr
+    elif drift:
+        assert "offline test firewall policy changed before teardown" in result.stderr
     commands = log.read_text(encoding="utf-8").splitlines()
     pytest_index = next(i for i, command in enumerate(commands)
                         if command.startswith("pytest -m pytest "))
     remove_index = next(i for i, command in enumerate(commands)
                         if command.startswith("v4 -w 5 -D OUTPUT "))
     assert pytest_index < remove_index
-    family = drift[:2]
+    family = drift[:2] if drift.startswith(("v4", "v6")) else "v4"
     assert any(
         command.startswith(f"{family} -w 5 -S ")
         for command in commands[pytest_index + 1:remove_index]
@@ -380,7 +403,7 @@ def test_verbose_pytest_progress_exposes_interrupted_test_context(tmp_path):
 def test_firewalled_pytest_requires_strict_collection_and_configuration():
     """The shared entrypoint must never certify unknown markers/config as green."""
     command = WRAPPER.read_text(encoding="utf-8").rstrip().splitlines()[-1]
-    assert command == 'python -m pytest -vv --durations=10 --strict-markers --strict-config -W error::pytest.PytestCollectionWarning "$@"'
+    assert command == 'python -m pytest -vv --durations=10 --strict-markers --strict-config -W error::pytest.PytestCollectionWarning "$@" 2>&1'
 
 
 @pytest.mark.parametrize(
@@ -557,7 +580,7 @@ def test_firewalled_runner_keeps_explicit_test_arguments_with_empty_pytest_env()
     """Existing wrapper contract keeps the call sites' explicit selection."""
     source = WRAPPER.read_text(encoding="utf-8")
     assert '[[ -n "${PYTEST_ADDOPTS:-}" || -n "${PYTEST_PLUGINS:-}" ]]' in source
-    assert 'python -m pytest -vv --durations=10 --strict-markers --strict-config -W error::pytest.PytestCollectionWarning "$@"' in source
+    assert 'python -m pytest -vv --durations=10 --strict-markers --strict-config -W error::pytest.PytestCollectionWarning "$@" 2>&1' in source
 
 def test_collection_warning_fails_offline_validation_even_with_a_passing_test(tmp_path):
     """One passing test must not conceal another silently uncollected test class."""
@@ -596,5 +619,5 @@ def test_shared_offline_runner_fails_on_pytest_collection_warnings():
     """The hardening must be present on the actual firewalled CI entrypoint."""
     assert WRAPPER.read_text(encoding="utf-8").rstrip().splitlines()[-1] == (
         'python -m pytest -vv --durations=10 --strict-markers --strict-config '
-        '-W error::pytest.PytestCollectionWarning "$@"'
+        '-W error::pytest.PytestCollectionWarning "$@" 2>&1'
     )

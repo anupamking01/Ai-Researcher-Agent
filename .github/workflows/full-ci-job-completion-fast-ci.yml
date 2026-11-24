@@ -15,6 +15,9 @@ on:
       - tests/test_full_ci_shard_selection.py
       - tests/test_full_ci_shard_set_verification.py
       - tests/test_full_ci_shard_set_ci_workflow.py
+      - tests/test_offline_ci_network_firewall.py
+      - .github/workflows/live-pilot.yml
+      - .github/workflows/live-app-smoke.yml
       - scripts/select_full_ci_shard.py
       - scripts/verify_full_ci_shard_set.py
       - scripts/verify_ci_early_gate_evidence.py
@@ -41,6 +44,9 @@ on:
       - tests/test_full_ci_shard_selection.py
       - tests/test_full_ci_shard_set_verification.py
       - tests/test_full_ci_shard_set_ci_workflow.py
+      - tests/test_offline_ci_network_firewall.py
+      - .github/workflows/live-pilot.yml
+      - .github/workflows/live-app-smoke.yml
       - scripts/select_full_ci_shard.py
       - scripts/verify_full_ci_shard_set.py
       - scripts/verify_ci_early_gate_evidence.py
@@ -106,6 +112,7 @@ jobs:
             tests/test_full_ci_shard_selection.py \
             tests/test_full_ci_shard_set_verification.py \
             tests/test_full_ci_shard_set_ci_workflow.py \
+            tests/test_offline_ci_network_firewall.py \
             scripts/select_full_ci_shard.py \
             scripts/verify_full_ci_shard_set.py \
             scripts/verify_ci_early_gate_evidence.py
@@ -120,7 +127,7 @@ jobs:
           VERA_CI_PRIVATE_NETNS: "1"
         run: |
           set -euo pipefail
-          bash scripts/run_offline_pytest_firewalled.sh tests/test_full_ci_job_completion_triage.py tests/test_full_ci_completion_fast_ci_workflow.py tests/test_full_ci_shard_selection.py tests/test_full_ci_shard_set_verification.py tests/test_full_ci_shard_set_ci_workflow.py 2>&1 | tee "$RUNNER_TEMP/vera-ci-completion-tests.log"
+          bash scripts/run_offline_pytest_firewalled.sh tests/test_full_ci_job_completion_triage.py tests/test_full_ci_completion_fast_ci_workflow.py tests/test_full_ci_shard_selection.py tests/test_full_ci_shard_set_verification.py tests/test_full_ci_shard_set_ci_workflow.py tests/test_offline_ci_network_firewall.py | tee "$RUNNER_TEMP/vera-ci-completion-tests.log"
 
       - name: Verify runtime and checkout after targeted tests
         run: |

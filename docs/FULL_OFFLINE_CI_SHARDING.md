@@ -379,3 +379,9 @@ No treatment, common evaluator or human rating is executed by this change.
 The diagnostic pilot, qualified post-collection designated-primary
 automated analysis, retrospective exploratory sensitivities and pending
 blinded human evaluation remain distinct.
+
+## Separate pytest transcript from wrapper diagnostics — 24 November 2026
+
+The first private-namespace [full-suite run 45415545594](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45415545594) completed ten shard jobs successfully, failed five at the evidence-binding step, and cancelled one. For example, [shard 4](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45415545594/job/138520631450) printed 303 passing tests followed by sudo hostname-resolution warnings during teardown. The receipt verifier correctly rejected the nonterminal pytest summary. This is a log-boundary conflict, not evidence that those jobs were certifiable or that the prior cancellation cause is proven.
+
+The two private-namespace receipt-bearing CI lanes now tee wrapper stdout only. The wrapper still merges **both pytest output streams** into the transcript, while all teardown output and other wrapper stderr remain visible in the GitHub job log rather than being appended to the receipt-bound pytest transcript. No lines are filtered, no synthetic success footer is generated, and the verifier's terminal-summary requirement is unchanged. Bash pipefail still prevents receipt binding on a nonzero wrapper exit, including failed post-pytest firewall checks or teardown. The archived transcript alone does not attest teardown success; require the successful job and source-bound replay as before. Legacy combined-stream callers are unchanged. The synthetic stream and failure regressions are included in the targeted lane. Full sixteen-shard replay remains required; no scientific results or human ratings are changed.
