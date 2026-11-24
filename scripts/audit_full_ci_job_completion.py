@@ -337,11 +337,17 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
     pending = sorted(i for i, value in shard_conclusions.items() if value == "in_progress")
     other = sorted(i for i, value in shard_conclusions.items() if value not in {"success", "failure", "timed_out", "action_required", "cancelled", "in_progress"})
     missing = sorted(set(range(EXPECTED_SHARDS)) - shard_conclusions.keys())
-    complete = (
-        len(passed) == EXPECTED_SHARDS
-        and not missing
-        and replay_conclusion == "success"
-    )
+    # The replay job has needs: unit-tests and no status override in
+    # tests.yml. A successful replay cannot coexist with missing, pending,
+    # or unsuccessful dependencies in this exact-attempt inventory.
+    # Reject contradictory metadata rather than issuing an incomplete
+    # receipt that nevertheless advertises successful aggregate replay.
+    if replay_conclusion == "success" and len(passed) != EXPECTED_SHARDS:
+        raise ValueError(
+            "successful full-set replay contradicts incomplete shard dependencies; "
+            "recapture the original attempt-specific jobs inventory"
+        )
+    complete = len(passed) == EXPECTED_SHARDS and replay_conclusion == "success"
     if complete:
         # Step-by-step green conclusions must not certify a replay that
         # started before all sixteen shard jobs had finished and uploaded.

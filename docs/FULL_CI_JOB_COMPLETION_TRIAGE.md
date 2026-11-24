@@ -161,3 +161,23 @@ retained run/checkout evidence, then follow
 The metadata auditor does not substitute a current PR merge SHA for a
 historical tested commit, infer a checkout from a branch name, or authenticate
 the actual source tree or archive. No scientific outcomes are changed.
+
+
+## Aggregate replay dependency consistency
+
+The `replay-complete-shard-set` job declares `needs: unit-tests` with no
+status override. A reported successful aggregate replay is therefore
+inconsistent with any missing, unfinished, cancelled or otherwise unsuccessful
+shard in the exact-attempt job inventory. Such a snapshot is invalid (exit 2,
+no receipt), not valid incomplete triage that can advertise a successful replay.
+Re-capture the original attempt-specific job inventory; never combine attempts
+or edit job conclusions. Skipped, cancelled or pending aggregate replay remains
+triageable as incomplete under the existing snapshot consistency checks.
+
+For comparison, [run 45320219010](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45320219010)
+reported eight successful shards, eight cancelled shards and skipped aggregate
+replay. Its [shard 6 log](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45320219010/job/138196686038)
+printed 364 passing tests before reporting operation cancellation; this is not a
+successful shard or proof of the cancellation cause. The metadata dependency
+check neither authenticates the provider response nor verifies retained bytes,
+scientific provenance, or human validation.

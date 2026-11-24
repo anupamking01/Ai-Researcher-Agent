@@ -142,7 +142,7 @@ def test_inconsistent_or_mixed_inventories_fail_closed(mutation, pattern):
 
 
 def test_missing_shard_classified_not_success():
-    payload = _inventory()
+    payload = _inventory(replay="skipped")
     payload["jobs"].pop(4)
     payload["total_count"] = len(payload["jobs"])
     result = _audit(payload)
@@ -969,3 +969,32 @@ def test_cli_rejects_ambiguous_head_arguments(tmp_path, capsys):
         ])
     assert exc.value.code == 2
     assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("shard_conclusion", [
+    None, "failure", "cancelled", "skipped", "timed_out", "action_required", "neutral",
+])
+def test_successful_replay_rejects_unsuccessful_dependency(shard_conclusion):
+    with pytest.raises(ValueError, match="successful full-set replay contradicts"):
+        _audit(_inventory({4: shard_conclusion}, replay="success"))
+
+
+def test_successful_replay_rejects_missing_dependency():
+    payload = _inventory()
+    payload["jobs"].pop(4)
+    payload["total_count"] -= 1
+    with pytest.raises(ValueError, match="successful full-set replay contradicts"):
+        _audit(payload)
+
+
+def test_successful_replay_with_cancelled_dependency_emits_no_cli_receipt(tmp_path, capsys):
+    jobs_path, run_path = tmp_path / "jobs.json", tmp_path / "run.json"
+    jobs_path.write_text(json.dumps(_inventory({4: "cancelled"})), encoding="utf-8")
+    run_path.write_text(json.dumps(_run_snapshot(conclusion="cancelled")), encoding="utf-8")
+    assert main([
+        "--jobs-json", str(jobs_path), "--run-json", str(run_path),
+        "--run-id", str(RUN), "--run-attempt", str(ATTEMPT), "--head-sha", SHA,
+    ]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "successful full-set replay contradicts" in captured.err
