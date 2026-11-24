@@ -96,3 +96,17 @@ artifact custody, or change any frozen scientific outcome. The original
 17-job inventory for [run 45289666532](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45289666532)
 contains the matching source labels for all jobs (five successful shards,
 eleven cancelled, replay skipped); it remains uncertified.
+
+
+## Malformed metadata field handling
+
+The CLI treats non-string job/workflow status, non-string non-null conclusions,
+and non-string workflow events as invalid input (exit 2), including JSON arrays,
+objects, numbers and booleans. Missing conclusion keys are not interchangeable
+with explicit JSON nulls for pending jobs or workflows. The shard names must use
+the exact canonical decimal labels from the declared matrix (0 through 15,
+without leading zeros); aliases such as `unit-tests (00)` are invalid rather than
+being converted into an index that later fails during replay chronology checks.
+Malformed input produces a controlled diagnostic and no receipt, not an
+uncaught exception or a valid incomplete classification. These are offline
+schema checks, not evidence that the provider snapshot is authentic.

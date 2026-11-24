@@ -810,3 +810,53 @@ def test_valid_incomplete_receipt_preserves_repository_run_identity():
     )
     assert audit["jobs_run_url"] == RUN_URL
     assert audit["full_workflow_job_gate_completed"] is False
+
+
+@pytest.mark.parametrize("scope,field", [
+    ("jobs", "status"),
+    ("jobs", "conclusion"),
+    ("run", "event"),
+    ("run", "status"),
+    ("run", "conclusion"),
+])
+@pytest.mark.parametrize("value", [[], {}, True, 1])
+def test_cli_rejects_nonstring_metadata_enums_without_traceback(
+    tmp_path, capsys, scope, field, value
+):
+    jobs, run = _inventory(), _run_snapshot()
+    target = jobs["jobs"][0] if scope == "jobs" else run
+    target[field] = value
+    jobs_path, run_path = tmp_path / "jobs.json", tmp_path / "run.json"
+    jobs_path.write_text(json.dumps(jobs), encoding="utf-8")
+    run_path.write_text(json.dumps(run), encoding="utf-8")
+    assert main([
+        "--jobs-json", str(jobs_path), "--run-json", str(run_path),
+        "--run-id", str(RUN), "--run-attempt", str(ATTEMPT), "--commit", SHA,
+    ]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "CI job completion audit invalid:" in captured.err
+    assert "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize("scope", ["jobs", "run"])
+def test_missing_conclusion_is_not_an_explicit_pending_verdict(scope):
+    jobs = _inventory({0: None}, replay=None)
+    run = _run_snapshot(status="in_progress", conclusion=None)
+    assert audit_run_envelope(
+        run, _audit(jobs), run_id=RUN, run_attempt=ATTEMPT, commit=SHA,
+    )["full_workflow_job_gate_completed"] is False
+    target = jobs["jobs"][0] if scope == "jobs" else run
+    target.pop("conclusion")
+    with pytest.raises(ValueError, match="missing .* conclusion field"):
+        audit_run_envelope(
+            run, _audit(jobs), run_id=RUN, run_attempt=ATTEMPT, commit=SHA,
+        )
+
+
+@pytest.mark.parametrize("label", ["unit-tests (00)", "unit-tests (01)", "unit-tests (000000)"])
+def test_noncanonical_shard_labels_fail_closed_instead_of_aliasing_indices(label):
+    jobs = _inventory()
+    jobs["jobs"][int(label.removeprefix("unit-tests (").removesuffix(")"))]["name"] = label
+    with pytest.raises(ValueError, match="unexpected CI job"):
+        _audit(jobs)

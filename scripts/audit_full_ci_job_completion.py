@@ -21,7 +21,7 @@ MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_JSON_DEPTH = 32
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 UTC_JOB_TIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
-SHARD_RE = re.compile(r"unit-tests \(([0-9]+)\)\Z")
+SHARD_RE = re.compile(r"unit-tests \((0|[1-9][0-9]?)\)\Z")
 REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 RUN_URL_RE = re.compile(
     r"https://api\.github\.com/repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/actions/runs/([1-9][0-9]*)\Z"
@@ -295,12 +295,15 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
         if jobs_run_url is not None and run_url != jobs_run_url:
             raise ValueError(f"{name}: mixed repository run URLs")
         jobs_run_url = run_url
-        if job.get("status") not in {"queued", "in_progress", "completed", "waiting", "pending"}:
+        status = job.get("status")
+        if not isinstance(status, str) or status not in {"queued", "in_progress", "completed", "waiting", "pending"}:
             raise ValueError(f"{name}: unsupported GitHub Actions job status")
-        conclusion = job.get("conclusion")
-        if conclusion is not None and conclusion not in {
+        if "conclusion" not in job:
+            raise ValueError(f"{name}: missing job conclusion field")
+        conclusion = job["conclusion"]
+        if conclusion is not None and (not isinstance(conclusion, str) or conclusion not in {
             "success", "failure", "cancelled", "skipped", "timed_out", "action_required", "neutral"
-        }:
+        }):
             raise ValueError(f"{name}: unsupported job conclusion")
         if job["status"] == "completed" and conclusion is None:
             raise ValueError(f"{name}: completed job without conclusion")
@@ -399,16 +402,19 @@ def audit_run_envelope(
         run_id, run_attempt, commit
     ):
         raise ValueError("job audit and workflow run identities disagree")
-    if run.get("event") not in {"pull_request", "push", "workflow_dispatch"}:
+    event = run.get("event")
+    if not isinstance(event, str) or event not in {"pull_request", "push", "workflow_dispatch"}:
         raise ValueError("unexpected workflow trigger")
     status = run.get("status")
-    conclusion = run.get("conclusion")
-    if status not in {"requested", "waiting", "queued", "pending", "in_progress", "completed"}:
+    if "conclusion" not in run:
+        raise ValueError("missing workflow conclusion field")
+    conclusion = run["conclusion"]
+    if not isinstance(status, str) or status not in {"requested", "waiting", "queued", "pending", "in_progress", "completed"}:
         raise ValueError("unsupported workflow status")
-    if conclusion is not None and conclusion not in {
+    if conclusion is not None and (not isinstance(conclusion, str) or conclusion not in {
         "success", "failure", "cancelled", "skipped", "timed_out",
         "action_required", "neutral", "startup_failure", "stale",
-    }:
+    }):
         raise ValueError("unsupported workflow conclusion")
     if (status == "completed") != (conclusion is not None):
         raise ValueError("inconsistent workflow status and conclusion")
