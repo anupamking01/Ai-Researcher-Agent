@@ -12,7 +12,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import stat
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -146,7 +148,20 @@ def _require_json_container_depth(raw: bytes) -> None:
 
 def _load_metadata_snapshot(path: Path) -> tuple[dict, str]:
     """Parse and fingerprint the same bounded raw bytes, without reopening the input."""
-    with Path(path).open("rb") as stream:
+    path = Path(path)
+    # Reject special files before opening them, then validate the opened
+    # descriptor too. Nonblocking open prevents a FIFO substituted between
+    # lstat and open from hanging the offline auditor.
+    expected = path.lstat()
+    if not stat.S_ISREG(expected.st_mode):
+        raise ValueError("metadata snapshot must be a regular file (not a symlink)")
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    with os.fdopen(os.open(path, flags), "rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if not stat.S_ISREG(opened.st_mode):
+            raise ValueError("metadata snapshot must be a regular file")
+        if (expected.st_dev, expected.st_ino) != (opened.st_dev, opened.st_ino):
+            raise ValueError("metadata snapshot replaced before capture")
         raw = stream.read(MAX_JSON_BYTES + 1)
     if len(raw) > MAX_JSON_BYTES:
         raise ValueError("jobs JSON exceeds two-megabyte limit")

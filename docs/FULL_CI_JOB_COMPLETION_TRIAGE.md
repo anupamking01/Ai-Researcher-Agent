@@ -226,3 +226,19 @@ had consistent mandatory-step timestamps in the attempt-specific REST
 metadata at inspection. Ten shards were cancelled and replay was skipped;
 this is not full-suite certification or independent evidence authentication.
 No treatments, evaluators, frozen outcomes or human ratings are changed.
+
+
+## Nonregular metadata snapshot inputs — 24 November 2026
+
+Both JSON inputs must be regular files, not directories, symlink leaves or
+named pipes. A byte limit alone does not bound a blocking FIFO open. The
+auditor now checks the pathname with lstat, opens nonblocking where supported
+(and without following a leaf symlink where supported), and verifies the
+opened descriptor's regular-file type and device/inode against the preflight
+identity before reading. Eight synthetic cases cover both input roles and
+replacement between preflight and open. An invalid input produces exit 2
+and no receipt. Use saved regular JSON files rather than process substitution
+or pipes. This is a local input safety check, not an atomic filesystem
+snapshot, a guarantee against concurrent in-place edits, or independent
+source authentication. The same parsed bytes remain SHA-256 fingerprinted.
+No scientific outcomes or human-validation claims are changed.

@@ -1,6 +1,8 @@
 """Synthetic offline CI job metadata; no GitHub, treatments or ratings."""
 import hashlib
 import json
+import os
+from pathlib import Path
 
 import pytest
 
@@ -1104,3 +1106,78 @@ def test_partial_inventory_cli_does_not_issue_receipt_for_invalid_green_shard(tm
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "missing or malformed started_at" in captured.err
+
+
+@pytest.mark.parametrize("which", ["jobs", "run"])
+@pytest.mark.parametrize("kind", ["directory", "symlink", "fifo"])
+def test_cli_rejects_nonregular_metadata_snapshot_without_receipt(tmp_path, capsys, monkeypatch, which, kind):
+    jobs_path, run_path = tmp_path / "jobs.json", tmp_path / "run.json"
+    jobs_path.write_text(json.dumps(_inventory()), encoding="utf-8")
+    run_path.write_text(json.dumps(_run_snapshot()), encoding="utf-8")
+    path = jobs_path if which == "jobs" else run_path
+    target = tmp_path / "original.json"
+    path.rename(target)
+    if kind == "directory":
+        path.mkdir()
+    elif kind == "symlink":
+        path.symlink_to(target)
+    else:
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("FIFO creation unavailable")
+        os.mkfifo(path)
+    # Fail promptly even if a regression tries to open a blocking FIFO.
+    original_path_open, original_os_open = Path.open, os.open
+
+    def guard_path_open(self, *args, **kwargs):
+        assert self != path, "nonregular snapshot opened before preflight"
+        return original_path_open(self, *args, **kwargs)
+
+    def guard_os_open(name, *args, **kwargs):
+        assert Path(name) != path, "nonregular snapshot opened before preflight"
+        return original_os_open(name, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", guard_path_open)
+        patch.setattr(os, "open", guard_os_open)
+        status = main([
+            "--jobs-json", str(jobs_path), "--run-json", str(run_path),
+            "--run-id", str(RUN), "--run-attempt", str(ATTEMPT), "--head-sha", SHA,
+        ])
+    assert status == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "regular file" in captured.err
+
+
+def test_metadata_open_detects_regular_file_replacement(tmp_path, monkeypatch):
+    path = tmp_path / "jobs.json"
+    path.write_text('{"jobs":[],"total_count":0}', encoding="utf-8")
+    replacement = tmp_path / "other.json"
+    replacement.write_text('{"jobs":[],"total_count":0}', encoding="utf-8")
+    original_open = os.open
+
+    def replace_then_open(name, flags, *args, **kwargs):
+        replacement.replace(path)
+        return original_open(name, flags, *args, **kwargs)
+
+    monkeypatch.setattr("scripts.audit_full_ci_job_completion.os.open", replace_then_open)
+    with pytest.raises(ValueError, match="replaced before capture"):
+        load_jobs_json(path)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo") or not hasattr(os, "O_NONBLOCK"),
+                    reason="nonblocking POSIX FIFO open unavailable")
+def test_metadata_open_rejects_fifo_substituted_after_preflight(tmp_path, monkeypatch):
+    path = tmp_path / "jobs.json"
+    path.write_text('{"jobs":[],"total_count":0}', encoding="utf-8")
+    original_open = os.open
+
+    def replace_then_open(name, flags, *args, **kwargs):
+        assert flags & os.O_NONBLOCK
+        path.unlink()
+        os.mkfifo(path)
+        return original_open(name, flags, *args, **kwargs)
+
+    monkeypatch.setattr("scripts.audit_full_ci_job_completion.os.open", replace_then_open)
+    with pytest.raises(ValueError, match="regular file"):
+        load_jobs_json(path)
