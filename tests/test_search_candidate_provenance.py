@@ -80,6 +80,29 @@ def test_rejects_invalid_present_pool_label(bad_pool):
         }]))
 
 
+@pytest.mark.parametrize("surrogate", ["\ud800", "\udfff"])
+def test_escaped_lone_surrogate_pool_fails_before_scheduling(surrogate):
+    # json.dumps escapes the surrogate, so the wire text itself is valid UTF-8.
+    raw = json.dumps([
+        {"href": "https://a.test/", "_search_backend_pool": "valid"},
+        {"href": "https://b.test/", "_search_backend_pool": "pool" + surrogate},
+    ])
+    raw.encode("utf-8")
+    with pytest.raises(ValueError, match="Search candidate 2.*backend pool label"):
+        parse_search_candidates(raw)
+
+
+def test_valid_supplementary_unicode_candidate_metadata_round_trips_utf8():
+    url = "https://example.org/\U0001f30d"
+    pool = "pool-\U0001f50e"
+    entries = parse_search_candidates(json.dumps([
+        {"href": url, "_search_backend_pool": pool},
+    ]))
+    assert entries == [{"url": url, "backend_pool": pool}]
+    retained = json.dumps(entries, ensure_ascii=False).encode("utf-8")
+    assert json.loads(retained) == entries
+
+
 @pytest.mark.parametrize("scheduled", [
     ["https://missing.test"], ["https://a.test", "https://a.test"],
 ])
@@ -350,6 +373,29 @@ def test_versioned_search_custody_rejects_consistent_local_root_dot_ledger(url):
     t["successful_urls"] = [url]
     # Every ledger agrees; rejection must come from URL admission itself.
     with pytest.raises(ValueError, match=r"external HTTP\(S\) href"):
+        validate_search_trace_provenance(t)
+
+
+@pytest.mark.parametrize("surrogate", ["\ud800", "\udfff"])
+@pytest.mark.parametrize("field", ["url", "backend_pool"])
+def test_consistent_trace_source_metadata_rejects_non_scalar_text(field, surrogate):
+    from logic.search_provenance import validate_search_trace_provenance
+    t = _search_custody_fixture()
+    record = t["search_records"][0]
+    if field == "url":
+        url = "https://example.org/" + surrogate
+        record["candidate_urls"] = [url, url]
+        record["scheduled_urls"] = [url]
+        t["scheduled_urls"] = [url]
+        t["successful_urls"] = [url]
+        for entry in record["candidate_sources"] + record["scheduled_sources"]:
+            entry["url"] = url
+    else:
+        for entry in (record["candidate_sources"][0], record["scheduled_sources"][0]):
+            entry["backend_pool"] = "pool-" + surrogate
+    # The candidate and scheduled ledgers agree, but cannot be retained as
+    # ordinary UTF-8 evidence. Reject them rather than normalizing the bytes.
+    with pytest.raises(ValueError, match="invalid source metadata"):
         validate_search_trace_provenance(t)
 
 

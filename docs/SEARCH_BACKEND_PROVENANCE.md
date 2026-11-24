@@ -384,3 +384,23 @@ was rerun; the five-task pilot remains diagnostic, frozen automated findings
 retain their post-collection planning, fixed-order and evaluator-policy caveats,
 retrospective sensitivity analyses remain exploratory, and genuine blinded
 human-validation results remain pending.
+
+## UTF-8 scalar text at the search evidence boundary (25 November 2026)
+
+A JSON escape can decode to an isolated UTF-16 surrogate even when the
+provider response itself encodes as UTF-8. The earlier admission guard
+rejected these in candidate hrefs but not in reported backend-pool labels.
+An otherwise admitted candidate could therefore be scheduled and later fail
+UTF-8 trace publication (the trace writer uses `ensure_ascii=False`). Marked
+trace validation also admitted non-scalar text in URL paths or pool labels.
+
+Candidate admission and marked source-ledger validation now share the same
+nonblank Unicode-scalar predicate for URL and non-null pool strings. Isolated
+high/low surrogates fail without filtering the batch, inventing a pool label,
+or repairing text. Valid supplementary Unicode characters, candidate order,
+duplicates, null legacy pool labels and accepted URL strings remain intact.
+This is prospective schema-input hardening, not independent evidence custody
+or a new experimental result; unmarked historical traces are not certified.
+The pilot remains diagnostic, designated-primary automated inference remains
+post-collection and qualified, retrospective sensitivities remain exploratory,
+and independent human validation remains pending.

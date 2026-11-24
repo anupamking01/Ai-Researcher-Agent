@@ -30,6 +30,15 @@ _AMBIGUOUS_NUMERIC_HOST = re.compile(
 )
 
 
+def _is_nonblank_scalar_text(value: object) -> bool:
+    """Text that can be persisted unchanged in the UTF-8 trace envelope."""
+    return (
+        type(value) is str
+        and bool(value.strip())
+        and not any(0xD800 <= ord(char) <= 0xDFFF for char in value)
+    )
+
+
 def _require_external_web_url(url: str, *, index: int) -> None:
     """Reject non-web and explicitly local URLs before source scheduling.
 
@@ -184,13 +193,11 @@ def parse_search_candidates(
         if type(item) is not dict:
             raise ValueError(f"Search candidate {index} must be a JSON object")
         url = item.get("href")
-        if type(url) is not str or not url.strip() or any(
-            0xD800 <= ord(char) <= 0xDFFF for char in url
-        ):
+        if not _is_nonblank_scalar_text(url):
             raise ValueError(f"Search candidate {index} must contain a text href")
         _require_external_web_url(url, index=index)
         pool = item.get("_search_backend_pool")
-        if pool is not None and (type(pool) is not str or not pool.strip()):
+        if pool is not None and not _is_nonblank_scalar_text(pool):
             raise ValueError(
                 f"Search candidate {index} has an invalid backend pool label"
             )
@@ -441,13 +448,10 @@ def validate_search_trace_provenance(
         for entry in cs + ss:
             if (
                 type(entry) is not dict
-                or type(entry.get("url")) is not str
-                or not entry["url"].strip()
+                or not _is_nonblank_scalar_text(entry.get("url"))
                 or "backend_pool" not in entry
-                or (entry["backend_pool"] is not None and (
-                    type(entry["backend_pool"]) is not str
-                    or not entry["backend_pool"].strip()
-                ))
+                or (entry["backend_pool"] is not None
+                    and not _is_nonblank_scalar_text(entry["backend_pool"]))
             ):
                 raise ValueError(f"search record {index} invalid source metadata")
             _require_external_web_url(entry["url"], index=index)
