@@ -22,6 +22,10 @@ MAX_JSON_DEPTH = 32
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 UTC_JOB_TIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 SHARD_RE = re.compile(r"unit-tests \(([0-9]+)\)\Z")
+REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+RUN_URL_RE = re.compile(
+    r"https://api\.github\.com/repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/actions/runs/([1-9][0-9]*)\Z"
+)
 
 
 # Require every unconditional step in the pinned offline tests.yml jobs.
@@ -265,6 +269,7 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
     seen_ids: set[int] = set()
     shard_conclusions: dict[int, str] = {}
     replay_conclusion: str | None = None
+    jobs_run_url: str | None = None
     for job in jobs:
         if not isinstance(job, dict):
             raise ValueError("malformed job entry")
@@ -276,10 +281,20 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
         if job_id in seen_ids:
             raise ValueError("duplicate GitHub Actions job ID")
         seen_ids.add(job_id)
-        if (job.get("run_id"), job.get("run_attempt"), job.get("head_sha")) != (
-            run_id, run_attempt, commit
-        ):
+        if (type(job.get("run_id")) is not int or type(job.get("run_attempt")) is not int
+                or (job.get("run_id"), job.get("run_attempt"), job.get("head_sha")) != (
+                    run_id, run_attempt, commit
+                )):
             raise ValueError(f"{name}: mixed run, attempt, or checkout SHA")
+        # The original jobs endpoint identifies its workflow and repository in
+        # every job, even cancelled jobs. Do not accept contradictory identities.
+        run_url = job.get("run_url")
+        match_url = RUN_URL_RE.fullmatch(run_url) if isinstance(run_url, str) else None
+        if job.get("workflow_name") != "tests" or match_url is None or match_url.group(2) != str(run_id):
+            raise ValueError(f"{name}: unexpected job workflow or run URL")
+        if jobs_run_url is not None and run_url != jobs_run_url:
+            raise ValueError(f"{name}: mixed repository run URLs")
+        jobs_run_url = run_url
         if job.get("status") not in {"queued", "in_progress", "completed", "waiting", "pending"}:
             raise ValueError(f"{name}: unsupported GitHub Actions job status")
         conclusion = job.get("conclusion")
@@ -337,6 +352,7 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
         "run_id": run_id,
         "run_attempt": run_attempt,
         "commit": commit,
+        "jobs_run_url": jobs_run_url,
         "source": "provided GitHub Actions jobs metadata; authenticity not independently attested",
         "successful_shards": passed,
         "failed_shards": failed,
@@ -370,6 +386,19 @@ def audit_run_envelope(
         raise ValueError("workflow run metadata has mixed ID, attempt, or checkout SHA")
     if run.get("name") != "tests" or run.get("path") != ".github/workflows/tests.yml":
         raise ValueError("unexpected workflow identity; expected tests.yml")
+    # Cross-check the job audit against the actual run envelope, not merely
+    # against caller-supplied IDs. This is metadata consistency, not authentication.
+    repository = run.get("repository")
+    full_name = repository.get("full_name") if isinstance(repository, dict) else None
+    if not isinstance(full_name, str) or not REPOSITORY_RE.fullmatch(full_name):
+        raise ValueError("workflow run metadata has invalid repository identity")
+    expected_url = f"https://api.github.com/repos/{full_name}/actions/runs/{run_id}"
+    if run.get("url") != expected_url or job_audit.get("jobs_run_url") != expected_url:
+        raise ValueError("job inventory and workflow run repository URLs disagree")
+    if (job_audit.get("run_id"), job_audit.get("run_attempt"), job_audit.get("commit")) != (
+        run_id, run_attempt, commit
+    ):
+        raise ValueError("job audit and workflow run identities disagree")
     if run.get("event") not in {"pull_request", "push", "workflow_dispatch"}:
         raise ValueError("unexpected workflow trigger")
     status = run.get("status")

@@ -9,6 +9,8 @@ from scripts.audit_full_ci_job_completion import audit_jobs, audit_run_envelope,
 SHA = "a" * 40
 RUN = 12345
 ATTEMPT = 2
+REPO = "example/vera"
+RUN_URL = f"https://api.github.com/repos/{REPO}/actions/runs/{RUN}"
 
 # Independent from implementation constants: tests fail if required step names
 # are silently removed from the auditor.
@@ -69,6 +71,7 @@ def _inventory(shard_overrides=None, replay="success"):
             "run_id": RUN,
             "run_attempt": ATTEMPT,
             "head_sha": SHA,
+            "workflow_name": "tests", "run_url": RUN_URL,
             "name": f"unit-tests ({shard})",
             "status": "completed" if conclusion else "in_progress",
             "conclusion": conclusion,
@@ -78,6 +81,7 @@ def _inventory(shard_overrides=None, replay="success"):
         })
     jobs.append({
         "id": 17, "run_id": RUN, "run_attempt": ATTEMPT,
+        "workflow_name": "tests", "run_url": RUN_URL,
         "head_sha": SHA, "name": "replay-complete-shard-set",
         "status": "completed" if replay else "in_progress",
         "conclusion": replay,
@@ -206,6 +210,7 @@ def _run_snapshot(status="completed", conclusion="success"):
     return {
         "id": RUN, "run_attempt": ATTEMPT, "head_sha": SHA,
         "name": "tests", "path": ".github/workflows/tests.yml",
+        "url": RUN_URL, "repository": {"full_name": REPO},
         "event": "pull_request", "status": status, "conclusion": conclusion,
     }
 
@@ -749,3 +754,59 @@ def test_cli_fingerprints_captured_jobs_even_if_path_changes_after_parsing(
     assert result["jobs_json_sha256"] == hashlib.sha256(original).hexdigest()
     assert result["jobs_json_sha256"] != hashlib.sha256(replacement).hexdigest()
     assert result["full_workflow_job_gate_completed"] is True
+
+
+@pytest.mark.parametrize("mutation,pattern", [
+    ({"workflow_name": "other"}, "unexpected job workflow"),
+    ({"run_url": RUN_URL + "0"}, "unexpected job workflow"),
+    ({"run_url": RUN_URL + "?page=1"}, "unexpected job workflow"),
+    ({"run_url": RUN_URL.replace(REPO, "other/vera")}, "mixed repository"),
+    ({"run_id": float(RUN)}, "mixed run"),
+    ({"run_attempt": float(ATTEMPT)}, "mixed run"),
+])
+def test_job_identity_contradictions_fail_closed_even_for_cancelled_job(mutation, pattern):
+    payload = _inventory({3: "cancelled"}, replay="skipped")
+    payload["jobs"][3].update(mutation)
+    with pytest.raises(ValueError, match=pattern):
+        _audit(payload)
+
+
+def test_uniform_wrong_repository_jobs_cannot_certify_matching_numeric_run():
+    payload = _inventory()
+    for job in payload["jobs"]:
+        job["run_url"] = RUN_URL.replace(REPO, "other/vera")
+    with pytest.raises(ValueError, match="repository URLs disagree"):
+        audit_run_envelope(
+            _run_snapshot(), _audit(payload),
+            run_id=RUN, run_attempt=ATTEMPT, commit=SHA,
+        )
+
+
+@pytest.mark.parametrize("mutation,pattern", [
+    ({"repository": None}, "invalid repository identity"),
+    ({"repository": {"full_name": "other/vera"}}, "repository URLs disagree"),
+    ({"url": RUN_URL + "0"}, "repository URLs disagree"),
+])
+def test_run_envelope_requires_consistent_repository_and_url(mutation, pattern):
+    run = _run_snapshot()
+    run.update(mutation)
+    with pytest.raises(ValueError, match=pattern):
+        audit_run_envelope(run, _audit(_inventory()), run_id=RUN, run_attempt=ATTEMPT, commit=SHA)
+
+
+def test_cross_endpoint_audit_rejects_reused_job_audit_from_another_commit():
+    audit = _audit(_inventory())
+    audit["commit"] = "b" * 40
+    with pytest.raises(ValueError, match="identities disagree"):
+        audit_run_envelope(
+            _run_snapshot(), audit, run_id=RUN, run_attempt=ATTEMPT, commit=SHA,
+        )
+
+
+def test_valid_incomplete_receipt_preserves_repository_run_identity():
+    audit = audit_run_envelope(
+        _run_snapshot(conclusion="cancelled"), _audit(_inventory({3: "cancelled"}, "skipped")),
+        run_id=RUN, run_attempt=ATTEMPT, commit=SHA,
+    )
+    assert audit["jobs_run_url"] == RUN_URL
+    assert audit["full_workflow_job_gate_completed"] is False

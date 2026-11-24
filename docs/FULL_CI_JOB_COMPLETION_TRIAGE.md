@@ -77,3 +77,22 @@ they neither authenticate the GitHub source nor prove that the files still
 contain those bytes after the read. They do not certify independently
 retained CI artifacts or any experimental or human-evaluation outcome.
 Invalid input still produces no success or incomplete receipt.
+
+
+## Cross-endpoint repository identity
+
+Use the unmodified REST responses, not a reduced connector job list. Every job
+(including cancelled jobs) must identify the `tests` workflow and the same
+canonical GitHub API `run_url` ending in the requested run ID. Job run IDs and
+attempts must be JSON integers, not numeric lookalikes. The run envelope's
+`repository.full_name` and `url` must independently agree with the job
+inventory URL, and the in-memory job audit must match the requested commit,
+run and attempt. The receipt records `jobs_run_url` for both complete and
+incomplete classifications. Mixed or missing source identities fail closed.
+
+This catches contradictory source labels, not forged but internally consistent
+metadata. It does not authenticate the repository's provider response, prove
+artifact custody, or change any frozen scientific outcome. The original
+17-job inventory for [run 45289666532](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45289666532)
+contains the matching source labels for all jobs (five successful shards,
+eleven cancelled, replay skipped); it remains uncertified.
