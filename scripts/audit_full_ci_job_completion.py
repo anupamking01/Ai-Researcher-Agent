@@ -419,17 +419,18 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
             "recapture the original attempt-specific jobs inventory"
         )
     complete = len(passed) == EXPECTED_SHARDS and replay_conclusion == "success"
+    # A successful shard is an affirmative metadata claim even when its
+    # siblings fail or are cancelled. Apply the same chronology contract
+    # regardless of aggregate success; incomplete jobs need no timestamps.
+    successful_jobs = [job for job in jobs if job["conclusion"] == "success"]
+    windows = {job["name"]: _completed_job_window(job) for job in successful_jobs}
     if complete:
-        # Step-by-step green conclusions must not certify a replay that
-        # started before all sixteen shard jobs had finished and uploaded.
-        # Incomplete/cancelled runs remain triageable without full timestamps.
-        windows = {job["name"]: _completed_job_window(job) for job in jobs}
         replay_start = windows[REPLAY_JOB][0]
         if replay_start < max(windows[f"unit-tests ({i})"][1]
                               for i in range(EXPECTED_SHARDS)):
             raise ValueError("full-set replay started before all successful shards completed")
-        for job in jobs:
-            _require_step_windows(job, windows[job["name"]])
+    for job in successful_jobs:
+        _require_step_windows(job, windows[job["name"]])
     return {
         "schema_version": 1,
         "run_id": run_id,

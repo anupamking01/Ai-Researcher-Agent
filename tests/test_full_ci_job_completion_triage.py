@@ -534,8 +534,9 @@ def test_green_ci_job_gate_allows_same_second_replay_after_last_shard():
 def test_incomplete_run_triage_needs_no_cross_job_timestamp_claim():
     payload = _inventory({8: "cancelled"}, replay="skipped")
     for job in payload["jobs"]:
-        job.pop("started_at")
-        job.pop("completed_at")
+        if job["conclusion"] != "success":
+            job.pop("started_at")
+            job.pop("completed_at")
     result = _audit(payload)
     assert result["cancelled_shards"] == [8]
     assert result["full_job_gate_completed"] is False
@@ -682,12 +683,13 @@ def test_complete_gate_rejects_overlapping_required_steps(job_index, overlap_end
         _audit(payload)
 
 
-def test_incomplete_run_does_not_require_step_timing():
+def test_unsuccessful_jobs_do_not_require_step_timing():
     payload = _inventory({2: "cancelled"}, replay="skipped")
     for job in payload["jobs"]:
-        for step in job["steps"]:
-            step.pop("started_at")
-            step.pop("completed_at")
+        if job["conclusion"] != "success":
+            for step in job["steps"]:
+                step.pop("started_at")
+                step.pop("completed_at")
     assert _audit(payload)["cancelled_shards"] == [2]
 
 
@@ -1072,3 +1074,33 @@ def test_unusable_cancelled_step_inventory_does_not_invent_progress(mutation):
 
 def test_successful_inventory_has_no_cancelled_progress():
     assert _audit(_inventory())["cancelled_shard_progress"] == []
+
+
+@pytest.mark.parametrize("mutation,pattern", [
+    (lambda job: job.pop("started_at"), "missing or malformed started_at"),
+    (lambda job: job.update(completed_at="2026-11-22T23:59:00Z"), "completed_at precedes started_at"),
+    (lambda job: job["steps"][1].pop("completed_at"), "missing or malformed completed_at"),
+    (lambda job: job["steps"][1].update(completed_at="2026-11-24T00:00:00Z"), "outside job time window"),
+    (lambda job: job["steps"][0].update(completed_at="2026-11-23T00:00:01Z"), "overlaps previous required step"),
+])
+def test_partial_inventory_rejects_contradictory_successful_shard_timing(mutation, pattern):
+    payload = _inventory({8: "cancelled"}, replay="skipped")
+    mutation(payload["jobs"][3])
+    with pytest.raises(ValueError, match=pattern):
+        _audit(payload)
+
+
+def test_partial_inventory_cli_does_not_issue_receipt_for_invalid_green_shard(tmp_path, capsys):
+    jobs = _inventory({8: "cancelled"}, replay="skipped")
+    jobs["jobs"][3]["steps"][0].pop("started_at")
+    jobs_path = tmp_path / "jobs.json"
+    run_path = tmp_path / "run.json"
+    jobs_path.write_text(json.dumps(jobs), encoding="utf-8")
+    run_path.write_text(json.dumps(_run_snapshot(conclusion="cancelled")), encoding="utf-8")
+    assert main([
+        "--jobs-json", str(jobs_path), "--run-json", str(run_path),
+        "--run-id", str(RUN), "--run-attempt", str(ATTEMPT), "--head-sha", SHA,
+    ]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "missing or malformed started_at" in captured.err
