@@ -204,3 +204,14 @@ jobs:
             ${{ runner.temp }}/vera-runner-provenance-test-receipt.json
           if-no-files-found: error
           retention-days: 90
+
+      # A partial transcript is diagnostic only. Cancellation can interrupt
+      # the upload itself; absence does not prove that tests never started.
+      - name: Retain unverified runner diagnostics on failure or cancellation (90 days)
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-unverified-runner-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vera-runner-provenance-tests.log
+          if-no-files-found: warn
+          retention-days: 90

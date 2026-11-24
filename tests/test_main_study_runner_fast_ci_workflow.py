@@ -112,3 +112,22 @@ def test_runner_lane_replays_exact_checkout_and_retains_receipts():
     assert "vera-runner-provenance-test-receipt.json" in upload["with"]["path"]
     assert upload["with"]["if-no-files-found"] == "error"
     assert upload["with"]["retention-days"] == "90"
+
+
+def test_runner_lane_retains_only_unverified_transcript_on_failure_or_cancellation():
+    steps = _definition()["jobs"]["noncanonical-runner-regressions"]["steps"]
+    diagnostic = _step(
+        steps, "Retain unverified runner diagnostics on failure or cancellation (90 days)"
+    )
+    success = _step(steps, "Retain source-bound targeted runner test evidence (90 days)")
+    assert steps.index(diagnostic) > steps.index(success)
+    assert "if" not in success
+    assert diagnostic["if"] == "${{ failure() || cancelled() }}"
+    assert diagnostic["uses"] == success["uses"]
+    assert diagnostic["with"] == {
+        "name": "vera-unverified-runner-failure-${{ github.run_id }}-${{ github.run_attempt }}",
+        "path": "${{ runner.temp }}/vera-runner-provenance-tests.log",
+        "if-no-files-found": "warn",
+        "retention-days": "90",
+    }
+    assert diagnostic["with"]["name"] != success["with"]["name"]

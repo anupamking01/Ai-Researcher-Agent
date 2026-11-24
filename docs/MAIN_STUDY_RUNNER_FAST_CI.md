@@ -92,3 +92,32 @@ oversized-file rejection for both locks, plus the three unsafe Python-version
 pin cases. The observed local checks are not atomic filesystem snapshots,
 and they neither recover missing original evidence nor authorize any new
 treatments or blinded human distribution.
+
+
+## Best-effort interrupted runner transcript retention — 25 November 2026
+
+At source commit `64f9cfd17a019107073d58e04196dbca087156f7`, the
+[push run 45451010364](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45451010364)
+and [PR run 45451025683](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45451025683)
+both ended as cancelled. Their job metadata records successful source
+verification before the targeted pytest step, but no completed pytest step.
+Each inventory contains only its pre-install diagnostic bundle. Attempts
+to retrieve both job logs returned BlobNotFound. Thus neither the active
+test nor the cause of cancellation can be established from these records.
+
+The runner-provenance lane now requests a best-effort upload of its raw
+pytest transcript on failure or cancellation, with an explicitly
+unverified, exact-run/attempt artifact name and 90-day retention. It never
+includes a success receipt and never replaces the ordinary success-only
+receipt and replay path. Missing logs warn rather than manufacturing
+evidence; an interrupted runner may not execute the upload at all.
+The structural regression checks the conditional, distinct artifact
+identity, exact log-only path and preserved success-only upload.
+
+A retained partial transcript may help locate an interruption, but does
+not prove its cause, a passing test suite, or a successful treatment.
+No scientific outcomes are changed. The pilot remains diagnostic,
+frozen automated results retain their post-collection and design
+qualifications, retrospective sensitivities remain exploratory, and
+original-evidence authentication and independent human validation remain
+outstanding.
