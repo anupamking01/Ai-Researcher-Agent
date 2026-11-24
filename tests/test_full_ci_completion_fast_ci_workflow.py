@@ -3,8 +3,11 @@
 A passing fast lane tests metadata classification and synthetic shard replay. It cannot certify
 a cancelled sixteen-shard run, historical treatment custody, or human ratings.
 """
+import os
 from pathlib import Path
+import subprocess
 
+import pytest
 import yaml
 
 from scripts.audit_full_ci_job_completion import (
@@ -75,6 +78,7 @@ def test_completion_auditor_fast_lane_is_pinned_offline_and_source_triggered():
         assert module in compile_command.split()
     run = _step(steps, "Run firewalled completion-auditor regressions")
     assert run["env"]["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+    assert run["env"]["VERA_CI_PRIVATE_NETNS"] == "1"
     assert run["run"].strip().splitlines() == [
         "set -euo pipefail",
         "bash scripts/run_offline_pytest_firewalled.sh "
@@ -133,9 +137,9 @@ def test_completion_auditor_essential_step_labels_match_actual_full_ci_contract(
         # Couple the metadata auditor to actual test / receipt / replay order.
         positions = [names.index(label) for label in required]
         assert positions == sorted(positions)
-    assert "scripts/run_offline_pytest_firewalled.sh" in _step(
-        unit_steps, "Run offline unit tests"
-    )["run"]
+    offline = _step(unit_steps, "Run offline unit tests")
+    assert "scripts/run_offline_pytest_firewalled.sh" in offline["run"]
+    assert offline["env"]["VERA_CI_PRIVATE_NETNS"] == "1"
     assert "scripts.verify_retained_ci_test_evidence" in _step(
         unit_steps, "Replay exact-commit offline test evidence before upload"
     )["run"]
@@ -149,3 +153,40 @@ def test_completion_auditor_essential_step_labels_match_actual_full_ci_contract(
         upload = _step(steps, label)
         assert upload["uses"].startswith("actions/upload-artifact@")
         assert upload["with"]["if-no-files-found"] == "error"
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,
+                    reason="private namespace launcher requires nonroot Linux caller")
+@pytest.mark.parametrize(("mode", "expected"), [("1", 73), ("invalid", 1)])
+def test_private_namespace_bootstrap_never_falls_back_to_host_firewall(tmp_path, mode, expected):
+    """Fake sudo failure must not reach host iptables or pytest."""
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    log = tmp_path / "sudo.log"
+    scripts = {
+        "sudo": '#!/bin/sh\nprintf "%s\\n" "$@" > "$VERA_FAKE_NETNS_LOG"\nexit 73\n',
+        "iptables": "#!/bin/sh\nexit 91\n",
+        "ip6tables": "#!/bin/sh\nexit 92\n",
+        "python": "#!/bin/sh\nexit 93\n",
+    }
+    for name, body in scripts.items():
+        path = fake / name
+        path.write_text(body, encoding="utf-8")
+        path.chmod(0o755)
+    env = os.environ.copy()
+    for name in ("PYTHONPATH", "PYTHONHOME", "PYTHONOPTIMIZE", "PYTEST_ADDOPTS", "PYTEST_PLUGINS"):
+        env.pop(name, None)
+    env.update(PATH=str(fake) + os.pathsep + env["PATH"],
+               VERA_CI_PRIVATE_NETNS=mode, VERA_FAKE_NETNS_LOG=str(log))
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts/run_offline_pytest_firewalled.sh"), "tests/synthetic.py"],
+        cwd=ROOT, env=env, text=True, capture_output=True, timeout=10, check=False,
+    )
+    assert result.returncode == expected, result.stdout + result.stderr
+    assert "Offline pytest egress isolation active" not in result.stdout
+    if mode == "1":
+        args = log.read_text(encoding="utf-8").splitlines()
+        assert args[:7] == ["-n", "-E", "/usr/bin/unshare", "--net", "--fork", "--kill-child", "/bin/bash"]
+        assert args[-1] == "tests/synthetic.py"
+    else:
+        assert not log.exists()

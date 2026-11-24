@@ -347,3 +347,35 @@ sensitivities, or human ratings are changed. The pilot remains diagnostic;
 designated-primary automated estimates remain qualified by post-collection
 planning, fixed treatment order and evaluator comparability; sensitivity
 analyses are exploratory, and genuine human validation is pending.
+
+## Private network namespace for full-suite pytest — 24 November 2026
+
+The host-wide OUTPUT firewall also rejects traffic from the GitHub runner
+agent while pytest is active. This is a structural control-plane conflict,
+not a proven explanation of historical cancellations. In [PR run
+45404670423](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45404670423),
+ten shards succeeded and six were cancelled. Five had explicit offline-test
+step cancellations about three minutes after the step began; shard 5
+logged 384 passing tests and shard 15 logged 695 passing tests before
+cancellation. Neither qualified as successful evidence. The aggregate
+replay was skipped; 16 early bundles, 10 success bundles, and 5 unverified
+failure bundles were listed.
+
+Full-suite pytest and the completion-auditor fast lane now explicitly
+request a private Linux network namespace. The privileged bootstrap
+checks a distinct namespace with only loopback, enables loopback, and
+drops to the original runner UID/GID with the pinned Python PATH. The
+unchanged IPv4/IPv6 firewall, effective-policy checks, strict pytest
+flags, exit-code propagation and receipt marker then execute inside that
+namespace. The runner agent remains outside it. A failed setup stops
+the job without falling back to host-wide OUTPUT rules. Other callers
+retain their existing behavior; synthetic nested wrapper tests do not
+inherit the opt-in flag. This is not a security sandbox against malicious
+privileged code, nor proof of continuous isolation or of the root cause
+of earlier cancellations. Real hosted-runner execution and all sixteen
+successful shards plus aggregate replay remain necessary for certification.
+
+No treatment, common evaluator or human rating is executed by this change.
+The diagnostic pilot, qualified post-collection designated-primary
+automated analysis, retrospective exploratory sensitivities and pending
+blinded human evaluation remain distinct.

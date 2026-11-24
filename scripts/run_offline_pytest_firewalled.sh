@@ -52,6 +52,45 @@ for executable in sudo iptables ip6tables python; do
   fi
 done
 
+# Opt in only from the reviewed CI steps. A host-wide OUTPUT rejection
+# otherwise also blocks the GitHub runner agent while pytest is executing.
+# The child uses the existing dual-stack firewall and the original runner UID.
+# Never fall back to a host-wide firewall if private namespace setup fails.
+if [[ -n "${VERA_CI_PRIVATE_NETNS:-}" ]]; then
+  if [[ "$VERA_CI_PRIVATE_NETNS" != "1" || "$EUID" == "0" ]]; then
+    echo "Invalid private offline namespace mode or root caller" >&2
+    exit 1
+  fi
+  unset VERA_CI_PRIVATE_NETNS
+  host_netns="$(/usr/bin/readlink /proc/self/ns/net)"
+  wrapper="$(/usr/bin/realpath -- "$0")"
+  runner_uid="$(id -u)"
+  runner_gid="$(id -g)"
+  # Preserve the pinned Python PATH and normal runner HOME across sudo.
+  # The privileged bootstrap only creates/checks the namespace and enables
+  # loopback; the checked-out wrapper and pytest execute as the runner user.
+  exec sudo -n -E /usr/bin/unshare --net --fork --kill-child /bin/bash -c '
+    set -euo pipefail
+    host_netns="$1"; uid="$2"; gid="$3"; runner_path="$4"; runner_home="$5"; wrapper="$6"
+    shift 6
+    child_netns="$(/usr/bin/readlink /proc/self/ns/net)"
+    if [[ -z "$child_netns" || "$child_netns" == "$host_netns" ]]; then
+      echo "Private offline namespace was not created" >&2
+      exit 1
+    fi
+    links="$(/usr/sbin/ip -o link show)"
+    if [[ "$links" != "1: lo:"* ]] || [[ "$(printf "%s\n" "$links" | /usr/bin/wc -l)" != "1" ]]; then
+      echo "Private offline namespace contains unexpected interfaces" >&2
+      exit 1
+    fi
+    /usr/sbin/ip link set dev lo up
+    echo "Private offline network namespace verified; runner network left untouched."
+    exec /usr/bin/setpriv --reuid="$uid" --regid="$gid" --init-groups \
+      /usr/bin/env PATH="$runner_path" HOME="$runner_home" \
+      /bin/bash "$wrapper" "$@"
+  ' vera-private-netns "$host_netns" "$runner_uid" "$runner_gid" "$PATH" "$HOME" "$wrapper" "$@"
+fi
+
 # All xtables lock acquisitions (setup, validation, and cleanup) have a
 # bounded five-second wait. An indefinite -w can strand a CI shard under
 # lock contention, including after pytest has finished.
