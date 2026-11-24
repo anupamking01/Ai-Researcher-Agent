@@ -53,7 +53,12 @@ no embedded credentials or whitespace/control characters, and a usable port.
 Known localhost/local-name suffixes, non-global IP literals and browser-style
 abbreviated or hexadecimal numeric IPv4 authorities are rejected. IDNA
 normalization is used only to evaluate host safety (for example visually
-encoded localhost); accepted URLs are recorded **byte-for-byte**, without
+encoded localhost). The DNS root dot is stripped for safety checks after
+IDNA normalization as well as before it: U+3002, U+FF0E and U+FF61 can
+normalize to a trailing ASCII dot, otherwise masking local-name suffixes
+or numeric private IP literals from the syntactic gate. The same guard
+applies when replaying marked search ledgers, even when all their URL
+arrays agree. Accepted URLs are recorded **byte-for-byte**, without
 rewriting query parameters, fragments, ordering, duplicates or selection.
 A mixed valid/invalid result array raises a validation error rather than
 quietly removing candidates, shifting budgets, or choosing replacement

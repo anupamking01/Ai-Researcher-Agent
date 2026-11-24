@@ -50,7 +50,10 @@ def _require_external_web_url(url: str, *, index: int) -> None:
     if parts.scheme not in ("http", "https") or not host or has_userinfo or port == 0:
         raise ValueError(message)
     try:
-        ascii_host = host.rstrip(".").encode("idna").decode("ascii").lower()
+        # IDNA maps Unicode DNS separators (e.g. U+3002) to ASCII dots.
+        # Strip the root dot again *after* normalization, or local and
+        # numeric hosts can evade the checks below via a Unicode root dot.
+        ascii_host = host.rstrip(".").encode("idna").decode("ascii").lower().rstrip(".")
     except UnicodeError as exc:
         raise ValueError(message) from exc
     if (

@@ -100,6 +100,8 @@ def test_selection_copies_metadata_instead_of_aliasing_mutable_candidate():
     "https://a.test/path?q=α", "http://8.8.8.8/",
     "https://[2606:4700:4700::1111]/",
     "https://münchen.de/über", "https://example.org./path",
+    "https://example.org。/path?q=α", "https://münchen.de．/über",
+    "http://8.8.8.8｡/",
 ])
 def test_external_web_candidate_keeps_exact_original_url(valid_url):
     entries = parse_search_candidates(json.dumps([{"href": valid_url}]))
@@ -118,6 +120,10 @@ def test_external_web_candidate_keeps_exact_original_url(valid_url):
     "http://2130706433/", "http://127.1/",
     "http://0x7f000001/", "http://0x7f.0.0.1/",
     "https://ⓛocalhost/", "http://example.org:0/",
+    # IDNA root separators must not bypass local-name or numeric-host checks.
+    "http://localhost。/", "http://sub.localhost．/",
+    "http://router.internal｡/", "http://127.0.0.1。/",
+    "http://0x7f000001．/", "http://169.254.169.254｡/",
     "http://example.org:99999/",
     "https://user:pass@example.org/",
     "https://example.org/has space", "https://example.org/\npath",
@@ -329,6 +335,22 @@ def _search_custody_fixture():
 def test_versioned_search_custody_accepts_duplicate_candidates_and_failed_query():
     from logic.search_provenance import validate_search_trace_provenance
     validate_search_trace_provenance(_search_custody_fixture())
+
+
+@pytest.mark.parametrize("url", ["http://localhost。/", "http://127.0.0.1．/"])
+def test_versioned_search_custody_rejects_consistent_local_root_dot_ledger(url):
+    from logic.search_provenance import validate_search_trace_provenance
+    t = _search_custody_fixture()
+    record = t["search_records"][0]
+    record["candidate_urls"] = [url, url]
+    record["scheduled_urls"] = [url]
+    for entry in record["candidate_sources"] + record["scheduled_sources"]:
+        entry["url"] = url
+    t["scheduled_urls"] = [url]
+    t["successful_urls"] = [url]
+    # Every ledger agrees; rejection must come from URL admission itself.
+    with pytest.raises(ValueError, match=r"external HTTP\(S\) href"):
+        validate_search_trace_provenance(t)
 
 
 def test_versioned_search_custody_accepts_skipped_planner_query():
