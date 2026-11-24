@@ -51,7 +51,7 @@ SOURCE_TRIGGER_PATHS = (
 SCOPE = (
     "bash scripts/run_offline_pytest_firewalled.sh "
     + " ".join(FREEZE_MODULES)
-    + ' 2>&1 | tee "$RUNNER_TEMP/vera-human-freeze-tests.log"'
+    + ' | tee "$RUNNER_TEMP/vera-human-freeze-tests.log"'
 )
 
 

@@ -148,7 +148,7 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |
           set -euo pipefail
-          bash scripts/run_offline_pytest_firewalled.sh tests/test_human_reconciliation_readiness.py tests/test_human_reconciliation_readiness_file_identity.py tests/test_human_reconciliation_readiness_input_bounds.py tests/test_human_reconciliation_readiness_json_numbers.py tests/test_human_reconciliation_readiness_json_structure_bounds.py tests/test_human_reconciliation_legacy_source_binding.py tests/test_human_reconciliation_execution.py tests/test_human_reconciliation_artifact_size_contract.py tests/test_human_reconciliation_output_verification.py tests/test_human_reconciliation_fast_ci_workflow.py 2>&1 | tee "$RUNNER_TEMP/vera-human-reconciliation-tests.log"
+          bash scripts/run_offline_pytest_firewalled.sh tests/test_human_reconciliation_readiness.py tests/test_human_reconciliation_readiness_file_identity.py tests/test_human_reconciliation_readiness_input_bounds.py tests/test_human_reconciliation_readiness_json_numbers.py tests/test_human_reconciliation_readiness_json_structure_bounds.py tests/test_human_reconciliation_legacy_source_binding.py tests/test_human_reconciliation_execution.py tests/test_human_reconciliation_artifact_size_contract.py tests/test_human_reconciliation_output_verification.py tests/test_human_reconciliation_fast_ci_workflow.py | tee "$RUNNER_TEMP/vera-human-reconciliation-tests.log"
 
       - name: Verify runtime and source after reconciliation tests
         run: |

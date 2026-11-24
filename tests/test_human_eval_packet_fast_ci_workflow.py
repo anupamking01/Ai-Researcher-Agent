@@ -60,7 +60,7 @@ PACKET_MODULES = (
 SCOPE = (
     "bash scripts/run_offline_pytest_firewalled.sh "
     + " ".join(PACKET_MODULES)
-    + ' 2>&1 | tee "$RUNNER_TEMP/vera-human-packet-tests.log"'
+    + ' | tee "$RUNNER_TEMP/vera-human-packet-tests.log"'
 )
 
 

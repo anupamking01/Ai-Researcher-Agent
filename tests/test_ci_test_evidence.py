@@ -481,7 +481,9 @@ def test_workflow_keeps_piped_wrapper_and_publishes_both_evidence_files():
     assert commands.strip().splitlines()[0] == "set -euo pipefail"
     assert "python -m scripts.select_full_ci_shard --verify-partition --shards 16" in commands
     assert '--shard "$VERA_SHARD" --shards 16' in commands
-    assert 'bash scripts/run_offline_pytest_firewalled.sh "${test_modules[@]}" 2>&1 | tee -a "$RUNNER_TEMP/vera-offline-tests.log"' in commands
+    # Pytest merges its own stderr inside the wrapper; merging the wrapper\'s
+    # teardown stderr here would corrupt the receipt\'s terminal summary.
+    assert 'bash scripts/run_offline_pytest_firewalled.sh "${test_modules[@]}" | tee -a "$RUNNER_TEMP/vera-offline-tests.log"' in commands.splitlines()
     assert '"$RUNNER_TEMP/vera-offline-test-modules.txt"' in commands
     verify_step = next(s for s in steps if s.get("name") == "Bind exact-commit offline test evidence")
     assert "python -m scripts.verify_ci_test_evidence" in verify_step["run"]

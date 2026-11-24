@@ -78,7 +78,7 @@ def test_local_diagnostic_lane_is_narrow_pinned_and_firewalled():
         "set -euo pipefail",
         "bash scripts/run_offline_pytest_firewalled.sh "
         + " ".join(TARGETS)
-        + ' 2>&1 | tee "$RUNNER_TEMP/vera-local-diagnostic-tests.log"',
+        + ' | tee "$RUNNER_TEMP/vera-local-diagnostic-tests.log"',
     ]
 
 

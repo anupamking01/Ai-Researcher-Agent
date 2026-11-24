@@ -18,7 +18,7 @@ SCOPE = (
     "tests/test_evaluation.py tests/test_evaluation_fast_ci_workflow.py "
     "tests/test_ci_early_gate_bounded_file_capture.py "
     "tests/test_ci_test_evidence.py tests/test_retained_ci_test_evidence.py "
-    '2>&1 | tee "$RUNNER_TEMP/vera-diagnostic-evaluation-tests.log"'
+    '| tee "$RUNNER_TEMP/vera-diagnostic-evaluation-tests.log"'
 )
 
 

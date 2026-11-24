@@ -75,7 +75,7 @@ def test_runner_lane_is_read_only_firewalled_and_source_triggered():
         "set -euo pipefail",
         "bash scripts/run_offline_pytest_firewalled.sh "
         + " ".join(TARGETS)
-        + ' 2>&1 | tee "$RUNNER_TEMP/vera-runner-provenance-tests.log"',
+        + ' | tee "$RUNNER_TEMP/vera-runner-provenance-tests.log"',
     ]
 
 

@@ -166,7 +166,7 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |
           set -euo pipefail
-          bash scripts/run_offline_pytest_firewalled.sh tests/test_main_study_runner_replication_gate.py tests/test_main_study_runner_trace_completion.py tests/test_main_study_task_file.py tests/test_main_study_pricing_file.py tests/test_main_study_trace_accounting.py tests/test_main_study_runner_fast_ci_workflow.py tests/test_planner_query_contract.py tests/test_search_candidate_provenance.py 2>&1 | tee "$RUNNER_TEMP/vera-runner-provenance-tests.log"
+          bash scripts/run_offline_pytest_firewalled.sh tests/test_main_study_runner_replication_gate.py tests/test_main_study_runner_trace_completion.py tests/test_main_study_task_file.py tests/test_main_study_pricing_file.py tests/test_main_study_trace_accounting.py tests/test_main_study_runner_fast_ci_workflow.py tests/test_planner_query_contract.py tests/test_search_candidate_provenance.py | tee "$RUNNER_TEMP/vera-runner-provenance-tests.log"
 
       - name: Verify source checkout after targeted tests
         run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests

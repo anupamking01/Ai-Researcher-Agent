@@ -88,7 +88,7 @@ def test_reconciliation_lane_covers_readiness_producer_and_independent_verifier(
         "set -euo pipefail",
         'bash scripts/run_offline_pytest_firewalled.sh '
         + " ".join(TESTS)
-        + ' 2>&1 | tee "$RUNNER_TEMP/' + LOG + '"',
+        + ' | tee "$RUNNER_TEMP/' + LOG + '"',
     ]
     assert len(TESTS) == len(set(TESTS))
     assert set(TESTS) & {"tests/test_human_reconciliation_execution.py", "tests/test_human_reconciliation_readiness.py", "tests/test_human_reconciliation_output_verification.py"} == {

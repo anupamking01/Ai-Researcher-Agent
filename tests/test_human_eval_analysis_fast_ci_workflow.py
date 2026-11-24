@@ -89,7 +89,7 @@ def test_human_analysis_lane_covers_production_verification_and_triggers():
         "set -euo pipefail",
         'bash scripts/run_offline_pytest_firewalled.sh '
         + " ".join(ANALYSIS_MODULES)
-        + ' 2>&1 | tee "$RUNNER_TEMP/' + LOG + '"',
+        + ' | tee "$RUNNER_TEMP/' + LOG + '"',
     ]
     assert len(ANALYSIS_MODULES) == len(set(ANALYSIS_MODULES))
     for event in ("push", "pull_request"):

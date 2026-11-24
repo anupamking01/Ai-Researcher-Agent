@@ -74,7 +74,10 @@ def test_pilot_lane_selected_modules_and_trigger_paths_are_complete():
         assert path in compilation
     execution = next(step["run"] for step in steps if step["name"].startswith("Run firewalled"))
     command = execution.split("bash scripts/run_offline_pytest_firewalled.sh ", 1)[1]
-    assert shlex.split(command.split(" 2>&1", 1)[0]) == TESTS
+    assert execution.strip().splitlines()[0] == "set -euo pipefail"
+    modules, sink = command.strip().split(" | tee ", 1)
+    assert shlex.split(modules) == TESTS
+    assert sink == '"$RUNNER_TEMP/vera-pilot-integrity-tests.log"'
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD" in str(
         next(step["env"] for step in steps if step["name"].startswith("Run firewalled"))
     )
