@@ -1273,3 +1273,49 @@ def test_optional_artifact_cli_gate_preserves_job_verdict_and_fingerprints(tmp_p
     artifacts.write_text(json.dumps(payload), encoding="utf-8")
     assert main(args) == 2
     assert not capsys.readouterr().out
+
+def test_artifact_identity_handoff_is_stable_and_preserves_unknowns():
+    payload = _artifact_inventory()
+    first = payload["artifacts"][0]
+    first.update(digest="sha256:" + "d" * 64, size_in_bytes=123, expired=True)
+    # Equal provider digests are not duplicate artifact identities.
+    payload["artifacts"][1].update(digest=first["digest"], size_in_bytes=123)
+    payload["artifacts"][2].update(digest=None, size_in_bytes=None)
+    payload["artifacts"][3]["name"] = f"vera-stdlib-evaluation-shard-3-{RUN}-1"
+    result = audit_artifact_inventory(payload, _artifact_run())
+    identities = result["listed_artifact_identities"]
+    assert identities[0] == {
+        "group": "early_diagnostics", "slot": 0, "name": first["name"],
+        "artifact_id": first["id"], "expired": True,
+        "provider_declared_digest": first["digest"],
+        "provider_declared_size_in_bytes": 123,
+    }
+    assert identities[1]["artifact_id"] != identities[0]["artifact_id"]
+    assert identities[1]["provider_declared_digest"] == first["digest"]
+    assert identities[2]["provider_declared_digest"] is None
+    assert identities[2]["provider_declared_size_in_bytes"] is None
+    assert identities[3]["slot"] == 4
+    assert identities[3]["provider_declared_digest"] is None
+    assert identities[3]["provider_declared_size_in_bytes"] is None
+    assert len(identities) == 32
+    assert identities[-1]["group"] == "aggregate_replay"
+    assert identities[-1]["slot"] == "replay"
+    assert result["full_artifact_inventory_listed_unexpired"] is False
+    payload["artifacts"].reverse()
+    assert audit_artifact_inventory(payload, _artifact_run()) == result
+
+
+@pytest.mark.parametrize("field, value", [
+    ("digest", "d" * 64),
+    ("digest", "sha256:" + "d" * 63),
+    ("digest", "sha256:" + "g" * 64),
+    ("digest", []),
+    ("size_in_bytes", -1),
+    ("size_in_bytes", True),
+    ("size_in_bytes", "123"),
+])
+def test_artifact_identity_handoff_rejects_malformed_provider_fields(field, value):
+    payload = _artifact_inventory()
+    payload["artifacts"][0][field] = value
+    with pytest.raises(ValueError, match="invalid provider artifact"):
+        audit_artifact_inventory(payload, _artifact_run())

@@ -599,7 +599,16 @@ def audit_artifact_inventory(payload: dict, run: dict) -> dict:
             continue
         if name in current:
             raise ValueError(f"duplicate exact-attempt artifact name {name!r}")
+        digest = artifact.get("digest")
+        if digest is not None and (not isinstance(digest, str)
+                                   or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest)):
+            raise ValueError("invalid provider artifact SHA-256 digest")
+        size = artifact.get("size_in_bytes")
+        if size is not None and (type(size) is not int or size < 0):
+            raise ValueError("invalid provider artifact size_in_bytes")
         current[name] = artifact
+    # Keep exact artifact identities for a later independent archive download.
+    # The digest is provider-declared metadata, not a digest of locally read bytes.
     result = {}
     for group, names in groups.items():
         result[group] = {
@@ -612,6 +621,22 @@ def audit_artifact_inventory(payload: dict, run: dict) -> dict:
     return {
         "artifact_inventory": result,
         "excluded_artifact_count": excluded,
+        # Stable ordering is independent of the API pagination/order. Missing
+        # or null legacy digest/size fields remain unknown, not verified.
+        "listed_artifact_identities": [
+            {
+                "group": group,
+                "slot": index,
+                "name": name,
+                "artifact_id": current[name]["id"],
+                "expired": current[name]["expired"],
+                "provider_declared_digest": current[name].get("digest"),
+                "provider_declared_size_in_bytes": current[name].get("size_in_bytes"),
+            }
+            for group, names in groups.items()
+            for name, index in names.items()
+            if name in current
+        ],
         "full_artifact_inventory_listed_unexpired": all(
             not result[group]["missing"] and not result[group]["listed_expired"]
             for group in ("early_diagnostics", "offline_tests", "aggregate_replay")

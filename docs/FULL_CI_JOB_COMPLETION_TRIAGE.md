@@ -277,3 +277,26 @@ to successful shards 4, 6, 11 and 15; cancelled shard 0 had no listed failure
 diagnostic. This is an inventory observation, not certification or proof of
 cancellation cause. No treatments, evaluators, frozen results or human ratings
 are changed.
+
+### Artifact identity handoff to independent archive verification
+
+The optional inventory receipt also records `listed_artifact_identities` for
+each present exact-attempt slot (including expired and unverified diagnostic
+entries). Each entry preserves the exact name, numeric artifact ID, group,
+slot, expired flag, provider-declared SHA-256 digest and provider-declared
+size in bytes. The order follows the fixed workflow slot order, not the API
+response order. Historical or omitted digest/size metadata is represented
+as null; malformed non-null values fail closed. Equal provider digests for
+distinct artifact IDs do not imply identity and are not rejected.
+
+This gives a later verifier an explicit ID to download through the authenticated
+GitHub artifact endpoint, rather than resolving the name again against a
+potentially changed run-wide listing. Preserve the raw inventory snapshot
+as well. Compare downloaded ZIP bytes with the provider-declared digest when
+available, but do not substitute this comparison for the source-bound
+full-set replay or independent original research-artifact authentication.
+A missing digest is unknown, not a verified digest; listing status and
+exit-code semantics are unchanged. No archive bytes are downloaded or
+hashed by this metadata auditor, and it does not attest that provider metadata
+is authentic. This handoff does not alter any treatment, evaluator, frozen
+automated outcome or human-rating gate.
