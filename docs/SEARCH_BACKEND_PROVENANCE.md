@@ -321,6 +321,25 @@ evaluator-policy caveats, retrospective sensitivity analyses stay
 exploratory, and genuine blinded human validation remains pending.
 
 
+## Prospective normalized verifier receipt consistency (25 November 2026)
+
+The treatment verifier's normalized success receipt retains at most eight
+illustrative examples and no error marker. Its parse-error receipt has zero
+claim counters, an empty example list, and an explicit error type. Previously
+a digest-rebound schema-5 or schema-6 receipt could satisfy the retained-byte,
+status and counter checks yet contain nine examples, or fabricated examples
+on a parse error. The offline verifier now rejects those impossible producer
+states and contradictory success/error markers without rewriting any receipt.
+It also independently rejects nonzero claim counts on a parse-error receipt,
+even if the supplied trace agrees. Synthetic regressions cover both schemas
+and the zero/eight-example boundary.
+
+This is prospective internal producer/receipt consistency, not authentication
+of an external model response, correctness of illustrative examples, or
+recovery of historical September evidence. No experimental outcomes or human
+ratings are changed; the diagnostic pilot, post-collection automated findings,
+exploratory sensitivities and pending human validation remain distinct.
+
 ## Prospective retained verifier-output custody (22 November 2026)
 
 Schema-4 treatment-factor checks only established that a completed P6V trace

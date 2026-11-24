@@ -994,6 +994,52 @@ def test_schema5_rejects_digest_rebound_but_inconsistent_verifier_receipt(mutati
         validate_verifier_artifact(trace, corrupt)
 
 
+@pytest.mark.parametrize("schema", [5, 6])
+@pytest.mark.parametrize("status, updates", [
+    ("ok", {"examples": ["synthetic"] * 9}),
+    ("ok", {"error": "ValueError"}),
+    ("parse_error", {"examples": ["fabricated example"]}),
+])
+def test_retained_verifier_rejects_impossible_producer_receipts(schema, status, updates):
+    import hashlib
+    from logic.search_provenance import validate_verifier_artifact
+    trace, _, raw = _verifier_bound_fixture(status=status)
+    trace["search_provenance_schema"] = schema
+    receipt = json.loads(raw)
+    receipt.update(updates)
+    corrupt = json.dumps(receipt).encode("utf-8")
+    # Even when the digest and all five claim counters agree with the trace,
+    # these receipts cannot have been emitted by the normalized producer.
+    trace["verification_artifact_sha256"] = hashlib.sha256(corrupt).hexdigest()
+    with pytest.raises(ValueError, match="verifier artifact"):
+        validate_verifier_artifact(trace, corrupt)
+
+
+@pytest.mark.parametrize("count", [0, 8])
+def test_retained_verifier_accepts_normalized_example_boundaries(count):
+    import hashlib
+    from logic.search_provenance import validate_verifier_artifact
+    trace, _, raw = _verifier_bound_fixture()
+    receipt = json.loads(raw)
+    receipt["examples"] = [{"claim": f"synthetic {i}"} for i in range(count)]
+    raw = json.dumps(receipt).encode("utf-8")
+    trace["verification_artifact_sha256"] = hashlib.sha256(raw).hexdigest()
+    validate_verifier_artifact(trace, raw)
+
+
+def test_retained_verifier_parse_error_rejects_claims_even_if_trace_agrees():
+    import hashlib
+    from logic.search_provenance import validate_verifier_artifact
+    trace, _, raw = _verifier_bound_fixture(status="parse_error")
+    receipt = json.loads(raw)
+    receipt.update(claims_checked=1, supported=1)
+    trace.update(citation_count=1, supported_claim_count=1)
+    raw = json.dumps(receipt).encode("utf-8")
+    trace["verification_artifact_sha256"] = hashlib.sha256(raw).hexdigest()
+    with pytest.raises(ValueError, match="verifier artifact"):
+        validate_verifier_artifact(trace, raw)
+
+
 def test_schema5_incomplete_verifier_trace_retains_uncertainty():
     from logic.search_provenance import validate_search_trace_provenance
     trace, experiment, _ = _verifier_bound_fixture()

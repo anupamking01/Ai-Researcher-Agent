@@ -566,12 +566,19 @@ def validate_verifier_artifact(trace: dict, raw: bytes) -> None:
         for source, target in fields
     ):
         raise ValueError("verifier artifact claim counts differ from trace")
-    if type(receipt.get("examples")) is not list:
-        raise ValueError("verifier artifact examples must be an array")
-    if receipt["status"] == "parse_error" and (
-        type(receipt.get("error")) is not str or not receipt["error"].strip()
-    ):
-        raise ValueError("verifier parse-error artifact needs its error type")
+    # Match the producer's normalized receipt, not just its counters. The
+    # successful normalizer retains at most eight illustrative examples;
+    # a parse failure writes none and reports an explicit error type.
+    examples = receipt.get("examples")
+    if type(examples) is not list or len(examples) > 8:
+        raise ValueError("verifier artifact examples must be an array of at most eight")
+    if receipt["status"] == "parse_error":
+        if examples or any(receipt[name] for name, _ in fields):
+            raise ValueError("verifier artifact parse error must not contain claims or examples")
+        if not _is_nonblank_scalar_text(receipt.get("error")):
+            raise ValueError("verifier parse-error artifact needs its error type")
+    elif receipt["status"] != "ok" or "error" in receipt:
+        raise ValueError("verifier artifact has contradictory success/error status")
 
 
 # Separate from the verifier JSON receipt: this binds the exact report text
