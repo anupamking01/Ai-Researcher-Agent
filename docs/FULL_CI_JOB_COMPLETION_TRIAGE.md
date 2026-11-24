@@ -300,3 +300,26 @@ exit-code semantics are unchanged. No archive bytes are downloaded or
 hashed by this metadata auditor, and it does not attest that provider metadata
 is authentic. This handoff does not alter any treatment, evaluator, frozen
 automated outcome or human-rating gate.
+
+
+## Optional local archive checksum comparison
+
+For the exact artifact IDs from the original inventory, download the original
+ZIP bytes (do not extract or repackage), naming each local file
+`<artifact_id>.zip` in a regular directory. Pass `--archives-dir /path/to/downloads`
+along with `--artifacts-json` and the existing job/run arguments. The optional
+gate compares streamed local SHA-256 values to provider-declared digests for the
+32 required shard bundles and aggregate replay; failure-only diagnostics cannot
+substitute. Its receipt preserves per-ID observed digest, byte count and
+match/mismatch/missing/unknown status. The 64 MiB per-file bound, regular-file
+checks and capture consistency checks limit unsafe input handling. Provider size
+is not used as a checksum substitute. Exit 0 with this option additionally
+requires all 33 exact-attempt required bundles listed unexpired and digest-matched;
+exit 1 preserves incomplete comparisons, and unsafe inputs return exit 2.
+Without the option, the previous metadata-only exit behavior is unchanged.
+
+This is byte matching against supplied provider metadata, not independent
+authentication of that metadata, ZIP structure, contents, checkout identity,
+or scientific evidence. A digest match does not replace the source-bound
+`verify_full_ci_shard_set` replay. No original treatment or evaluator artifacts
+are recovered by this check and no experimental or human ratings are changed.

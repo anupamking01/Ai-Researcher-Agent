@@ -23,6 +23,7 @@ EXPECTED_SHARDS = 16
 REPLAY_JOB = "replay-complete-shard-set"
 MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_JSON_DEPTH = 32
+MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 UTC_JOB_TIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 SHARD_RE = re.compile(r"unit-tests \((0|[1-9][0-9]?)\)\Z")
@@ -648,11 +649,83 @@ def audit_artifact_inventory(payload: dict, run: dict) -> dict:
     }
 
 
+def _capture_archive_digest(path: Path) -> tuple[str, int]:
+    """Hash bounded raw bytes from one regular file without extracting it."""
+    expected = path.lstat()
+    if not stat.S_ISREG(expected.st_mode):
+        raise ValueError("artifact archive must be a regular file (not a symlink)")
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    digest = hashlib.sha256()
+    size = 0
+    with os.fdopen(os.open(path, flags), "rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if not stat.S_ISREG(opened.st_mode):
+            raise ValueError("artifact archive must be a regular file")
+        if (expected.st_dev, expected.st_ino) != (opened.st_dev, opened.st_ino):
+            raise ValueError("artifact archive replaced before capture")
+        if opened.st_size > MAX_ARCHIVE_BYTES:
+            raise ValueError("artifact archive exceeds byte limit")
+        while chunk := stream.read(1024 * 1024):
+            size += len(chunk)
+            if size > MAX_ARCHIVE_BYTES:
+                raise ValueError("artifact archive exceeds byte limit")
+            digest.update(chunk)
+        final = os.fstat(stream.fileno())
+        if (opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns) != (
+            final.st_size, final.st_mtime_ns, final.st_ctime_ns
+        ) or size != opened.st_size:
+            raise ValueError("artifact archive changed during capture")
+    return "sha256:" + digest.hexdigest(), size
+
+
+def audit_local_archive_digests(inventory: dict, directory: Path) -> dict:
+    """Compare local ID-named downloads to provider digests, not their contents."""
+    if not stat.S_ISDIR(directory.lstat().st_mode):
+        raise ValueError("archive directory must be a directory (not a symlink)")
+    comparisons = []
+    for item in inventory["listed_artifact_identities"]:
+        if item["group"] == "unverified_diagnostics":
+            continue
+        path = directory / f"{item['artifact_id']}.zip"
+        observed, size = None, None
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            status = "missing_local_archive"
+        else:
+            observed, size = _capture_archive_digest(path)
+            declared = item["provider_declared_digest"]
+            if declared is None:
+                status = "provider_digest_unavailable"
+            else:
+                status = "match" if declared == observed else "mismatch"
+        comparisons.append({
+            "artifact_id": item["artifact_id"],
+            "name": item["name"],
+            "status": status,
+            "local_digest": observed,
+            "local_size_in_bytes": size,
+        })
+    return {
+        "local_archive_digest_comparisons": comparisons,
+        "full_archive_digest_match": (
+            inventory["full_artifact_inventory_listed_unexpired"]
+            and len(comparisons) == 2 * EXPECTED_SHARDS + 1
+            and all(item["status"] == "match" for item in comparisons)
+        ),
+        "archive_digest_scope": (
+            "local raw bytes compared with provider-declared digests; "
+            "archive contents, source checkout and provider authenticity not verified"
+        ),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--jobs-json", type=Path, required=True)
     parser.add_argument("--run-json", type=Path, required=True)
     parser.add_argument("--artifacts-json", type=Path, help="optional complete run-wide artifact inventory")
+    parser.add_argument("--archives-dir", type=Path, help="optional local downloads named by artifact ID (<id>.zip)")
     parser.add_argument("--run-id", type=int, required=True)
     parser.add_argument("--run-attempt", type=int, required=True)
     identity = parser.add_mutually_exclusive_group(required=True)
@@ -660,6 +733,8 @@ def main(argv: list[str] | None = None) -> int:
     identity.add_argument("--commit", dest="commit", help="legacy alias for --head-sha")
     args = parser.parse_args(argv)
     try:
+        if args.archives_dir is not None and args.artifacts_json is None:
+            raise ValueError("--archives-dir requires --artifacts-json")
         jobs, jobs_sha256 = _load_metadata_snapshot(args.jobs_json)
         job_audit = audit_jobs(
             jobs,
@@ -676,6 +751,8 @@ def main(argv: list[str] | None = None) -> int:
             artifacts, artifacts_sha256 = _load_metadata_snapshot(args.artifacts_json)
             audit.update(audit_artifact_inventory(artifacts, run))
             audit["artifacts_json_sha256"] = artifacts_sha256
+            if args.archives_dir is not None:
+                audit.update(audit_local_archive_digests(audit, args.archives_dir))
     except (OSError, ValueError) as exc:
         print(f"CI job completion audit invalid: {exc}", file=sys.stderr)
         return 2
@@ -688,7 +765,8 @@ def main(argv: list[str] | None = None) -> int:
     })
     print(json.dumps(audit, sort_keys=True, indent=2))
     return 0 if (audit["full_workflow_job_gate_completed"]
-                 and audit.get("full_artifact_inventory_listed_unexpired", True)) else 1
+                 and audit.get("full_artifact_inventory_listed_unexpired", True)
+                 and audit.get("full_archive_digest_match", True)) else 1
 
 
 if __name__ == "__main__":

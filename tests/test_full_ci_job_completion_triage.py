@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.audit_full_ci_job_completion import audit_artifact_inventory, audit_jobs, audit_run_envelope, load_jobs_json, main
+from scripts.audit_full_ci_job_completion import audit_artifact_inventory, audit_jobs, audit_local_archive_digests, audit_run_envelope, load_jobs_json, main
 
 SHA = "a" * 40
 RUN = 12345
@@ -1319,3 +1319,88 @@ def test_artifact_identity_handoff_rejects_malformed_provider_fields(field, valu
     payload["artifacts"][0][field] = value
     with pytest.raises(ValueError, match="invalid provider artifact"):
         audit_artifact_inventory(payload, _artifact_run())
+
+
+def _local_archives(directory):
+    payload = _artifact_inventory()
+    for entry in payload["artifacts"]:
+        raw = f"synthetic archive {entry['id']}".encode()
+        (directory / f"{entry['id']}.zip").write_bytes(raw)
+        entry["digest"] = "sha256:" + hashlib.sha256(raw).hexdigest()
+    return payload
+
+
+@pytest.mark.parametrize("problem, status", [
+    (None, "match"),
+    ("missing", "missing_local_archive"),
+    ("changed", "mismatch"),
+    ("unknown_digest", "provider_digest_unavailable"),
+])
+def test_local_archive_gate_requires_exact_id_and_digest(tmp_path, problem, status):
+    payload = _local_archives(tmp_path)
+    first = payload["artifacts"][0]
+    path = tmp_path / f"{first['id']}.zip"
+    if problem == "missing":
+        path.rename(tmp_path / "other-name.zip")
+    elif problem == "changed":
+        path.write_bytes(b"changed")
+    elif problem == "unknown_digest":
+        first.pop("digest")
+    result = audit_local_archive_digests(
+        audit_artifact_inventory(payload, _artifact_run()), tmp_path
+    )
+    assert result["local_archive_digest_comparisons"][0]["status"] == status
+    assert result["full_archive_digest_match"] is (problem is None)
+
+
+@pytest.mark.parametrize("kind", ["directory", "symlink", "fifo", "oversize"])
+def test_local_archive_gate_rejects_unsafe_inputs(tmp_path, monkeypatch, kind):
+    payload = _local_archives(tmp_path)
+    path = tmp_path / "1.zip"
+    path.unlink()
+    if kind == "directory":
+        path.mkdir()
+    elif kind == "symlink":
+        path.symlink_to(tmp_path / "2.zip")
+    elif kind == "fifo":
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("FIFO creation unavailable")
+        os.mkfifo(path)
+    else:
+        path.write_bytes(b"oversized")
+        monkeypatch.setattr("scripts.audit_full_ci_job_completion.MAX_ARCHIVE_BYTES", 1)
+    with pytest.raises(ValueError, match="regular file|byte limit"):
+        audit_local_archive_digests(
+            audit_artifact_inventory(payload, _artifact_run()), tmp_path
+        )
+
+
+def test_local_archive_cli_does_not_promote_incomplete_or_mismatching_evidence(tmp_path, capsys):
+    directory = tmp_path / "archives"
+    directory.mkdir()
+    payload = _local_archives(directory)
+    jobs, run, artifacts = [tmp_path / name for name in ("jobs.json", "run.json", "artifacts.json")]
+    jobs.write_text(json.dumps(_inventory()))
+    run.write_text(json.dumps(_artifact_run()))
+    artifacts.write_text(json.dumps(payload))
+    args = ["--jobs-json", str(jobs), "--run-json", str(run),
+            "--run-id", str(RUN), "--run-attempt", str(ATTEMPT), "--head-sha", SHA,
+            "--archives-dir", str(directory)]
+    assert main(args) == 2
+    assert not capsys.readouterr().out
+    args += ["--artifacts-json", str(artifacts)]
+    assert main(args) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["full_archive_digest_match"] is True
+    assert receipt["retained_evidence_verified_by_this_tool"] is False
+    (directory / "33.zip").write_bytes(b"wrong")
+    assert main(args) == 1
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["full_workflow_job_gate_completed"] is True
+    assert receipt["full_archive_digest_match"] is False
+    payload["artifacts"].pop()
+    payload["total_count"] -= 1
+    artifacts.write_text(json.dumps(payload))
+    assert main(args) == 1
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["full_archive_digest_match"] is False
