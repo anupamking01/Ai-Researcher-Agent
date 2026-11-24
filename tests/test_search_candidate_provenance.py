@@ -797,6 +797,7 @@ def _factor_bound_fixture(variant):
         "planning_mode": mode,
         "source_budget": budget,
         "verification_mode": verification,
+        "search_candidate_multiplier": trace["search_candidate_multiplier"],
     }
     return trace, experiment
 
@@ -1143,6 +1144,38 @@ def test_schema6_does_not_retroactively_strengthen_schema5_or_incomplete_runs():
     validate_search_trace_provenance(trace, experiment=experiment)
     trace["search_provenance_schema"] = SEARCH_TRACE_PROVENANCE_SCHEMA
     trace["completed"] = False
+    validate_search_trace_provenance(trace, experiment=experiment)
+
+
+@pytest.mark.parametrize("schema", [4, 5, 6])
+@pytest.mark.parametrize("bad_multiplier", [None, True, 2.0, 0, -1, 3])
+def test_completed_trace_rejects_missing_or_conflicting_envelope_multiplier(
+    schema, bad_multiplier,
+):
+    from logic.search_provenance import validate_search_trace_provenance
+    trace, experiment, _, _ = _report_bound_fixture("D3")
+    trace["search_provenance_schema"] = schema
+    if bad_multiplier is None:
+        experiment.pop("search_candidate_multiplier")
+    else:
+        experiment["search_candidate_multiplier"] = bad_multiplier
+    with pytest.raises(ValueError, match="candidate multiplier disagrees"):
+        validate_search_trace_provenance(trace, experiment=experiment)
+
+
+@pytest.mark.parametrize("variant", ["D3", "D6", "P6", "P6V"])
+def test_completed_trace_binds_multiplier_even_when_all_request_limits_agree(variant):
+    from logic.search_provenance import validate_search_trace_provenance
+    trace, experiment, _, _ = _report_bound_fixture(variant)
+    validate_search_trace_provenance(trace, experiment=experiment)
+    trace["search_candidate_multiplier"] = 3
+    slots = [trace["source_budget"]] if trace["planning_mode"] == "direct" else [2, 2, 1, 1]
+    for record, slot in zip(trace["search_records"], slots):
+        record["requested_candidate_limit"] = min(slot * 3, 20)
+    with pytest.raises(ValueError, match="candidate multiplier disagrees"):
+        validate_search_trace_provenance(trace, experiment=experiment)
+    # A legitimately different prospective configuration is not prohibited.
+    experiment["search_candidate_multiplier"] = 3
     validate_search_trace_provenance(trace, experiment=experiment)
 
 

@@ -332,6 +332,16 @@ def validate_search_trace_provenance(
                 or source.get("verification_mode") != verification_mode
             ):
                 raise ValueError("completed treatment factors disagree with frozen arm")
+        # The per-query request arithmetic alone cannot detect a multiplier
+        # and all its derived limits being changed together. Bind the control
+        # to the independently serialized ExperimentConfig as well.
+        multiplier = experiment.get("search_candidate_multiplier")
+        if (
+            type(multiplier) is not int or multiplier <= 0
+            or type(trace.get("search_candidate_multiplier")) is not int
+            or trace["search_candidate_multiplier"] != multiplier
+        ):
+            raise ValueError("completed search candidate multiplier disagrees with experiment")
 
     # Schema 5 requires a retained verifier artifact for successful P6V
     # treatments. A verification flag alone cannot establish that the

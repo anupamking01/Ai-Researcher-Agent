@@ -321,6 +321,22 @@ evaluator-policy caveats, retrospective sensitivity analyses stay
 exploratory, and genuine blinded human validation remains pending.
 
 
+## Prospective candidate multiplier envelope consistency (25 November 2026)
+
+The schema-2 request arithmetic could be satisfied by changing the trace's
+candidate multiplier together with every derived candidate-request limit.
+For completed schema-4 through schema-6 traces, the saved ExperimentConfig
+already contains this control independently of the search ledger. The
+validator now requires a positive, exact integer multiplier in that
+envelope and exact agreement with the trace before checking request
+arithmetic. This does not prescribe a new multiplier or alter retrieval;
+legitimately matching prospective configurations still pass. Schemas 1–3
+and incomplete runs retain their earlier validation scope. This is internal
+configuration consistency, not authentication of a provider request or
+recovery of the original September evidence. No historical outcome, pilot
+claim, post-collection automated estimate, exploratory sensitivity, or
+pending human rating changes.
+
 ## Prospective normalized verifier receipt consistency (25 November 2026)
 
 The treatment verifier's normalized success receipt retains at most eight
