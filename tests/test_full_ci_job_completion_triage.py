@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.audit_full_ci_job_completion import audit_jobs, audit_run_envelope, load_jobs_json, main
+from scripts.audit_full_ci_job_completion import audit_artifact_inventory, audit_jobs, audit_run_envelope, load_jobs_json, main
 
 SHA = "a" * 40
 RUN = 12345
@@ -1181,3 +1181,95 @@ def test_metadata_open_rejects_fifo_substituted_after_preflight(tmp_path, monkey
     monkeypatch.setattr("scripts.audit_full_ci_job_completion.os.open", replace_then_open)
     with pytest.raises(ValueError, match="regular file"):
         load_jobs_json(path)
+
+
+# Run-wide artifact metadata is separate from exact-attempt job metadata.
+def _artifact_run():
+    run = _run_snapshot()
+    run["repository"]["id"] = 42
+    return run
+
+
+def _artifact(name, artifact_id, expired=False):
+    return {
+        "id": artifact_id, "name": name, "expired": expired,
+        "workflow_run": {"id": RUN, "repository_id": 42, "head_sha": SHA},
+    }
+
+
+def _artifact_inventory():
+    names = [
+        f"vera-{kind}-shard-{shard}-{RUN}-{ATTEMPT}"
+        for kind in ("stdlib-evaluation", "offline-tests") for shard in range(16)
+    ] + [f"vera-full-shard-replay-{RUN}-{ATTEMPT}"]
+    return {"total_count": len(names), "artifacts": [
+        _artifact(name, i) for i, name in enumerate(names, 1)
+    ]}
+
+
+def test_artifact_inventory_complete_does_not_require_failure_diagnostics():
+    result = audit_artifact_inventory(_artifact_inventory(), _artifact_run())
+    assert result["full_artifact_inventory_listed_unexpired"] is True
+    assert result["artifact_inventory"]["unverified_diagnostics"]["missing"] == list(range(16))
+
+
+def test_artifact_inventory_distinguishes_expired_missing_and_previous_attempt():
+    payload = _artifact_inventory()
+    payload["artifacts"][16]["expired"] = True
+    payload["artifacts"][17]["name"] = f"vera-offline-tests-shard-1-{RUN}-1"
+    payload["artifacts"][-1]["name"] = f"vera-full-shard-replay-{RUN}-1"
+    payload["artifacts"].append(_artifact(
+        f"vera-unverified-failure-shard-1-{RUN}-{ATTEMPT}", 99
+    ))
+    payload["total_count"] += 1
+    result = audit_artifact_inventory(payload, _artifact_run())
+    assert result["artifact_inventory"]["offline_tests"]["listed_expired"] == [0]
+    assert result["artifact_inventory"]["offline_tests"]["missing"] == [1]
+    assert result["artifact_inventory"]["aggregate_replay"]["missing"] == ["replay"]
+    assert result["artifact_inventory"]["unverified_diagnostics"]["listed_unexpired"] == [1]
+    assert result["excluded_artifact_count"] == 2
+    assert result["full_artifact_inventory_listed_unexpired"] is False
+
+
+@pytest.mark.parametrize("mutation, message", [
+    (lambda p: p.update(total_count=100), "paginated"),
+    (lambda p: p["artifacts"][0].update(expired=0), "boolean"),
+    (lambda p: p["artifacts"][0]["workflow_run"].update(id=999), "mixed workflow run"),
+    (lambda p: p["artifacts"][0]["workflow_run"].update(repository_id=99), "mixed workflow run"),
+    (lambda p: p["artifacts"][0]["workflow_run"].update(head_sha="b" * 40), "mixed workflow run"),
+    (lambda p: p["artifacts"][1].update(id=p["artifacts"][0]["id"]), "duplicate artifact ID"),
+    (lambda p: p["artifacts"][1].update(name=p["artifacts"][0]["name"]), "duplicate exact-attempt"),
+])
+def test_artifact_inventory_rejects_ambiguous_or_foreign_metadata(mutation, message):
+    payload = _artifact_inventory()
+    mutation(payload)
+    with pytest.raises(ValueError, match=message):
+        audit_artifact_inventory(payload, _artifact_run())
+
+
+def test_optional_artifact_cli_gate_preserves_job_verdict_and_fingerprints(tmp_path, capsys):
+    jobs = tmp_path / "jobs.json"
+    run = tmp_path / "run.json"
+    artifacts = tmp_path / "artifacts.json"
+    jobs.write_text(json.dumps(_inventory()), encoding="utf-8")
+    run.write_text(json.dumps(_artifact_run()), encoding="utf-8")
+    payload = _artifact_inventory()
+    args = [
+        "--jobs-json", str(jobs), "--run-json", str(run), "--artifacts-json", str(artifacts),
+        "--run-id", str(RUN), "--run-attempt", str(ATTEMPT), "--head-sha", SHA,
+    ]
+    artifacts.write_text(json.dumps(payload), encoding="utf-8")
+    assert main(args) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["artifacts_json_sha256"] == hashlib.sha256(artifacts.read_bytes()).hexdigest()
+    assert receipt["retained_evidence_verified_by_this_tool"] is False
+    payload["artifacts"][-1]["expired"] = True
+    artifacts.write_text(json.dumps(payload), encoding="utf-8")
+    assert main(args) == 1
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["full_workflow_job_gate_completed"] is True
+    assert receipt["full_artifact_inventory_listed_unexpired"] is False
+    payload["total_count"] += 1
+    artifacts.write_text(json.dumps(payload), encoding="utf-8")
+    assert main(args) == 2
+    assert not capsys.readouterr().out

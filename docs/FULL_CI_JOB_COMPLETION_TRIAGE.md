@@ -242,3 +242,38 @@ or pipes. This is a local input safety check, not an atomic filesystem
 snapshot, a guarantee against concurrent in-place edits, or independent
 source authentication. The same parsed bytes remain SHA-256 fingerprinted.
 No scientific outcomes or human-validation claims are changed.
+
+
+## Optional exact-attempt artifact inventory gate — 24 November 2026
+
+Job-step success does not establish that its retained evidence is still
+listed. Preserve the complete run-wide response from
+`GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts?per_page=100`
+(with all pages, if necessary), and pass it as `--artifacts-json` alongside
+the original attempt-specific jobs and run JSON. The auditor binds its raw
+bytes as `artifacts_json_sha256`, checks inventory cardinality, unique IDs,
+run/repository/head identity and exact expected artifact names. Names from
+earlier attempts and unrelated artifacts cannot fill a current-attempt slot.
+Duplicate exact-attempt names and malformed metadata fail closed (exit 2).
+
+The receipt separates listed-unexpired, listed-expired and missing entries
+for early diagnostics, offline tests, unverified failure diagnostics and the
+aggregate replay. Optional failure diagnostics never substitute for success
+evidence. With the extra input, exit 0 additionally requires all 16 early,
+16 offline and one aggregate artifact to be listed unexpired; otherwise a
+valid but incomplete inventory yields exit 1 even when the separate job gate
+is green. Without it the existing job-only exit contract is unchanged.
+The endpoint is run-wide: attempt association is inferred from the exact
+workflow naming convention, not independently attested by artifact metadata.
+Listed-unexpired is a snapshot property, not proof of downloadability,
+archive integrity, actual runner checkout or replay. Use the separate
+full-set evidence replayer for byte-level verification.
+
+For [run 45357047893](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45357047893),
+attempt 1, the 31 listed artifacts comprised 16 early diagnostics, four
+offline-test bundles, eleven unverified failure diagnostics and no aggregate
+replay. All were reported unexpired. The four offline bundles corresponded
+to successful shards 4, 6, 11 and 15; cancelled shard 0 had no listed failure
+diagnostic. This is an inventory observation, not certification or proof of
+cancellation cause. No treatments, evaluators, frozen results or human ratings
+are changed.

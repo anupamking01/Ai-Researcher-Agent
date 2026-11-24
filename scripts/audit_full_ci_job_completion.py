@@ -540,10 +540,94 @@ def audit_run_envelope(
     return result
 
 
+def audit_artifact_inventory(payload: dict, run: dict) -> dict:
+    """Inventory exact-attempt artifact names, never certify archive contents.
+
+    The run-wide endpoint includes previous attempts. Artifact names encode the
+    attempt by workflow convention, not an independently attested attempt ID.
+    """
+    run_id = _positive_int(run.get("id"), "run.id")
+    attempt = _positive_int(run.get("run_attempt"), "run.run_attempt")
+    repository = run.get("repository")
+    repo_id = _positive_int(
+        repository.get("id") if isinstance(repository, dict) else None,
+        "run.repository.id",
+    )
+    if not isinstance(payload, dict) or not isinstance(payload.get("artifacts"), list):
+        raise ValueError("artifact inventory must contain an artifacts array")
+    artifacts = payload["artifacts"]
+    if type(payload.get("total_count")) is not int or payload["total_count"] != len(artifacts):
+        raise ValueError("incomplete/paginated artifact inventory: total_count does not match artifacts")
+    suffix = f"-{run_id}-{attempt}"
+    groups = {
+        "early_diagnostics": {
+            f"vera-stdlib-evaluation-shard-{i}{suffix}": i for i in range(EXPECTED_SHARDS)
+        },
+        "offline_tests": {
+            f"vera-offline-tests-shard-{i}{suffix}": i for i in range(EXPECTED_SHARDS)
+        },
+        "unverified_diagnostics": {
+            f"vera-unverified-failure-shard-{i}{suffix}": i for i in range(EXPECTED_SHARDS)
+        },
+        "aggregate_replay": {f"vera-full-shard-replay{suffix}": "replay"},
+    }
+    expected = {name for group in groups.values() for name in group}
+    seen_ids: set[int] = set()
+    current: dict[str, dict] = {}
+    excluded = 0
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            raise ValueError("malformed artifact entry")
+        artifact_id = _positive_int(artifact.get("id"), "artifact.id")
+        if artifact_id in seen_ids:
+            raise ValueError("duplicate artifact ID")
+        seen_ids.add(artifact_id)
+        name = artifact.get("name")
+        if not isinstance(name, str) or not name:
+            raise ValueError("malformed artifact name")
+        if type(artifact.get("expired")) is not bool:
+            raise ValueError("artifact expired flag must be boolean")
+        lineage = artifact.get("workflow_run")
+        if (not isinstance(lineage, dict)
+                or type(lineage.get("id")) is not int
+                or type(lineage.get("repository_id")) is not int
+                or (lineage.get("id"), lineage.get("repository_id"), lineage.get("head_sha"))
+                != (run_id, repo_id, run.get("head_sha"))):
+            raise ValueError("artifact inventory has mixed workflow run, repository or head SHA")
+        if name not in expected:
+            excluded += 1
+            continue
+        if name in current:
+            raise ValueError(f"duplicate exact-attempt artifact name {name!r}")
+        current[name] = artifact
+    result = {}
+    for group, names in groups.items():
+        result[group] = {
+            "listed_unexpired": [index for name, index in names.items()
+                                 if name in current and not current[name]["expired"]],
+            "listed_expired": [index for name, index in names.items()
+                               if name in current and current[name]["expired"]],
+            "missing": [index for name, index in names.items() if name not in current],
+        }
+    return {
+        "artifact_inventory": result,
+        "excluded_artifact_count": excluded,
+        "full_artifact_inventory_listed_unexpired": all(
+            not result[group]["missing"] and not result[group]["listed_expired"]
+            for group in ("early_diagnostics", "offline_tests", "aggregate_replay")
+        ),
+        "artifact_inventory_source": (
+            "provided run-wide GitHub artifact metadata; attempt inferred from names; "
+            "availability and archive bytes not independently verified"
+        ),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--jobs-json", type=Path, required=True)
     parser.add_argument("--run-json", type=Path, required=True)
+    parser.add_argument("--artifacts-json", type=Path, help="optional complete run-wide artifact inventory")
     parser.add_argument("--run-id", type=int, required=True)
     parser.add_argument("--run-attempt", type=int, required=True)
     identity = parser.add_mutually_exclusive_group(required=True)
@@ -563,6 +647,10 @@ def main(argv: list[str] | None = None) -> int:
             run, job_audit,
             run_id=args.run_id, run_attempt=args.run_attempt, commit=args.commit,
         )
+        if args.artifacts_json is not None:
+            artifacts, artifacts_sha256 = _load_metadata_snapshot(args.artifacts_json)
+            audit.update(audit_artifact_inventory(artifacts, run))
+            audit["artifacts_json_sha256"] = artifacts_sha256
     except (OSError, ValueError) as exc:
         print(f"CI job completion audit invalid: {exc}", file=sys.stderr)
         return 2
@@ -574,7 +662,8 @@ def main(argv: list[str] | None = None) -> int:
         "run_json_sha256": run_sha256,
     })
     print(json.dumps(audit, sort_keys=True, indent=2))
-    return 0 if audit["full_workflow_job_gate_completed"] else 1
+    return 0 if (audit["full_workflow_job_gate_completed"]
+                 and audit.get("full_artifact_inventory_listed_unexpired", True)) else 1
 
 
 if __name__ == "__main__":
