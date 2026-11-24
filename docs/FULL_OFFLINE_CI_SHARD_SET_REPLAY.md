@@ -93,3 +93,33 @@ the complete suite.
 Original research artifact authentication, genuine blinded human evaluation,
 and the post-collection and exploratory interpretation boundaries are
 unchanged. No treatment or evaluator was rerun for this checkpoint.
+
+## Compare the retained aggregate receipt to independent replay
+
+The aggregate archive is a separate evidence object, not one of the 32
+per-shard bundles. Download its exact artifact ID, preserve its archive
+bytes, and stage its single `vera-full-shard-replay.json` member separately.
+A matching archive checksum does not establish that the aggregate JSON
+agrees with the independently replayed shard evidence.
+
+For a tested checkout containing the aggregate-comparison option, add
+`--retained-aggregate-receipt /trusted-download/aggregate/vera-full-shard-replay.json`
+to the full replay command above. Supply the early-evidence root as well.
+The verifier compares the bounded, regular-file receipt bytes to the exact
+canonical JSON it independently recomputes from all 32 bundles; an altered
+count, run identity, digest, duplicate key, or even changed serialization
+fails before a successful replay is printed. It does not read identity from
+the aggregate receipt or change the existing workflow's output format.
+
+For older tested checkouts lacking this flag, run the original verifier
+with both roots and redirect its stdout to a **new** local file; after
+successful exit compare that file to the retained aggregate using
+`cmp -- recomputed.json /trusted-download/aggregate/vera-full-shard-replay.json`.
+Do not replace or normalize the retained file to make it match. Use the
+actual tested checkout, not a newer branch merely to obtain the new flag.
+
+A matching aggregate establishes only local cross-artifact consistency,
+not provider authenticity, job completion, or actual execution. A missing
+aggregate cannot be manufactured from the per-shard replay to certify a
+cancelled run. The independent metadata, artifact inventory, checksum and
+scientific-evidence gates remain distinct.

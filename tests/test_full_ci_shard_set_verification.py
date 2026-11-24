@@ -340,3 +340,70 @@ def test_early_diagnostic_replay_rejects_symlinked_evidence_root(tmp_path):
             alias, checkout_sha=SHA, run_id="54321",
             run_attempt="2", event="push",
         )
+
+@pytest.mark.parametrize("mutation", [
+    "none", "aggregate_count", "attempt", "early_hash", "duplicate_key",
+    "format_only", "truncated", "oversized", "symlink",
+])
+def test_retained_aggregate_must_match_independently_replayed_bytes(
+    evidence, monkeypatch, mutation,
+):
+    # Use the real 16-shard pytest replay, with a synthetic early-gate summary.
+    early_result = {"shards_verified": 16, "per_shard": [
+        {"shard": i, "log_sha256": "b" * 64} for i in range(16)
+    ]}
+    monkeypatch.setattr(whole, "verify_early_diagnostic_set",
+                        lambda *args, **kwargs: early_result)
+    result = whole.verify_shard_set(
+        evidence, early_evidence_root=evidence.parent / "early", **KWARGS,
+    )
+    # Independent reproduction of the workflow's existing stdout contract.
+    original = (json.dumps(result, indent=2, sort_keys=True) + "\n").encode()
+    assert whole.canonical_aggregate_receipt(result) == original
+    path = evidence.parent / "vera-full-shard-replay.json"
+    if mutation == "aggregate_count":
+        original = original.replace(b'"passed": 32', b'"passed": 33')
+    elif mutation == "attempt":
+        original = original.replace(b'"workflow_run_attempt": "2"',
+                                    b'"workflow_run_attempt": "3"')
+    elif mutation == "early_hash":
+        original = original.replace(b"b" * 64, b"c" * 64, 1)
+    elif mutation == "duplicate_key":
+        original = original.replace(b'{\n', b'{\n  "shards_verified": 16,\n', 1)
+    elif mutation == "format_only":
+        original = json.dumps(result).encode()
+    elif mutation == "truncated":
+        original = original[:-10]
+    elif mutation == "oversized":
+        original = b"x" * (whole.MAX_AGGREGATE_RECEIPT_BYTES + 1)
+    if mutation == "symlink":
+        target = path.with_suffix(".original")
+        target.write_bytes(original)
+        path.symlink_to(target)
+    else:
+        path.write_bytes(original)
+    if mutation == "none":
+        whole.verify_retained_aggregate_receipt(result, path)
+    else:
+        with pytest.raises(ValueError):
+            whole.verify_retained_aggregate_receipt(result, path)
+
+
+def test_retained_aggregate_requires_early_diagnostic_replay(evidence):
+    result = whole.verify_shard_set(evidence, **KWARGS)
+    path = evidence.parent / "aggregate.json"
+    path.write_bytes(whole.canonical_aggregate_receipt(result))
+    with pytest.raises(ValueError, match="requires all early diagnostics"):
+        whole.verify_retained_aggregate_receipt(result, path)
+
+
+def test_aggregate_cli_requires_early_root_before_checkout(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", [
+        "verify_full_ci_shard_set", "--evidence-root", "unused",
+        "--checkout-sha", SHA, "--run-id", "54321", "--run-attempt", "2",
+        "--event", "push", "--retained-aggregate-receipt", "unused.json",
+    ])
+    with pytest.raises(SystemExit) as exc:
+        whole.main()
+    assert exc.value.code == 2
+    assert "requires --early-evidence-root" in capsys.readouterr().err

@@ -20,6 +20,8 @@ from scripts import verify_ci_source_checkout as source_checker
 from scripts import verify_ci_test_evidence as producer
 from scripts import verify_retained_ci_test_evidence as replay
 
+MAX_AGGREGATE_RECEIPT_BYTES = 256 * 1024
+
 EVIDENCE_FILES = frozenset({
     "vera-offline-tests.log",
     "vera-offline-test-receipt.json",
@@ -268,10 +270,29 @@ def _verify_pinned_shard_set(
     }
 
 
+def canonical_aggregate_receipt(result: dict) -> bytes:
+    """Serialize the exact bytes emitted by the aggregate workflow job."""
+    return (json.dumps(result, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def verify_retained_aggregate_receipt(result: dict, path: Path) -> None:
+    """Require the provider-retained aggregate to equal independent full replay."""
+    if not isinstance(result.get("preinstall_diagnostics"), dict):
+        raise ValueError("retained aggregate comparison requires all early diagnostics")
+    retained = producer.read_bounded_evidence(
+        path, maximum=MAX_AGGREGATE_RECEIPT_BYTES,
+        label="retained aggregate replay receipt",
+    )
+    if retained != canonical_aggregate_receipt(result):
+        raise ValueError("retained aggregate receipt disagrees with independent replay")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence-root", required=True, type=Path)
     parser.add_argument("--early-evidence-root", type=Path)
+    parser.add_argument("--retained-aggregate-receipt", type=Path,
+                        help="compare the downloaded aggregate JSON to the full independent replay")
     parser.add_argument("--checkout-sha", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--run-attempt", required=True)
@@ -280,6 +301,8 @@ def main() -> int:
         choices=("push", "pull_request", "workflow_dispatch"),
     )
     args = parser.parse_args()
+    if args.retained_aggregate_receipt is not None and args.early_evidence_root is None:
+        parser.error("--retained-aggregate-receipt requires --early-evidence-root")
     try:
         # Require exact checkout bytes, not just a matching branch name/HEAD.
         source_checker.verify_source_checkout(
@@ -294,9 +317,12 @@ def main() -> int:
             },
             early_evidence_root=args.early_evidence_root,
         )
+        if args.retained_aggregate_receipt is not None:
+            verify_retained_aggregate_receipt(result, args.retained_aggregate_receipt)
     except (OSError, ValueError, UnicodeError) as exc:
         parser.exit(1, f"VERA FULL CI SHARD SET: FAIL: {exc}\n")
-    print(json.dumps(result, indent=2, sort_keys=True))
+    # Keep the historical aggregate bytes stable in both modes.
+    print(canonical_aggregate_receipt(result).decode("utf-8"), end="")
     return 0
 
 
