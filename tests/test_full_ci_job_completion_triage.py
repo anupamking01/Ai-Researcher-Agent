@@ -911,3 +911,61 @@ def test_cli_stale_job_snapshot_emits_no_receipt(tmp_path, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "recapture both snapshots" in captured.err
+
+
+@pytest.mark.parametrize("event", ["pull_request", "push", "workflow_dispatch"])
+@pytest.mark.parametrize("incomplete", [False, True])
+def test_metadata_receipt_preserves_head_identity_without_checkout_attestation(
+    tmp_path, capsys, event, incomplete
+):
+    jobs_path, run_path = tmp_path / "jobs.json", tmp_path / "run.json"
+    jobs = _inventory({6: "cancelled"}, "skipped") if incomplete else _inventory()
+    run = _run_snapshot(conclusion="cancelled" if incomplete else "success")
+    run["event"] = event
+    jobs_path.write_text(json.dumps(jobs), encoding="utf-8")
+    run_path.write_text(json.dumps(run), encoding="utf-8")
+    args = ["--jobs-json", str(jobs_path), "--run-json", str(run_path),
+            "--run-id", str(RUN), "--run-attempt", str(ATTEMPT)]
+    assert main(args + ["--head-sha", SHA]) == (1 if incomplete else 0)
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["workflow_event"] == event
+    assert receipt["workflow_head_sha"] == receipt["commit"] == SHA
+    assert receipt["tested_checkout_sha_verified_by_this_tool"] is False
+    assert main(args + ["--commit", SHA]) == (1 if incomplete else 0)
+    assert json.loads(capsys.readouterr().out) == receipt
+
+
+def test_pr_integration_checkout_cannot_be_substituted_for_rest_head(tmp_path, capsys):
+    jobs_path, run_path = tmp_path / "jobs.json", tmp_path / "run.json"
+    jobs_path.write_text(json.dumps(_inventory()), encoding="utf-8")
+    run_path.write_text(json.dumps(_run_snapshot()), encoding="utf-8")
+    integration_checkout = "b" * 40
+    assert main([
+        "--jobs-json", str(jobs_path), "--run-json", str(run_path),
+        "--run-id", str(RUN), "--run-attempt", str(ATTEMPT),
+        "--head-sha", integration_checkout,
+    ]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "workflow head SHA" in captured.err
+
+
+def test_cross_endpoint_audit_rejects_conflicting_explicit_head_identity():
+    audit = _audit(_inventory())
+    audit["workflow_head_sha"] = "b" * 40
+    with pytest.raises(ValueError, match="identities disagree"):
+        audit_run_envelope(
+            _run_snapshot(), audit, run_id=RUN, run_attempt=ATTEMPT, commit=SHA,
+        )
+
+
+def test_cli_rejects_ambiguous_head_arguments(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "--jobs-json", str(tmp_path / "jobs.json"),
+            "--run-json", str(tmp_path / "run.json"),
+            "--run-id", str(RUN), "--run-attempt", str(ATTEMPT),
+            "--head-sha", SHA, "--commit", "b" * 40,
+        ])
+    assert exc.value.code == 2
+    assert capsys.readouterr().out == ""

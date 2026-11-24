@@ -13,7 +13,7 @@ python -m scripts.audit_full_ci_job_completion \
   --jobs-json /path/to/original-run-jobs.json \
   --run-json /path/to/original-workflow-run.json \
   --run-id 45089271290 --run-attempt 1 \
-  --commit ada5a719ae9692ef2d69599e8f87bda57b0d7ddf
+  --head-sha ada5a719ae9692ef2d69599e8f87bda57b0d7ddf
 ```
 
 Exit code 0 requires all seventeen jobs and the matching `tests.yml` workflow to report success; 1 means valid but incomplete/cancelled/failed metadata; 2 means invalid or contradictory input. Exit 0 does **not** independently attest to the evidence archive.
@@ -47,7 +47,7 @@ the original run JSON from
 `GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}`, and the original jobs
 inventory from `GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs?per_page=100`.
 Use attempt-specific endpoints rather than latest-attempt responses when preserving historical evidence.
-The CLI requires both snapshots: it binds the run ID, attempt, tested commit SHA,
+The CLI requires both snapshots: it binds the run ID, attempt, REST workflow head SHA,
 workflow name, exact `tests.yml` path, event, status and conclusion. A
 cancelled or unfinished run cannot be certified even if a synthetic jobs
 snapshot reports all green. A green workflow envelope contradicting incomplete
@@ -131,3 +131,33 @@ cancelled shards and skipped replay, with no unfinished observed jobs. This
 is terminal incomplete metadata, not a full-suite certificate. No cause of
 cancellation or authenticity of the retained artifacts follows from these
 status fields.
+
+
+## Workflow head identity is not the tested checkout identity
+
+For a pull-request workflow the REST run/job `head_sha` can identify the PR
+branch head even though the runner tests an integration merge commit.
+Use `--head-sha` with the original REST `head_sha` for this metadata auditor;
+`--commit` remains a legacy alias with identical semantics. Supply only one.
+The receipt explicitly records `workflow_head_sha` (the legacy `commit` field
+has the same value), `workflow_event`, and
+`tested_checkout_sha_verified_by_this_tool: false`. Even exit 0 does not
+certify the tested checkout SHA.
+
+For example, the original attempt-1 jobs inventory for
+[run 45313095875](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45313095875)
+reports PR head `e3eebfe83afa86039812f7a1aff020019055ee8a`. The retained
+[shard 12 job log](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45313095875/job/138173345771)
+instead reports the merge checkout `03a2a47136a3b0cadda5e0bb50c75966b9606138`
+in both the early diagnostic and full-suite transcript. These are distinct
+provider-reported identities, not an independently verified source checkout.
+That run had seven successful shards, nine cancelled shards, and skipped replay;
+it remains uncertified.
+
+Do not pass the REST head SHA automatically to the independent artifact
+replayer. Obtain the actual tested checkout identity from independently
+retained run/checkout evidence, then follow
+[FULL_OFFLINE_CI_SHARD_SET_REPLAY.md](FULL_OFFLINE_CI_SHARD_SET_REPLAY.md).
+The metadata auditor does not substitute a current PR merge SHA for a
+historical tested commit, infer a checkout from a branch name, or authenticate
+the actual source tree or archive. No scientific outcomes are changed.

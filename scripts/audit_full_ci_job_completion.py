@@ -1,8 +1,10 @@
 """Offline, fail-closed completion triage for a single VERA 16-shard CI run.
 
 This audits GitHub Actions *job and workflow-run metadata*, not pytest output
-or retained test receipts. A successful replay job is necessary for completion, but inspecting
-metadata alone never independently verifies the replay artifact's contents.
+or retained test receipts. The REST head SHA identifies the workflow source head,
+not necessarily the runner checkout (pull requests can test a merge commit).
+A successful replay job is necessary for completion, but inspecting metadata
+alone never independently verifies the tested checkout or replay artifact.
 No network calls, treatments, evaluator calls, or experimental data are used.
 """
 from __future__ import annotations
@@ -259,7 +261,7 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
     run_id = _positive_int(run_id, "run_id")
     run_attempt = _positive_int(run_attempt, "run_attempt")
     if not isinstance(commit, str) or not SHA_RE.fullmatch(commit):
-        raise ValueError("commit must be an exact lowercase 40-character SHA")
+        raise ValueError("workflow head SHA must be an exact lowercase 40-character SHA")
     if not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list):
         raise ValueError("jobs payload must contain a jobs array")
     jobs = payload["jobs"]
@@ -285,7 +287,7 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
                 or (job.get("run_id"), job.get("run_attempt"), job.get("head_sha")) != (
                     run_id, run_attempt, commit
                 )):
-            raise ValueError(f"{name}: mixed run, attempt, or checkout SHA")
+            raise ValueError(f"{name}: mixed run, attempt, or workflow head SHA")
         # The original jobs endpoint identifies its workflow and repository in
         # every job, even cancelled jobs. Do not accept contradictory identities.
         run_url = job.get("run_url")
@@ -355,7 +357,9 @@ def audit_jobs(payload: dict, *, run_id: int, run_attempt: int, commit: str) -> 
         "schema_version": 1,
         "run_id": run_id,
         "run_attempt": run_attempt,
-        "commit": commit,
+        "commit": commit,  # Legacy alias for the REST head SHA, not a checkout claim.
+        "workflow_head_sha": commit,
+        "tested_checkout_sha_verified_by_this_tool": False,
         "jobs_run_url": jobs_run_url,
         "source": "provided GitHub Actions jobs metadata; authenticity not independently attested",
         "successful_shards": passed,
@@ -388,7 +392,7 @@ def audit_run_envelope(
         or run["run_attempt"] != run_attempt
         or run.get("head_sha") != commit
     ):
-        raise ValueError("workflow run metadata has mixed ID, attempt, or checkout SHA")
+        raise ValueError("workflow run metadata has mixed ID, attempt, or workflow head SHA")
     if run.get("name") != "tests" or run.get("path") != ".github/workflows/tests.yml":
         raise ValueError("unexpected workflow identity; expected tests.yml")
     # Cross-check the job audit against the actual run envelope, not merely
@@ -400,9 +404,8 @@ def audit_run_envelope(
     expected_url = f"https://api.github.com/repos/{full_name}/actions/runs/{run_id}"
     if run.get("url") != expected_url or job_audit.get("jobs_run_url") != expected_url:
         raise ValueError("job inventory and workflow run repository URLs disagree")
-    if (job_audit.get("run_id"), job_audit.get("run_attempt"), job_audit.get("commit")) != (
-        run_id, run_attempt, commit
-    ):
+    if (job_audit.get("run_id"), job_audit.get("run_attempt"), job_audit.get("commit"),
+            job_audit.get("workflow_head_sha")) != (run_id, run_attempt, commit, commit):
         raise ValueError("job audit and workflow run identities disagree")
     event = run.get("event")
     if not isinstance(event, str) or event not in {"pull_request", "push", "workflow_dispatch"}:
@@ -430,6 +433,7 @@ def audit_run_envelope(
         raise ValueError("completed workflow contradicts unfinished job metadata; recapture both snapshots")
     result = dict(job_audit)
     result.update({
+        "workflow_event": event,
         "workflow_status": status,
         "workflow_conclusion": conclusion or "in_progress",
         "workflow_source": "provided GitHub workflow-run metadata; authenticity not independently attested",
@@ -446,7 +450,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-json", type=Path, required=True)
     parser.add_argument("--run-id", type=int, required=True)
     parser.add_argument("--run-attempt", type=int, required=True)
-    parser.add_argument("--commit", required=True)
+    identity = parser.add_mutually_exclusive_group(required=True)
+    identity.add_argument("--head-sha", dest="commit", help="REST run/job head_sha, not necessarily the tested checkout SHA")
+    identity.add_argument("--commit", dest="commit", help="legacy alias for --head-sha")
     args = parser.parse_args(argv)
     try:
         jobs, jobs_sha256 = _load_metadata_snapshot(args.jobs_json)
