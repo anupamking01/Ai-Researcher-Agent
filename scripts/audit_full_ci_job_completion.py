@@ -150,6 +150,11 @@ def _require_json_container_depth(raw: bytes) -> None:
 def _load_metadata_snapshot(path: Path) -> tuple[dict, str]:
     """Parse and fingerprint the same bounded raw bytes, without reopening the input."""
     path = Path(path)
+
+    def generation(info: os.stat_result) -> tuple[int, ...]:
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+                info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
     # Reject special files before opening them, then validate the opened
     # descriptor too. Nonblocking open prevents a FIFO substituted between
     # lstat and open from hanging the offline auditor.
@@ -163,9 +168,16 @@ def _load_metadata_snapshot(path: Path) -> tuple[dict, str]:
             raise ValueError("metadata snapshot must be a regular file")
         if (expected.st_dev, expected.st_ino) != (opened.st_dev, opened.st_ino):
             raise ValueError("metadata snapshot replaced before capture")
+        if generation(expected) != generation(opened):
+            raise ValueError("metadata snapshot changed before capture")
         raw = stream.read(MAX_JSON_BYTES + 1)
-    if len(raw) > MAX_JSON_BYTES:
-        raise ValueError("jobs JSON exceeds two-megabyte limit")
+        if len(raw) > MAX_JSON_BYTES:
+            raise ValueError("jobs JSON exceeds two-megabyte limit")
+        final = os.fstat(stream.fileno())
+        if (generation(opened) != generation(final)
+                or len(raw) != opened.st_size
+                or generation(final) != generation(path.lstat())):
+            raise ValueError("metadata snapshot changed during capture")
     _require_json_container_depth(raw)
     try:
         payload = json.loads(

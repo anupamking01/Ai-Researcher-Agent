@@ -378,3 +378,25 @@ This is consistency between supplied provider records and the reviewed
 workflow contract, not independent attestation of artifact naming or
 execution. It does not alter frozen experimental data, repair missing
 original report/trace custody, or establish prospective or human validation.
+
+## Stable metadata capture window — 25 November 2026
+
+The snapshot reader already bound the receipt hash to the parsed bytes and
+rejected a different inode substituted before open. It could still accept
+a valid JSON document rewritten in place between preflight and capture, or
+changed while its descriptor was held. The reader now checks file generation
+(device, inode, mode, link count, size, mtime and ctime) at preflight, open,
+end of the bounded read and the final visible pathname. It also requires the
+captured byte count to agree with the opened size. An observed change fails
+closed (CLI exit 2, no receipt) for jobs, run and optional artifact metadata.
+
+Synthetic cases cover appending valid JSON whitespace, a same-size rewrite
+with restored mtime, byte-identical atomic leaf replacement during capture,
+and an in-place edit before open. The original contract remains: changes
+*after* capture do not retroactively change the receipt hash.
+
+This is a local, bounded per-file observation window, not an atomic snapshot
+of all three metadata files, full ancestor-path custody, protection from all
+transient changes, or independent authentication of the provider records.
+It does not resolve missing original treatment custody or authorize human
+rating distribution, and changes no frozen experimental outcomes.

@@ -1646,3 +1646,56 @@ def test_historical_aggregate_alone_cannot_certify_complete_archive_set(tmp_path
     assert aggregate["shards_verified"] == 16
     assert aggregate["experimental_treatments_or_evaluators_run"] is False
     assert aggregate["human_validation_performed"] is False
+
+@pytest.mark.parametrize("which", ["jobs", "run", "artifacts"])
+@pytest.mark.parametrize("kind", ["append", "same-size", "replace"])
+def test_cli_rejects_metadata_mutation_during_capture(tmp_path, capsys, monkeypatch, which, kind):
+    jobs, run, artifacts = [tmp_path / name for name in ("jobs.json", "run.json", "artifacts.json")]
+    for path, payload in ((jobs, _inventory()), (run, _artifact_run()),
+                          (artifacts, _artifact_inventory())):
+        path.write_bytes(json.dumps(payload).encode("utf-8") + b" ")
+    path = {"jobs": jobs, "run": run, "artifacts": artifacts}[which]
+    target = path.stat()
+    original_fstat = os.fstat
+    changed = False
+
+    def mutate_after_open_stat(fd):
+        nonlocal changed
+        info = original_fstat(fd)
+        if not changed and (info.st_dev, info.st_ino) == (target.st_dev, target.st_ino):
+            changed = True
+            if kind == "append":
+                path.write_bytes(path.read_bytes() + b" ")
+            elif kind == "same-size":
+                path.write_bytes(path.read_bytes()[:-1] + b"\n")
+                os.utime(path, ns=(target.st_atime_ns, target.st_mtime_ns))
+            else:
+                replacement = path.with_suffix(".new")
+                replacement.write_bytes(path.read_bytes())
+                replacement.replace(path)
+        return info
+
+    monkeypatch.setattr(os, "fstat", mutate_after_open_stat)
+    assert main([
+        "--jobs-json", str(jobs), "--run-json", str(run),
+        "--artifacts-json", str(artifacts), "--run-id", str(RUN),
+        "--run-attempt", str(ATTEMPT), "--head-sha", SHA,
+    ]) == 2
+    assert changed
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "metadata snapshot changed during capture" in captured.err
+
+
+def test_metadata_open_detects_in_place_mutation_before_capture(tmp_path, monkeypatch):
+    path = tmp_path / "jobs.json"
+    path.write_bytes(b'{"jobs":[],"total_count":0}')
+    original_open = os.open
+
+    def mutate_then_open(name, flags, *args, **kwargs):
+        path.write_bytes(path.read_bytes() + b" ")
+        return original_open(name, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", mutate_then_open)
+    with pytest.raises(ValueError, match="metadata snapshot changed before capture"):
+        load_jobs_json(path)
