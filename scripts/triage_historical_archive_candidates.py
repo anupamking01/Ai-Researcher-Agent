@@ -110,24 +110,27 @@ TRIAGE_INTERPRETATION = (
 )
 
 
-def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
-    """Inspect every explicitly supplied candidate; retain negative observations.
+def capture_candidate_roster(
+    assignments: Sequence[tuple[str, Path]],
+) -> tuple[tuple[str, Path], ...]:
+    """Copy and validate the ordered declarations before any candidate I/O.
 
-    Successful structural checks and matching GitHub-provider ZIP metadata are
-    only preliminary *same-provider concordance*. No result authorizes human
-    packet distribution or authenticates a historical treatment/report.
+    Bound actual iteration rather than trusting a mutable sequence's length.
+    Copy each row as well as the outer roster so later caller edits cannot
+    substitute an unvalidated role/path or extend the candidate budget.
+    This is a local declaration snapshot, not an atomic filesystem snapshot.
     """
-    if not 0 < len(assignments) <= MAX_CANDIDATES:
-        raise CandidateTriageError(
-            f"provide 1 to {MAX_CANDIDATES} explicitly identified ZIP candidates"
-        )
-
-    # Reject duplicate input paths before inspecting any source. Distinct
-    # aliases/hardlinks are separately rejected by the ZIP preflight's
-    # single-link and stable-descriptor checks; this is not a custody proof.
+    captured = []
     seen_paths: set[str] = set()
-    for role, path in assignments:
-        if role not in ROLES:
+    for row in assignments:
+        if len(captured) >= MAX_CANDIDATES:
+            raise CandidateTriageError(
+                f"provide 1 to {MAX_CANDIDATES} explicitly identified ZIP candidates"
+            )
+        if not isinstance(row, (tuple, list)) or len(row) != 2:
+            raise CandidateTriageError("candidate declaration must be a role/path pair")
+        role, path = row
+        if type(role) is not str or role not in ROLES:
             raise CandidateTriageError("unknown historical archive role")
         if not isinstance(path, Path) or not str(path) or "\x00" in str(path):
             raise CandidateTriageError("candidate must be a valid local path")
@@ -135,6 +138,22 @@ def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
         if normalized in seen_paths:
             raise CandidateTriageError("same candidate path supplied more than once")
         seen_paths.add(normalized)
+        captured.append((role, path))
+    if not captured:
+        raise CandidateTriageError(
+            f"provide 1 to {MAX_CANDIDATES} explicitly identified ZIP candidates"
+        )
+    return tuple(captured)
+
+
+def triage_candidates(assignments: Sequence[tuple[str, Path]]) -> dict:
+    """Inspect every explicitly supplied candidate; retain negative observations.
+
+    Successful structural checks and matching GitHub-provider ZIP metadata are
+    only preliminary *same-provider concordance*. No result authorizes human
+    packet distribution or authenticates a historical treatment/report.
+    """
+    assignments = capture_candidate_roster(assignments)
 
     remaining_uncompressed_budget = MAX_BATCH_UNCOMPRESSED_BYTES
     remaining_archive_budget = MAX_BATCH_ARCHIVE_BYTES

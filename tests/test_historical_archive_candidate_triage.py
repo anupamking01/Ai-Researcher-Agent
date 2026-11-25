@@ -604,3 +604,44 @@ def test_preflight_archive_byte_reservation_precedes_any_archive_fingerprint(
     with pytest.raises(triage.BatchArchiveBudgetExceeded):
         triage.zip_preflight.audit_recovered_zip(path, reserve_archive_bytes=reject)
     assert recorded == [path.stat().st_size]
+
+
+def test_candidate_roster_is_captured_before_first_archive_scan(tmp_path, monkeypatch):
+    first = _zip(tmp_path / "first.zip")
+    second = _zip(tmp_path / "second.zip")
+    replacement = _zip(tmp_path / "replacement.zip")
+    assignments = [["original_treatment", first], ["evaluator_recovery", second]]
+    expected = triage.triage_candidates(assignments)
+    actual_audit = triage.zip_preflight.audit_recovered_zip
+    inspected = []
+
+    def mutate_roster(path, **kwargs):
+        inspected.append(path)
+        if path == first:
+            assignments[1][:] = ["original_treatment", replacement]
+            assignments.extend(
+                ["original_treatment", replacement]
+                for _ in range(triage.MAX_CANDIDATES)
+            )
+        return actual_audit(path, **kwargs)
+
+    monkeypatch.setattr(triage.zip_preflight, "audit_recovered_zip", mutate_roster)
+    assert triage.triage_candidates(assignments) == expected
+    assert inspected == [first, second]
+
+
+def test_candidate_limit_uses_actual_iterated_count_before_io(tmp_path, monkeypatch):
+    class UnderreportedRoster(list):
+        def __len__(self):
+            return 1
+
+    assignments = UnderreportedRoster(
+        ("original_treatment", tmp_path / f"{index}.zip")
+        for index in range(triage.MAX_CANDIDATES + 1)
+    )
+    monkeypatch.setattr(
+        triage.zip_preflight, "audit_recovered_zip",
+        lambda *a, **kw: pytest.fail("over-limit roster must not scan ZIPs"),
+    )
+    with pytest.raises(triage.CandidateTriageError, match="provide 1 to"):
+        triage.triage_candidates(assignments)

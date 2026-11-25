@@ -381,3 +381,26 @@ def test_source_identity_claims_rejected_before_any_archive_rescan(
         verify.ReceiptVerificationError, match="inconsistent claims"
     ):
         verify.verify_receipt(receipt, assignments)
+
+
+def test_receipt_replay_cannot_switch_to_another_same_basename_candidate(
+    tmp_path, monkeypatch,
+):
+    intended_dir = tmp_path / "intended"
+    alternate_dir = tmp_path / "alternate"
+    intended_dir.mkdir()
+    alternate_dir.mkdir()
+    intended = _zip(intended_dir / "candidate.zip", b"not the recorded bytes")
+    alternate = _zip(alternate_dir / "candidate.zip", b"recorded synthetic bytes")
+    receipt = _receipt(tmp_path / "receipt.json", [("original_treatment", alternate)])
+    assignments = [["original_treatment", intended]]
+    actual_read = verify._read_receipt
+
+    def mutate_during_receipt_read(path):
+        raw = actual_read(path)
+        assignments[0][1] = alternate
+        return raw
+
+    monkeypatch.setattr(verify, "_read_receipt", mutate_during_receipt_read)
+    with pytest.raises(verify.ReceiptVerificationError, match="differs from replayed"):
+        verify.verify_receipt(receipt, assignments)

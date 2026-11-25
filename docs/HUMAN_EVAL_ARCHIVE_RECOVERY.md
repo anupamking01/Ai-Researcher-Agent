@@ -1,3 +1,23 @@
+## Ordered candidate declaration snapshot (26 November 2026)
+
+The direct archive triage API previously validated the caller's mutable roster,
+then iterated it again during ZIP inspection. A mutation could substitute a
+different role/path or append unvalidated candidates after the 16-candidate
+limit had been checked. Receipt replay also reread the caller roster after
+opening the receipt; switching to a different directory's same-basename ZIP
+could make a receipt appear to replay against the intended candidate.
+
+Both paths now use one bounded, copied ordered role/path roster. The candidate
+limit applies to actual iteration, not a reported sequence length; duplicate
+paths and invalid declarations are rejected before candidate reads. Synthetic
+regressions exercise in-place row edits and roster growth during archive
+inspection, an underreported count, and a same-basename substitution during
+receipt capture. The immutable roster is reused for all subsequent accounting
+and replay. It does not guarantee an atomic view during initial roster capture
+or authenticate any historical archive; original report/trace custody and
+genuine human validation remain pending. No treatments, evaluators, frozen
+outcomes or human ratings were generated or changed.
+
 ## Coordinator packet output directory custody (19 November 2026)
 
 The offline human packet builder previously rejected a symlink at its output

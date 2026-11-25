@@ -442,8 +442,10 @@ def verify_receipt(
     receipt_path: Path, assignments: Sequence[tuple[str, Path]],
 ) -> dict:
     """Recompute the full inventory with the same role/order and resource bounds."""
-    if not 0 < len(assignments) <= triage.MAX_CANDIDATES:
-        raise ReceiptVerificationError("provide original ordered candidate paths")
+    try:
+        assignments = triage.capture_candidate_roster(assignments)
+    except triage.CandidateTriageError as exc:
+        raise ReceiptVerificationError(str(exc)) from exc
     raw = _read_receipt(receipt_path)
     try:
         recorded = json.loads(
