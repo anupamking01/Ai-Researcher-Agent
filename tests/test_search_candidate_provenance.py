@@ -1127,8 +1127,16 @@ def test_schema6_rejects_same_word_count_report_substitution():
     validate_report_artifact(trace, substituted)
 
 
-@pytest.mark.parametrize("bad_raw", [None, "", b"", b"x" * (8 * 1024 * 1024 + 1)])
-def test_schema6_rejects_missing_or_unbounded_retained_report_bytes(bad_raw):
+@pytest.mark.parametrize("case", ["none", "text", "empty-bytes", "over-byte-limit"])
+def test_schema6_rejects_missing_or_unbounded_retained_report_bytes(case):
+    # Construct the large payload inside the test: pytest's automatic node
+    # ID for an 8 MiB bytes parameter otherwise expands into an 8 MiB log
+    # line under -vv. Keep all four cases and the exact original boundary.
+    bad_raw = (
+        b"x" * (8 * 1024 * 1024 + 1)
+        if case == "over-byte-limit"
+        else {"none": None, "text": "", "empty-bytes": b""}[case]
+    )
     from logic.search_provenance import validate_report_artifact
     trace, _, _, _ = _report_bound_fixture()
     with pytest.raises(ValueError, match="report artifact must be bounded"):

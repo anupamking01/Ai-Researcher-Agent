@@ -121,3 +121,33 @@ frozen automated results retain their post-collection and design
 qualifications, retrospective sensitivities remain exploratory, and
 original-evidence authentication and independent human validation remain
 outstanding.
+
+## Bound oversized-report regression node IDs — 25 November 2026
+
+At branch head `af83157774f94419598aeaaeaa004019ff1efa29`, the
+[full-suite PR run 45518904419](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45518904419)
+again retained 15 of 16 offline-test bundles; shard 0 was cancelled during
+pytest and aggregate replay was skipped. The independent
+[runner-provenance PR run 45518904673](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45518904673)
+was also cancelled during pytest. Both job-log retrievals returned
+BlobNotFound; neither produced a failure transcript artifact.
+
+A concrete shared test-output defect was identified in
+`test_schema6_rejects_missing_or_unbounded_retained_report_bytes`: the
+oversized 8 MiB + 1 bytes fixture was itself a pytest parameter. Default
+pytest IDs expand bytes values into verbose test names. A local isolated
+pytest 9.0.2 reproduction using the same four input cases and report
+validator emitted a single 8,388,704-byte line under `-vv`, versus 109
+bytes after using short semantic case IDs and constructing the payload
+inside the test. Both isolated executions passed all four cases. The
+repository pins pytest 8.3.2; pinned-runner confirmation remains a
+separate check. The actual payload, rejection assertion and four cases
+are unchanged; the oversized allocation is now deferred until execution.
+
+This removes a reproducible source of excessive CI transcript output
+without narrowing test selection, changing the report-size limit or
+relaxing any receipt/replay rule. It is a plausible contributor to the
+observed interruptions, **not** an established cancellation cause.
+Only exact-attempt retained CI evidence can establish suite completion.
+No treatments or evaluators were rerun, no frozen outcomes were changed,
+and no human ratings or historical artifact authentication are implied.
