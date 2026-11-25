@@ -420,3 +420,30 @@ and a pre-open in-place edit. This does not replace the SHA-256 or provider
 size checks; it is a bounded per-file observation, not atomic multi-archive
 custody, full ancestor-path authentication or a guarantee against subsequent
 changes. No scientific or human-evaluation outcome is changed.
+
+
+## Exact retention-step creation chronology — 25 November 2026
+
+The run-wide artifact endpoint encodes attempt identity in artifact names,
+not an independently authenticated attempt field. A name, lineage and
+checksum match alone cannot detect an artifact creation time that contradicts
+the successful job's actual retention step. The combined CLI now compares
+each listed required archive's provider `created_at` with the inclusive UTC
+start/end window of its corresponding successful upload step: early
+diagnostic, offline pytest, or aggregate replay. Missing/malformed timestamps
+or times outside that step invalidate the receipt (exit 2), even for expired
+archives and even if local ZIP checksums would match. Incomplete jobs and
+failure-only diagnostics are not assumed to have successful upload windows;
+their listed IDs are explicitly unchecked. The standalone inventory helper
+remains a listing-only diagnostic.
+
+The receipt records `artifact_upload_window_matched_ids` and
+`artifact_upload_window_unchecked_ids`. Before implementing this contract,
+all 33 original artifacts from preserved run 45526533438 attempt 1 and all
+33 artifacts from completed run 45595485874 were observed within their exact
+retention-step windows. These are provider metadata observations, not
+independent clock synchronization, cryptographic upload attestation, source
+checkout authentication, or original experimental evidence. The strict window
+is a fail-closed consistency check; a provider clock discrepancy must be
+investigated rather than silently accepted. No treatment/evaluator results
+or human ratings are changed.

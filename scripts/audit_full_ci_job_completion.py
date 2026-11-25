@@ -678,6 +678,50 @@ def audit_artifact_inventory(
     }
 
 
+def _audit_artifact_upload_windows(payload: dict, jobs: dict, inventory: dict) -> dict:
+    """Compare creation timestamps with the exact successful retention steps.
+
+    Call only after job and artifact inventories have been validated. Incomplete
+    jobs can have partial uploads; do not infer their upload chronology.
+    """
+    successful = {job["name"]: job for job in jobs["jobs"]
+                  if job["conclusion"] == "success"}
+    artifacts = {item["id"]: item for item in payload["artifacts"]}
+    labels = {
+        "early_diagnostics": "Retain pre-install diagnostic evidence (90 days)",
+        "offline_tests": "Retain source-bound offline test evidence (90 days)",
+        "aggregate_replay": "Retain verified sixteen-shard replay (90 days)",
+    }
+    matched, unchecked = [], []
+    for item in inventory["listed_artifact_identities"]:
+        group, slot, artifact_id = item["group"], item["slot"], item["artifact_id"]
+        job_name = REPLAY_JOB if group == "aggregate_replay" else f"unit-tests ({slot})"
+        job = successful.get(job_name)
+        if group not in labels or job is None:
+            unchecked.append(artifact_id)
+            continue
+        step = next(step for step in job["steps"] if step["name"] == labels[group])
+        start, end = _completed_job_window(step)
+        created = artifacts[artifact_id].get("created_at")
+        instant, _ = _completed_job_window({
+            "name": f"artifact {artifact_id} created_at",
+            "started_at": created, "completed_at": created,
+        })
+        if not start <= instant <= end:
+            raise ValueError(
+                f"artifact {artifact_id} creation outside successful upload step window"
+            )
+        matched.append(artifact_id)
+    return {
+        "artifact_upload_window_matched_ids": sorted(matched),
+        "artifact_upload_window_unchecked_ids": sorted(unchecked),
+        "artifact_upload_window_scope": (
+            "provider creation time within corresponding successful retention step; "
+            "not independent attestation of upload identity or attempt"
+        ),
+    }
+
+
 def _capture_archive_digest(path: Path) -> tuple[str, int]:
     """Hash bounded raw bytes from one regular file without extracting it."""
     expected = path.lstat()
@@ -799,6 +843,7 @@ def main(argv: list[str] | None = None) -> int:
             audit.update(audit_artifact_inventory(
                 artifacts, run, successful_shards=audit["successful_shards"]
             ))
+            audit.update(_audit_artifact_upload_windows(artifacts, jobs, audit))
             audit["artifacts_json_sha256"] = artifacts_sha256
             if args.archives_dir is not None:
                 audit.update(audit_local_archive_digests(audit, args.archives_dir))

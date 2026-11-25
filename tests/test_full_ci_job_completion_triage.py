@@ -1193,6 +1193,8 @@ def _artifact_run():
 def _artifact(name, artifact_id, expired=False):
     return {
         "id": artifact_id, "name": name, "expired": expired,
+        "created_at": ("2026-11-23T00:11:00Z" if name.startswith("vera-full-shard-replay-")
+                       else "2026-11-23T00:00:00Z"),
         "workflow_run": {"id": RUN, "repository_id": 42, "head_sha": SHA},
     }
 
@@ -1575,6 +1577,10 @@ def test_historical_metadata_escrow_replays_through_actual_auditor(capsys):
     assert receipt["successful_shards"] == list(range(16))
     assert receipt["full_artifact_inventory_listed_unexpired"] is True
     assert len(receipt["listed_artifact_identities"]) == 33
+    assert receipt["artifact_upload_window_matched_ids"] == sorted(
+        item["artifact_id"] for item in receipt["listed_artifact_identities"]
+    )
+    assert receipt["artifact_upload_window_unchecked_ids"] == []
     assert sum(item["provider_declared_size_in_bytes"]
                for item in receipt["listed_artifact_identities"]) == 219898
     for name in ("run", "jobs", "artifacts"):
@@ -1758,3 +1764,74 @@ def test_archive_open_detects_in_place_mutation_before_capture(tmp_path, monkeyp
     monkeypatch.setattr(os, "open", mutate_then_open)
     with pytest.raises(ValueError, match="artifact archive changed before capture"):
         _capture_archive_digest(path)
+
+
+@pytest.mark.parametrize("mode", ["inventory", "local", "historical"])
+@pytest.mark.parametrize("index", [0, 16, 32])
+@pytest.mark.parametrize("offset", [-1, 1])
+def test_cli_rejects_artifact_creation_outside_successful_upload_window(
+    tmp_path, capsys, mode, index, offset
+):
+    from datetime import datetime, timedelta
+
+    directory = tmp_path / "archives"
+    directory.mkdir()
+    payload = _local_archives(directory)
+    entry = payload["artifacts"][index]
+    # All synthetic successful upload steps have zero-duration UTC windows.
+    timestamp = datetime.strptime(entry["created_at"], "%Y-%m-%dT%H:%M:%SZ")
+    entry["created_at"] = (timestamp + timedelta(seconds=offset)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    entry["expired"] = mode == "historical"
+    jobs, run, artifacts = [tmp_path / name for name in ("jobs.json", "run.json", "artifacts.json")]
+    jobs.write_text(json.dumps(_inventory()))
+    run.write_text(json.dumps(_artifact_run()))
+    artifacts.write_text(json.dumps(payload))
+    args = ["--jobs-json", str(jobs), "--run-json", str(run),
+            "--artifacts-json", str(artifacts), "--run-id", str(RUN),
+            "--run-attempt", str(ATTEMPT), "--head-sha", SHA]
+    if mode != "inventory":
+        args += ["--archives-dir", str(directory)]
+    if mode == "historical":
+        args.append("--historical-local-archives")
+    assert main(args) == 2
+    captured = capsys.readouterr()
+    assert not captured.out
+    assert "creation outside successful upload step window" in captured.err
+
+
+@pytest.mark.parametrize("created", [None, True, "2026-11-23T00:00:00+00:00", "2026-02-30T00:00:00Z"])
+def test_cli_rejects_missing_or_invalid_artifact_creation_time(tmp_path, capsys, created):
+    payload = _artifact_inventory()
+    if created is None:
+        del payload["artifacts"][0]["created_at"]
+    else:
+        payload["artifacts"][0]["created_at"] = created
+    jobs, run, artifacts = [tmp_path / name for name in ("jobs.json", "run.json", "artifacts.json")]
+    jobs.write_text(json.dumps(_inventory()))
+    run.write_text(json.dumps(_artifact_run()))
+    artifacts.write_text(json.dumps(payload))
+    assert main(["--jobs-json", str(jobs), "--run-json", str(run),
+                 "--artifacts-json", str(artifacts), "--run-id", str(RUN),
+                 "--run-attempt", str(ATTEMPT), "--head-sha", SHA]) == 2
+    captured = capsys.readouterr()
+    assert not captured.out
+    assert "created_at" in captured.err
+
+
+def test_incomplete_job_upload_windows_are_explicitly_unchecked(tmp_path, capsys):
+    payload = _artifact_inventory()
+    # The cancelled shard and skipped replay have no successful upload step
+    # chronology to assert, even if an artifact listing happens to exist.
+    for index in (1, 17, 32):
+        del payload["artifacts"][index]["created_at"]
+    jobs, run, artifacts = [tmp_path / name for name in ("jobs.json", "run.json", "artifacts.json")]
+    jobs.write_text(json.dumps(_inventory({1: "cancelled"}, replay="skipped")))
+    run.write_text(json.dumps(_artifact_run() | {"conclusion": "cancelled"}))
+    artifacts.write_text(json.dumps(payload))
+    assert main(["--jobs-json", str(jobs), "--run-json", str(run),
+                 "--artifacts-json", str(artifacts), "--run-id", str(RUN),
+                 "--run-attempt", str(ATTEMPT), "--head-sha", SHA]) == 1
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["artifact_upload_window_unchecked_ids"] == [2, 18, 33]
+    assert len(receipt["artifact_upload_window_matched_ids"]) == 30
+    assert receipt["full_workflow_job_gate_completed"] is False
