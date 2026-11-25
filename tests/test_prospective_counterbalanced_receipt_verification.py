@@ -167,7 +167,11 @@ def test_cli_emits_only_digests_and_rejects_bad_file_or_symlink(
     output = json.loads(capsys.readouterr().out)
     assert output["supplied_plan_file_pin_matched"] is True
     assert "schedule" not in output
-    assert list(tmp_path.iterdir()) == [manifest_path, receipt_path]
+    # Directory iteration order is filesystem-dependent. Require the exact
+    # input inventory and unchanged bytes, not a particular enumeration order.
+    assert set(tmp_path.iterdir()) == {manifest_path, receipt_path}
+    assert manifest_path.read_bytes() == source
+    assert receipt_path.read_bytes() == receipt
 
     symlink = tmp_path / "alias.json"
     symlink.symlink_to(receipt_path)
