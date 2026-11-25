@@ -103,6 +103,31 @@ def test_unsafe_paths_rejected(tmp_path, name):
 
 
 @pytest.mark.parametrize("name", [
+    "reports/report.mdXhidden",
+    "reports/report.mdX",
+    "reports/é.mdXhidden",
+])
+def test_nul_in_original_zip_member_name_rejected_before_decompression(tmp_path, name):
+    # Writing a NUL via ZipInfo would truncate it before serialization.
+    # Patch both local and central names, preserving every offset and CRC.
+    path = _zip(tmp_path / "nul-name.zip", {name: b"synthetic"})
+    original = name.encode("utf-8")
+    rewritten = original.replace(b"X", b"\x00", 1)
+    raw = path.read_bytes()
+    assert raw.count(original) == 2
+    path.write_bytes(raw.replace(original, rewritten))
+    with zipfile.ZipFile(path) as archive:
+        info = archive.infolist()[0]
+        assert info.orig_filename == rewritten.decode("utf-8")
+        assert info.filename == name.split("X", 1)[0]
+        assert archive.read(info) == b"synthetic"
+    reserved = []
+    with pytest.raises(audit.RecoveredArchiveError, match="reader rewrote original path"):
+        audit.audit_recovered_zip(path, reserve_uncompressed_bytes=reserved.append)
+    assert reserved == []
+
+
+@pytest.mark.parametrize("name", [
     "reports/\uFF0E\uFF0E/trace.json",  # FULLWIDTH FULL STOP => ".."
     "reports/\uFF0E/trace.json",        # FULLWIDTH FULL STOP => "."
     "reports\uFF0Ftrace.json",          # FULLWIDTH SOLIDUS => new separator

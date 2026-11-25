@@ -146,6 +146,10 @@ def _check_zip_extra_fields(extra: bytes, *, label: str) -> None:
 
 def _inspect_member(info: zipfile.ZipInfo) -> tuple[str, bool]:
     _check_zip_extra_fields(info.extra, label="central")
+    # ZipInfo silently truncates NUL-containing names (and may normalize
+    # separators on Windows). Do not inventory a rewritten path as evidence.
+    if info.orig_filename != info.filename:
+        raise RecoveredArchiveError("unsafe ZIP member name: reader rewrote original path")
     key = _path_key(info.filename)
     is_directory = info.is_dir()
     mode = stat.S_IFMT(info.external_attr >> 16)

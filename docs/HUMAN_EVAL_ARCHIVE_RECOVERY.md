@@ -1,3 +1,18 @@
+## Original ZIP member name integrity (26 November 2026)
+
+Python's ZIP reader can silently truncate a decoded filename at an embedded
+NUL even when both local and central headers contain that same malformed name.
+A safety check on the already-truncated filename would then hash and inventory
+a different path from the one recorded in the archive. The recovered-ZIP
+preflight now rejects any member for which the reader's original decoded
+filename differs from its exposed filename, before reserving decompression
+or reading member contents. Synthetic regressions patch both headers with
+embedded and terminal NULs, including a UTF-8 filename, and confirm that
+ordinary ZIP reading would otherwise accept the rewritten name.
+
+This is a structural path-identity check only; it does not authenticate
+historical custody, recover reports or authorize human evaluation.
+
 ## Candidate receipt reservation accounting (26 November 2026)
 
 Before reopening any candidate ZIP, schema-v3 receipt replay now checks the
