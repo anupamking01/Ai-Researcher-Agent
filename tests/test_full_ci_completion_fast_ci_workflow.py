@@ -35,6 +35,8 @@ REPLAY_DEPENDENCIES = (
     "tests/test_evaluation_stdlib_gate.py",
     "tests/conftest.py",
     "docs/FULL_OFFLINE_CI_SHARD_SET_REPLAY.md",
+    "research-evidence/offline-ci-45526533438-attempt-1/**",
+    "research-evidence/offline-ci-aggregate-45526533438-attempt-1.zip",
     ".github/workflows/live-pilot.yml",
     ".github/workflows/live-app-smoke.yml",
 )

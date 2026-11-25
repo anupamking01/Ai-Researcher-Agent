@@ -1,4 +1,4 @@
-"""Synthetic offline CI job metadata; no GitHub, treatments or ratings."""
+"""Offline synthetic and historical CI metadata; no network, treatments or ratings."""
 import hashlib
 import json
 import os
@@ -1404,3 +1404,115 @@ def test_local_archive_cli_does_not_promote_incomplete_or_mismatching_evidence(t
     assert main(args) == 1
     receipt = json.loads(capsys.readouterr().out)
     assert receipt["full_archive_digest_match"] is False
+
+
+# Unlike the synthetic fixtures above, these are immutable historical
+# provider-response snapshots and one actual retained CI aggregate ZIP.
+_ESCROW_ROOT = Path(__file__).resolve().parents[1] / "research-evidence"
+_ESCROW = _ESCROW_ROOT / "offline-ci-45526533438-attempt-1"
+_ESCROW_HEAD = "74b75bb5e7be9c54054dc7384a5d38ce5b80416d"
+_ESCROW_CHECKOUT = "ee1e1d54ac5102f441f9641eab070d9e9233cac5"
+_ESCROW_BLOBS = {
+    "run.json": "bc469891a10e273a0f74b5d20db8dffebe61499b",
+    "jobs.json": "87ca6497a1e65ebcba18bbc8411f30ebe8119a58",
+    "artifacts.json": "c85839caa86ef72e58ff863c7d5658c7c7837fc2",
+    "tested-integration-commit.json": "c11abcace9ecd7737e1a3bf038ddbb88e1b50b56",
+}
+
+
+def _escrow_cli_args(head=_ESCROW_HEAD):
+    return [
+        "--run-json", str(_ESCROW / "run.json"),
+        "--jobs-json", str(_ESCROW / "jobs.json"),
+        "--artifacts-json", str(_ESCROW / "artifacts.json"),
+        "--run-id", "45526533438", "--run-attempt", "1", "--head-sha", head,
+    ]
+
+
+def test_historical_metadata_escrow_replays_through_actual_auditor(capsys):
+    # Anchor original bytes to the recorded Git blob identities, without
+    # relying on GitHub access, current PR state, or a reserialized JSON copy.
+    for name, expected in _ESCROW_BLOBS.items():
+        raw = (_ESCROW / name).read_bytes()
+        header = f"blob {len(raw)}\0".encode("ascii")
+        assert hashlib.sha1(header + raw).hexdigest() == expected, name
+
+    assert main(_escrow_cli_args()) == 0
+    captured = capsys.readouterr()
+    assert not captured.err
+    receipt = json.loads(captured.out)
+    assert receipt["full_workflow_job_gate_completed"] is True
+    assert receipt["successful_shards"] == list(range(16))
+    assert receipt["full_artifact_inventory_listed_unexpired"] is True
+    assert len(receipt["listed_artifact_identities"]) == 33
+    assert sum(item["provider_declared_size_in_bytes"]
+               for item in receipt["listed_artifact_identities"]) == 219898
+    for name in ("run", "jobs", "artifacts"):
+        assert receipt[f"{name}_json_sha256"] == hashlib.sha256(
+            (_ESCROW / f"{name}.json").read_bytes()
+        ).hexdigest()
+    assert receipt["tested_checkout_sha_verified_by_this_tool"] is False
+    assert receipt["retained_evidence_verified_by_this_tool"] is False
+    assert receipt["research_result_or_human_validation"] is False
+    assert "full_archive_digest_match" not in receipt
+
+
+def test_historical_escrow_rejects_mutable_pr_head_and_integration_as_run_head(capsys):
+    run = json.loads((_ESCROW / "run.json").read_bytes())
+    integration = json.loads((_ESCROW / "tested-integration-commit.json").read_bytes())
+    assert run["head_sha"] == _ESCROW_HEAD
+    assert integration["sha"] == _ESCROW_CHECKOUT
+    assert integration["tree"]["sha"] == "6f7ff2f2e91314a898d27565ea1632e225416e64"
+    assert [parent["sha"] for parent in integration["parents"]] == [
+        "f66768b4af38664eb4cc373b7d7161d8b5b8de69", _ESCROW_HEAD,
+    ]
+    mutable_head = run["pull_requests"][0]["head"]["sha"]
+    assert len({mutable_head, _ESCROW_HEAD, _ESCROW_CHECKOUT}) == 3
+    for wrong_head in (mutable_head, _ESCROW_CHECKOUT):
+        assert main(_escrow_cli_args(wrong_head)) == 2
+        captured = capsys.readouterr()
+        assert not captured.out
+        assert "mixed run, attempt, or workflow head SHA" in captured.err
+
+
+def test_historical_aggregate_alone_cannot_certify_complete_archive_set(tmp_path, capsys):
+    import zipfile
+
+    raw = (_ESCROW_ROOT / "offline-ci-aggregate-45526533438-attempt-1.zip").read_bytes()
+    assert len(raw) == 3198
+    assert hashlib.sha256(raw).hexdigest() == (
+        "b69570a1babd1116e58a43f1994f0d5e3ff2a81f66868e55f0aebd9d96ff17d9"
+    )
+    archive = tmp_path / "14983325938.zip"
+    archive.write_bytes(raw)
+    # Even a real, byte-matched aggregate is not the missing 32 archives.
+    assert main(_escrow_cli_args() + ["--archives-dir", str(tmp_path)]) == 1
+    captured = capsys.readouterr()
+    assert not captured.err
+    receipt = json.loads(captured.out)
+    assert receipt["full_workflow_job_gate_completed"] is True
+    assert receipt["full_archive_digest_match"] is False
+    matches = receipt["local_archive_digest_comparisons"]
+    assert len(matches) == 33
+    assert sum(item["status"] == "missing_local_archive" for item in matches) == 32
+    assert [item["artifact_id"] for item in matches if item["status"] == "match"] == [14983325938]
+    assert receipt["retained_evidence_verified_by_this_tool"] is False
+
+    with zipfile.ZipFile(archive) as zipped:
+        assert zipped.namelist() == ["vera-full-shard-replay.json"]
+        assert zipped.testzip() is None
+        member = zipped.read("vera-full-shard-replay.json")
+    assert hashlib.sha256(member).hexdigest() == (
+        "2c2bffbc5624be41523d20c6ac1d64c3c449a873487f4585db856e6f5cbd2273"
+    )
+    aggregate = json.loads(member)
+    assert aggregate["checkout_sha"] == _ESCROW_CHECKOUT
+    assert aggregate["workflow_run_id"] == "45526533438"
+    assert aggregate["workflow_run_attempt"] == "1"
+    assert aggregate["workflow_event"] == "pull_request"
+    assert aggregate["status"] == "complete_sixteen_shard_local_replay_consistent_not_independently_attested"
+    assert aggregate["aggregate_test_counts"] == {"passed": 8475, "warnings": 4}
+    assert aggregate["source_test_modules_covered"] == 264
+    assert aggregate["shards_verified"] == 16
+    assert aggregate["experimental_treatments_or_evaluators_run"] is False
+    assert aggregate["human_validation_performed"] is False

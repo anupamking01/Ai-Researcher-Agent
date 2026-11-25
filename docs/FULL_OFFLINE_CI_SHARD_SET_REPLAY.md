@@ -353,3 +353,26 @@ matched their post-commit re-fetches byte-for-byte.
 Full source-bound exact-checkout replay, original experimental evidence
 custody, and genuine blinded human evaluation remain separate gates.
 No treatments, evaluators or scientific outcomes were changed.
+
+
+### Executable historical escrow regression
+
+The completion-auditor test module now exercises the actual immutable
+metadata snapshots and Git-preserved aggregate, in addition to its
+synthetic fixtures. Run the focused checks without network access:
+
+```bash
+python -m pytest -q tests/test_full_ci_job_completion_triage.py -k historical
+```
+
+The checks pin all four original metadata Git blob IDs, invoke the actual
+metadata auditor CLI with the historical workflow head, reject substitution
+of the mutable nested PR head or tested integration checkout as that head,
+and require a nonzero incomplete-archive verdict when only the original
+aggregate ZIP is available. They also verify the original aggregate ZIP
+and member hashes, identity, and reported software-test counts. The
+dedicated offline CI lane triggers on changes to either escrow location.
+A passing regression is a check of retained metadata and aggregate bytes,
+not a new experimental result, independent full source-bound replay, or
+proof of runner honesty. The separately retained 32 shard archives and
+exact tested checkout remain necessary for the complete external replay.

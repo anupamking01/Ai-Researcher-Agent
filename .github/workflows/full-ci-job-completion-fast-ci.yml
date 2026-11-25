@@ -1,6 +1,6 @@
 name: full-ci-job-completion-fast-ci
 
-# Offline, synthetic-only regressions for job-completion and shard-set evidence.
+# Offline regressions for synthetic and retained historical CI evidence.
 # A green result is NOT a substitute for the sixteen-shard aggregate replay.
 on:
   push:
@@ -25,6 +25,8 @@ on:
       - tests/test_evaluation_stdlib_gate.py
       - tests/conftest.py
       - docs/FULL_OFFLINE_CI_SHARD_SET_REPLAY.md
+      - research-evidence/offline-ci-45526533438-attempt-1/**
+      - research-evidence/offline-ci-aggregate-45526533438-attempt-1.zip
       - docs/FULL_CI_JOB_COMPLETION_TRIAGE.md
       - scripts/run_offline_pytest_firewalled.sh
       - scripts/verify_ci_python_runtime.py
@@ -54,6 +56,8 @@ on:
       - tests/test_evaluation_stdlib_gate.py
       - tests/conftest.py
       - docs/FULL_OFFLINE_CI_SHARD_SET_REPLAY.md
+      - research-evidence/offline-ci-45526533438-attempt-1/**
+      - research-evidence/offline-ci-aggregate-45526533438-attempt-1.zip
       - docs/FULL_CI_JOB_COMPLETION_TRIAGE.md
       - scripts/run_offline_pytest_firewalled.sh
       - scripts/verify_ci_python_runtime.py
