@@ -1187,3 +1187,83 @@ def test_schema6_report_producer_trace_and_reader_are_wired():
     assert "self.report_artifact_sha256 = hashlib.sha256(" in agent
     assert 'trace_payload["report_artifact_sha256"] = getattr(' in run
     assert "validate_report_artifact(trace, raw)" in runner
+
+
+
+# Replay the producer's ordered first-unseen selection independently of
+# source hashes, pool attribution, total counts and request arithmetic.
+def _selection_replay_fixture(schema, mutation=None):
+    trace, experiment, _ = _verifier_bound_fixture("P6")
+    trace["search_provenance_schema"] = schema
+    if schema == 6:
+        trace["report_artifact_sha256"] = "a" * 64
+    first, second = trace["search_records"][:2]
+
+    def record_selection(record, candidates, chosen):
+        entries = [
+            {"url": f"https://example.org/{name}", "backend_pool": f"pool-{i}"}
+            for i, name in enumerate(candidates)
+        ]
+        first_entries = {}
+        for entry in entries:
+            first_entries.setdefault(entry["url"], entry)
+        urls = [f"https://example.org/{name}" for name in chosen]
+        record.pop("search_error", None)
+        record.update(
+            candidate_sources=entries,
+            candidate_urls=[entry["url"] for entry in entries],
+            scheduled_urls=urls,
+            scheduled_sources=[dict(first_entries[url]) for url in urls],
+        )
+
+    choices = {
+        None: (["one", "two"], ["four", "five"]),
+        "reorder": (["two", "one"], ["four", "five"]),
+        "skip_earlier": (["one", "three"], ["two", "four"]),
+        "underfill": (["one", "two"], ["four"]),
+        "later_reorder": (["one", "two"], ["five", "four"]),
+    }
+    left, right = choices[mutation]
+    record_selection(first, ["one", "one", "two", "three"], left)
+    record_selection(second, ["two", "four", "four", "five"], right)
+    urls = first["scheduled_urls"] + second["scheduled_urls"]
+    # A prior failed browse still consumes its visited URL and must not be
+    # scheduled again on a later planner query.
+    trace.update(
+        scheduled_urls=urls, source_count=len(urls),
+        successful_urls=urls[:1] + urls[2:], successful_source_count=len(urls) - 1,
+        failed_urls=urls[1:2], failed_source_count=1,
+        source_success_rate=(len(urls) - 1) / len(urls),
+    )
+    return trace, experiment
+
+
+@pytest.mark.parametrize("schema", [2, 3, 4, 5, 6])
+def test_completed_candidate_replay_preserves_order_duplicates_and_seen_urls(schema):
+    from logic.search_provenance import validate_search_trace_provenance
+    trace, experiment = _selection_replay_fixture(schema)
+    validate_search_trace_provenance(trace, experiment=experiment)
+
+
+@pytest.mark.parametrize("schema", [2, 3, 4, 5, 6])
+@pytest.mark.parametrize("mutation", [
+    "reorder", "skip_earlier", "underfill", "later_reorder",
+])
+def test_completed_candidate_replay_rejects_eligible_but_impossible_selection(
+    schema, mutation
+):
+    from logic.search_provenance import validate_search_trace_provenance
+    trace, experiment = _selection_replay_fixture(schema, mutation)
+    # All selected URLs remain eligible, and all counts, pools and outcome
+    # lists are rebound. Only the producer's selection rule is violated.
+    with pytest.raises(ValueError, match="deterministic candidate selection"):
+        validate_search_trace_provenance(trace, experiment=experiment)
+
+
+def test_candidate_replay_preserves_legacy_and_incomplete_contracts():
+    from logic.search_provenance import validate_search_trace_provenance
+    legacy, experiment = _selection_replay_fixture(1, "underfill")
+    validate_search_trace_provenance(legacy, experiment=experiment)
+    incomplete, experiment = _selection_replay_fixture(6, "underfill")
+    incomplete["completed"] = False
+    validate_search_trace_provenance(incomplete, experiment=experiment)

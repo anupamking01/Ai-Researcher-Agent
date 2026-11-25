@@ -467,6 +467,19 @@ def validate_search_trace_provenance(
             _require_external_web_url(entry["url"], index=index)
         if [entry["url"] for entry in cs] != cu:
             raise ValueError(f"search record {index} candidate URL mismatch")
+        # A completed request-bound ledger must reproduce the producer's
+        # first-unseen selection, not merely contain an eligible subset.
+        # Prior scheduled attempts count as visited even if browsing failed.
+        # Leave schema 1 and incomplete traces under their narrower contract.
+        if request_bound and trace.get("completed") is True:
+            prior = set(accumulated)
+            expected_urls = [
+                url for url in dict.fromkeys(cu) if url not in prior
+            ][:allowed]
+            if su != expected_urls:
+                raise ValueError(
+                    f"search record {index} violates deterministic candidate selection"
+                )
         try:
             expected = selected_search_sources(cs, su)
         except (ValueError, KeyError, TypeError) as exc:

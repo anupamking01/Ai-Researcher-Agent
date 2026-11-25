@@ -439,3 +439,22 @@ or a new experimental result; unmarked historical traces are not certified.
 The pilot remains diagnostic, designated-primary automated inference remains
 post-collection and qualified, retrospective sensitivities remain exploratory,
 and independent human validation remains pending.
+
+
+
+## Deterministic candidate-selection replay (25 November 2026)
+
+For completed request-bound (schema 2–6) traces, the offline provenance
+validator independently replays the producer's first-unseen URL selection:
+walk the original candidate order, skip URLs scheduled in earlier queries
+(including unsuccessful browse attempts), retain only the first occurrence
+of each new URL, and stop at the permitted query slot. A selected subset
+that is eligible but reordered, omits an earlier eligible candidate, or
+leaves a funded slot unspent despite available unseen candidates is rejected
+even if its other ledgers are internally consistent. Genuine provider
+outages, duplicate-only responses and insufficient candidate supply remain
+valid; the validator does not fill those slots or perform any retrieval.
+Schema 1 and incomplete traces retain their narrower contracts. This is
+internal prospective selection fidelity, not independent proof of provider
+requests or historical report custody. Frozen outcomes and all pilot,
+exploratory and pending human-validation claims remain unchanged.
