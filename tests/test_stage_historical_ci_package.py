@@ -75,3 +75,65 @@ def test_stage_refuses_invalid_package_before_publication(tmp_path, monkeypatch,
     with pytest.raises(ValueError):
         stage.stage_package(package, output)
     assert not output.exists()
+
+
+def _direct_fixture(tmp_path, monkeypatch, defect=None):
+    package = _fixture(tmp_path, monkeypatch, "extra" if defect == "extra" else None)
+    archives = tmp_path / "archives"
+    archives.mkdir()
+    with ZipFile(package) as original:
+        rows = json.loads(original.read("external-archive-receipt.json"))["artifacts"]
+        provider = []
+        for row in rows:
+            filename = f'{row["artifact_id"]}.zip'
+            (archives / filename).write_bytes(original.read("archives/" + filename))
+            provider.append({"id": row["artifact_id"], "name": row["name"],
+                             "size_in_bytes": row["archive_bytes"],
+                             "digest": "sha256:" + row["provider_sha256"]})
+    raw = json.dumps({"total_count": len(provider), "artifacts": provider}).encode()
+    monkeypatch.setattr(stage, "INVENTORY_SIZE", len(raw))
+    monkeypatch.setattr(stage, "INVENTORY_SHA256", stage.sha(raw))
+    inventory = tmp_path / "artifacts.json"
+    inventory.write_bytes(raw)
+    return archives, inventory
+
+
+def test_direct_archives_match_package_replay_and_preserve_inventory(tmp_path, monkeypatch):
+    archives, inventory = _direct_fixture(tmp_path, monkeypatch)
+    output = tmp_path / "direct"
+    stage.stage_archives(archives, inventory, output)
+    package_output = tmp_path / "package-staged"
+    stage.stage_package(tmp_path / "package.zip", package_output)
+    files = {p.relative_to(output) for p in output.rglob("*") if p.is_file()}
+    assert len(files) == 115
+    assert (output / "artifacts.json").read_bytes() == inventory.read_bytes()
+    assert not (output / "external-archive-receipt.json").exists()
+    assert all((output / p).read_bytes() == (package_output / p).read_bytes()
+               for p in files - {Path("artifacts.json")})
+    with pytest.raises(FileExistsError):
+        stage.stage_archives(archives, inventory, output)
+
+
+@pytest.mark.parametrize("defect", ["metadata", "missing", "swap", "truncated", "extra"])
+def test_direct_archives_fail_before_publication(tmp_path, monkeypatch, defect):
+    archives, inventory = _direct_fixture(tmp_path, monkeypatch, defect)
+    first = archives / "1.zip"
+    if defect == "metadata":
+        inventory.write_bytes(inventory.read_bytes() + b" ")
+    elif defect == "missing":
+        first.unlink()
+    elif defect == "swap":
+        first.write_bytes((archives / "2.zip").read_bytes())
+    elif defect == "truncated":
+        first.write_bytes(first.read_bytes()[:-1])
+    output = tmp_path / "direct"
+    with pytest.raises((ValueError, FileNotFoundError)):
+        stage.stage_archives(archives, inventory, output)
+    assert not output.exists()
+
+
+def test_direct_inventory_pin_matches_git_escrow():
+    inventory = (Path(__file__).resolve().parents[1] / "research-evidence" /
+                 "offline-ci-45526533438-attempt-1" / "artifacts.json").read_bytes()
+    assert len(inventory) == stage.INVENTORY_SIZE
+    assert stage.sha(inventory) == stage.INVENTORY_SHA256

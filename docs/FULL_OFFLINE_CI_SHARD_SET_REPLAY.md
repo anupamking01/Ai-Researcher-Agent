@@ -435,3 +435,34 @@ authentication of original scientific reports/traces. It performs no treatment,
 evaluator or human evaluation. The existing analysis qualifications remain
 unchanged. Synthetic staging fixtures exercise failure behavior only; they
 are not historical evidence.
+
+### Alternative staging from the original individual archives
+
+If the separately delivered outer package is unavailable, use the original
+33 ID-named ZIPs (from an independent retained copy or the exact historical
+artifact IDs in the retrieval ledger). Do not recreate the outer package or
+its external archive receipt merely to satisfy their pinned fingerprints.
+
+```bash
+snapshot=research-evidence/offline-ci-45526533438-attempt-1
+python -m scripts.stage_historical_ci_package \
+  --archives-dir /trusted-download/original-zips \
+  --artifact-inventory "$snapshot/artifacts.json" \
+  --output /trusted-download/staged
+```
+
+The source directory must contain each required original ZIP as
+`<artifact-id>.zip`. The direct mode reads only those exact IDs and requires
+the original Git-escrowed provider inventory (24,830 bytes, SHA-256
+`52d74984e07d78b912e179bafc34d352895412f1aa74572da6d58e7e32596e16`).
+It checks the complete inventory, every archive's size and SHA-256, exact
+member sets, and member CRCs before creating a new output directory.
+The output has the same 33 original ZIPs and 81 replay files as package
+mode, plus the exact provider inventory as `artifacts.json`, **not** a
+recreated external archive receipt. Both modes feed the same metadata/byte
+audit and exact-checkout replay commands above. The original package mode
+and its stronger separate member-hash checks remain unchanged.
+
+This alternative is not a substitute for the independent exact-checkout
+replay, and it does not authenticate the missing scientific source artifacts.
+No treatment, evaluator or human-rating execution is involved.
