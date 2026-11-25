@@ -295,3 +295,55 @@ remained empty. No treatments or evaluators were rerun, no scientific
 outcomes changed, and no human ratings were collected. The diagnostic
 pilot, qualified post-collection automated analysis, exploratory
 sensitivity analyses and pending human-validation gates remain distinct.
+
+
+## Attempt-specific metadata escrow — 25 November 2026
+
+A fresh read-only retrieval of the same successful run (not a new workflow)
+now preserves the four provider response documents as UTF-8 text under
+[`research-evidence/offline-ci-45526533438-attempt-1/`](../research-evidence/offline-ci-45526533438-attempt-1/).
+The stored text is exactly the connector-returned JSON representation, not a
+claim about original HTTP wire serialization or cryptographic attestation.
+It was retrieved on 25 November 2026, before the artifact expiration dates.
+The four Git blob identities are:
+
+| Snapshot | Source endpoint (GET) | Git blob SHA |
+| --- | --- | --- |
+| `run.json` | [API](https://api.github.com/repos/anupamking01/Ai-Researcher-Agent/actions/runs/45526533438/attempts/1) | `bc469891a10e273a0f74b5d20db8dffebe61499b` |
+| `jobs.json` | [API](https://api.github.com/repos/anupamking01/Ai-Researcher-Agent/actions/runs/45526533438/attempts/1/jobs?per_page=100) | `87ca6497a1e65ebcba18bbc8411f30ebe8119a58` |
+| `artifacts.json` | [API](https://api.github.com/repos/anupamking01/Ai-Researcher-Agent/actions/runs/45526533438/artifacts?per_page=100) | `c85839caa86ef72e58ff863c7d5658c7c7837fc2` |
+| `tested-integration-commit.json` | [API](https://api.github.com/repos/anupamking01/Ai-Researcher-Agent/git/commits/ee1e1d54ac5102f441f9641eab070d9e9233cac5) | `c11abcace9ecd7737e1a3bf038ddbb88e1b50b56` |
+
+The read-only cross-check confirmed all 17 distinct successful job IDs,
+348 mandatory successful workflow steps in the documented order and
+within their job time windows, aggregate replay beginning after the last
+shard completed, and all 33 distinct artifact names, IDs, lineage fields,
+and provider-declared hashes against the earlier retrieval ledger. The
+provider sizes sum to 219,898 bytes, matching the earlier observed archive
+size total. The integration-commit response records the tested tree and
+ordered parents, and distinguishes the actual tested checkout from the REST
+workflow head. These checks are independent metadata comparisons, not a new
+pytest run or execution of the full Python metadata auditor.
+
+To reproduce the metadata gate after the live endpoints or artifacts become
+unavailable, from the research checkout run:
+
+```bash
+snapshot=research-evidence/offline-ci-45526533438-attempt-1
+python -m scripts.audit_full_ci_job_completion \\
+  --run-json "$snapshot/run.json" --jobs-json "$snapshot/jobs.json" \\
+  --artifacts-json "$snapshot/artifacts.json" \\
+  --run-id 45526533438 --run-attempt 1 \\
+  --head-sha 74b75bb5e7be9c54054dc7384a5d38ce5b80416d
+```
+
+To additionally compare archive bytes, add `--archives-dir /path/to/archives`
+pointing to the ID-named original ZIPs in the separately delivered complete
+preservation package. The captured `expired: false` fields describe the
+historical retrieval, not present-day availability; a later metadata capture
+may legitimately mark the same artifacts expired. Do not edit these snapshots
+to make a future live inventory pass. The integration commit JSON identifies
+the tested source but does not itself preserve the whole Git checkout.
+Full source-bound exact-checkout replay, original experimental evidence
+custody, and genuine blinded human evaluation remain separate gates.
+No treatments, evaluators or scientific outcomes were changed.
