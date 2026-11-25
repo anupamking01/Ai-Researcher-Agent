@@ -219,3 +219,79 @@ analysis remains post-collection with design and measurement qualifications,
 retrospective sensitivities remain exploratory, and human ratings, agreement
 and automated-human reconciliation remain pending. No treatments or
 evaluators were rerun and no frozen outcomes changed.
+
+
+## External archive byte-verification checkpoint — 25 November 2026
+
+A separate read-only follow-up downloaded **all 33 original ZIP archives**
+from the exact artifact IDs in the retrieval ledger above, without starting
+another workflow. SHA-256 computed over each downloaded ZIP matched its
+provider-declared digest (33/33; 219,898 original archive bytes in total).
+All ZIPs passed member CRC checks and had exactly the expected member names.
+No archive was substituted, regenerated, or normalized.
+
+The small original aggregate ZIP (artifact ID 14983325938, 3,198 bytes)
+is now preserved verbatim in Git at
+[research-evidence/offline-ci-aggregate-45526533438-attempt-1.zip](../research-evidence/offline-ci-aggregate-45526533438-attempt-1.zip).
+Its Git blob is `a681f679987b8c46c1cb28b842b9102e051b0e34`, and its
+archive SHA-256 is `b69570a1babd1116e58a43f1994f0d5e3ff2a81f66868e55f0aebd9d96ff17d9`.
+The single retained JSON member has SHA-256
+`2c2bffbc5624be41523d20c6ac1d64c3c449a873487f4585db856e6f5cbd2273`.
+
+Independent local Python checks of the downloaded bytes established:
+
+- All 33 receipts (16 early, 16 pytest, one aggregate) carry the expected
+  run, attempt, event and integration-checkout identity.
+- The 32 shard log lengths and SHA-256 digests match their receipts;
+  the aggregate's per-shard log and receipt digests match all 32
+  original shard bundles.
+- All sixteen selected-module file hashes and counts match their receipts
+  and the aggregate. The sorted union contains 264 distinct modules and
+  reproduces the 16-way round-robin partition. Its newline-terminated
+  inventory SHA-256 is
+  `44277e13648e8ef6a6719401adf23d8dc8c9d2ea1641508aed52d536aa800b26`,
+  matching a separately retrieved, nontruncated Git tree
+  `6f7ff2f2e91314a898d27565ea1632e225416e64` at the tested integration SHA.
+- All sixteen pytest final summaries agree with the corresponding receipt
+  counts and elapsed-time fields; their sum matches the aggregate
+  (8,475 passing cases and four warnings). Each early diagnostic log
+  reports 20 passing unittest cases. These are software checks, not
+  experimental observations or additional tasks.
+- Each early receipt's five source fingerprints and each pytest receipt's
+  two dependency fingerprints match SHA-256 independently computed from
+  the seven UTF-8 files retrieved by the exact tested integration ref.
+
+The complete external preservation package, named
+`VERA-CI-45526533438-attempt-1-original-archives.zip`, was assembled with
+the original 33 ZIPs stored under `archives/<artifact-id>.zip` and a
+derived `external-archive-receipt.json` recording each actual byte hash,
+member hash, and archive size. The outer package is 246,104 bytes,
+SHA-256 `13406729cbbdda8d4acf71885ac4acd9d50c65c8f58349f05bd3cc48c85673b1`;
+the 21,958-byte receipt SHA-256 is
+`f2f678dc5e8baeed09b62c882d02cccf08374b70a3e53e65059561049e693a73`.
+The package was reopened and each nested original ZIP hash checked again.
+The complete package was delivered separately; **only the original
+aggregate ZIP is escrowed in Git by this change**. Retain the package
+outside GitHub Actions before artifact expiry.
+
+This advances the earlier checkpoint from provider inventory alone to
+external byte matching and independent cross-artifact consistency checks.
+It does **not** constitute execution of the repository's complete
+`verify_full_ci_shard_set` CLI on a clean, exact Git checkout: local
+GitHub DNS resolution prevented that checkout. The custom local checks
+did not implement all of that verifier's transcript, filesystem and
+source-custody contracts. A reviewer should still run the documented
+exact-checkout replay, including retained aggregate comparison, using
+the original archive bytes and independently retrieved run metadata.
+Provider authenticity, actual network egress and runner honesty are
+not independently attested.
+
+The later [PR run 45533689669](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45533689669)
+also reported all sixteen shard jobs and aggregate replay successful at
+branch head `24b6489c8c139774600c7ebfd3338576d3321ea5`; all 18 PR workflows reported success.
+Its archives were not substituted for the earlier attempt examined here.
+The original treatment and evaluator-recovery artifact inventories
+remained empty. No treatments or evaluators were rerun, no scientific
+outcomes changed, and no human ratings were collected. The diagnostic
+pilot, qualified post-collection automated analysis, exploratory
+sensitivity analyses and pending human-validation gates remain distinct.
