@@ -437,6 +437,39 @@ def _preflight_receipt_claims(recorded: dict) -> None:
         if type(value) is not int or not 0 <= value <= allowance:
             raise ReceiptVerificationError(failed)
 
+    _preflight_reservation_bounds(recorded)
+
+
+def _preflight_reservation_bounds(recorded: dict) -> None:
+    """Check necessary bounds from the rows, without trusting failed ZIP sizes."""
+    rows = recorded["candidates"]
+    verified_bytes = sum(
+        row["observed_zip_bytes"] for row in rows
+        if row["structural_preflight_succeeded"]
+    )
+    failed_count = sum(row["status"] == "structural_preflight_failed" for row in rows)
+    decompression_skipped = sum(
+        row["status"] == "not_inspected_batch_decompression_budget_exceeded"
+        for row in rows
+    )
+    # A decompression-budget rejection already spent its positive raw size.
+    # A structural failure may have spent zero or up to the per-ZIP limit.
+    # An archive-budget rejection spent neither reservation.
+    minimum_raw = verified_bytes + decompression_skipped
+    maximum_raw = verified_bytes + (
+        failed_count + decompression_skipped
+    ) * triage.zip_preflight.MAX_ARCHIVE_BYTES
+    maximum_decompressed = (
+        sum(row["structural_preflight_succeeded"] for row in rows) + failed_count
+    ) * triage.zip_preflight.MAX_UNCOMPRESSED_BYTES
+    if (
+        not minimum_raw <= recorded["batch_archive_bytes_reserved"] <= maximum_raw
+        or recorded["batch_declared_uncompressed_bytes_reserved"] > maximum_decompressed
+    ):
+        raise ReceiptVerificationError(
+            "recorded triage receipt has inconsistent claims or accounting: reservation bounds"
+        )
+
 
 def verify_receipt(
     receipt_path: Path, assignments: Sequence[tuple[str, Path]],

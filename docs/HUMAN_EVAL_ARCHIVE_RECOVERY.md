@@ -1,3 +1,20 @@
+## Candidate receipt reservation accounting (26 November 2026)
+
+Before reopening any candidate ZIP, schema-v3 receipt replay now checks the
+declared batch reservations against the recorded per-candidate dispositions.
+Every structurally verified archive spent its exact observed raw byte count;
+a decompression-budget rejection already spent a positive raw size, while an
+archive-budget rejection spent neither reservation. Structural failures may
+have spent either reservation, so only conservative upper bounds apply to
+their unknown sizes. A fully verified roster must have a raw reservation
+equal to the sum of its observed archive sizes, including duplicate backups.
+
+The new synthetic regressions reject impossible in-range reservation totals
+before ZIP I/O, including mixed failure/skip inventories. This is an early
+internal-accounting check, not authentication or a substitute for full ZIP
+replay. Original report/trace custody, blinded human distribution and genuine
+human ratings remain pending; no treatment, evaluator or outcome was changed.
+
 ## Ordered candidate declaration snapshot (26 November 2026)
 
 The direct archive triage API previously validated the caller's mutable roster,

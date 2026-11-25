@@ -404,3 +404,60 @@ def test_receipt_replay_cannot_switch_to_another_same_basename_candidate(
     monkeypatch.setattr(verify, "_read_receipt", mutate_during_receipt_read)
     with pytest.raises(verify.ReceiptVerificationError, match="differs from replayed"):
         verify.verify_receipt(receipt, assignments)
+
+
+@pytest.mark.parametrize("corruption", [
+    "verified_raw_short", "verified_raw_excess", "failed_raw_excess",
+    "decompression_excess", "archive_skipped_raw_excess",
+    "decompression_skipped_raw_short", "decompression_skipped_dec_excess",
+])
+def test_impossible_reservations_rejected_before_any_archive_rescan(
+    tmp_path, monkeypatch, corruption,
+):
+    first = _zip(tmp_path / "first.zip", b"synthetic one")
+    assignments = [("original_treatment", first)]
+    if corruption == "failed_raw_excess":
+        assignments.append(("evaluator_recovery", tmp_path / "missing.zip"))
+    elif "skipped" in corruption:
+        second = _zip(tmp_path / "second.zip", b"synthetic two")
+        assignments.append(("evaluator_recovery", second))
+        if corruption.startswith("archive_skipped"):
+            monkeypatch.setattr(triage, "MAX_BATCH_ARCHIVE_BYTES", first.stat().st_size)
+        else:
+            monkeypatch.setattr(triage, "MAX_BATCH_UNCOMPRESSED_BYTES", len(b"synthetic one"))
+    receipt = _receipt(tmp_path / "receipt.json", assignments)
+    doc = json.loads(receipt.read_text(encoding="utf-8"))
+    # The genuine synthetic receipt must pass before editing its accounting.
+    verify.verify_receipt(receipt, assignments)
+    if corruption in ("verified_raw_short", "decompression_skipped_raw_short"):
+        doc["batch_archive_bytes_reserved"] = first.stat().st_size - (
+            1 if corruption == "verified_raw_short" else 0
+        )
+    elif corruption == "verified_raw_excess":
+        doc["batch_archive_bytes_reserved"] += 1
+    elif corruption == "failed_raw_excess":
+        doc["batch_archive_bytes_reserved"] += triage.zip_preflight.MAX_ARCHIVE_BYTES + 1
+    elif corruption == "archive_skipped_raw_excess":
+        # Leave the top-level budget untouched by reserving less for the
+        # verified row, so the impossible sum is still inside that budget.
+        doc["candidates"][0]["observed_zip_bytes"] -= 1
+    elif corruption == "decompression_skipped_dec_excess":
+        # Widen the batch allowance only for this fabricated receipt; the
+        # skipped row still cannot have reserved decompression bytes.
+        monkeypatch.setattr(triage, "MAX_BATCH_UNCOMPRESSED_BYTES", 1024**3)
+        doc["batch_declared_uncompressed_byte_budget"] = 1024**3
+        doc["batch_declared_uncompressed_bytes_reserved"] = (
+            triage.zip_preflight.MAX_UNCOMPRESSED_BYTES + 1
+        )
+    else:
+        doc["batch_declared_uncompressed_bytes_reserved"] = (
+            triage.zip_preflight.MAX_UNCOMPRESSED_BYTES + 1
+        )
+    receipt.write_text(json.dumps(doc), encoding="utf-8")
+
+    def no_scan(*args, **kwargs):
+        raise AssertionError("impossible reservations must fail before ZIP I/O")
+
+    monkeypatch.setattr(verify.triage, "triage_candidates", no_scan)
+    with pytest.raises(verify.ReceiptVerificationError, match="reservation bounds"):
+        verify.verify_receipt(receipt, assignments)
