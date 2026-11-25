@@ -1699,3 +1699,62 @@ def test_metadata_open_detects_in_place_mutation_before_capture(tmp_path, monkey
     monkeypatch.setattr(os, "open", mutate_then_open)
     with pytest.raises(ValueError, match="metadata snapshot changed before capture"):
         load_jobs_json(path)
+
+
+@pytest.mark.parametrize("historical", [False, True])
+def test_archive_cli_rejects_directory_replacement_during_capture(
+    tmp_path, capsys, monkeypatch, historical
+):
+    import shutil
+
+    directory = tmp_path / "archives"
+    directory.mkdir()
+    payload = _local_archives(directory)
+    jobs, run, artifacts = [tmp_path / name for name in ("jobs.json", "run.json", "artifacts.json")]
+    jobs.write_text(json.dumps(_inventory()))
+    run.write_text(json.dumps(_artifact_run()))
+    artifacts.write_text(json.dumps(payload))
+    path = directory / "1.zip"
+    target = path.stat()
+    original_fstat = os.fstat
+    changed = False
+
+    def swap_directory_after_open(fd):
+        nonlocal changed
+        info = original_fstat(fd)
+        if not changed and (info.st_dev, info.st_ino) == (target.st_dev, target.st_ino):
+            changed = True
+            previous = tmp_path / "previous-archives"
+            directory.rename(previous)
+            shutil.copytree(previous, directory)
+            path.write_bytes(b"not the original archive")
+        return info
+
+    monkeypatch.setattr(os, "fstat", swap_directory_after_open)
+    args = ["--jobs-json", str(jobs), "--run-json", str(run),
+            "--artifacts-json", str(artifacts), "--run-id", str(RUN),
+            "--run-attempt", str(ATTEMPT), "--head-sha", SHA,
+            "--archives-dir", str(directory)]
+    if historical:
+        args.append("--historical-local-archives")
+    assert main(args) == 2
+    assert changed
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "artifact archive changed during capture" in captured.err
+
+
+def test_archive_open_detects_in_place_mutation_before_capture(tmp_path, monkeypatch):
+    from scripts.audit_full_ci_job_completion import _capture_archive_digest
+
+    path = tmp_path / "1.zip"
+    path.write_bytes(b"original")
+    original_open = os.open
+
+    def mutate_then_open(name, flags, *args, **kwargs):
+        path.write_bytes(b"changed")
+        return original_open(name, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", mutate_then_open)
+    with pytest.raises(ValueError, match="artifact archive changed before capture"):
+        _capture_archive_digest(path)

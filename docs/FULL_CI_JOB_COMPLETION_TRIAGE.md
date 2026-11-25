@@ -400,3 +400,23 @@ of all three metadata files, full ancestor-path custody, protection from all
 transient changes, or independent authentication of the provider records.
 It does not resolve missing original treatment custody or authorize human
 rating distribution, and changes no frozen experimental outcomes.
+
+
+## Stable local archive capture window — 25 November 2026
+
+The streamed archive reader now shares the metadata reader's file-generation
+checks. Previously a directory rename followed by a replacement directory
+could leave the opened archive inode unchanged while its visible pathname
+pointed to different bytes. The old reader could accept that descriptor's
+digest even though the supplied archive path no longer identified it.
+An in-place edit between preflight and open could also escape detection.
+
+The reader now compares device, inode, mode, link count, size, mtime and
+ctime across preflight, descriptor open, the end of the bounded streaming
+read and the final visible pathname. A detected change is invalid input
+(exit 2, no receipt) in both default and historical-local modes. Regression
+cases exercise directory replacement with different visible archive bytes
+and a pre-open in-place edit. This does not replace the SHA-256 or provider
+size checks; it is a bounded per-file observation, not atomic multi-archive
+custody, full ancestor-path authentication or a guarantee against subsequent
+changes. No scientific or human-evaluation outcome is changed.

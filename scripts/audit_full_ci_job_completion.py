@@ -147,13 +147,14 @@ def _require_json_container_depth(raw: bytes) -> None:
         raise ValueError("jobs JSON has an incomplete container or string")
 
 
+def _file_generation(info: os.stat_result) -> tuple[int, ...]:
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+            info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
 def _load_metadata_snapshot(path: Path) -> tuple[dict, str]:
     """Parse and fingerprint the same bounded raw bytes, without reopening the input."""
     path = Path(path)
-
-    def generation(info: os.stat_result) -> tuple[int, ...]:
-        return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
-                info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
     # Reject special files before opening them, then validate the opened
     # descriptor too. Nonblocking open prevents a FIFO substituted between
@@ -168,15 +169,15 @@ def _load_metadata_snapshot(path: Path) -> tuple[dict, str]:
             raise ValueError("metadata snapshot must be a regular file")
         if (expected.st_dev, expected.st_ino) != (opened.st_dev, opened.st_ino):
             raise ValueError("metadata snapshot replaced before capture")
-        if generation(expected) != generation(opened):
+        if _file_generation(expected) != _file_generation(opened):
             raise ValueError("metadata snapshot changed before capture")
         raw = stream.read(MAX_JSON_BYTES + 1)
         if len(raw) > MAX_JSON_BYTES:
             raise ValueError("jobs JSON exceeds two-megabyte limit")
         final = os.fstat(stream.fileno())
-        if (generation(opened) != generation(final)
+        if (_file_generation(opened) != _file_generation(final)
                 or len(raw) != opened.st_size
-                or generation(final) != generation(path.lstat())):
+                or _file_generation(final) != _file_generation(path.lstat())):
             raise ValueError("metadata snapshot changed during capture")
     _require_json_container_depth(raw)
     try:
@@ -691,6 +692,8 @@ def _capture_archive_digest(path: Path) -> tuple[str, int]:
             raise ValueError("artifact archive must be a regular file")
         if (expected.st_dev, expected.st_ino) != (opened.st_dev, opened.st_ino):
             raise ValueError("artifact archive replaced before capture")
+        if _file_generation(expected) != _file_generation(opened):
+            raise ValueError("artifact archive changed before capture")
         if opened.st_size > MAX_ARCHIVE_BYTES:
             raise ValueError("artifact archive exceeds byte limit")
         while chunk := stream.read(1024 * 1024):
@@ -699,9 +702,9 @@ def _capture_archive_digest(path: Path) -> tuple[str, int]:
                 raise ValueError("artifact archive exceeds byte limit")
             digest.update(chunk)
         final = os.fstat(stream.fileno())
-        if (opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns) != (
-            final.st_size, final.st_mtime_ns, final.st_ctime_ns
-        ) or size != opened.st_size:
+        if (_file_generation(opened) != _file_generation(final)
+                or size != opened.st_size
+                or _file_generation(final) != _file_generation(path.lstat())):
             raise ValueError("artifact archive changed during capture")
     return "sha256:" + digest.hexdigest(), size
 
