@@ -1835,3 +1835,128 @@ def test_incomplete_job_upload_windows_are_explicitly_unchecked(tmp_path, capsys
     assert receipt["artifact_upload_window_unchecked_ids"] == [2, 18, 33]
     assert len(receipt["artifact_upload_window_matched_ids"]) == 30
     assert receipt["full_workflow_job_gate_completed"] is False
+
+
+# The hosted replay has a different provider run and workflow source from
+# the original historical evidence. Pin both, and never infer either from
+# the verification output itself.
+_HOSTED = _ESCROW_ROOT / "historical-replay-45646023560-attempt-1"
+_HOSTED_HEAD = "1a9b79f02a1917ec1c442524757817f1653fd92d"
+_HOSTED_BLOBS = {
+    "run.json": "1450c84d86a87452a767967b2f5880cdc38ad014",
+    "jobs.json": "0c9c5a91ec0c71a67a46c60d5470ef97046d0269",
+    "artifacts.json": "08a0b9475f7192608ad8b4d3f766f9c210885a33",
+    "verification.zip": "7f8a26317d64fe461e6c1d708da8996abac476bd",
+}
+
+
+def test_historical_hosted_replay_escrow_provider_chain():
+    """Check the retained provider declarations, not independent attestation."""
+    from datetime import datetime
+
+    for name, expected in _HOSTED_BLOBS.items():
+        raw = (_HOSTED / name).read_bytes()
+        assert hashlib.sha1(f"blob {len(raw)}\0".encode("ascii") + raw).hexdigest() == expected, name
+
+    run = json.loads((_HOSTED / "run.json").read_bytes())
+    assert (run["id"], run["run_attempt"], run["head_sha"], run["event"]) == (
+        45646023560, 1, _HOSTED_HEAD, "push",
+    )
+    assert (run["status"], run["conclusion"]) == ("completed", "success")
+    assert run["path"] == ".github/workflows/historical-ci-exact-replay.yml"
+    jobs = json.loads((_HOSTED / "jobs.json").read_bytes())
+    assert jobs["total_count"] == len(jobs["jobs"]) == 1
+    job = jobs["jobs"][0]
+    assert (job["id"], job["run_id"], job["run_attempt"], job["head_sha"]) == (
+        139317128126, run["id"], 1, _HOSTED_HEAD,
+    )
+    assert (job["status"], job["conclusion"]) == ("completed", "success")
+    assert job["name"] == "replay-historical-attempt"
+    labels = (
+        "Checkout reviewed staging and metadata tools",
+        "Checkout exact historical integration commit",
+        "Pin historical Python runtime",
+        "Download original archive bytes by pinned artifact IDs",
+        "Stage and audit the original attempt without credentials",
+        "Replay original shard evidence and compare retained aggregate",
+        "Retain fresh replay verification outputs (not original artifacts)",
+    )
+    steps = [step for step in job["steps"] if step["name"] in labels]
+    assert tuple(step["name"] for step in steps) == labels
+    assert all((step["status"], step["conclusion"]) == ("completed", "success")
+               for step in steps)
+    def utc(value):
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    timeline = [utc(job["started_at"])]
+    for step in steps:
+        timeline.extend((utc(step["started_at"]), utc(step["completed_at"])))
+    timeline.append(utc(job["completed_at"]))
+    assert timeline == sorted(timeline)
+    artifacts = json.loads((_HOSTED / "artifacts.json").read_bytes())
+    assert artifacts["total_count"] == len(artifacts["artifacts"]) == 1
+    artifact = artifacts["artifacts"][0]
+    assert artifact["id"] == 15036564529
+    assert artifact["name"] == "vera-historical-replay-verification-45646023560-1"
+    assert artifact["workflow_run"]["id"] == run["id"]
+    assert artifact["workflow_run"]["head_sha"] == _HOSTED_HEAD
+    assert artifact["expired"] is False  # historical capture, not current availability
+    assert utc(steps[-1]["started_at"]) <= utc(artifact["created_at"]) <= utc(steps[-1]["completed_at"])
+    raw = (_HOSTED / "verification.zip").read_bytes()
+    assert len(raw) == artifact["size_in_bytes"] == 7231
+    assert "sha256:" + hashlib.sha256(raw).hexdigest() == artifact["digest"]
+
+
+def test_historical_hosted_replay_receipts_match_original_escrow():
+    """Cross-bind recorded comparisons without claiming the 33 ZIPs are here."""
+    import zipfile
+
+    with zipfile.ZipFile(_HOSTED / "verification.zip") as fresh, zipfile.ZipFile(
+        _ESCROW_ROOT / "offline-ci-aggregate-45526533438-attempt-1.zip"
+    ) as original:
+        assert sorted(fresh.namelist()) == ["metadata-audit.json", "recomputed-aggregate.json"]
+        assert fresh.testzip() is None
+        audit_raw = fresh.read("metadata-audit.json")
+        aggregate_raw = fresh.read("recomputed-aggregate.json")
+        assert aggregate_raw == original.read("vera-full-shard-replay.json")
+    assert hashlib.sha256(audit_raw).hexdigest() == (
+        "01fa955f47f2e0b63dea25184062770965f1cb67c5c85504a554258173560abf"
+    )
+    assert hashlib.sha256(aggregate_raw).hexdigest() == (
+        "2c2bffbc5624be41523d20c6ac1d64c3c449a873487f4585db856e6f5cbd2273"
+    )
+    audit, aggregate = json.loads(audit_raw), json.loads(aggregate_raw)
+    assert (audit["run_id"], audit["run_attempt"], audit["workflow_head_sha"]) == (
+        45526533438, 1, _ESCROW_HEAD,
+    )
+    assert (aggregate["workflow_run_id"], aggregate["workflow_run_attempt"],
+            aggregate["checkout_sha"], aggregate["workflow_event"]) == (
+        "45526533438", "1", _ESCROW_CHECKOUT, "pull_request",
+    )
+    assert len({_HOSTED_HEAD, _ESCROW_HEAD, _ESCROW_CHECKOUT}) == 3
+    for name in ("run", "jobs", "artifacts"):
+        assert audit[f"{name}_json_sha256"] == hashlib.sha256(
+            (_ESCROW / f"{name}.json").read_bytes()
+        ).hexdigest()
+    inventory = json.loads((_ESCROW / "artifacts.json").read_bytes())
+    assert inventory["total_count"] == len(inventory["artifacts"]) == 33
+    expected = {row["id"]: (row["name"], row["digest"], row["size_in_bytes"])
+                for row in inventory["artifacts"]}
+    comparisons = audit["local_archive_digest_comparisons"]
+    assert len(expected) == len(comparisons) == 33
+    assert all(row["status"] == "match" for row in comparisons)
+    assert {row["artifact_id"]: (row["name"], row["local_digest"], row["local_size_in_bytes"])
+            for row in comparisons} == expected
+    assert audit["artifact_upload_window_matched_ids"] == sorted(expected)
+    assert audit["artifact_upload_window_unchecked_ids"] == []
+    assert audit["archive_gate_mode"] == "historical_local_bytes"
+    assert audit["full_workflow_job_gate_completed"] is True
+    assert audit["full_local_archive_bytes_match"] is True
+    assert audit["successful_shards"] == list(range(16))
+    assert audit["retained_evidence_verified_by_this_tool"] is False
+    assert audit["tested_checkout_sha_verified_by_this_tool"] is False
+    assert audit["research_result_or_human_validation"] is False
+    assert aggregate["status"] == "complete_sixteen_shard_local_replay_consistent_not_independently_attested"
+    assert aggregate["aggregate_test_counts"] == {"passed": 8475, "warnings": 4}
+    assert aggregate["source_test_modules_covered"] == 264
+    assert aggregate["experimental_treatments_or_evaluators_run"] is False
+    assert aggregate["human_validation_performed"] is False

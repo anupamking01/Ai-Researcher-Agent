@@ -29,6 +29,7 @@ on:
       - docs/FULL_OFFLINE_CI_SHARD_SET_REPLAY.md
       - research-evidence/offline-ci-45526533438-attempt-1/**
       - research-evidence/offline-ci-aggregate-45526533438-attempt-1.zip
+      - research-evidence/historical-replay-45646023560-attempt-1/**
       - docs/FULL_CI_JOB_COMPLETION_TRIAGE.md
       - scripts/run_offline_pytest_firewalled.sh
       - scripts/verify_ci_python_runtime.py
@@ -62,6 +63,7 @@ on:
       - docs/FULL_OFFLINE_CI_SHARD_SET_REPLAY.md
       - research-evidence/offline-ci-45526533438-attempt-1/**
       - research-evidence/offline-ci-aggregate-45526533438-attempt-1.zip
+      - research-evidence/historical-replay-45646023560-attempt-1/**
       - docs/FULL_CI_JOB_COMPLETION_TRIAGE.md
       - scripts/run_offline_pytest_firewalled.sh
       - scripts/verify_ci_python_runtime.py

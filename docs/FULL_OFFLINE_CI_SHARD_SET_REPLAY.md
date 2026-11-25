@@ -577,3 +577,16 @@ runner. The original report/trace recovery inventories remain empty,
 human ratings and inter-rater agreement remain pending, and no treatment
 or evaluator was rerun. Pilot, qualified post-collection automated results
 and exploratory analyses retain their existing interpretation boundaries.
+
+### Automated hosted-output escrow regression
+
+The existing firewalled completion-auditor lane now checks the four
+hosted-output escrow Git blobs, provider run/job/upload chronology, the
+verification ZIP, and its two receipts. It cross-binds the recorded 33
+archive comparisons to the original pinned provider inventory, the original
+metadata fingerprints and the byte-identical historical aggregate. Run
+`python -m pytest -q tests/test_full_ci_job_completion_triage.py -k historical_hosted_replay`
+without network access. Changes to the hosted escrow trigger the lane.
+This verifies retained receipts and recorded declarations; it does not
+re-download or independently rehash the 33 original archives, rerun the
+historical source verifier, or attest the runner or scientific evidence.

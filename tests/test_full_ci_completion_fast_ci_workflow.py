@@ -39,6 +39,7 @@ REPLAY_DEPENDENCIES = (
     "docs/FULL_OFFLINE_CI_SHARD_SET_REPLAY.md",
     "research-evidence/offline-ci-45526533438-attempt-1/**",
     "research-evidence/offline-ci-aggregate-45526533438-attempt-1.zip",
+    "research-evidence/historical-replay-45646023560-attempt-1/**",
     ".github/workflows/live-pilot.yml",
     ".github/workflows/live-app-smoke.yml",
 )
