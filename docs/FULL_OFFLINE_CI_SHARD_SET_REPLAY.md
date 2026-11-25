@@ -330,10 +330,10 @@ unavailable, from the research checkout run:
 
 ```bash
 snapshot=research-evidence/offline-ci-45526533438-attempt-1
-python -m scripts.audit_full_ci_job_completion \\
-  --run-json "$snapshot/run.json" --jobs-json "$snapshot/jobs.json" \\
-  --artifacts-json "$snapshot/artifacts.json" \\
-  --run-id 45526533438 --run-attempt 1 \\
+python -m scripts.audit_full_ci_job_completion \
+  --run-json "$snapshot/run.json" --jobs-json "$snapshot/jobs.json" \
+  --artifacts-json "$snapshot/artifacts.json" \
+  --run-id 45526533438 --run-attempt 1 \
   --head-sha 74b75bb5e7be9c54054dc7384a5d38ce5b80416d
 ```
 
@@ -344,6 +344,12 @@ historical retrieval, not present-day availability; a later metadata capture
 may legitimately mark the same artifacts expired. Do not edit these snapshots
 to make a future live inventory pass. The integration commit JSON identifies
 the tested source but does not itself preserve the whole Git checkout.
+A post-commit re-fetch of the run response changed only the nested
+`pull_requests[0].head.sha` from the branch tip at capture to the new tip.
+That mutable PR association is not the run's top-level `head_sha`, nor the
+actual integration checkout SHA. Preserve the captured value; never use it
+to select a historical replay checkout. The other three response documents
+matched their post-commit re-fetches byte-for-byte.
 Full source-bound exact-checkout replay, original experimental evidence
 custody, and genuine blinded human evaluation remain separate gates.
 No treatments, evaluators or scientific outcomes were changed.
