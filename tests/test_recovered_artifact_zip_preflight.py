@@ -775,3 +775,50 @@ def test_recovered_zip_rejects_malformed_local_extra_length(tmp_path):
         assert archive.read(info.filename) == b"# Synthetic"
     with pytest.raises(audit.RecoveredArchiveError, match="malformed local ZIP extra-field length"):
         audit.audit_recovered_zip(path)
+
+
+@pytest.mark.parametrize(("name", "payload", "declared"), [
+    ("reports/test.md", b"# Synthetic\nHIDDEN", b"# Synthetic\n"),
+    ("folder/", b"HIDDEN", b""),
+])
+def test_stored_member_cannot_hide_bytes_beyond_declared_size(
+    tmp_path, name, payload, declared,
+):
+    path = tmp_path / "understated-stored.zip"
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr(name, payload)
+        archive.writestr("reports/control.md", b"# Control")
+    raw = bytearray(path.read_bytes())
+    central = raw.index(b"PK\x01\x02")
+    assert raw.startswith(b"PK\x03\x04")
+    # Keep the complete payload and compressed size, but make both headers
+    # agree on a smaller uncompressed size and CRC of only the visible prefix.
+    for offset in (14, central + 16):
+        struct.pack_into("<I", raw, offset, zlib.crc32(declared))
+    for offset in (22, central + 24):
+        struct.pack_into("<I", raw, offset, len(declared))
+    path.write_bytes(raw)
+    with zipfile.ZipFile(path) as archive:
+        assert archive.read(name) == declared
+        assert archive.testzip() is None
+    reserved = []
+    with pytest.raises(audit.RecoveredArchiveError, match="stored ZIP member"):
+        audit.audit_recovered_zip(path, reserve_uncompressed_bytes=reserved.append)
+    assert reserved == []
+    assert path.read_bytes() == raw
+
+
+def test_stored_members_with_equal_sizes_remain_supported(tmp_path):
+    path = tmp_path / "ordinary-stored.zip"
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("folder/", b"")
+        archive.writestr("folder/empty.md", b"")
+        archive.writestr("folder/report.md", b"# Synthetic")
+    receipt = audit.audit_recovered_zip(path)
+    assert receipt["file_count"] == 2
+    assert receipt["total_uncompressed_bytes"] == len(b"# Synthetic")
+    assert {item["path"]: item["sha256"] for item in receipt["files"]} == {
+        "folder/empty.md": hashlib.sha256(b"").hexdigest(),
+        "folder/report.md": hashlib.sha256(b"# Synthetic").hexdigest(),
+    }
+    assert receipt["historical_evidence_authenticated"] is False

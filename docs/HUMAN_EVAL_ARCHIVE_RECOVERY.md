@@ -1,3 +1,16 @@
+## Stored ZIP payload accounting (26 November 2026)
+
+The standard ZIP reader can return a CRC-valid prefix of an uncompressed
+(STORED) entry when the declared uncompressed size is smaller than the
+stored payload. Even an ostensibly empty directory can conceal bytes.
+The recovery preflight now requires equal compressed and uncompressed
+sizes for STORED members before reserving decompression or hashing member
+contents. Synthetic tests construct consistent local/central headers with
+a prefix CRC, demonstrate ordinary reader acceptance, and require rejection
+of both report and directory cases. Valid empty and nonempty STORED entries
+remain supported. This check is not a general proof of DEFLATE stream
+canonicality or historical archive authenticity.
+
 ## Original ZIP member name integrity (26 November 2026)
 
 Python's ZIP reader can silently truncate a decoded filename at an embedded

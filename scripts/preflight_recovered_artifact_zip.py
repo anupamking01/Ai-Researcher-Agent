@@ -161,6 +161,11 @@ def _inspect_member(info: zipfile.ZipInfo) -> tuple[str, bool]:
         raise RecoveredArchiveError(f"unsupported ZIP compression: {info.filename!r}")
     if info.file_size < 0 or info.compress_size < 0:
         raise RecoveredArchiveError("negative ZIP member size")
+    # STORED members have no compression: every payload byte must be
+    # represented in the uncompressed size and member digest. ZipExtFile
+    # otherwise clips reads to file_size, even with a matching prefix CRC.
+    if info.compress_type == zipfile.ZIP_STORED and info.compress_size != info.file_size:
+        raise RecoveredArchiveError("stored ZIP member compressed/uncompressed sizes disagree")
     if is_directory and info.file_size:
         raise RecoveredArchiveError(f"nonempty directory entry: {info.filename!r}")
     if info.file_size > MAX_MEMBER_BYTES:
