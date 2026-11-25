@@ -1482,6 +1482,60 @@ def test_historical_local_archive_gate_separates_expiration_from_bytes(tmp_path,
     assert historical["tested_checkout_sha_verified_by_this_tool"] is False
 
 
+@pytest.mark.parametrize("mode", ["inventory", "local", "historical"])
+@pytest.mark.parametrize("scenario, expected", [
+    ("green", 2),
+    ("green_expired", 2),
+    ("green_in_cancelled_run", 2),
+    ("cancelled_shard", 1),
+    ("previous_attempt", 0),
+    ("no_diagnostic", 0),
+])
+def test_cli_cross_checks_failure_only_artifacts_against_job_conclusions(
+    tmp_path, capsys, mode, scenario, expected
+):
+    directory = tmp_path / "archives"
+    directory.mkdir()
+    payload = _local_archives(directory)
+    incomplete = scenario in {"green_in_cancelled_run", "cancelled_shard"}
+    run_payload = _artifact_run()
+    jobs_payload = _inventory()
+    if incomplete:
+        jobs_payload = _inventory({1: "cancelled"}, replay="skipped")
+        run_payload["conclusion"] = "cancelled"
+    if scenario != "no_diagnostic":
+        shard = 1 if scenario == "cancelled_shard" else 0
+        attempt = ATTEMPT - 1 if scenario == "previous_attempt" else ATTEMPT
+        payload["artifacts"].append(_artifact(
+            f"vera-unverified-failure-shard-{shard}-{RUN}-{attempt}", 99,
+            expired=scenario == "green_expired",
+        ))
+        payload["total_count"] += 1
+    jobs, run, artifacts = [tmp_path / name for name in ("jobs.json", "run.json", "artifacts.json")]
+    jobs.write_text(json.dumps(jobs_payload))
+    run.write_text(json.dumps(run_payload))
+    artifacts.write_text(json.dumps(payload))
+    args = ["--jobs-json", str(jobs), "--run-json", str(run),
+            "--run-id", str(RUN), "--run-attempt", str(ATTEMPT), "--head-sha", SHA,
+            "--artifacts-json", str(artifacts)]
+    if mode != "inventory":
+        args += ["--archives-dir", str(directory)]
+    if mode == "historical":
+        args += ["--historical-local-archives"]
+    assert main(args) == expected
+    captured = capsys.readouterr()
+    if expected == 2:
+        assert not captured.out
+        assert "failure-only artifacts contradict successful shards: [0]" in captured.err
+    else:
+        receipt = json.loads(captured.out)
+        assert receipt["full_workflow_job_gate_completed"] is (not incomplete)
+        if scenario == "cancelled_shard":
+            assert receipt["artifact_inventory"]["unverified_diagnostics"]["listed_unexpired"] == [1]
+        if scenario == "previous_attempt":
+            assert receipt["excluded_artifact_count"] == 1
+
+
 # Unlike the synthetic fixtures above, these are immutable historical
 # provider-response snapshots and one actual retained CI aggregate ZIP.
 _ESCROW_ROOT = Path(__file__).resolve().parents[1] / "research-evidence"

@@ -359,3 +359,22 @@ This mode establishes consistency with the supplied historical metadata,
 not present downloadability, provider authenticity, ZIP content validity,
 independent source-bound replay, original treatment custody or human
 validation. No experimental outcomes are modified.
+
+## Cross-endpoint failure-only diagnostic consistency — 25 November 2026
+
+The reviewed `tests.yml` uploads `vera-unverified-failure-shard-…` only
+under `failure() || cancelled()`. A current-attempt diagnostic for a
+shard reported successful by the job inventory contradicts that contract,
+even if the diagnostic is expired, the overall workflow is incomplete,
+or all 33 required local ZIP hashes match. The combined CLI now rejects
+this disagreement (exit 2, no receipt) before any local archive reads.
+This applies to inventory-only, default local and historical-local modes.
+Diagnostics for a cancelled shard remain triageable, absence of a diagnostic
+never establishes success, and names from earlier attempts remain excluded.
+The inventory-only Python helper still supports classification without a job
+audit; pass its optional `successful_shards` argument for the cross-check.
+
+This is consistency between supplied provider records and the reviewed
+workflow contract, not independent attestation of artifact naming or
+execution. It does not alter frozen experimental data, repair missing
+original report/trace custody, or establish prospective or human validation.

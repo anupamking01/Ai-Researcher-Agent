@@ -541,11 +541,14 @@ def audit_run_envelope(
     return result
 
 
-def audit_artifact_inventory(payload: dict, run: dict) -> dict:
+def audit_artifact_inventory(
+    payload: dict, run: dict, *, successful_shards: list[int] | None = None
+) -> dict:
     """Inventory exact-attempt artifact names, never certify archive contents.
 
     The run-wide endpoint includes previous attempts. Artifact names encode the
     attempt by workflow convention, not an independently attested attempt ID.
+    When a job audit is supplied, reject failure-only artifacts for green shards.
     """
     run_id = _positive_int(run.get("id"), "run.id")
     attempt = _positive_int(run.get("run_attempt"), "run.run_attempt")
@@ -608,6 +611,19 @@ def audit_artifact_inventory(payload: dict, run: dict) -> dict:
         if size is not None and (type(size) is not int or size < 0):
             raise ValueError("invalid provider artifact size_in_bytes")
         current[name] = artifact
+    # The reviewed workflow can only upload this diagnostic on failure or
+    # cancellation. Its presence (even expired) contradicts a successful
+    # shard in the same attempt. Previous-attempt names were excluded above.
+    if successful_shards is not None:
+        contradictory = sorted(
+            index for name, index in groups["unverified_diagnostics"].items()
+            if name in current and index in successful_shards
+        )
+        if contradictory:
+            raise ValueError(
+                f"failure-only artifacts contradict successful shards: {contradictory}; "
+                "recapture the original attempt-specific metadata"
+            )
     # Keep exact artifact identities for a later independent archive download.
     # The digest is provider-declared metadata, not a digest of locally read bytes.
     result = {}
@@ -765,7 +781,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.artifacts_json is not None:
             artifacts, artifacts_sha256 = _load_metadata_snapshot(args.artifacts_json)
-            audit.update(audit_artifact_inventory(artifacts, run))
+            audit.update(audit_artifact_inventory(
+                artifacts, run, successful_shards=audit["successful_shards"]
+            ))
             audit["artifacts_json_sha256"] = artifacts_sha256
             if args.archives_dir is not None:
                 audit.update(audit_local_archive_digests(audit, args.archives_dir))
