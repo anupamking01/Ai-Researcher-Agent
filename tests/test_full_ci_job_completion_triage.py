@@ -1327,6 +1327,7 @@ def _local_archives(directory):
         raw = f"synthetic archive {entry['id']}".encode()
         (directory / f"{entry['id']}.zip").write_bytes(raw)
         entry["digest"] = "sha256:" + hashlib.sha256(raw).hexdigest()
+        entry["size_in_bytes"] = len(raw)
     return payload
 
 
@@ -1335,6 +1336,11 @@ def _local_archives(directory):
     ("missing", "missing_local_archive"),
     ("changed", "mismatch"),
     ("unknown_digest", "provider_digest_unavailable"),
+    ("size_too_small", "provider_size_mismatch"),
+    ("size_too_large", "provider_size_mismatch"),
+    ("size_zero", "provider_size_mismatch"),
+    ("unknown_size", "match"),
+    ("null_size", "match"),
 ])
 def test_local_archive_gate_requires_exact_id_and_digest(tmp_path, problem, status):
     payload = _local_archives(tmp_path)
@@ -1346,11 +1352,25 @@ def test_local_archive_gate_requires_exact_id_and_digest(tmp_path, problem, stat
         path.write_bytes(b"changed")
     elif problem == "unknown_digest":
         first.pop("digest")
+    elif problem == "size_too_small":
+        first["size_in_bytes"] -= 1
+    elif problem == "size_too_large":
+        first["size_in_bytes"] += 1
+    elif problem == "size_zero":
+        first["size_in_bytes"] = 0
+    elif problem == "unknown_size":
+        first.pop("size_in_bytes")
+    elif problem == "null_size":
+        first["size_in_bytes"] = None
     result = audit_local_archive_digests(
         audit_artifact_inventory(payload, _artifact_run()), tmp_path
     )
     assert result["local_archive_digest_comparisons"][0]["status"] == status
-    assert result["full_archive_digest_match"] is (problem is None)
+    assert result["full_archive_digest_match"] is (status == "match")
+    if status == "provider_size_mismatch":
+        comparison = result["local_archive_digest_comparisons"][0]
+        assert comparison["local_digest"] == first["digest"]
+        assert comparison["local_size_in_bytes"] == len(path.read_bytes())
 
 
 @pytest.mark.parametrize("kind", ["directory", "symlink", "fifo", "oversize"])
@@ -1393,6 +1413,16 @@ def test_local_archive_cli_does_not_promote_incomplete_or_mismatching_evidence(t
     receipt = json.loads(capsys.readouterr().out)
     assert receipt["full_archive_digest_match"] is True
     assert receipt["retained_evidence_verified_by_this_tool"] is False
+    # Matching hashes cannot override contradictory provider byte counts.
+    payload["artifacts"][-1]["size_in_bytes"] += 1
+    artifacts.write_text(json.dumps(payload))
+    assert main(args) == 1
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["full_workflow_job_gate_completed"] is True
+    assert receipt["full_archive_digest_match"] is False
+    assert receipt["local_archive_digest_comparisons"][-1]["status"] == "provider_size_mismatch"
+    payload["artifacts"][-1]["size_in_bytes"] -= 1
+    artifacts.write_text(json.dumps(payload))
     (directory / "33.zip").write_bytes(b"wrong")
     assert main(args) == 1
     receipt = json.loads(capsys.readouterr().out)

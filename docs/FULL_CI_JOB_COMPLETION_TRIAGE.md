@@ -316,9 +316,15 @@ gate compares streamed local SHA-256 values to provider-declared digests for the
 32 required shard bundles and aggregate replay; failure-only diagnostics cannot
 substitute. Its receipt preserves per-ID observed digest, byte count and
 match/mismatch/missing/unknown status. The 64 MiB per-file bound, regular-file
-checks and capture consistency checks limit unsafe input handling. Provider size
-is not used as a checksum substitute. Exit 0 with this option additionally
-requires all 33 exact-attempt required bundles listed unexpired and digest-matched;
+checks and capture consistency checks limit unsafe input handling. A known provider size must also
+match the byte count captured by the same streaming read. A matching SHA-256
+with a contradictory size is reported as `provider_size_mismatch` and cannot
+satisfy the complete archive gate. A digest mismatch remains `mismatch`; an
+unavailable digest remains unknown regardless of size. Missing or null legacy
+size metadata remains compatible with digest matching and is not independently
+verified. Provider size is never a checksum substitute. Exit 0 with this option
+additionally requires all 33 exact-attempt required bundles listed unexpired
+and digest-matched, with every supplied size consistent;
 exit 1 preserves incomplete comparisons, and unsafe inputs return exit 2.
 Without the option, the previous metadata-only exit behavior is unchanged.
 

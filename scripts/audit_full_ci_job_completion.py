@@ -679,7 +679,7 @@ def _capture_archive_digest(path: Path) -> tuple[str, int]:
 
 
 def audit_local_archive_digests(inventory: dict, directory: Path) -> dict:
-    """Compare local ID-named downloads to provider digests, not their contents."""
+    """Compare local ID-named downloads to provider digests and known sizes."""
     if not stat.S_ISDIR(directory.lstat().st_mode):
         raise ValueError("archive directory must be a directory (not a symlink)")
     comparisons = []
@@ -697,8 +697,13 @@ def audit_local_archive_digests(inventory: dict, directory: Path) -> dict:
             declared = item["provider_declared_digest"]
             if declared is None:
                 status = "provider_digest_unavailable"
+            elif declared != observed:
+                status = "mismatch"
+            elif (item["provider_declared_size_in_bytes"] is not None
+                  and item["provider_declared_size_in_bytes"] != size):
+                status = "provider_size_mismatch"
             else:
-                status = "match" if declared == observed else "mismatch"
+                status = "match"
         comparisons.append({
             "artifact_id": item["artifact_id"],
             "name": item["name"],
@@ -714,7 +719,7 @@ def audit_local_archive_digests(inventory: dict, directory: Path) -> dict:
             and all(item["status"] == "match" for item in comparisons)
         ),
         "archive_digest_scope": (
-            "local raw bytes compared with provider-declared digests; "
+            "local raw bytes compared with provider-declared digests and known sizes; "
             "archive contents, source checkout and provider authenticity not verified"
         ),
     }
