@@ -1,3 +1,20 @@
+## Complete DEFLATE stream accounting (26 November 2026)
+
+A ZIP reader can report a matching CRC and declared output size even when
+the raw DEFLATE stream has no end marker, has trailing compressed bytes, or
+decodes to additional output beyond a declared prefix. After reserving the
+existing declared uncompressed-byte budget, recovered-ZIP preflight now
+decodes each DEFLATE member directly from its verified local payload offset
+using bounded input and output chunks. It requires the stream to reach EOF,
+consume exactly the declared compressed payload, and match the declared
+uncompressed size and CRC, including empty directory entries. At most one
+extra output byte is decoded to detect an understated size. Local filename
+and flag checks still use the standard ZIP reader. Synthetic regressions
+cover missing stream termination, trailing bytes, understated report and
+directory output, and valid multi-chunk/empty entries. This establishes
+complete stream accounting, not canonical compression encoding or
+independent historical archive authenticity.
+
 ## Stored ZIP payload accounting (26 November 2026)
 
 The standard ZIP reader can return a CRC-valid prefix of an uncompressed

@@ -822,3 +822,79 @@ def test_stored_members_with_equal_sizes_remain_supported(tmp_path):
         "folder/report.md": hashlib.sha256(b"# Synthetic").hexdigest(),
     }
     assert receipt["historical_evidence_authenticated"] is False
+
+
+@pytest.mark.parametrize("case", ["trailing", "truncated"])
+def test_deflate_requires_exact_complete_compressed_stream(tmp_path, case):
+    path = tmp_path / "ambiguous-deflate.zip"
+    data = b"# Synthetic report\n"
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("report.md", data)
+    raw = bytearray(path.read_bytes())
+    central = raw.index(b"PK\x01\x02")
+    compressed = struct.unpack_from("<I", raw, 18)[0]
+    if case == "trailing":
+        raw[central:central] = b"junk"
+        delta = 4
+    else:
+        del raw[central - 1]
+        delta = -1
+    central += delta
+    eocd = raw.index(b"PK\x05\x06", central)
+    for offset in (18, central + 20):
+        struct.pack_into("<I", raw, offset, compressed + delta)
+    struct.pack_into("<I", raw, eocd + 16, central)
+    path.write_bytes(raw)
+    # Matching headers and CRC are insufficient: ordinary reading accepts both.
+    with zipfile.ZipFile(path) as archive:
+        assert archive.read("report.md") == data
+        assert archive.testzip() is None
+    reserved = []
+    with pytest.raises(audit.RecoveredArchiveError, match="DEFLATE stream"):
+        audit.audit_recovered_zip(path, reserve_uncompressed_bytes=reserved.append)
+    assert reserved == [len(data)]
+    assert path.read_bytes() == raw
+
+
+@pytest.mark.parametrize(("name", "declared"), [
+    ("reports/test.md", b"# Synthetic\n"),
+    ("folder/", b""),
+])
+def test_deflate_cannot_hide_uncompressed_bytes(tmp_path, name, declared):
+    path = _zip(tmp_path / "understated-deflate.zip", {
+        name: declared + b"HIDDEN",
+        "reports/control.md": b"# Control",
+    })
+    raw = bytearray(path.read_bytes())
+    central = raw.index(b"PK\x01\x02")
+    for offset in (14, central + 16):
+        struct.pack_into("<I", raw, offset, zlib.crc32(declared))
+    for offset in (22, central + 24):
+        struct.pack_into("<I", raw, offset, len(declared))
+    path.write_bytes(raw)
+    with zipfile.ZipFile(path) as archive:
+        assert archive.read(name) == declared
+        assert archive.testzip() is None
+    reserved = []
+    with pytest.raises(audit.RecoveredArchiveError, match="expanded beyond declared size"):
+        audit.audit_recovered_zip(path, reserve_uncompressed_bytes=reserved.append)
+    assert reserved == [len(declared) + len(b"# Control")]
+    assert path.read_bytes() == raw
+
+
+def test_deflate_valid_multiple_chunks_and_empty_entries(tmp_path, monkeypatch):
+    data = bytes(range(256)) * 60
+    path = _zip(tmp_path / "multichunk-deflate.zip", {
+        "folder/": b"",
+        "folder/empty.md": b"",
+        "folder/report.md": data,
+    })
+    monkeypatch.setattr(audit, "CHUNK_BYTES", 7)
+    receipt = audit.audit_recovered_zip(path)
+    assert receipt["total_uncompressed_bytes"] == len(data)
+    assert receipt["file_count"] == 2
+    assert {item["path"]: item["sha256"] for item in receipt["files"]} == {
+        "folder/empty.md": hashlib.sha256(b"").hexdigest(),
+        "folder/report.md": hashlib.sha256(data).hexdigest(),
+    }
+    assert receipt["historical_evidence_authenticated"] is False

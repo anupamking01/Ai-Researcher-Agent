@@ -263,7 +263,7 @@ def _preflight_central_directory(handle, archive_bytes: int) -> int:
     return cd_offset
 
 
-def _verify_local_header_metadata(handle, info: zipfile.ZipInfo, *, cd_offset: int) -> tuple[int, int]:
+def _verify_local_header_metadata(handle, info: zipfile.ZipInfo, *, cd_offset: int) -> tuple[int, int, int]:
     """Require the local and central ZIP records to describe the same member.
 
     Python's zipfile verifies the local filename and decodes using the central
@@ -311,7 +311,8 @@ def _verify_local_header_metadata(handle, info: zipfile.ZipInfo, *, cd_offset: i
         ) == (info.CRC, info.compress_size, info.file_size)
     if not sizes_agree:
         raise RecoveredArchiveError("cannot safely inspect ZIP: local ZIP header CRC/size metadata disagrees with central directory")
-    payload_end = start + LOCAL_HEADER.size + name_length + extra_length + info.compress_size
+    payload_start = start + LOCAL_HEADER.size + name_length + extra_length
+    payload_end = payload_start + info.compress_size
     if payload_end > cd_offset:
         raise RecoveredArchiveError("local ZIP header/data extends into central directory")
     if flags & 0x08:
@@ -331,7 +332,40 @@ def _verify_local_header_metadata(handle, info: zipfile.ZipInfo, *, cd_offset: i
             )
     else:
         member_end = payload_end
-    return start, member_end
+    return start, member_end, payload_start
+
+
+def _digest_deflated_member(handle, info: zipfile.ZipInfo, *, payload_start: int) -> tuple[int, str]:
+    """Decode exactly one bounded raw DEFLATE stream, not a CRC-valid prefix."""
+    handle.seek(payload_start)
+    decoder = zlib.decompressobj(-zlib.MAX_WBITS)
+    remaining = info.compress_size
+    pending = b""
+    digest = hashlib.sha256()
+    size = crc = 0
+    while not decoder.eof:
+        if not pending and remaining:
+            pending = handle.read(min(CHUNK_BYTES, remaining))
+            if not pending:
+                raise RecoveredArchiveError("truncated ZIP compressed payload")
+            remaining -= len(pending)
+        previous_pending = len(pending)
+        # At most one byte beyond the already reserved declared output size.
+        part = decoder.decompress(pending, min(CHUNK_BYTES, info.file_size - size + 1))
+        pending = decoder.unconsumed_tail
+        size += len(part)
+        if size > info.file_size:
+            raise RecoveredArchiveError("ZIP member expanded beyond declared size")
+        digest.update(part)
+        crc = zlib.crc32(part, crc)
+        if not decoder.eof and not part and len(pending) == previous_pending:
+            raise RecoveredArchiveError("incomplete DEFLATE stream in ZIP member")
+    if remaining or decoder.unused_data or pending:
+        raise RecoveredArchiveError("trailing bytes after DEFLATE stream in ZIP member")
+    if size != info.file_size or crc != info.CRC:
+        raise RecoveredArchiveError("cannot safely inspect ZIP: DEFLATE member CRC/size mismatch")
+    return size, digest.hexdigest()
+
 
 def _unchanged(original: os.stat_result, current: os.stat_result) -> bool:
     return (
@@ -474,10 +508,13 @@ def audit_recovered_zip(
                     raise RecoveredArchiveError("ZIP member count outside permitted bounds")
                 # Validate all local/central metadata BEFORE decompressing bytes.
                 local_ranges = []
+                payload_starts = {}
                 for info in entries:
-                    local_ranges.append(
-                        _verify_local_header_metadata(handle, info, cd_offset=cd_offset)
+                    start, end, payload_start = _verify_local_header_metadata(
+                        handle, info, cd_offset=cd_offset
                     )
+                    local_ranges.append((start, end))
+                    payload_starts[start] = payload_start
                     key, is_directory = _inspect_member(info)
                     if key in seen:
                         raise RecoveredArchiveError(f"duplicate or nonportable ZIP path: {info.filename!r}")
@@ -525,37 +562,34 @@ def audit_recovered_zip(
                 if reserve_uncompressed_bytes is not None:
                     reserve_uncompressed_bytes(total)
                 for info in entries:
-                    if info.is_dir():
-                        # ZIP directory members are real entries with local headers,
-                        # compressed streams, and CRCs. Skipping archive.open() would
-                        # accept corrupt directory metadata or unreadable DEFLATE data.
-                        # A one-byte read reaches EOF for a valid empty directory and
-                        # makes ZipExtFile validate its stream and CRC.
-                        with archive.open(info, mode="r") as directory:
-                            if directory.read(1):
-                                raise RecoveredArchiveError(
-                                    f"ZIP directory contains data: {info.filename!r}"
-                                )
-                        continue
-                    digest = hashlib.sha256()
-                    size = 0
-                    # ZipFile verifies CRC on reaching EOF; our bounds also
-                    # protect against understated central-directory sizes.
+                    # Keep ZipFile's local filename and unsupported-flag checks.
+                    # For DEFLATE, do not read via ZipExtFile: it clips output
+                    # to file_size and need not consume a complete raw stream.
                     with archive.open(info, mode="r") as member:
-                        while True:
-                            part = member.read(CHUNK_BYTES)
-                            if not part:
-                                break
-                            size += len(part)
-                            if size > info.file_size or size > MAX_MEMBER_BYTES:
-                                raise RecoveredArchiveError("ZIP member expanded beyond declared size")
-                            digest.update(part)
-                    if size != info.file_size:
-                        raise RecoveredArchiveError("ZIP member did not match declared uncompressed size")
+                        if info.compress_type == zipfile.ZIP_DEFLATED:
+                            size, sha256 = _digest_deflated_member(
+                                handle, info, payload_start=payload_starts[info.header_offset]
+                            )
+                        else:
+                            digest = hashlib.sha256()
+                            size = 0
+                            while True:
+                                part = member.read(CHUNK_BYTES)
+                                if not part:
+                                    break
+                                size += len(part)
+                                if size > info.file_size or size > MAX_MEMBER_BYTES:
+                                    raise RecoveredArchiveError("ZIP member expanded beyond declared size")
+                                digest.update(part)
+                            if size != info.file_size:
+                                raise RecoveredArchiveError("ZIP member did not match declared uncompressed size")
+                            sha256 = digest.hexdigest()
+                    if info.is_dir():
+                        continue
                     files.append({
                         "path": info.filename,
                         "uncompressed_bytes": size,
-                        "sha256": digest.hexdigest(),
+                        "sha256": sha256,
                     })
             # Re-read the same descriptor, and recheck its on-disk pathname:
             # an in-place edit or a path swap must not yield a PASS.
