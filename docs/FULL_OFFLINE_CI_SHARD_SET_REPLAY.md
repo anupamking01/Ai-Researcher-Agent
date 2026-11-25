@@ -502,3 +502,78 @@ original inputs and local exact-checkout procedure above. Genuine human
 evaluation, the original report/trace authentication gate and existing
 analysis qualifications remain separate. The workflow definition alone does
 not establish successful execution.
+
+
+### Hosted replay output escrow — 25 November 2026
+
+The [fresh hosted replay run 45646023560, attempt 1](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45646023560)
+completed successfully at workflow-source head
+`1a9b79f02a1917ec1c442524757817f1653fd92d` (push event).
+Its [single job 139317128126](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45646023560/job/139317128126)
+reports success for both checkouts, original archive retrieval, metadata
+audit, exact historical source replay, aggregate comparison and retention.
+This is a different run from the original offline CI run 45526533438:
+the verification receipts retain the **original** run/attempt and source
+identities, not the fresh replay's workflow-source SHA.
+
+The new [verification artifact 15036564529](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45646023560/artifacts/15036564529)
+was downloaded separately, before its provider-reported expiry
+(23 February 2027), and its 7,231 bytes independently matched the provider
+SHA-256. The original downloaded ZIP is escrowed verbatim at
+[research-evidence/historical-replay-45646023560-attempt-1/verification.zip](../research-evidence/historical-replay-45646023560-attempt-1/verification.zip).
+It contains exactly two JSON members, both CRC-valid:
+
+| Object | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Original verification ZIP | 7231 | `0d83d1ddae2470b576d2c8734819a23fe53559d2cb3507972445e2d375b5a0c2` |
+| metadata-audit.json | 23830 | `01fa955f47f2e0b63dea25184062770965f1cb67c5c85504a554258173560abf` |
+| recomputed-aggregate.json | 10427 | `2c2bffbc5624be41523d20c6ac1d64c3c449a873487f4585db856e6f5cbd2273` |
+
+The recomputed aggregate is byte-identical to the aggregate member of the
+original retained artifact 14983325938. Independently rehashing the 33
+previously downloaded original ZIPs also matched every local archive
+comparison (digest and size) recorded in the new metadata receipt.
+The receipt reports 16 successful shard jobs, successful aggregate replay,
+33 matching upload windows and local archives, and no missing or incomplete
+shards. The aggregate reports 8,475 passing software tests, four warnings,
+264 test modules, and the historical integration SHA
+`ee1e1d54ac5102f441f9641eab070d9e9233cac5`. These are **retained software
+test counts**, not new pytest executions or scientific observations.
+
+The attempt-specific provider responses, captured as connector-returned
+UTF-8 JSON (not claimed HTTP wire bytes), are stored alongside the ZIP:
+
+| Snapshot | Git blob SHA |
+| --- | --- |
+| `run.json` | `1450c84d86a87452a767967b2f5880cdc38ad014` |
+| `jobs.json` | `0c9c5a91ec0c71a67a46c60d5470ef97046d0269` |
+| `artifacts.json` | `08a0b9475f7192608ad8b4d3f766f9c210885a33` |
+| `verification.zip` | `7f8a26317d64fe461e6c1d708da8996abac476bd` |
+
+To check the retained verification output offline from the research root:
+
+```bash
+python - <<'PY'
+from hashlib import sha256
+from pathlib import Path
+from zipfile import ZipFile
+
+root = Path("research-evidence")
+p = root / "historical-replay-45646023560-attempt-1/verification.zip"
+assert sha256(p.read_bytes()).hexdigest() == "0d83d1ddae2470b576d2c8734819a23fe53559d2cb3507972445e2d375b5a0c2"
+with ZipFile(p) as fresh, ZipFile(root / "offline-ci-aggregate-45526533438-attempt-1.zip") as original:
+    assert sorted(fresh.namelist()) == ["metadata-audit.json", "recomputed-aggregate.json"]
+    assert fresh.testzip() is None
+    assert sha256(fresh.read("metadata-audit.json")).hexdigest() == "01fa955f47f2e0b63dea25184062770965f1cb67c5c85504a554258173560abf"
+    assert fresh.read("recomputed-aggregate.json") == original.read("vera-full-shard-replay.json")
+PY
+```
+
+This escrow preserves evidence of a successful **same-provider hosted**
+source-bound replay beyond the verification artifact's retention period.
+It does not escrow the complete original 33-archive input set, reexecute
+the historical verifier locally, or independently attest the hosted
+runner. The original report/trace recovery inventories remain empty,
+human ratings and inter-rater agreement remain pending, and no treatment
+or evaluator was rerun. Pilot, qualified post-collection automated results
+and exploratory analyses retain their existing interpretation boundaries.
