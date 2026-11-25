@@ -711,12 +711,17 @@ def audit_local_archive_digests(inventory: dict, directory: Path) -> dict:
             "local_digest": observed,
             "local_size_in_bytes": size,
         })
+    # Availability at the provider and the identity of retained local bytes
+    # are different facts. Expiration cannot invalidate an already saved ZIP.
+    full_local_match = (
+        len(comparisons) == 2 * EXPECTED_SHARDS + 1
+        and all(item["status"] == "match" for item in comparisons)
+    )
     return {
         "local_archive_digest_comparisons": comparisons,
+        "full_local_archive_bytes_match": full_local_match,
         "full_archive_digest_match": (
-            inventory["full_artifact_inventory_listed_unexpired"]
-            and len(comparisons) == 2 * EXPECTED_SHARDS + 1
-            and all(item["status"] == "match" for item in comparisons)
+            inventory["full_artifact_inventory_listed_unexpired"] and full_local_match
         ),
         "archive_digest_scope": (
             "local raw bytes compared with provider-declared digests and known sizes; "
@@ -731,6 +736,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-json", type=Path, required=True)
     parser.add_argument("--artifacts-json", type=Path, help="optional complete run-wide artifact inventory")
     parser.add_argument("--archives-dir", type=Path, help="optional local downloads named by artifact ID (<id>.zip)")
+    parser.add_argument(
+        "--historical-local-archives", action="store_true",
+        help="require all local archive bytes to match, even if provider listing reports expiration",
+    )
     parser.add_argument("--run-id", type=int, required=True)
     parser.add_argument("--run-attempt", type=int, required=True)
     identity = parser.add_mutually_exclusive_group(required=True)
@@ -738,6 +747,8 @@ def main(argv: list[str] | None = None) -> int:
     identity.add_argument("--commit", dest="commit", help="legacy alias for --head-sha")
     args = parser.parse_args(argv)
     try:
+        if args.historical_local_archives and args.archives_dir is None:
+            raise ValueError("--historical-local-archives requires --archives-dir")
         if args.archives_dir is not None and args.artifacts_json is None:
             raise ValueError("--archives-dir requires --artifacts-json")
         jobs, jobs_sha256 = _load_metadata_snapshot(args.jobs_json)
@@ -768,10 +779,16 @@ def main(argv: list[str] | None = None) -> int:
         "jobs_json_sha256": jobs_sha256,
         "run_json_sha256": run_sha256,
     })
+    if args.historical_local_archives:
+        audit["archive_gate_mode"] = "historical_local_bytes"
+        archive_gate = audit["full_local_archive_bytes_match"]
+    else:
+        archive_gate = (
+            audit.get("full_artifact_inventory_listed_unexpired", True)
+            and audit.get("full_archive_digest_match", True)
+        )
     print(json.dumps(audit, sort_keys=True, indent=2))
-    return 0 if (audit["full_workflow_job_gate_completed"]
-                 and audit.get("full_artifact_inventory_listed_unexpired", True)
-                 and audit.get("full_archive_digest_match", True)) else 1
+    return 0 if audit["full_workflow_job_gate_completed"] and archive_gate else 1
 
 
 if __name__ == "__main__":

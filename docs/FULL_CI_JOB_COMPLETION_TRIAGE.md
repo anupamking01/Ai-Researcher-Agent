@@ -333,3 +333,29 @@ authentication of that metadata, ZIP structure, contents, checkout identity,
 or scientific evidence. A digest match does not replace the source-bound
 `verify_full_ci_shard_set` replay. No original treatment or evaluator artifacts
 are recovered by this check and no experimental or human ratings are changed.
+
+## Historical local archive verification after provider expiration
+
+The provider's expiration flag describes listing availability, not the
+identity of an already retained local ZIP. The receipt now separately
+reports `full_local_archive_bytes_match`: all 33 required exact-attempt
+artifact IDs must be listed (expired is permitted), present locally, and
+match their provider-declared SHA-256 digests and every supplied size.
+The existing `full_archive_digest_match` continues to require an unexpired
+listing as well, and the default CLI exit contract is unchanged.
+
+For a historical escrow, add `--historical-local-archives` to the command
+with both `--artifacts-json` and `--archives-dir`. This explicit mode
+records `archive_gate_mode: historical_local_bytes` and permits exit 0
+only when the workflow/job gate and all 33 local byte comparisons pass.
+It does not require the provider to still list those artifacts as unexpired.
+Never edit historical metadata to clear expiration flags. Missing entries,
+missing or mismatched bytes, unknown digests, contradictory sizes and
+unsuccessful workflows remain incomplete; malformed inputs remain invalid.
+If the provider no longer lists artifacts at all, use the original preserved
+inventory snapshot, not invented metadata.
+
+This mode establishes consistency with the supplied historical metadata,
+not present downloadability, provider authenticity, ZIP content validity,
+independent source-bound replay, original treatment custody or human
+validation. No experimental outcomes are modified.

@@ -1367,6 +1367,7 @@ def test_local_archive_gate_requires_exact_id_and_digest(tmp_path, problem, stat
     )
     assert result["local_archive_digest_comparisons"][0]["status"] == status
     assert result["full_archive_digest_match"] is (status == "match")
+    assert result["full_local_archive_bytes_match"] is (status == "match")
     if status == "provider_size_mismatch":
         comparison = result["local_archive_digest_comparisons"][0]
         assert comparison["local_digest"] == first["digest"]
@@ -1434,6 +1435,51 @@ def test_local_archive_cli_does_not_promote_incomplete_or_mismatching_evidence(t
     assert main(args) == 1
     receipt = json.loads(capsys.readouterr().out)
     assert receipt["full_archive_digest_match"] is False
+
+
+@pytest.mark.parametrize("problem", [None, "missing_file", "missing_listing", "digest", "size", "unknown_digest", "cancelled_workflow"])
+def test_historical_local_archive_gate_separates_expiration_from_bytes(tmp_path, capsys, problem):
+    directory = tmp_path / "archives"
+    directory.mkdir()
+    payload = _local_archives(directory)
+    for entry in payload["artifacts"]:
+        entry["expired"] = True
+    first = payload["artifacts"][0]
+    if problem == "missing_file":
+        (directory / f"{first['id']}.zip").unlink()
+    elif problem == "missing_listing":
+        payload["artifacts"].pop(0)
+        payload["total_count"] -= 1
+    elif problem == "digest":
+        first["digest"] = "sha256:" + "0" * 64
+    elif problem == "size":
+        first["size_in_bytes"] += 1
+    elif problem == "unknown_digest":
+        first.pop("digest")
+    jobs, run, artifacts = [tmp_path / name for name in ("jobs.json", "run.json", "artifacts.json")]
+    jobs.write_text(json.dumps(_inventory()))
+    run_payload = _artifact_run()
+    if problem == "cancelled_workflow":
+        run_payload["conclusion"] = "cancelled"
+    run.write_text(json.dumps(run_payload))
+    artifacts.write_text(json.dumps(payload))
+    args = ["--jobs-json", str(jobs), "--run-json", str(run),
+            "--run-id", str(RUN), "--run-attempt", str(ATTEMPT), "--head-sha", SHA,
+            "--artifacts-json", str(artifacts)]
+    assert main(args + ["--historical-local-archives"]) == 2
+    assert not capsys.readouterr().out
+    args += ["--archives-dir", str(directory)]
+    assert main(args) == 1
+    default = json.loads(capsys.readouterr().out)
+    assert main(args + ["--historical-local-archives"]) == (0 if problem is None else 1)
+    historical = json.loads(capsys.readouterr().out)
+    assert historical.pop("archive_gate_mode") == "historical_local_bytes"
+    assert historical == default
+    assert historical["full_artifact_inventory_listed_unexpired"] is False
+    assert historical["full_archive_digest_match"] is False
+    assert historical["full_local_archive_bytes_match"] is (problem in (None, "cancelled_workflow"))
+    assert historical["retained_evidence_verified_by_this_tool"] is False
+    assert historical["tested_checkout_sha_verified_by_this_tool"] is False
 
 
 # Unlike the synthetic fixtures above, these are immutable historical
