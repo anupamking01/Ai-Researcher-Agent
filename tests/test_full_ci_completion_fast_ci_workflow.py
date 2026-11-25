@@ -25,9 +25,11 @@ TESTS = (
     "tests/test_full_ci_shard_set_verification.py",
     "tests/test_full_ci_shard_set_ci_workflow.py",
     "tests/test_offline_ci_network_firewall.py",
+    "tests/test_stage_historical_ci_package.py",
 )
 AUDITOR = "scripts/audit_full_ci_job_completion.py"
 REPLAY_DEPENDENCIES = (
+    "scripts/stage_historical_ci_package.py",
     "scripts/select_full_ci_shard.py",
     "scripts/verify_full_ci_shard_set.py",
     "scripts/verify_ci_early_gate_evidence.py",
@@ -77,7 +79,8 @@ def test_completion_auditor_fast_lane_is_pinned_offline_and_source_triggered():
                   "--constraint requirements.txt"):
         assert token in install
     compile_command = _step(steps, "Compile auditor and targeted tests")["run"]
-    for module in (*TESTS, AUDITOR, "scripts/select_full_ci_shard.py",
+    for module in (*TESTS, AUDITOR, "scripts/stage_historical_ci_package.py",
+                   "scripts/select_full_ci_shard.py",
                    "scripts/verify_full_ci_shard_set.py",
                    "scripts/verify_ci_early_gate_evidence.py"):
         assert module in compile_command.split()

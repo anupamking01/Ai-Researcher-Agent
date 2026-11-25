@@ -394,9 +394,29 @@ The helper is deliberately restricted to the already documented package,
 not an arbitrary replacement archive. It checks the pinned outer size and
 SHA-256, the receipt SHA-256, the complete 33-archive name and ID inventory,
 every original archive size and digest, exact ZIP member sets, and each
-member digest before writing any of the 81 fixed-path files. It refuses
-existing output directories. If publication is interrupted, discard the
-partial staging directory; do not reuse it. The original ZIPs remain unchanged.
+member digest before writing any files. The output contains the 81 replay
+files, all 33 original ZIPs under `archives/<positive-integer-artifact-id>.zip`,
+and the original external archive receipt (115 files total). The original
+ZIPs and receipt are copied byte-for-byte, not recompressed or regenerated.
+It refuses existing output directories. If publication is interrupted, discard
+the partial staging directory; do not reuse it.
+
+Run the metadata/byte audit directly against the staged archives from the
+research checkout; no second manual extraction is needed:
+
+```bash
+snapshot=research-evidence/offline-ci-45526533438-attempt-1
+python -m scripts.audit_full_ci_job_completion \
+  --run-json "$snapshot/run.json" --jobs-json "$snapshot/jobs.json" \
+  --artifacts-json "$snapshot/artifacts.json" \
+  --run-id 45526533438 --run-attempt 1 \
+  --head-sha 74b75bb5e7be9c54054dc7384a5d38ce5b80416d \
+  --archives-dir /trusted-download/staged/archives --historical-local-archives
+```
+
+This checks the historical workflow head and retained archive bytes, not the
+integration checkout or the source-bound shard replay below. The fast offline
+completion-auditor lane also runs the synthetic staging contracts.
 
 Next, in a separate clean checkout of the actual historical integration SHA
 `ee1e1d54ac5102f441f9641eab070d9e9233cac5` (not the current PR head), run:

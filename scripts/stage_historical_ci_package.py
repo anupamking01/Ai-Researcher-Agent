@@ -54,17 +54,21 @@ def stage_package(package: Path, output: Path) -> None:
         rows = json.loads(receipt_raw)["artifacts"]
         if len(rows) != len(layout) or {r["name"] for r in rows} != set(layout):
             raise ValueError("historical artifact inventory mismatch")
+        if any(type(r["artifact_id"]) is not int or r["artifact_id"] <= 0 for r in rows):
+            raise ValueError("invalid historical artifact ID")
         ids = {r["artifact_id"] for r in rows}
         if len(ids) != len(layout):
             raise ValueError("duplicate historical artifact ID")
         require_members(outer, {f"archives/{i}.zip" for i in ids} |
                         {"external-archive-receipt.json"})
+        files[Path("external-archive-receipt.json")] = receipt_raw
         for row in rows:
             folder, names = layout[row["name"]]
             archive = outer.read(f'archives/{row["artifact_id"]}.zip')
             if (len(archive) != row["archive_bytes"] or
                     sha(archive) != row["provider_sha256"]):
                 raise ValueError("original archive size or SHA-256 mismatch")
+            files[Path("archives") / f'{row["artifact_id"]}.zip'] = archive
             with ZipFile(io.BytesIO(archive)) as inner:
                 require_members(inner, set(names))
                 for name in names:
