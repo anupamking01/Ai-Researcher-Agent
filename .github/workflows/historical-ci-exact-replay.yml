@@ -1,0 +1,100 @@
+name: historical-ci-exact-replay
+
+# One historical attempt only. Do not add this retention-dependent lane to
+# ordinary PR CI or use it to rerun tests, treatments, or the evaluator.
+on:
+  push:
+    branches: [research-paper-eval-2027]
+    paths: [.github/workflows/historical-ci-exact-replay.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  replay-historical-attempt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      HISTORICAL_SHA: ee1e1d54ac5102f441f9641eab070d9e9233cac5
+      HISTORICAL_HEAD: 74b75bb5e7be9c54054dc7384a5d38ce5b80416d
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONNOUSERSITE: '1'
+    steps:
+      - name: Checkout reviewed staging and metadata tools
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: review-source
+          persist-credentials: false
+      - name: Checkout exact historical integration commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ee1e1d54ac5102f441f9641eab070d9e9233cac5
+          path: historical-source
+          persist-credentials: false
+      - name: Pin historical Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11.17'
+          pip-version: '26.2.1'
+      - name: Download original archive bytes by pinned artifact IDs
+        working-directory: review-source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          snapshot=research-evidence/offline-ci-45526533438-attempt-1
+          printf '%s  %s\n' 52d74984e07d78b912e179bafc34d352895412f1aa74572da6d58e7e32596e16 "$snapshot/artifacts.json" | sha256sum --check --strict
+          ids=$(jq -er '.artifacts[].id' "$snapshot/artifacts.json")
+          mapfile -t artifact_ids <<< "$ids"
+          test "${#artifact_ids[@]}" -eq 33
+          mkdir "$RUNNER_TEMP/original-zips"
+          for id in "${artifact_ids[@]}"; do
+            [[ "$id" =~ ^[1-9][0-9]*$ ]]
+            curl --disable --fail --location --silent --show-error --retry 2 --max-time 60 --max-filesize 1048576 \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'Accept: application/vnd.github+json' \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" \
+              --output "$RUNNER_TEMP/original-zips/$id.zip"
+          done
+      - name: Stage and audit the original attempt without credentials
+        working-directory: review-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          snapshot=research-evidence/offline-ci-45526533438-attempt-1
+          python -m scripts.stage_historical_ci_package \
+            --archives-dir "$RUNNER_TEMP/original-zips" \
+            --artifact-inventory "$snapshot/artifacts.json" \
+            --output "$RUNNER_TEMP/staged"
+          mkdir "$RUNNER_TEMP/replay-verification"
+          python -m scripts.audit_full_ci_job_completion \
+            --run-json "$snapshot/run.json" --jobs-json "$snapshot/jobs.json" \
+            --artifacts-json "$snapshot/artifacts.json" \
+            --run-id 45526533438 --run-attempt 1 --head-sha "$HISTORICAL_HEAD" \
+            --archives-dir "$RUNNER_TEMP/staged/archives" --historical-local-archives \
+            > "$RUNNER_TEMP/replay-verification/metadata-audit.json"
+      - name: Replay original shard evidence and compare retained aggregate
+        working-directory: historical-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.verify_ci_python_runtime --phase before-tests
+          python -m scripts.verify_ci_source_checkout --checkout-sha "$HISTORICAL_SHA" --phase before-tests
+          python -m scripts.verify_full_ci_shard_set \
+            --evidence-root "$RUNNER_TEMP/staged/pytest" \
+            --early-evidence-root "$RUNNER_TEMP/staged/early" \
+            --retained-aggregate-receipt "$RUNNER_TEMP/staged/aggregate/vera-full-shard-replay.json" \
+            --checkout-sha "$HISTORICAL_SHA" --run-id 45526533438 --run-attempt 1 --event pull_request \
+            > "$RUNNER_TEMP/replay-verification/recomputed-aggregate.json"
+          cmp -- "$RUNNER_TEMP/replay-verification/recomputed-aggregate.json" "$RUNNER_TEMP/staged/aggregate/vera-full-shard-replay.json"
+          python -m scripts.verify_ci_source_checkout --checkout-sha "$HISTORICAL_SHA" --phase after-tests
+      - name: Retain fresh replay verification outputs (not original artifacts)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-historical-replay-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/replay-verification/
+          if-no-files-found: error
+          retention-days: 90

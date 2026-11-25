@@ -466,3 +466,39 @@ and its stronger separate member-hash checks remain unchanged.
 This alternative is not a substitute for the independent exact-checkout
 replay, and it does not authenticate the missing scientific source artifacts.
 No treatment, evaluator or human-rating execution is involved.
+
+
+### Fresh hosted historical replay
+
+The separate [historical-ci-exact-replay workflow](../.github/workflows/historical-ci-exact-replay.yml)
+automates the above direct-archive route while the original provider
+artifacts are retrievable. It runs on pushes changing that workflow on
+the research branch, rather than on every PR revision, and declares a
+manual dispatch entry point (GitHub requires the workflow on the default
+branch for manual dispatch). Do not substitute an ordinary current-branch
+CI run or a new experimental run if retrieval fails.
+
+The job checks the pinned provider inventory before downloading by its
+33 original artifact IDs. It uses read-only repository and Actions
+permissions, no persisted checkout credentials, and a download-step-only
+token. The staging and completion auditor use the reviewed research
+checkout; the source-bound replay runs in a separate clean checkout of
+the historical integration SHA `ee1e1d54ac5102f441f9641eab070d9e9233cac5`,
+using the pinned historical Python runtime. No application dependencies,
+pytest, treatments or evaluator execution are required for the replay.
+Both the retained-aggregate comparison and an explicit byte comparison
+must succeed, with exact checkout verification before and after.
+On success, a newly named verification artifact retains the metadata audit
+and recomputed aggregate; it is not an original artifact or a replacement
+for the archived aggregate.
+
+This is a fresh same-provider-hosted replay, **not** an independent external
+runner attestation. The retrieval phase uses the network, and a successful
+job does not establish physical network isolation, provider honesty or
+scientific evidence custody. A missing historical Git object, inaccessible
+or expired artifact, or byte mismatch must fail the job, not trigger a
+replacement run. After provider expiration use the separately retained
+original inputs and local exact-checkout procedure above. Genuine human
+evaluation, the original report/trace authentication gate and existing
+analysis qualifications remain separate. The workflow definition alone does
+not establish successful execution.
