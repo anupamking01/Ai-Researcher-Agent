@@ -1846,3 +1846,72 @@ def test_semantic_archive_reread_rejects_symlinked_parent(tmp_path):
     with pytest.raises(concordance.RecoveryConcordanceError, match="archive source"):
         with concordance._open_audited_archive(alias / path.name, audit):
             pytest.fail("symlinked ancestor reached semantic reads")
+
+
+def test_comparison_archive_snapshot_accepts_stable_nested_zip(tmp_path):
+    root = tmp_path / "nested"
+    root.mkdir()
+    path, raw, _ = _semantic_reread_fixture(root)
+    first = concordance._archive_source_snapshot(path)
+    assert first[1] == hashlib.sha256(raw).hexdigest()
+    assert concordance._archive_source_snapshot(path) == first
+
+
+@pytest.mark.parametrize("alias_kind", ("parent-symlink", "parent-traversal", "hardlink"))
+def test_comparison_archive_snapshot_rejects_alias_before_hash(
+    tmp_path, monkeypatch, alias_kind,
+):
+    root = tmp_path / "nested"
+    root.mkdir()
+    path, _, _ = _semantic_reread_fixture(root)
+    try:
+        if alias_kind == "parent-symlink":
+            alias = tmp_path / "alias"
+            alias.symlink_to(root, target_is_directory=True)
+            candidate = alias / path.name
+        elif alias_kind == "parent-traversal":
+            candidate = root / ".." / root.name / path.name
+        else:
+            candidate = tmp_path / "hardlink.zip"
+            os.link(path, candidate)
+    except (OSError, NotImplementedError):
+        pytest.skip("filesystem links unavailable")
+
+    def must_not_hash(*args, **kwargs):
+        pytest.fail("aliased archive reached preliminary hash")
+
+    monkeypatch.setattr(preflight, "_fingerprint", must_not_hash)
+    with pytest.raises(concordance.RecoveryConcordanceError, match="archive source"):
+        concordance._archive_source_snapshot(candidate)
+
+
+def test_comparison_archive_snapshot_rejects_same_inode_parent_redirect(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "nested"
+    root.mkdir()
+    path, raw, _ = _semantic_reread_fixture(root)
+    # Check symlink support before mutating the actual source directory.
+    probe = tmp_path / "probe"
+    try:
+        probe.symlink_to(root, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    probe.unlink()
+    relocated = tmp_path / "relocated"
+    actual_fingerprint = preflight._fingerprint
+
+    def redirect_parent(handle, *, expected_bytes):
+        digest = actual_fingerprint(handle, expected_bytes=expected_bytes)
+        root.rename(relocated)
+        root.symlink_to(relocated, target_is_directory=True)
+        # Leaf-only identity and digest checks cannot detect this redirect.
+        assert os.fstat(handle.fileno()).st_ino == path.stat().st_ino
+        assert path.read_bytes() == raw
+        return digest
+
+    monkeypatch.setattr(preflight, "_fingerprint", redirect_parent)
+    with pytest.raises(
+        concordance.RecoveryConcordanceError, match="archive parent directory changed",
+    ):
+        concordance._archive_source_snapshot(path)

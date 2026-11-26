@@ -37,13 +37,17 @@ def _archive_source_snapshot(path: Path) -> tuple[tuple[int, ...], str]:
     Unlike each individual ZIP preflight, this snapshot also bounds the
     *combined* two-archive comparison window. It does not authenticate custody.
     """
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    # The preliminary hash reads must obey the same path and hardlink
+    # contract as the structural audit and later semantic reads.
     try:
-        with os.fdopen(os.open(path, flags), "rb") as handle:
+        with preflight._open_archive_with_pinned_parents(path) as handle:
             before = os.fstat(handle.fileno())
             pathname = os.stat(path, follow_symlinks=False)
-            if not stat.S_ISREG(before.st_mode) or not preflight._unchanged(before, pathname):
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or not preflight._unchanged(before, pathname)
+            ):
                 raise RecoveryConcordanceError(
                     "archive source must be an unchanged regular file, not a link"
                 )
@@ -55,7 +59,7 @@ def _archive_source_snapshot(path: Path) -> tuple[tuple[int, ...], str]:
                 or not preflight._unchanged(before, os.stat(path, follow_symlinks=False))
             ):
                 raise RecoveryConcordanceError("archive changed during source snapshot")
-    except OSError as exc:
+    except (OSError, preflight.RecoveredArchiveError) as exc:
         raise RecoveryConcordanceError(
             f"cannot safely capture archive source {path}: {exc}"
         ) from exc

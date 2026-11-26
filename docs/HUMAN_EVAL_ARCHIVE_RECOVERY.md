@@ -1,3 +1,23 @@
+## Combined source snapshot path custody (26 November 2026)
+
+The source-concordance comparator fingerprints both historical archives
+before their structural audits and again at combined comparison checkpoints.
+These preliminary hash reads previously used a leaf-only no-follow open:
+a symlinked parent could be followed, a hard-linked ZIP could be hashed,
+and redirecting a parent to the relocated original directory could preserve
+the leaf inode and bytes. Later structural or semantic checks are not a
+substitute for safe preliminary reads. The combined snapshots now reuse
+the structural preflight's descriptor-relative, pinned-parent opener,
+reject multi-linked archives before hashing, and translate preflight
+failures to the comparator's error type. Synthetic regressions cover a
+stable nested ZIP, ancestor symlinks, parent traversal, hard links, and
+an observed parent redirect preserving the leaf inode and digest.
+
+This is local observation-window custody, not an atomic filesystem
+transaction or independent authentication of the original archives. It
+does not authorize human-evaluation distribution or change any frozen
+scientific outcomes.
+
 ## General-purpose ZIP flag semantics (26 November 2026)
 
 Recovery preflight accepts ordinary STORED and DEFLATE members only.
