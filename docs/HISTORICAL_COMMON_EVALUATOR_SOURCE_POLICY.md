@@ -304,3 +304,35 @@ remain unverified. The diagnostic pilot, qualified post-collection
 automated primary analysis, exploratory sensitivity analyses, and pending
 human validation remain distinct. No new measurement or rerun is warranted
 by this finding.
+
+
+## Prospective raw evaluator text retention (27 November 2026)
+
+The historical absence of raw model text is irreversible from normalized
+counts alone. Newly produced **explicitly noncanonical** evaluator cache
+records now retain a `raw_response` object containing the exact returned
+text (including surrounding whitespace and any code fences), its UTF-8 byte
+length, and SHA-256. This is the text returned by the adapter, not a raw HTTP
+response, provider execution identity, billing receipt, or signed timestamp.
+The text is bounded to 1 MiB of UTF-8. The existing strict normalizer and
+positive-denominator/evidence-only checks still govern publication; a
+malformed response does not become a valid measurement.
+
+When a cache includes this object, the offline replay preflight verifies
+its fingerprint, re-normalizes the retained text under the current frozen
+claim cap and compares all normalized counts and examples against the stored
+measurement. The existing schema-2 input-fingerprint contract remains
+compatible with older caches. **Absence of this optional extension is not
+evidence of raw-response compliance**; the verifier cannot establish that
+an older record ever retained this text or that a new cache was not rewritten
+coherently before capture. Keep raw evaluator records coordinator-only;
+they may contain report or source excerpts and must not enter annotator
+bundles. The aggregate CSV continues to contain only the existing selected
+fields.
+
+This prospective safeguard does not recover the historical raw responses,
+validate individual classification accuracy, or justify a treatment or
+evaluator rerun. No historical measurements, frozen plans, or human ratings
+are changed. The pilot remains diagnostic, the frozen automated analysis
+qualified, retrospective diagnostics exploratory, and human validation
+pending.

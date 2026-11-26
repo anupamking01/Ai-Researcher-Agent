@@ -910,6 +910,8 @@ def test_new_cache_binds_exact_evaluator_prompt_inputs(tmp_path, monkeypatch):
     evidence = evaluate_posthoc_support.NO_EVIDENCE_SENTINEL
     assert captured[0]["temperature"] == 1.0
     assert cache["schema_version"] == 2
+    assert cache["raw_response"] == {"text": _evaluator_result(), **_fingerprint_text(_evaluator_result())}
+    evaluate_posthoc_support._validate_raw_response_receipt(cache)
     assert cache["replay_provenance"] == evaluate_posthoc_support._noncanonical_evaluator_replay_provenance()
     assert cache["input_fingerprints"] == _input_fingerprints(
         question=question,
@@ -1490,3 +1492,58 @@ def test_cached_evaluator_mutation_after_preflight_blocks_aggregate(
         evaluate_posthoc_support.main()
     assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
     assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
+def _cache_with_raw_response():
+    payload = _cached_evaluation()
+    raw = " \n" + json.dumps({
+        field: payload[field] for field in (
+            "claims_checked", "supported", "partially_supported", "unsupported",
+            "contradicted", "examples",
+        )
+    }) + "\n"
+    payload["raw_response"] = {"text": raw, **_fingerprint_text(raw)}
+    return payload
+
+
+def test_raw_response_cache_round_trip_preserves_exact_text(tmp_path):
+    payload = _cache_with_raw_response()
+    path = tmp_path / "cache.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert _load_cached(path) == payload
+
+
+@pytest.mark.parametrize("mutation", ["text", "digest", "size", "boolean_size", "missing_field", "counts", "examples", "duplicate_key"])
+def test_raw_response_cache_rejects_inconsistent_evidence(tmp_path, mutation):
+    payload = _cache_with_raw_response()
+    receipt = payload["raw_response"]
+    if mutation == "text":
+        receipt["text"] += " "
+    elif mutation == "digest":
+        receipt["sha256"] = "0" * 64
+    elif mutation == "size":
+        receipt["byte_size"] += 1
+    elif mutation == "boolean_size":
+        receipt["byte_size"] = True
+    elif mutation == "missing_field":
+        del receipt["sha256"]
+    elif mutation == "counts":
+        payload.update(supported=7, unsupported=2, strict_support_rate=7 / 12)
+    elif mutation == "examples":
+        payload["examples"] = [{"claim": "synthetic"}]
+    elif mutation == "duplicate_key":
+        raw = receipt["text"].replace('"supported": 8', '"supported": 8, "supported": 8')
+        payload["raw_response"] = {"text": raw, **_fingerprint_text(raw)}
+    path = tmp_path / "cache.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(SystemExit, match="raw evaluator response|duplicate JSON key"):
+        _load_cached(path)
+
+
+def test_raw_response_receipt_bounds_utf8_bytes(monkeypatch):
+    monkeypatch.setattr(evaluate_posthoc_support, "MAX_RAW_EVALUATOR_RESPONSE_BYTES", 4)
+    assert evaluate_posthoc_support._raw_response_receipt("éé") == {
+        "text": "éé", **_fingerprint_text("éé"),
+    }
+    with pytest.raises(ValueError, match="byte limit"):
+        evaluate_posthoc_support._raw_response_receipt("ééé")

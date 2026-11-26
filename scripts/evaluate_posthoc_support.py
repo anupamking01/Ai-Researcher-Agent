@@ -43,6 +43,8 @@ MAX_EVALUATOR_JSON_NUMBER_TOKEN_CHARS = 128
 # Bounds are operational safety limits, not replacements for frozen study data.
 MAX_EVALUATOR_JSON_BYTES = 16 * 1024 * 1024
 MAX_EVALUATOR_TEXT_FILE_BYTES = 2 * 1024 * 1024
+# Prospective raw model text is retained in the coordinator-only cache.
+MAX_RAW_EVALUATOR_RESPONSE_BYTES = 1024 * 1024
 MAX_EVALUATOR_EVIDENCE_BYTES = 4 * 1024 * 1024
 # Aggregate CSVs are retained external evidence, not unlimited trusted output.
 MAX_EVALUATOR_AGGREGATE_CSV_BYTES = 16 * 1024 * 1024
@@ -779,6 +781,34 @@ def _normalize_evaluator_output(raw_result: str) -> dict:
 
 
 
+def _raw_response_receipt(raw: str) -> dict:
+    """Capture exact returned text, not the provider's HTTP response envelope."""
+    if type(raw) is not str or len(raw) > MAX_RAW_EVALUATOR_RESPONSE_BYTES:
+        raise ValueError("raw evaluator response must be bounded text")
+    fingerprint = _text_fingerprint(raw)
+    if fingerprint["byte_size"] > MAX_RAW_EVALUATOR_RESPONSE_BYTES:
+        raise ValueError("raw evaluator response exceeds byte limit")
+    return {"text": raw, **fingerprint}
+
+
+def _validate_raw_response_receipt(payload: dict) -> None:
+    """Check optional prospective evidence without upgrading legacy records."""
+    if "raw_response" not in payload:
+        return  # Historical and earlier schema-2 caches have no such evidence.
+    receipt = payload["raw_response"]
+    if not isinstance(receipt, dict) or set(receipt) != {"text", "byte_size", "sha256"}:
+        raise ValueError("raw evaluator response receipt has invalid fields")
+    if type(receipt["byte_size"]) is not int or receipt != _raw_response_receipt(receipt["text"]):
+        raise ValueError("raw evaluator response fingerprint mismatch")
+    normalized = _normalize_evaluator_output(receipt["text"])
+    # Compare serialized JSON, not Python equality (True == 1, for example).
+    recorded = {field: payload[field] for field in normalized}
+    if json.dumps(recorded, sort_keys=True, allow_nan=False) != json.dumps(
+        normalized, sort_keys=True, allow_nan=False
+    ):
+        raise ValueError("raw evaluator response disagrees with normalized cache")
+
+
 def _require_zero_evidence_classifications(
     record: dict, *, evidence_status: str, label: str
 ) -> None:
@@ -938,7 +968,8 @@ def _validate_cached_evaluation(
         )
     try:
         _normalize_evaluator_output(json.dumps(payload))
-    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        _validate_raw_response_receipt(payload)
+    except (json.JSONDecodeError, TypeError, ValueError, RecursionError, KeyError) as exc:
         raise SystemExit(
             f"Cached post-hoc evaluation {path} is invalid: {exc}"
         ) from exc
@@ -1598,6 +1629,7 @@ def main() -> int:
             usage_tracker=tracker,
             request_timeout_seconds=120,
         )
+        raw_response = _raw_response_receipt(raw)
         result = _normalize_evaluator_output(raw)
         _require_zero_evidence_classifications(
             result,
@@ -1622,6 +1654,7 @@ def main() -> int:
             "max_claims": MAX_CLAIMS,
             "evidence_status": evidence_status,
             "input_fingerprints": item["input_fingerprints"],
+            "raw_response": raw_response,
             "claims_checked": result["claims_checked"],
             "supported": result["supported"],
             "partially_supported": result["partially_supported"],
