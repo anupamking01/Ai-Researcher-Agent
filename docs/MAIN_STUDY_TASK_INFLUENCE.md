@@ -6,7 +6,7 @@
 
 The frozen ten-task main study reports paired mean strict-support differences under three predefined contrasts. With only ten paired observations, a single task can have a notable effect on a sample mean. This diagnostic exposes that sensitivity **without selecting tasks based on observed outcomes**, modifying a treatment, changing the frozen dataset, or rerunning a model.
 
-The diagnostic enumerates **all 10 possible single-task omissions for each of all 3 preregistered contrasts**. Every row reports the mean of the remaining nine original paired differences and its change from the untouched ten-task mean. The complete-study mean stays the point estimate of record. No p-values, intervals, post-hoc hypothesis tests, adjusted significance decisions, or new primary endpoints are produced.
+The diagnostic enumerates **all 10 possible single-task omissions for each of all 3 designated-primary contrasts**. Every row reports the mean of the remaining nine original paired differences and its change from the untouched ten-task mean. The complete-study mean stays the point estimate of record. No p-values, intervals, post-hoc hypothesis tests, adjusted significance decisions, or new primary endpoints are produced.
 
 ## Use (offline, read-only)
 
@@ -23,14 +23,14 @@ For original frozen task differences `d[1] ... d[10]` (right minus left), the fu
 
 **Claims allowed:** these diagnostics describe how each fixed original-sample paired mean responds to excluding one task, and are useful for assessing task concentration and small-sample sensitivity.
 
-**Claims not allowed:** calling a nine-task omission a new primary estimate, reporting significance from selected omissions, replacing the Holm-adjusted confirmatory analyses, treating the ten original tasks as a population-representative benchmark, or using the results to choose a favorable rerun/variant. Cross-contrast comparisons remain descriptive. The diagnostic also cannot adjudicate claim-level truth, model-evaluator bias, web drift, or whether humans agree with the automated support judge.
+**Claims not allowed:** calling a nine-task omission a new primary estimate, reporting significance from selected omissions, replacing the frozen Holm-adjusted analyses, treating the ten original tasks as a population-representative benchmark, or using the results to choose a favorable rerun/variant. Cross-contrast comparisons remain descriptive. The diagnostic also cannot adjudicate claim-level truth, model-evaluator bias, web drift, or whether humans agree with the automated support judge.
 
 ## Evidentiary separation
 
 | Layer | Source | Status and use |
 |---|---|---|
 | Diagnostic pilot | `paper/PILOT_RESULTS.md` | Diagnostic only; cannot supply omitted main-study pairs. |
-| Frozen confirmatory automated inference | `paper/ANALYSIS_PLAN.md`, `outputs/main_study_inference.json`, `paper/MAIN_STUDY_INFERENCE.md` | Original ten-task, three-contrast results remain unchanged. |
+| Qualified frozen automated inference | `paper/ANALYSIS_PLAN.md`, `outputs/main_study_inference.json`, `paper/MAIN_STUDY_INFERENCE.md` and [required reporting cover](../paper/MAIN_STUDY_REPORTING_COVER.md) | Original ten-task, three-contrast results remain unchanged; post-collection plan timing and outcome blinding qualification apply. |
 | Task-influence diagnostic | `scripts/analyze_main_study_task_influence.py` | Exhaustive *post-hoc exploratory* sensitivity only; no added inference. |
 | Blinded human evaluation | `paper/HUMAN_EVAL_PROTOCOL.md` | Pending genuine independent blinded annotations; this script supplies none. |
 
@@ -63,5 +63,5 @@ fails. The artifact is retained for 90 days unless deliberately preserved
 elsewhere with its checksums.
 
 This is verification of an exploratory calculation on the original ten
-tasks, **not** a revised confirmatory estimate, an independent human
+tasks, **not** a revised designated-primary estimate, an independent human
 assessment, or a basis to remove any task from the manuscript analysis.

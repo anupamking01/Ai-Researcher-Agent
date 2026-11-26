@@ -60,7 +60,7 @@ unobserved transient mutations, or turn the independent arithmetic check into
 a new statistical analysis.
 
 It checks: frozen task order and configuration, report-level strict-support
-fractions, four variant mean strict-support rates, the three preregistered
+fractions, four variant mean strict-support rates, the three designated-primary
 left/right paired means and mean/median contrasts, all ten task differences per
 contrast, sign counts, paired standardized effects, exact two-sided sign-flip
 p-values across 2^10 assignments, the three-test Holm family, **and the three
@@ -136,7 +136,8 @@ retroactively authenticate treatment traces and cannot establish human
 validation. Historical canonical artifacts, the frozen analysis script, plan,
 and hashes are unchanged.
 
-The original diagnostic pilot, frozen automated confirmatory results,
+The original diagnostic pilot, frozen automated results (qualified by the
+[post-collection chronology and reporting cover](../paper/MAIN_STUDY_REPORTING_COVER.md)),
 exploratory follow-ups, and still-pending genuine blinded human evaluation
 must be reported separately. The auditor does not alter or select outcomes.
 
@@ -153,6 +154,6 @@ parent inspection and opening, and legitimate nested CSV paths. This applies
 to the independent frozen-CSV input preflight and downstream exploratory
 denominator inspection as well as the independent inference audit. The
 published SHA-256 pins, 40-cell arithmetic checks, frozen statistical
-implementation, and confirmatory results are unchanged. This is a *local
+implementation, and frozen automated results are unchanged. This is a *local
 path-continuity safeguard*, not proof of original experiment custody, an
 atomic filesystem snapshot, or evidence of human-validation readiness.

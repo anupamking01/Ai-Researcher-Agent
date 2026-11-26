@@ -38,7 +38,7 @@ The output also counts how many of the ten omitted-task analyses include each va
 
 **Not allowed:** dropping an inconvenient task from the primary dataset; treating one omitted-task frontier as the preferred treatment; claiming a population Pareto probability; adding p-values or CIs; using this diagnostic as independent replication; or inferring human report quality from common-evaluator strict support.
 
-This is **distinct** from the existing paired-mean task-influence diagnostic. Pilot results remain diagnostic. The preregistered automated paired primary contrasts and Holm correction remain unchanged; this frontier audit is post-hoc exploratory only. Human ratings, inter-annotator agreement, and automated–human reconciliation remain outstanding.
+This is **distinct** from the existing paired-mean task-influence diagnostic. Pilot results remain diagnostic. The frozen designated-primary automated paired contrasts and Holm correction remain unchanged, subject to the [post-collection plan timing and inference qualification](../paper/MAIN_STUDY_REPORTING_COVER.md); this frontier audit is post-hoc exploratory only. Human ratings, inter-annotator agreement, and automated–human reconciliation remain outstanding.
 
 ## Tests and provenance boundaries
 
@@ -69,7 +69,7 @@ execution-bound provenance and canonical-output verification must pass
 **before** any of the ten task omissions is evaluated. Its additional coverage checks reject omitted,
 duplicated, or selectively reported task omissions. It uploads only an
 exploratory diagnostic JSON and a SHA-256/checkout/run-identity receipt as a
-GitHub Actions artifact; neither is promoted into the frozen confirmatory
+GitHub Actions artifact; neither is promoted into the frozen automated
 outputs. Artifacts have finite retention and should be separately preserved
 with verified hashes if needed for a manuscript audit.
 

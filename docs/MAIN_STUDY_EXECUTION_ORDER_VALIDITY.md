@@ -6,7 +6,7 @@
 
 The original treatment runner at immutable revision [c3c15e46a8eec3a8bbc24c968eedc0548172a897](https://github.com/anupamking01/Ai-Researcher-Agent/blob/c3c15e46a8eec3a8bbc24c968eedc0548172a897/scripts/run_budget_main_study.py) iterated through ten fixed tasks and, **within each task**, executed **D3, D6, P6, P6V** in that order. Each run was awaited before the next began. Its progress writer recorded per-run start and finish timestamps in outputs/main_study_progress.json. This arrangement preserved matched task prefixes if a cost limit stopped execution; it did **not** randomize or counterbalance arm assignment.
 
-Treatment identity was consequently tied to relative execution time within each task. Mutable search results, web availability, transient browsing failures, or provider behavior might differ as the successive treatments ran. The paired design controls task identity but cannot by itself remove within-task temporal-order confounding. The exact sign-flip calculation in paper/ANALYSIS_PLAN.md enumerates paired sign assignments; it must not be described as evidence of historical random treatment allocation. This is a validity caveat regardless of any observed effect direction, not permission to replace the preregistered analysis.
+Treatment identity was consequently tied to relative execution time within each task. Mutable search results, web availability, transient browsing failures, or provider behavior might differ as the successive treatments ran. The paired design controls task identity but cannot by itself remove within-task temporal-order confounding. The exact sign-flip calculation in paper/ANALYSIS_PLAN.md enumerates paired sign assignments; it must not be described as evidence of historical random treatment allocation. This is a validity caveat regardless of any observed effect direction, not permission to replace the frozen automated analysis.
 
 ## Read-only archived progress-log diagnostic
 
@@ -76,11 +76,11 @@ original progress log is unavailable.
 
 ## Scientific reporting and unresolved gates
 
-Disclose fixed-order temporal confounding explicitly in the eventual manuscript's threats to validity even if it complicates an appealing interpretation. Preserve the exact first complete 40-cell treatment dataset, recorded zero-evidence outcomes, the existing post-hoc evaluator, all preregistered paired estimates and Holm-adjusted p-values. Do not select reruns, reorder observed cases, or claim that retrospective timestamp checks repair the allocation design.
+Disclose fixed-order temporal confounding explicitly in the eventual manuscript's threats to validity even if it complicates an appealing interpretation. Preserve the exact first complete 40-cell treatment dataset, recorded zero-evidence outcomes, the existing post-hoc evaluator, all frozen designated-primary paired estimates and Holm-adjusted p-values. Do not select reruns, reorder observed cases, or claim that retrospective timestamp checks repair the allocation design.
 
 A separately authorized future replication could prospectively predeclare randomized/counterbalanced order and time-sensitive evidence capture, but must be labeled separately; it does not retroactively randomize the original main study. Full recovery and independent custody of original treatment traces, reports, retrieval evidence and progress remain blocked, as does distribution to two eligible blinded human annotators.
 
-Keep the five-task pilot diagnostic; label the original ten-task automated inference as frozen confirmatory **under its assumptions**, the task-influence/Pareto diagnostics exploratory, and genuine independent human validation pending. Human ratings, even when available, cannot repair treatment-order confounding or prove historical archive authenticity.
+Keep the five-task pilot diagnostic; label the original ten-task automated inference as frozen post-collection, pre-canonical-publication, with designated primary contrasts and unresolved sign-exchangeability assumptions. Prospective statistical preregistration and outcome blinding at freeze are not established; see the [chronology](MAIN_STUDY_ANALYSIS_FREEZE_CHRONOLOGY.md) and [reporting cover](../paper/MAIN_STUDY_REPORTING_COVER.md). Keep the task-influence/Pareto diagnostics exploratory, and genuine independent human validation pending. Human ratings, even when available, cannot repair treatment-order confounding or prove historical archive authenticity.
 
 ## Prospective manual-run labeling boundary (31 October 2026)
 
@@ -193,7 +193,7 @@ This is **structural correspondence to the historical writer**, not proof
 of original bytes or of a trustworthy archive. A fabricated log conforming
 to the exact writer schema could still pass. Independent recovery, custody,
 and source-to-evaluation verification remain mandatory before blinded
-human-evaluation packet distribution. Pilot, automated confirmatory,
+human-evaluation packet distribution. Pilot, qualified frozen automated,
 exploratory, and pending human-validation evidence remain separate.
 
 

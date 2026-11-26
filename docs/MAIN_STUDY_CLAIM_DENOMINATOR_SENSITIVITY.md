@@ -4,14 +4,14 @@
 
 The frozen automated primary outcome is strict support among the claims
 selected by the common post-hoc evaluator, capped at twelve claims per report.
-A 1/1 rate and a 12/12 rate both contribute one report to the preregistered
+A 1/1 rate and a 12/12 rate both contribute one report to the frozen designated-primary
 task-macro mean. A report with fewer selected claims may be much less complete,
 but the support rate alone cannot establish that. Differences in checked-claim
 denominators across arms could affect interpretation of the automated quality
 metric even when all recorded support fractions are arithmetically valid.
 
 The standalone read-only command below reports denominator distributions for
-all forty frozen task/treatment cells and the three predeclared task pairs.
+all forty frozen task/treatment cells and the three designated-primary task pairs.
 This is a **post-hoc descriptive sensitivity**, not another statistical
 hypothesis test or an alternative confirmatory outcome.
 
@@ -27,7 +27,7 @@ It also distinguishes two different descriptive weightings:
 
 - **Equal-report macro strict support:** arithmetic mean of each of the ten
   task/report support fractions. This is the weighting used by the original,
-  frozen confirmatory task-paired analysis.
+  frozen task-paired analysis.
 - **Claim-pooled micro strict support:** total supported claims divided by
   total checked claims in that arm. This weights reports with more checked
   claims more heavily and has **no preregistered inferential standing**.
@@ -52,7 +52,7 @@ made in a report, claim importance, task completeness, source reliability,
 retrieval quality, or independent human quality. The twelve-claim selection
 cap means a maximum denominator is censored by design. A micro rate may be
 higher or lower than the frozen macro rate without proving any variant better.
-Report-level task pairing, and the original Holm-adjusted confirmatory family,
+Report-level task pairing, and the original Holm-adjusted designated-primary family,
 must not be replaced by pooled-claim arithmetic or post-hoc selection.
 
 Inputs are historically Git-retained published **summary CSV bytes**. Local
@@ -60,7 +60,7 @@ fingerprint validation does not recover or independently authenticate the
 unavailable original treatment traces/reports or evaluator execution.
 Human-validation readiness is still blocked on the documented archive-custody
 and two-independent-annotator gates. Diagnostic pilot findings, frozen
-automated confirmatory analysis, this exploratory denominator sensitivity,
+automated analysis (qualified by the [reporting cover](../paper/MAIN_STUDY_REPORTING_COVER.md)), this exploratory denominator sensitivity,
 and prospective human validation remain separate. This command performs no
 treatment/evaluator reruns, no model calls and no artifact writes.
 
@@ -93,6 +93,6 @@ numbers of checked cells and pairs.
 post-hoc sensitivity diagnostic, not independent authentication of missing
 treatment reports or original evaluator execution. The two calculations share
 the established frozen-CSV input audit; the result does not replace the
-preregistered task-macro estimand or change the historical custody and blinded
+frozen task-macro estimand or change the historical custody and blinded
 human-evaluation blockers. External publication custody of the saved JSON
 would require a separately retained trusted fingerprint of that saved file.

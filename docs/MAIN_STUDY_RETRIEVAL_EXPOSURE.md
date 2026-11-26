@@ -2,7 +2,7 @@
 
 **Scope:** post-hoc descriptive audit of recorded retrieval/resource exposure, not a new inferential model, causal estimate, or treatment rerun.
 
-The preregistered retrieval-depth contrast D6–D3 changes *scheduled* browse slots from three to six. Scheduled slots do not necessarily mean successfully retrieved sources; a failed source result does not supply supporting evidence, and a slot not accounted for in the retained summary cannot be classified as an executed attempt. Planning and verification arms also differ in search/model calls and token usage, so budget comparisons are not equal-total-compute comparisons.
+The designated-primary retrieval-depth contrast D6–D3 changes *scheduled* browse slots from three to six. Scheduled slots do not necessarily mean successfully retrieved sources; a failed source result does not supply supporting evidence, and a slot not accounted for in the retained summary cannot be classified as an executed attempt. Planning and verification arms also differ in search/model calls and token usage, so budget comparisons are not equal-total-compute comparisons.
 
 Run from the research checkout, without network access or provider credentials:
 
@@ -20,9 +20,9 @@ These fields allow a reader to see how *assignment* to retrieval capacity differ
 
 ## Research boundaries
 
-The original task-paired strict-support estimand, deterministic confidence intervals, exact sign-flip p-values and Holm adjustment in the frozen confirmatory analysis are **unchanged**. This exploratory audit does not read support rates to compute its exposure descriptives (the independent input preflight nevertheless checks the original mirrored scores for integrity); no reweighting, subgroup selection, outcome-conditioned rerun, treatment-model call, evaluator call, or human rating occurs.
+The original task-paired strict-support estimand, deterministic confidence intervals, exact sign-flip p-values and Holm adjustment in the frozen automated analysis are **unchanged**. This exploratory audit does not read support rates to compute its exposure descriptives (the independent input preflight nevertheless checks the original mirrored scores for integrity); no reweighting, subgroup selection, outcome-conditioned rerun, treatment-model call, evaluator call, or human rating occurs.
 
-Only summary CSV bytes are locally pinned. Matching those bytes does not independently authenticate the missing original treatment reports/traces, provider retrieval execution, or original archives. Historical within-task fixed-order temporal confounding remains unresolved, as do the automated-to-human custody checks and genuine blinded evaluation by two eligible independent annotators. Keep diagnostic pilot, frozen automated confirmatory, exploratory retrieval exposure, and pending human-validation findings explicitly separate.
+Only summary CSV bytes are locally pinned. Matching those bytes does not independently authenticate the missing original treatment reports/traces, provider retrieval execution, or original archives. Historical within-task fixed-order temporal confounding remains unresolved, as do the automated-to-human custody checks and genuine blinded evaluation by two eligible independent annotators. Keep diagnostic pilot, qualified frozen automated (see the [reporting cover](../paper/MAIN_STUDY_REPORTING_COVER.md)), exploratory retrieval exposure, and pending human-validation findings explicitly separate.
 
 
 ## Replaying a saved exploratory exposure receipt

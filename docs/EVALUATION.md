@@ -835,11 +835,11 @@ Additional tests pin the predeclared three-contrast Holm family, bootstrap
 seed/draw count, contrast definitions, constant-effect paired CI and direction,
 and the all-tied undefined standardized effect. They protect inferential
 interpretation against future regressions without altering
-`scripts/analyze_main_study.py`, the preregistered analysis plan, or any
+`scripts/analyze_main_study.py`, the frozen post-collection analysis plan, or any
 historical result. These are **mathematical test fixtures**, not pilot,
 confirmatory, exploratory, or human-evaluation measurements.
 
-This optional new audit neither changes the preregistered estimands nor
+This optional new audit neither changes the frozen designated-primary estimands nor
 reclassifies original outputs; it does not authenticate missing
 source traces/reports, prove experimental execution, or establish human
 validation. Any discrepancy warrants investigation and a documented
@@ -865,7 +865,7 @@ The current main-study analysis focuses on the following four conditions over th
 | `P6` | Planner | 6 | No | Planning comparison / verification baseline |
 | `P6V` | Planner | 6 | Yes | Verification comparison |
 
-The full research protocol discusses additional possible retrieval levels, but those should not be silently mixed into the frozen confirmatory analysis unless a new study version explicitly declares them.
+The full research protocol discusses additional possible retrieval levels, but those should not be silently mixed into the frozen automated analysis unless a new study version explicitly declares them.
 
 ## 4. Task design
 
@@ -1091,7 +1091,7 @@ Representative operational failure categories include:
 
 ## 9. Frozen paired statistical analysis
 
-The confirmatory automated analysis is specified in `paper/ANALYSIS_PLAN.md` and was frozen before inspecting main-study outcome summaries.
+The exact automated statistical plan in `paper/ANALYSIS_PLAN.md` entered Git on **14 September 2026**, after the 11 September treatment execution and 13 September evaluator recovery, but before canonical publication on 24 September. The earlier broad research protocol preceded collection. **Prospective precollection statistical preregistration and outcome blinding at freeze are not established**; this chronology also does not prove that outcomes were inspected before the plan was written. The three contrasts are designated primary contrasts of the frozen post-collection, pre-canonical-publication analysis. See the [source-linked chronology](MAIN_STUDY_ANALYSIS_FREEZE_CHRONOLOGY.md) and [required reporting cover](../paper/MAIN_STUDY_REPORTING_COVER.md).
 
 Primary paired contrasts are:
 
@@ -1104,13 +1104,13 @@ For the primary strict-support outcome, the analysis reports:
 - paired mean difference;
 - paired median difference;
 - deterministic paired bootstrap 95% percentile confidence interval for the mean difference;
-- exact two-sided sign-flip/randomization p-value when all paired cells are present;
+- exact two-sided sign-flip p-value when all paired cells are present (calibration requires assumptions such as sign exchangeability; fixed treatment order does not justify a randomized causal test);
 - paired standardized mean difference (`d_z`) when defined;
 - counts of positive, negative, and tied task-level effects.
 
-The three confirmatory p-values are adjusted together with the Holm step-down procedure. Because the frozen task set is small, effect size, uncertainty, and task-level consistency should be emphasized over binary significance language.
+The three designated-primary p-values are adjusted together with the Holm step-down procedure. Because the frozen task set is small, effect size, uncertainty, and task-level consistency should be emphasized over binary significance language.
 
-Additional metrics and contrasts are exploratory unless separately preregistered.
+Additional metrics and contrasts are exploratory; neither multiplicity correction nor the paired bootstrap establishes prospective confirmation or causal identification.
 
 The manuscript-facing entry point, `scripts/run_verified_main_study_analysis.py`,
 does not analyze live CSV paths after merely checking them. It captures both
@@ -1395,12 +1395,13 @@ Key research artifacts:
 |---|---|
 | `paper/RESEARCH_PROTOCOL.md` | Research question, hypotheses, experimental principles |
 | `paper/PILOT_RESULTS.md` | Canonical pilot evidence and caveats |
-| `paper/ANALYSIS_PLAN.md` | Frozen main-study confirmatory analysis |
+| `paper/ANALYSIS_PLAN.md` | Frozen post-collection main-study analysis plan; cite with the reporting cover |
+| `paper/MAIN_STUDY_REPORTING_COVER.md` | Required chronology, fixed-order and inference qualification |
 | `paper/HUMAN_EVAL_PROTOCOL.md` | Blinded human-quality scoring protocol |
 | `logic/experiment.py` | Experimental configuration/provenance structures |
 | `scripts/run_budget_main_study.py` | Main-study treatment/evaluation orchestration |
 | `scripts/summarize_budget_main_study.py` | Offline aggregation/validation |
-| `scripts/analyze_main_study.py` | Paired preregistered inference |
+| `scripts/analyze_main_study.py` | Frozen designated-primary paired inference |
 | `scripts/build_human_eval_packet.py` | Deterministic blinded human-evaluation packet |
 | `tests/` | Offline invariants and regression tests |
 | `.github/workflows/` | CI and manual research workflows |
@@ -1430,7 +1431,7 @@ Research-facing documentation should follow these rules:
 - separate treatment cost from evaluator overhead;
 - tie every reported number to a study/task version, commit/workflow provenance, model configuration, and analysis script;
 - report failed runs and protocol deviations;
-- distinguish pilot, confirmatory main-study, exploratory, and human-validation findings;
+- distinguish diagnostic pilot, qualified frozen automated main-study, post-hoc exploratory, and pending genuine human-validation findings; cite the reporting cover with historical results;
 - avoid state-of-the-art or universal-superiority claims without a fair external benchmark.
 
 ## 15. Current status
