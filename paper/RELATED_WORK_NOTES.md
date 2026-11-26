@@ -10,7 +10,7 @@ This is a working literature map, not final manuscript prose. Verify every bibli
 - URL: https://arxiv.org/abs/2506.06287
 - Key idea: 89 multi-step web research tasks plus a frozen RetroSearch environment to make evaluations reproducible over time.
 - Relevance: provides a strong example of controlled evaluation for changing-web research agents.
-- Difference from our planned study: our central question is not benchmark construction; it is how a fixed resource budget should be allocated across planning, retrieval depth, and verification.
+- Difference from VERA: benchmark construction is not our contribution. VERA compares four fixed pipeline configurations on a selected live-web task set, with scheduled browse-call caps rather than a shared total resource budget. RetroSearch is a useful future reproducibility precedent, not the environment used for the historical VERA treatments.
 
 ### DeepResearch Bench: A Comprehensive Benchmark for Deep Research Agents
 
@@ -18,7 +18,7 @@ This is a working literature map, not final manuscript prose. Verify every bibli
 - URL: https://arxiv.org/abs/2506.11763
 - Key idea: 100 expert-crafted PhD-level research tasks across 22 fields with report-quality and citation-oriented evaluation.
 - Relevance: candidate source of public tasks/evaluation methodology if licensing and contamination concerns are addressed.
-- Difference: benchmark/report evaluation rather than an equal-budget stage-wise systems ablation.
+- Difference: benchmark/report evaluation rather than VERA's staged pipeline contrasts. Their reported human alignment does not validate VERA's separate automated support measure.
 
 ### ReportBench: Evaluating Deep Research Agents via Academic Survey Tasks
 
@@ -51,7 +51,7 @@ This is a working literature map, not final manuscript prose. Verify every bibli
 - URL: https://arxiv.org/abs/2601.15808
 - Key idea: DeepVerifier uses rubric-guided verification and iterative refinement for deep research agents.
 - Relevance: means 'adding a verifier' alone is not novel.
-- Difference: our question is the marginal value of verification relative to planning/retrieval when the overall resource budget is constrained.
+- Difference: VERA compares the addition of treatment-time verification at the same scheduled browse cap (P6V versus P6); it does not hold total inference cost fixed or identify a general optimal allocation.
 
 ### DeepSciVerify: Verifying Scientific Claim--Citation Alignment via LLM-Driven Evidence Escalation
 
@@ -69,20 +69,27 @@ This is a working literature map, not final manuscript prose. Verify every bibli
 
 ## Budget-aware tool use
 
-### Budget-Aware Tool-Use Enables Effective Agent Scaling
+### Budget-Aware Tool Use Enables Effective Agent Scaling
 
-- arXiv: 2511.17006
-- URL: https://arxiv.org/abs/2511.17006
-- Key idea: explicit tool-budget awareness and adaptive planning/verification improve cost-performance scaling for web-search agents.
-- Relevance: closest work to the resource-allocation framing.
-- Difference to test carefully: rather than proposing a learned or adaptive budget-allocation policy, our first study performs controlled stage-wise interventions under comparable budgets and asks which component creates the strongest marginal return.
+- Liu et al., arXiv: 2511.17006v2 (17 August 2026; arXiv records acceptance to COLM 2026).
+- Version checked: https://arxiv.org/abs/2511.17006v2
+- Key idea: Budget Tracker exposes remaining tool capacity to an agent; BATS adjusts planning and verification dynamically. The study also defines a cost measure incorporating token and tool expenditure.
+- Relevance: a close precedent for the resource-allocation framing, including both planning and verification; it precludes a broad claim that these have not previously been studied together under budgets.
+- Difference: VERA's historical study uses fixed pipeline configurations, not BATS, a budget-aware policy, or an equal-total-cost intervention. The cost measures and endpoints are not demonstrated comparable; no cross-paper performance ranking or superiority claim is supported.
+
+### Thinking vs. Doing: Agents that Reason by Scaling Test-Time Interaction
+
+- Shen et al., arXiv: 2506.07976v2 (10 June 2025).
+- Version checked: https://arxiv.org/abs/2506.07976v2
+- Key idea: extends the interaction horizon rather than only increasing per-step reasoning; studies prompting and curriculum-based online reinforcement learning on web-agent tasks.
+- Relevance: a precedent for distinguishing environmental interaction from internal inference. VERA changes a scheduled unique-URL browse-call cap, not the whole interaction horizon, and does not train an adaptive policy.
 
 ### One Policy, Any Budget: Internalizing Budget-Aware Search via Reinforcement Learning
 
 - arXiv: 2609.00813
 - URL: https://arxiv.org/abs/2609.00813
 - Key idea: reinforcement-learning approach to a single policy that adapts to changing search budgets.
-- Relevance: very recent evidence that budget-aware search is moving quickly; final manuscript must explicitly distinguish itself from training a budget-aware policy.
+- Relevance: a contemporaneous example (first submitted 1 September 2026) of training a budget-adaptive search policy. VERA does not train or evaluate AnySearch; its fixed configuration comparisons are a different empirical question.
 
 ## Retrieval evaluation
 
@@ -104,8 +111,20 @@ This is a working literature map, not final manuscript prose. Verify every bibli
 
 Avoid claiming that deep-research evaluation, failure taxonomies, verification, or budget awareness are new.
 
-A defensible empirical gap to investigate is:
+## Source-checked positioning and claim boundary (26 November 2026)
 
-> Existing work has separately advanced deep-research benchmarking, failure diagnosis, verification, and budget-aware tool use. Less clear is the marginal return of spending a fixed research budget at different stages of the same end-to-end pipeline. We therefore conduct controlled stage-wise ablations of planning, retrieval depth, and verification, reporting evidence support, report quality, latency, token/tool consumption, and cost on the same tasks.
+The primary abstracts for [FutureSearch's Deep Research Bench](https://arxiv.org/abs/2506.06287), [Du et al.'s DeepResearch Bench](https://arxiv.org/abs/2506.11763v1), [BATS](https://arxiv.org/abs/2511.17006v2), [test-time interaction](https://arxiv.org/abs/2506.07976v2), and [AnySearch](https://arxiv.org/abs/2609.00813) were checked for this positioning update. This is a targeted comparison, not an exhaustive systematic review or independent reproduction of their results.
 
-This statement must be re-checked against additional literature before submission.
+| VERA contrast | Planned source change | What must not be inferred |
+| --- | --- | --- |
+| D6 minus D3 | Scheduled unique-URL browse cap 3 to 6; direct mode in both | Six successful sources, equal total compute, or the causal return of each additional source |
+| P6 minus D6 | Planner rather than direct mode, both capped at six browses | Equal token/search/model-call costs or an isolated causal planning effect |
+| P6V minus P6 | Treatment-time verification added, both planner and six-browse cap | Equal inference cost, a common evaluator-policy guarantee, or proof verification harms quality |
+
+The planned settings are source-audited in [historical variant factors](../docs/HISTORICAL_VARIANT_FACTOR_SOURCE_AUDIT.md); [realized retrieval exposure](../docs/MAIN_STUDY_RETRIEVAL_EXPOSURE.md) is a separate exploratory analysis of retained summary counts. The fixed within-task execution order aliases treatment and position ([design audit](../docs/MAIN_STUDY_DESIGN_IDENTIFIABILITY.md)). Three recovered common-evaluator cells are concentrated in P6V ([measurement partition](../docs/HISTORICAL_EVALUATOR_MEASUREMENT_PARTITION.md)).
+
+A bounded description for a future manuscript is:
+
+> Prior work has developed research benchmarks and budget-adaptive agents. VERA contributes an auditable, task-paired case study of four fixed web-research pipeline configurations that vary scheduled retrieval capacity, planning and treatment-time verification. The retained automated evidence describes strict support and recorded resource use on ten selected live-web tasks; it does not identify causal marginal returns under a common total budget, establish an optimal policy or rank VERA against external benchmarks.
+
+The five-task pilot is diagnostic. The automated analysis is frozen but post-collection, with designated primary contrasts and unverified outcome blinding at freeze ([required reporting cover](MAIN_STUDY_REPORTING_COVER.md)). Retrospective analyses are exploratory. Original report/trace custody and genuine blinded human report-quality ratings and agreement remain pending; do not describe report quality as a completed human outcome. No external benchmark scores, new VERA measurements or treatment reruns enter this literature update. Recheck additional literature before submission; do not claim novelty by absence from this limited map.
