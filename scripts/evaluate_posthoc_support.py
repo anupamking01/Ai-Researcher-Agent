@@ -1432,6 +1432,37 @@ def _require_evaluator_cache_source_continuity(
             )
 
 
+def _evaluator_cache_manifest(
+    rows: list[dict], cache_source_hashes: dict[Path, str]
+) -> dict:
+    """Describe the exact validated cache generation without exporting raw text."""
+    cells = []
+    seen = set()
+    for row in sorted(rows, key=lambda r: (r["task_id"], VARIANTS.index(r["variant_id"]))):
+        path = EVAL_ROOT / row["variant_id"] / f'{row["task_id"]}.json'
+        if path in seen or path not in cache_source_hashes:
+            raise SystemExit("Evaluator cache manifest has duplicate or unbound cell")
+        seen.add(path)
+        receipt = row.get("raw_response")
+        cells.append({
+            "variant_id": row["variant_id"],
+            "task_id": row["task_id"],
+            "run_id": row["run_id"],
+            "cache_sha256": cache_source_hashes[path],
+            "raw_response_sha256": receipt["sha256"] if receipt is not None else None,
+            "raw_response_byte_size": receipt["byte_size"] if receipt is not None else None,
+        })
+    if seen != set(cache_source_hashes):
+        raise SystemExit("Evaluator cache manifest has unexpected cache source")
+    retained = sum(cell["raw_response_sha256"] is not None for cell in cells)
+    return {
+        "schema_version": 1,
+        "cells": cells,
+        "retained_raw_response_cells": retained,
+        "missing_raw_response_cells": len(cells) - retained,
+    }
+
+
 def _preflight_evaluator_resume(
     expected: list[tuple[str, Path, dict, str, str]],
     *,
@@ -1740,6 +1771,9 @@ def main() -> int:
     # This also covers cached cells that never entered the model-call loop.
     _require_final_evaluator_source_continuity(expected, rows)
     _require_evaluator_cache_source_continuity(cache_source_hashes)
+    summary["evaluator_cache_manifest"] = _evaluator_cache_manifest(
+        rows, cache_source_hashes
+    )
 
     _require_noncanonical_aggregate_destinations_unchanged(
         summary_path, csv_path, aggregate_destination_snapshot

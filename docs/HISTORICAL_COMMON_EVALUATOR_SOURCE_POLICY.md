@@ -336,3 +336,26 @@ evaluator rerun. No historical measurements, frozen plans, or human ratings
 are changed. The pilot remains diagnostic, the frozen automated analysis
 qualified, retrospective diagnostics exploratory, and human validation
 pending.
+
+
+### Noncanonical aggregate cache lineage
+
+A replay can mix older bound caches without raw response receipts with
+newer measurements that retain them. The aggregate summary now includes
+an additive `evaluator_cache_manifest` (version 1) listing each cell's
+variant, task, run ID, exact cache-file SHA-256 and raw-response receipt
+SHA-256/UTF-8 byte length, or explicit nulls when no receipt is retained.
+It reports retained and missing receipt counts separately. The cache
+digests come from the same captured bytes checked by the final cache
+continuity guard; duplicate, missing and unexpected manifest entries
+are rejected. Ordering is deterministic by task and frozen variant order.
+
+This is a coordinator-side inventory, not an annotator artifact. It
+contains no raw response text and leaves the aggregate CSV columns and
+all historical outputs unchanged. It lets an independent reviewer with
+the exact cache files reconcile the declared raw-response coverage
+without mistaking reused legacy measurements for fully auditable new
+ones. Neither a matching cache digest nor a receipt proves historical
+custody, provider identity, or classification correctness. Missing
+receipts remain missing evidence, not failed or incorrect measurements;
+no additional evaluator calls are authorized by the manifest.

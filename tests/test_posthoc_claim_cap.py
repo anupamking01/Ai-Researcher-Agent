@@ -1547,3 +1547,58 @@ def test_raw_response_receipt_bounds_utf8_bytes(monkeypatch):
     }
     with pytest.raises(ValueError, match="byte limit"):
         evaluate_posthoc_support._raw_response_receipt("ééé")
+
+
+def test_aggregate_cache_manifest_discloses_mixed_raw_response_coverage(tmp_path, monkeypatch):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch)
+    old_path = eval_root / "D3" / "main-01.json"
+    old_path.parent.mkdir(parents=True)
+    old_path.write_text(json.dumps(_bound_zero_source_cache()), encoding="utf-8")
+
+    calls = []
+
+    def complete_evaluation(**kwargs):
+        calls.append(kwargs)
+        _record_evaluator_usage(kwargs)
+        return _evaluator_result()
+
+    monkeypatch.setattr("agent.llm_utils.create_chat_completion", complete_evaluation)
+    assert evaluate_posthoc_support.main() == 0
+    assert len(calls) == 1
+    new_path = eval_root / "D3" / "main-02.json"
+    summary_path = tmp_path / "outputs" / "posthoc_support_summary.json"
+    manifest = json.loads(summary_path.read_text(encoding="utf-8"))["evaluator_cache_manifest"]
+    fingerprint = _fingerprint_text(_evaluator_result())
+    assert manifest == {
+        "schema_version": 1,
+        "retained_raw_response_cells": 1,
+        "missing_raw_response_cells": 1,
+        "cells": [
+            {
+                "variant_id": "D3", "task_id": "main-01", "run_id": "run-d3-main-01",
+                "cache_sha256": hashlib.sha256(old_path.read_bytes()).hexdigest(),
+                "raw_response_sha256": None, "raw_response_byte_size": None,
+            },
+            {
+                "variant_id": "D3", "task_id": "main-02", "run_id": "run-d3-main-02",
+                "cache_sha256": hashlib.sha256(new_path.read_bytes()).hexdigest(),
+                "raw_response_sha256": fingerprint["sha256"],
+                "raw_response_byte_size": fingerprint["byte_size"],
+            },
+        ],
+    }
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra", "duplicate"])
+def test_aggregate_cache_manifest_rejects_unbound_cells(tmp_path, monkeypatch, mutation):
+    monkeypatch.setattr(evaluate_posthoc_support, "EVAL_ROOT", tmp_path)
+    rows = [_cached_evaluation()]
+    hashes = {tmp_path / "D3" / "main-01.json": "a" * 64}
+    if mutation == "missing":
+        hashes.clear()
+    elif mutation == "extra":
+        hashes[tmp_path / "D3" / "main-02.json"] = "b" * 64
+    else:
+        rows.append(rows[0])
+    with pytest.raises(SystemExit, match="Evaluator cache manifest"):
+        evaluate_posthoc_support._evaluator_cache_manifest(rows, hashes)
