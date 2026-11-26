@@ -125,3 +125,92 @@ installation-level difference associated with the search dependency, not
 evidence of a changed evaluator code path or effect on scores. No treatment
 or evaluator rerun is warranted; the frozen automated results and pending
 human validation remain unchanged.
+
+## Historical raw-response schema and claim-label auditability (27 November 2026)
+
+The historical prompt and normalizer had different enforcement boundaries.
+The [original prompt source](https://github.com/anupamking01/Ai-Researcher-Agent/blob/c3c15e46a8eec3a8bbc24c968eedc0548172a897/logic/prompts.py)
+requests integer counts summing to the declared checked-claim count, at most
+12 selected important claims (as invoked by the common evaluator), and at most
+eight illustrative examples. The byte-identical historical
+[normalizer](https://github.com/anupamking01/Ai-Researcher-Agent/blob/c3c15e46a8eec3a8bbc24c968eedc0548172a897/logic/experiment.py)
+(blob `c98916c4a0aa17a94c38dd981489693bec5b87a7`) instead uses ordinary
+`json.loads`, converts each label count with `int(data.get(label, 0))`,
+clamps negatives to zero, and recomputes the denominator from the four
+normalized counts. Both the [original caller](https://github.com/anupamking01/Ai-Researcher-Agent/blob/c3c15e46a8eec3a8bbc24c968eedc0548172a897/scripts/evaluate_posthoc_support.py)
+and [recovery caller](https://github.com/anupamking01/Ai-Researcher-Agent/blob/8733ce492abc74e7b2966ed22ce08d3fddec43ca/scripts/evaluate_posthoc_support.py)
+check that the resulting denominator is positive, but do not enforce the
+12-claim upper bound on that raw-response path.
+
+The following **synthetic examples, not historical responses**, show why a
+valid retained count partition does not establish that the raw model
+response satisfied the prompt. Start with a valid one-claim supported
+response: all other label counts are zero, claims_checked is 1 and examples
+is an empty list. Apply each mutation separately.
+
+| Raw-response mutation | Historical normalized checked / supported |
+| --- | --- |
+| None (control) | 1 / 1 |
+| Declare claims_checked = 9 | 1 / 1 |
+| Set unsupported = -1 | 1 / 1 |
+| Omit unsupported | 1 / 1 |
+| Set supported = 1.9 | 1 / 1 |
+| Set supported = true | 1 / 1 |
+| Duplicate supported, first 0 then 1 | 1 / 1 |
+| Set both claims_checked and supported = 13 | 13 / 13 |
+
+Reproduce offline from a full-history checkout by extracting only the
+historical normalizer function (not importing historical modules or calling
+a model):
+
+```python
+import ast, json, subprocess
+from typing import Any
+
+rev = "c3c15e46a8eec3a8bbc24c968eedc0548172a897"
+src = subprocess.check_output(["git", "show", rev + ":logic/experiment.py"])
+node, = [n for n in ast.parse(src).body
+         if isinstance(n, ast.FunctionDef)
+         and n.name == "normalize_verifier_output"]
+scope = {"json": json, "Any": Any}
+exec(compile(ast.Module(body=[node], type_ignores=[]), "<historical>", "exec"), scope)
+normalizer = scope["normalize_verifier_output"]
+base = dict(claims_checked=1, supported=1, partially_supported=0,
+            unsupported=0, contradicted=0, examples=[])
+cases = [json.dumps(base),
+         json.dumps(base | {"claims_checked": 9}),
+         json.dumps(base | {"unsupported": -1}),
+         json.dumps({k: v for k, v in base.items() if k != "unsupported"}),
+         json.dumps(base | {"supported": 1.9}),
+         json.dumps(base | {"supported": True}),
+         json.dumps(base).replace('"supported": 1',
+                                  '"supported": 0, "supported": 1'),
+         json.dumps(base | {"claims_checked": 13, "supported": 13})]
+for raw, expected in zip(cases, [1]*7 + [13]):
+    result = normalizer(raw)
+    assert (result["claims_checked"], result["supported"]) == (expected, expected)
+```
+
+The [current stricter normalizer](https://github.com/anupamking01/Ai-Researcher-Agent/blob/487840cf2cbccdcde3acba695a15b49f06d449b5/logic/experiment.py)
+rejects the seven malformed cases when called with max_claims=12; it does
+not retroactively validate the original raw model responses. The
+[retained CSV numeric audit](MAIN_STUDY_NUMERIC_INPUT_INTEGRITY.md) separately
+checks the published normalized partitions and cap. This is useful arithmetic
+and metadata validation, not raw-response validation.
+
+Both historical per-cell JSON writers save normalized counts and up to eight
+examples, not the raw response string. Even if those JSON records are recovered,
+the examples are illustrative, not a complete claim-level verdict ledger:
+a 12-claim record can contain at most eight examples. Neither a matching
+archive digest nor a consistent summary establishes raw-response schema
+compliance, complete claim segmentation, or per-claim label accuracy.
+If independent original raw responses are recovered, retain their bytes
+separately and assess schema compliance without replacing the historical
+scores; otherwise report raw-response compliance as unknown. Do not infer
+that any of the synthetic mutations occurred, or their frequency, direction
+of bias, or treatment-specific effect.
+
+This is a retrospective source-policy qualification only. No pilot or
+frozen automated outcome is changed; the designated-primary analysis
+remains post-collection and qualified, retrospective diagnostics remain
+exploratory, and genuine human validation remains pending.
