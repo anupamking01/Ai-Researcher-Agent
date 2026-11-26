@@ -28,6 +28,7 @@ def _pair(
     tamper_recovery_measurements=None, schema2_recovery_cache=None,
     invalid_report_bytes=None, invalid_evidence_bytes=None,
     omit_evidence_both=None, alter_query_evidence_both=None,
+    newline_report_cell=None,
 ):
     csv_path = matrix.REPO_ROOT / lineage.SUPPORT_REL
     csv_bytes, _ = matrix._capture_evaluator(csv_path)
@@ -257,6 +258,11 @@ def _pair(
         files[f"{frozen_run_ids[(variant, task)]}/research-query-01.txt"] = replacement
     if omit_evidence_both:
         files.pop(f"{frozen_run_ids[omit_evidence_both]}/research-query-01.txt")
+    if newline_report_cell:
+        run_id = frozen_run_ids[newline_report_cell]
+        member = f"{run_id}/research_report.md"
+        # Preserve the recorded word count; change only synthetic whitespace.
+        files[member] = files[member].replace(b" ", b"\r\n", 1)
     if invalid_report_bytes:
         variant, task, replacement = invalid_report_bytes
         files[f"{frozen_run_ids[(variant, task)]}/research_report.md"] = replacement
@@ -430,6 +436,8 @@ def test_matching_40_sources_survive_repackaging_and_extra_recovery_metadata(
     assert receipt["published_treatment_csv_sha256"] == concordance.PUBLISHED_TREATMENT_CSV_SHA256
     assert receipt["report_sources_unchanged"] == 40
     assert receipt["evaluator_evidence_source_cells_compared"] == 40
+    assert receipt["candidate_newline_input_cells_checked"] == 40
+    assert receipt["candidate_newline_input_differences"] == []
     assert receipt["evaluator_evidence_source_members_byte_identical"] == 100
     assert receipt["original_treatment_saved_query_output_schedule_checked"] == 40
     assert receipt["recovery_treatment_saved_query_output_schedule_checked"] == 40
@@ -1917,3 +1925,30 @@ def test_comparison_archive_snapshot_rejects_same_inode_parent_redirect(
         concordance.RecoveryConcordanceError, match="archive parent directory changed",
     ):
         concordance._archive_source_snapshot(path)
+
+
+@pytest.mark.parametrize(("report_crlf", "evidence_bytes", "evidence_differs"), [
+    (True, b"synthetic evidence\n", False),
+    (False, b"synthetic\r\nevidence\n", True),
+    (True, b"synthetic\revidence\n", True),
+    (False, b"\r\nsynthetic evidence\r\n", False),
+])
+def test_candidate_newline_input_differences_are_cell_specific(
+    tmp_path, monkeypatch, report_crlf, evidence_bytes, evidence_differs,
+):
+    # Synthetic candidates only: no actual historical input bytes are claimed.
+    cell = ("D3", "main-01")
+    original, recovered, _, _ = _pair(
+        tmp_path, monkeypatch,
+        newline_report_cell=cell if report_crlf else None,
+        invalid_evidence_bytes=(*cell, evidence_bytes),
+    )
+    receipt = concordance.compare_recovered_treatment_sources(original, recovered)
+    expected = [{
+        "treatment": cell[0], "task_id": cell[1],
+        "report_differs": report_crlf, "evidence_differs": evidence_differs,
+    }] if report_crlf or evidence_differs else []
+    assert receipt["candidate_newline_input_cells_checked"] == 40
+    assert receipt["candidate_newline_input_differences"] == expected
+    assert receipt["historical_per_cell_prompt_bytes_authenticated"] is False
+    assert receipt["human_evaluation_ready"] is False

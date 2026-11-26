@@ -633,6 +633,11 @@ def _snapshot_archived_evaluator_evidence(
                         "sha256": hashlib.sha256(raw_prompt).hexdigest(),
                     },
                     "evidence_status": evidence_status,
+                    # Universal newline translation changes exactly strings
+                    # containing CR. Evidence has already been stripped per
+                    # member, so boundary-only CRs do not count as drift.
+                    "report_newline_input_differs": "\r" in report_text,
+                    "evidence_newline_input_differs": "\r" in evidence,
                 }
     except (zipfile.BadZipFile, KeyError) as exc:
         raise RecoveryConcordanceError(
@@ -1474,6 +1479,20 @@ def compare_recovered_treatment_sources(
         "schema_v1_evaluator_prompt_input_binding_unavailable": True,
         "schema_v2_evaluator_text_decode_policy": "raw-utf8",
         "historical_schema_v1_text_decode_policy": "utf8-universal-newlines",
+        # Candidate input differences, not historical provider-request evidence.
+        # Both archives have already matched on all evidence snapshots.
+        "candidate_newline_input_cells_checked": len(original_evidence),
+        "candidate_newline_input_differences": [
+            {
+                "treatment": variant,
+                "task_id": task,
+                "report_differs": item["report_newline_input_differs"],
+                "evidence_differs": item["evidence_newline_input_differs"],
+            }
+            for (variant, task), item in sorted(original_evidence.items())
+            if item["report_newline_input_differs"]
+            or item["evidence_newline_input_differs"]
+        ],
         "historical_per_cell_prompt_bytes_authenticated": False,
         "evaluator_cache_json_duplicate_keys_rejected": True,
         "recovery_only_evaluator_cells": [
