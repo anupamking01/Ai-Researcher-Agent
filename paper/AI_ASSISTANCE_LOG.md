@@ -75,6 +75,29 @@ The analysis explicitly preserves limitations: the pilot has only five tasks, la
 
 After successful canonical completion, the temporary automatic push trigger for the live workflow was removed so future API spending requires explicit manual dispatch.
 
+### 2026-11-26 — Retrospective disclosure of recent AI-assisted research work
+
+This dated entry records ten recent AI-assisted contributions for which the assistance conversation and the corresponding Git commits are available. The commit paths were checked at the immutable revisions below. It is a **partial retrospective disclosure**, not a complete reconstruction of all assistance since the 9 September entry. Git attribution alone does not establish whether a change was AI-assisted or independently reviewed by a human.
+
+| Contribution | Commit evidence | Scope of assistance |
+| --- | --- | --- |
+| ZIP member flag validation | [a7f8d320](https://github.com/anupamking01/Ai-Researcher-Agent/commit/a7f8d320a89aec202908938937cf1ebf67a1d861) | Recovery-tool code, synthetic regressions, documentation |
+| Historical semantic archive-read integrity | [abca99aa](https://github.com/anupamking01/Ai-Researcher-Agent/commit/abca99aa5c9431d65f37083fdacc20a0e30643d8) | Source-custody code, regressions, documentation |
+| Preliminary archive fingerprint custody | [9ca9f9a0](https://github.com/anupamking01/Ai-Researcher-Agent/commit/9ca9f9a0fd5010174827207277624a7a635f0dcf) | Source-custody code, regressions, documentation |
+| Portable evidence namespace inventory | [aed3ee45](https://github.com/anupamking01/Ai-Researcher-Agent/commit/aed3ee45301c0b638e97b5365750399610040fc8) | Inventory code, regressions, documentation |
+| Historical evaluator newline-policy qualification | [0735454d](https://github.com/anupamking01/Ai-Researcher-Agent/commit/0735454d7d7d02cfba3c5646475671d194b1c995) | Historical source comparison, audit code, tests, methods qualification |
+| Cell-level candidate newline-input diagnostic | [cda9c6b8](https://github.com/anupamking01/Ai-Researcher-Agent/commit/cda9c6b8d21a371adf2fcc27cdb6ed4ac5f1a891) | Diagnostic code, tests, qualification of candidate evidence |
+| Saved-query evidence inventory | [112fea9b](https://github.com/anupamking01/Ai-Researcher-Agent/commit/112fea9bcd351a59a5f2806d309512229b06a25b) | Inventory code, regressions, documentation |
+| Historical dependency-resolution comparison | [2aa1f7b8](https://github.com/anupamking01/Ai-Researcher-Agent/commit/2aa1f7b864865652ba25c8021b7d8be1b70314bc) | Historical log comparison and reproducibility limitations |
+| Scientific reporting and analysis-freeze qualification | [3a18e6a1](https://github.com/anupamking01/Ai-Researcher-Agent/commit/3a18e6a13e97138037d5d9fcab36581acf59d6ab) | Methods interpretation and research-document editing |
+| Literature positioning | [1d9c4a11](https://github.com/anupamking01/Ai-Researcher-Agent/commit/1d9c4a11743e74ad18a85abe0ff52749fa6ed205) | Literature comparison and novelty/claim-boundary editing |
+
+Generative AI assistance also identified the disclosure gap, inspected the current branch and CI, and drafted this log update. At the inspected tip `1d9c4a11743e74ad18a85abe0ff52749fa6ed205`, all 18 listed pull-request workflow runs had completed successfully. This records automated validation at that revision, not a claim that every earlier test was executed independently or that the human author has reviewed every change.
+
+**Outstanding disclosure and review:** The interval after the 9 September entry and before these recorded contributions has not been exhaustively reconciled against available assistance records. Before submission, the human author should reconcile that interval, verify citations and scientific interpretations, review the AI-assisted implementation and its actual validation receipts, and record material corrections or unresolved gaps. Do not infer a completed human review from a Git author field, a successful CI run, or the absence of review comments.
+
+These contributions do not establish recovery or authentication of original treatment reports, prospective automated-analysis preregistration, a causal effect of any treatment, or completed human evaluation. The [required reporting cover](MAIN_STUDY_REPORTING_COVER.md) governs the frozen automated results; the pilot remains diagnostic, retrospective sensitivity analyses remain exploratory, and genuine human ratings and agreement remain pending.
+
 ## Rules for future entries
 
 Add a dated entry whenever generative AI materially assists with any of the following:
@@ -103,4 +126,6 @@ For every AI-assisted contribution:
 
 Do not copy this blindly into a submission; adapt it to the target venue's current policy.
 
-> Generative AI tools were used to assist with literature discovery, research-question refinement, experimental-method feedback, software development, workflow debugging/orchestration, trace-based data analysis, and manuscript editing. All reported experimental values were derived from persisted run artifacts rather than generated or inferred by the assistant. The human author reviewed the research design, experimental records, analysis, citations, limitations, and final claims and takes responsibility for the full content of the work.
+> Generative AI tools were used to assist with literature discovery, research-question refinement, experimental-method feedback, software development, workflow debugging/orchestration, trace-based data analysis, research interpretation, and manuscript editing. The intended evidence policy is to report experimental values only from retained evidence, not invented or interpolated by the assistant. The retained automated evidence and its unresolved original-report custody limitations must be described separately from pending human validation.
+
+This is a provisional disclosure, not a signed human-author attestation. Add a statement of completed human review and responsibility only after the author actually performs and confirms that review; reconcile outstanding assistance records and check the target venue's policy before submission.
