@@ -209,3 +209,42 @@ def test_historical_text_mode_differs_from_raw_utf8_replay(tmp_path, raw, expect
     observed = replay._read_regular_text(path, label="synthetic fixture")
     assert observed == raw.decode("utf-8")
     assert (expected == observed) is (b"\r" not in raw)
+
+
+def _declared_import_fixture():
+    # Synthetic source-only imports, not provider or treatment execution.
+    sources = {}
+    for path, modules in audit.EXPECTED_IMPORT_MODULES.items():
+        raw = ("\n".join(f"import {name}" for name in modules) or "# no imports").encode()
+        for commit in (audit.ORIGINAL, audit.RECOVERY):
+            sources[(commit, path)] = raw
+    return sources
+
+
+def test_declared_import_scope_inventory():
+    inventory = audit.inspect_declared_import_scope(_declared_import_fixture())
+    assert inventory == {
+        path: sorted(modules) for path, modules in audit.EXPECTED_IMPORT_MODULES.items()
+    }
+    assert "ddgs" not in inventory[audit.EVALUATOR_PATH]
+    assert "primp" not in inventory["agent/llm_utils.py"]
+
+
+@pytest.mark.parametrize("path,addition", [
+    (audit.EVALUATOR_PATH, b"\nimport ddgs"),
+    ("agent/__init__.py", b"\nfrom primp import Client"),
+    ("settings/__init__.py", b"\nfrom .config import Config"),
+    ("logic/prompts.py", b"\ndef nested():\n    import ddgs\n"),
+])
+def test_declared_import_scope_drift_rejected(path, addition):
+    sources = _declared_import_fixture()
+    sources[(audit.RECOVERY, path)] += addition
+    with pytest.raises(audit.HistoricalEvaluatorPolicyError, match="import"):
+        audit.inspect_declared_import_scope(sources)
+
+
+def test_declared_import_scope_missing_initializer_rejected():
+    sources = _declared_import_fixture()
+    del sources[(audit.ORIGINAL, "logic/__init__.py")]
+    with pytest.raises(audit.HistoricalEvaluatorPolicyError, match="missing historical import-scope"):
+        audit.inspect_declared_import_scope(sources)

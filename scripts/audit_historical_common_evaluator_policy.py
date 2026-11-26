@@ -52,6 +52,42 @@ EXPECTED_BLOBS.update({
     for path, blob_sha in RUNTIME_DEPENDENCY_BLOBS.items()
 })
 
+# Python executes package initializers before their imported submodules. Pin
+# these separately from the existing execution/accounting dependency inventory.
+IMPORT_SCOPE_EXTRA_BLOBS = {
+    "agent/__init__.py": "f467c0ddb30ac07fb6df9726dc54fa60eb8ca304",
+    "logic/__init__.py": "59330536bf617149e068f21eb6abdb6a8e2b3c4c",
+    "settings/__init__.py": "8253a3c6bd910dcd282b46c089a4a9dde5e67ee8",
+    "settings/singleton.py": "55b2aeea120bbe51ca837265fcb7fbff467e55f2",
+}
+EXPECTED_BLOBS.update({
+    (commit, path): blob_sha
+    for commit in (ORIGINAL, RECOVERY)
+    for path, blob_sha in IMPORT_SCOPE_EXTRA_BLOBS.items()
+})
+
+# Explicit static import declarations in the historical evaluator and the
+# first-party modules reached by those declarations. External package internals
+# and runtime/dynamic imports are outside this source-only inspection.
+EXPECTED_IMPORT_MODULES = {
+    EVALUATOR_PATH: (
+        "__future__", "agent.llm_utils", "argparse", "csv", "json",
+        "logic.experiment", "logic.prompts", "os", "pathlib",
+        "scripts.summarize_pilot", "sys",
+    ),
+    "agent/__init__.py": ("agent.llm_utils",),
+    "agent/llm_utils.py": ("__future__", "logic.usage", "openai", "settings", "typing"),
+    "logic/__init__.py": (),
+    "logic/experiment.py": ("__future__", "dataclasses", "datetime", "json", "os", "pathlib", "typing"),
+    "logic/prompts.py": (),
+    "logic/usage.py": ("__future__", "threading", "typing"),
+    "settings/__init__.py": ("settings.config", "settings.singleton"),
+    "settings/config.py": ("colorama", "dotenv", "openai", "os", "settings.singleton"),
+    "settings/singleton.py": ("abc",),
+    "scripts/summarize_pilot.py": ("__future__", "collections", "csv", "json", "pathlib", "statistics"),
+}
+
+
 class HistoricalEvaluatorPolicyError(ValueError):
     """The frozen Git source does not support the stated evaluator provenance."""
 
@@ -239,6 +275,28 @@ def inspect_shared_runtime_dependencies(sources: dict[tuple[str, str], bytes]) -
     return fingerprints
 
 
+def inspect_declared_import_scope(sources: dict[tuple[str, str], bytes]) -> dict[str, list[str]]:
+    """Verify explicit import declarations, not a runtime import trace."""
+    inventory: dict[str, list[str]] = {}
+    for commit in (ORIGINAL, RECOVERY):
+        for path, expected in EXPECTED_IMPORT_MODULES.items():
+            raw = sources.get((commit, path))
+            if not isinstance(raw, bytes) or not raw:
+                raise HistoricalEvaluatorPolicyError(f"missing historical import-scope source: {path}")
+            modules: set[str] = set()
+            for node in ast.walk(_parse(raw)):
+                if isinstance(node, ast.Import):
+                    modules.update(alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom):
+                    if node.level or node.module is None:
+                        raise HistoricalEvaluatorPolicyError(f"unexpected relative import: {path}")
+                    modules.add(node.module)
+            if modules != set(expected):
+                raise HistoricalEvaluatorPolicyError(f"historical explicit import inventory changed: {path}")
+            inventory[path] = sorted(modules)
+    return inventory
+
+
 def audit_checkout(root: Path) -> dict:
     root = root.resolve()
     history.audit_checkout(root)  # full history, root, original runner identity
@@ -266,6 +324,11 @@ def audit_checkout(root: Path) -> dict:
     inspect_workflow(sources[(ORIGINAL, ORIGINAL_WORKFLOW)], recovered=False)
     inspect_workflow(sources[(RECOVERY, RECOVERY_WORKFLOW)], recovered=True)
     runtime_fingerprints = inspect_shared_runtime_dependencies(sources)
+    for commit in (ORIGINAL, RECOVERY):
+        # scripts was a namespace package in both historical trees.
+        if history._git(root, "ls-tree", commit, "--", "scripts/__init__.py").strip():
+            raise HistoricalEvaluatorPolicyError("unexpected historical scripts package initializer")
+    declared_imports = inspect_declared_import_scope(sources)
     return {
         "schema_version": 1,
         "status": "pinned_historical_evaluator_source_policy_comparison_only",
@@ -287,6 +350,9 @@ def audit_checkout(root: Path) -> dict:
         "historical_per_cell_prompt_bytes_authenticated": False,
         "shared_runtime_dependency_bytes_identical": True,
         "shared_runtime_source_sha256": runtime_fingerprints,
+        "historical_explicit_first_party_import_modules": declared_imports,
+        "historical_explicit_import_scope_mentions_ddgs_or_primp": False,
+        "historical_runtime_import_trace_authenticated": False,
         "historical_installed_package_versions_authenticated": False,
         "historical_provider_execution_authenticated": False,
         "original_empty_evidence_rejected": True,

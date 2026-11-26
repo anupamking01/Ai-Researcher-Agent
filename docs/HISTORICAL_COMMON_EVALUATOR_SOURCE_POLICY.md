@@ -10,7 +10,7 @@ Run in a full-history checkout without credentials or any model/network calls:
 
     python -m scripts.audit_historical_common_evaluator_policy
 
-The verifier pins Git ancestry and the exact 22 historical Git blobs for the original/recovery evaluator scripts, their launch workflows, prompt generator and normalizer. It parses historical evaluator source as Python AST **without importing or running it**. It checks shared calls to the same prompt generator, the same model-selection expression, the same 120-second request timeout and the same score normalizer, along with the workflow-declared model gpt-5.6-terra, temperature 1 and 12-claim cap. The historical prompt-generator and normalizer blobs are byte-identical across these two revisions.
+The verifier pins Git ancestry and the exact 30 historical Git blobs for the original/recovery evaluator scripts, their launch workflows, prompt generator and normalizer. It parses historical evaluator source as Python AST **without importing or running it**. It checks shared calls to the same prompt generator, the same model-selection expression, the same 120-second request timeout and the same score normalizer, along with the workflow-declared model gpt-5.6-terra, temperature 1 and 12-claim cap. The historical prompt-generator and normalizer blobs are byte-identical across these two revisions.
 
 It additionally checks the **entire source bytes in both historical revisions** for seven execution/accounting dependencies: the OpenAI chat adapter, provider-usage tracker, environment configuration, evaluator-cost estimator, frozen dated pricing table, and both Python requirements files. Both historical workflows must explicitly install those requirements. The independently pinned Git blobs are compared and SHA-256 fingerprints retained; the requirements source pins `openai==0.27.10`. This closes a source-provenance gap: identical top-level evaluator calls alone did not establish whether their transport, usage recording, temperature configuration, or cost-accounting implementations had drifted. These **source dependencies did not drift** in the pinned historical commits; this does **not** establish which wheels were installed, that the provider served an identical model, that any API call executed as declared, or that historical costs were empirically authenticated.
 
@@ -79,3 +79,49 @@ cells, or rerun treatments/evaluators from this observation. The original
 37 / recovered 3 split, frozen automated outcomes, and pending human
 validation are unchanged. Independently authenticated original source custody
 and complete runtime attestation remain open.
+
+
+## Scope of the dependency difference and runner evidence (26 November 2026)
+
+The retained job logs also explicitly report successful CPython setup, rather
+than only a Python version embedded in a cache key. Both jobs restored the
+same pip cache key and downloaded identical revisions of their three shared
+Actions. These observations narrow the known environment differences without
+establishing complete runtime identity.
+
+| GitHub log observation | Original job | Recovery job |
+| --- | --- | --- |
+| Successfully set up CPython | 3.11.16 at 16:15:20.9817666Z (Sep 11) | 3.11.16 at 21:20:38.5843900Z (Sep 13) |
+| Runner version | 2.337.0 | 2.337.0 |
+| checkout@v4 | `11d5960a326750d5838078e36cf38b85af677262` | same |
+| setup-python@v5 | `a26af69be951a213d495a4c3e4e4022e16d87065` | same |
+| upload-artifact@v4 | `ea165f8d65b6e75b540449e92b4886f43607fa02` | same |
+| download-artifact@v4 | not listed | `d3f86a106a0bac45b974a628896c90dbdf5c8093` |
+
+The cache-restore key in both logs is
+`setup-python-Linux-x64-24.04-Ubuntu-python-3.11.16-pip-189282c64ba415190431b8679a96d5304c37404f106891c01c5ba6ea3c75167d`.
+The observed primp version difference despite that matching key demonstrates
+why a pip download cache hit must not be interpreted as a locked installation.
+
+The source audit now additionally pins four previously uninspected local
+package initialization/support files (agent, logic and settings initializers,
+and settings/singleton.py) at both historical revisions, and verifies that
+scripts had no package initializer. It extracts all explicit Python import
+declarations, including imports nested inside functions, from the evaluator
+and the ten first-party files reached by its declared imports. Both revisions
+have the same inventory: the directly declared external modules are
+`openai`, `colorama` and `dotenv`. Neither `ddgs` nor `primp` appears in that
+inspected first-party import inventory. The historical retrieval module
+`scrape/web_search.py` (blob
+`77a96cd160fdd031f22470f2fba01218fa66168d` at both revisions) instead declares
+`from ddgs import DDGS`; it is not imported by the inspected evaluator files.
+
+Reproduce the static inventory using the existing offline command above;
+inspect the receipt field `historical_explicit_first_party_import_modules`.
+This is deliberately not a dependency resolver or runtime import tracer:
+third-party internals, runtime import hooks, actual library calls and provider
+execution remain unauthenticated. The drift is therefore a documented
+installation-level difference associated with the search dependency, not
+evidence of a changed evaluator code path or effect on scores. No treatment
+or evaluator rerun is warranted; the frozen automated results and pending
+human validation remain unchanged.
