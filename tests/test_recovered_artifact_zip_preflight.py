@@ -194,6 +194,43 @@ def test_casefold_path_collisions_are_rejected(tmp_path):
         audit.audit_recovered_zip(path)
 
 
+@pytest.mark.parametrize("names", [
+    ("Reports/a.md", "reports/b.md"),
+    ("reports/Traces/a.json", "reports/traces/b.json"),
+    ("reports/Ｆiles/a.md", "reports/Files/b.md"),
+    ("Reports/", "reports/a.md"),
+    ("reports/a.md", "Reports/"),
+])
+def test_nonportable_directory_aliases_rejected_before_decompression(tmp_path, names):
+    # Full member keys are distinct, but extraction would merge directories
+    # on a case-insensitive or compatibility-normalizing filesystem.
+    path = _zip(tmp_path / "directory-alias.zip", {
+        name: b"" if name.endswith("/") else b"synthetic" for name in names
+    })
+    with zipfile.ZipFile(path) as archive:
+        assert archive.namelist() == list(names)
+    reserved = []
+    with pytest.raises(audit.RecoveredArchiveError, match="nonportable ZIP directory spelling"):
+        audit.audit_recovered_zip(path, reserve_uncompressed_bytes=reserved.append)
+    assert reserved == []
+
+
+@pytest.mark.parametrize("names", [
+    ("reports/", "reports/a.md", "reports/b.md"),
+    ("reports/a.md", "reports/"),
+    ("left/Reports/a.md", "right/reports/b.md"),
+    ("reports/Ｆiles/a.md", "reports/Ｆiles/b.md"),
+])
+def test_consistent_directory_spellings_preserve_original_file_paths(tmp_path, names):
+    path = _zip(tmp_path / "directory-ok.zip", {
+        name: b"" if name.endswith("/") else b"synthetic" for name in names
+    })
+    receipt = audit.audit_recovered_zip(path)
+    assert [entry["path"] for entry in receipt["files"]] == [
+        name for name in names if not name.endswith("/")
+    ]
+
+
 def test_file_as_directory_conflict_is_rejected(tmp_path):
     path = _zip(tmp_path / "bad.zip", {"a": b"one", "a/b": b"two"})
     with pytest.raises(audit.RecoveredArchiveError, match="conflicts"):

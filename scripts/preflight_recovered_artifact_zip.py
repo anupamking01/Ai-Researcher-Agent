@@ -120,6 +120,18 @@ def _path_key(name: str) -> str:
     return normalized
 
 
+def _record_directory_spellings(name: str, key: str, is_directory: bool, spellings: dict[str, str]) -> None:
+    """Require every explicit or implicit directory to have one spelling."""
+    parts = name.rstrip('/').split('/')
+    normalized = key.split('/')
+    depth = len(parts) if is_directory else len(parts) - 1
+    for n in range(1, depth + 1):
+        prefix = '/'.join(normalized[:n])
+        spelling = '/'.join(parts[:n])
+        if spellings.setdefault(prefix, spelling) != spelling:
+            raise RecoveredArchiveError('nonportable ZIP directory spelling: ' + repr(spelling))
+
+
 def _check_zip_extra_fields(extra: bytes, *, label: str) -> None:
     """Forbid a second interpretation of a recovered member's filename.
 
@@ -502,6 +514,7 @@ def audit_recovered_zip(
             total = 0
             seen: set[str] = set()
             file_keys: set[str] = set()
+            directory_spellings: dict[str, str] = {}
             with zipfile.ZipFile(handle, mode="r") as archive:
                 entries = archive.infolist()
                 if not entries or len(entries) > MAX_MEMBERS:
@@ -519,6 +532,9 @@ def audit_recovered_zip(
                     if key in seen:
                         raise RecoveredArchiveError(f"duplicate or nonportable ZIP path: {info.filename!r}")
                     seen.add(key)
+                    _record_directory_spellings(
+                        info.filename, key, is_directory, directory_spellings
+                    )
                     if not is_directory:
                         file_keys.add(key)
                         total += info.file_size

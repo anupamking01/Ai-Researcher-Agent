@@ -1,3 +1,19 @@
+## Portable directory identity in recovered ZIPs (26 November 2026)
+
+Checking only full normalized member paths misses aliases of implicit
+directories: `Reports/a.md` and `reports/b.md` have distinct normalized file
+keys, but their directory structure differs between case-sensitive and
+case-insensitive extraction. Compatibility-equivalent Unicode directory names
+have the analogous ambiguity under downstream normalization. Preflight now
+records the exact original spelling of every normalized directory prefix,
+including explicit directory records and implicit parents, and rejects a
+second spelling before reserving decompression. It does not rename entries.
+Synthetic regressions cover nested aliases, Unicode compatibility aliases,
+explicit directories in either archive order, and valid shared or independent
+parents. This protects portable inventory identity only; it neither recovers
+nor authenticates original historical reports or permits human distribution.
+No treatment, evaluator, frozen result or human rating was changed.
+
 ## Complete DEFLATE stream accounting (26 November 2026)
 
 A ZIP reader can report a matching CRC and declared output size even when
