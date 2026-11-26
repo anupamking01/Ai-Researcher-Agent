@@ -9,6 +9,7 @@ evaluation packets. No extraction, evaluator runs, or treatments occur.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
@@ -64,6 +65,45 @@ def _archive_source_snapshot(path: Path) -> tuple[tuple[int, ...], str]:
     )
     return generation, digest
 
+
+
+@contextmanager
+def _open_audited_archive(path: Path, audit: dict):
+    """Rebind a semantic reread to the already structurally verified ZIP bytes.
+
+    Do not let a path substitution after preflight reach ZipFile's eager
+    central-directory parser. Use the same bounded, no-follow descriptor for
+    the digest, directory precheck and semantic reads; recheck after reading.
+    This is local consistency, not independent historical custody.
+    """
+    expected_size = audit["github_job_log_zip_correspondence"]["expected_archive_bytes"]
+    expected_digest = audit["zip_sha256_observed_now"]
+    try:
+        with preflight._open_archive_with_pinned_parents(path) as handle:
+            before = os.fstat(handle.fileno())
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or not preflight._unchanged(before, os.stat(path, follow_symlinks=False))
+                or not 0 < before.st_size <= preflight.MAX_ARCHIVE_BYTES
+                or before.st_size != expected_size
+            ):
+                raise RecoveryConcordanceError("archive source changed before semantic reread")
+            if preflight._fingerprint(handle, expected_bytes=before.st_size) != expected_digest:
+                raise RecoveryConcordanceError("archive digest differs before semantic reread")
+            preflight._preflight_central_directory(handle, before.st_size)
+            if not preflight._unchanged(before, os.fstat(handle.fileno())):
+                raise RecoveryConcordanceError("archive source changed before semantic reread")
+            with zipfile.ZipFile(handle, "r") as source:
+                yield source
+            if (
+                preflight._fingerprint(handle, expected_bytes=before.st_size) != expected_digest
+                or not preflight._unchanged(before, os.fstat(handle.fileno()))
+                or not preflight._unchanged(before, os.stat(path, follow_symlinks=False))
+            ):
+                raise RecoveryConcordanceError("archive source changed during semantic reread")
+    except (OSError, preflight.RecoveredArchiveError) as exc:
+        raise RecoveryConcordanceError("cannot safely capture archive source for semantic reread") from exc
 
 
 def _frozen_questions_snapshot(
@@ -470,7 +510,7 @@ def _snapshot_archived_evaluator_evidence(
     prefix = audit["source_layout_prefix"]
     result = {}
     try:
-        with zipfile.ZipFile(archive, "r") as source:
+        with _open_audited_archive(archive, audit) as source:
             names = source.namelist()
             for cell in cells:
                 variant, task, run_id = (
@@ -829,7 +869,7 @@ def _verify_evaluator_cache_json_identities(
     prefix = audit["source_layout_prefix"]
     report_input_bindings_checked = 0
     try:
-        with zipfile.ZipFile(archive, "r") as source:
+        with _open_audited_archive(archive, audit) as source:
             for (variant, task), (expected_digest, size) in sorted(cache.items()):
                 path = f"{prefix}posthoc_evaluations/{variant}/{task}.json"
                 if not 0 < size <= MAX_EVALUATOR_CACHE_JSON_BYTES:
@@ -1048,7 +1088,7 @@ def _verify_archived_treatment_trace_identities(
         raise RecoveryConcordanceError("historical trace matrix is incomplete")
     prefix = audit["source_layout_prefix"]
     try:
-        with zipfile.ZipFile(archive, "r") as source:
+        with _open_audited_archive(archive, audit) as source:
             for cell in cells:
                 variant, task, run_id = (
                     cell["treatment"], cell["task_id"], cell["run_id"]

@@ -1442,3 +1442,17 @@ the historical automated analysis retains post-collection statistical
 planning, fixed-order, and common-evaluator comparability qualifications;
 exploratory audit findings are not prospective confirmatory or completed
 human-validation evidence.
+
+### Bind semantic ZIP rereads to the structurally audited source (26 November 2026)
+
+The original/recovery source-concordance verifier performs three semantic
+passes over each ZIP (saved retrieval evidence, evaluator caches, and
+treatment traces/reports). Each pass now checks the already-audited archive
+byte count and SHA-256 on a no-follow, single-link regular-file descriptor,
+bounds the central-directory records again before constructing the eager ZIP
+reader, and rechecks the descriptor, pathname, digest and parent chain after
+the pass. A substituted archive must not reach semantic parsing merely because
+the earlier structural audit passed. The existing combined comparison-window
+checks remain in place. These are bounded local consistency checks, not an
+atomic multi-file snapshot or independent historical authentication. No
+treatments, evaluators or human ratings are generated.

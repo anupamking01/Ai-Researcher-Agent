@@ -1786,3 +1786,63 @@ def test_historical_treatment_trace_rejects_pathological_json_integer(
 def test_historical_archive_json_integer_parser_accepts_normal_ints():
     assert concordance._bounded_historical_json_int("0") == 0
     assert concordance._bounded_historical_json_int("-128") == -128
+
+def _semantic_reread_fixture(tmp_path):
+    path = tmp_path / "semantic.zip"
+    with zipfile.ZipFile(path, "w") as out:
+        out.writestr("report.md", "synthetic control")
+    raw = path.read_bytes()
+    audit = {
+        "zip_sha256_observed_now": hashlib.sha256(raw).hexdigest(),
+        "github_job_log_zip_correspondence": {"expected_archive_bytes": len(raw)},
+    }
+    return path, raw, audit
+
+
+def test_semantic_archive_reread_accepts_exact_audited_bytes(tmp_path):
+    path, _, audit = _semantic_reread_fixture(tmp_path)
+    with concordance._open_audited_archive(path, audit) as source:
+        assert source.read("report.md") == b"synthetic control"
+
+
+@pytest.mark.parametrize("replacement_kind", ["different-size", "same-size"])
+def test_semantic_archive_reread_rejects_substitution_before_zip_parser(
+    tmp_path, monkeypatch, replacement_kind,
+):
+    path, raw, audit = _semantic_reread_fixture(tmp_path)
+    path.write_bytes(
+        raw + b"x" if replacement_kind == "different-size"
+        else bytes([raw[0] ^ 1]) + raw[1:]
+    )
+
+    def must_not_parse(*args, **kwargs):
+        pytest.fail("substituted ZIP reached eager parser")
+
+    monkeypatch.setattr(zipfile, "ZipFile", must_not_parse)
+    with pytest.raises(concordance.RecoveryConcordanceError, match="before semantic reread"):
+        with concordance._open_audited_archive(path, audit):
+            pytest.fail("substituted ZIP reached semantic reads")
+
+
+def test_semantic_archive_reread_rejects_same_byte_path_swap(tmp_path):
+    path, raw, audit = _semantic_reread_fixture(tmp_path)
+    with pytest.raises(concordance.RecoveryConcordanceError, match="during semantic reread"):
+        with concordance._open_audited_archive(path, audit) as source:
+            replacement = tmp_path / "replacement.zip"
+            replacement.write_bytes(raw)
+            os.replace(replacement, path)
+            assert source.read("report.md") == b"synthetic control"
+
+
+def test_semantic_archive_reread_rejects_symlinked_parent(tmp_path):
+    directory = tmp_path / "real"
+    directory.mkdir()
+    path, _, audit = _semantic_reread_fixture(directory)
+    alias = tmp_path / "alias"
+    try:
+        alias.symlink_to(directory, target_is_directory=True)
+    except (NotImplementedError, OSError):
+        pytest.skip("symlinks unavailable on this platform")
+    with pytest.raises(concordance.RecoveryConcordanceError, match="archive source"):
+        with concordance._open_audited_archive(alias / path.name, audit):
+            pytest.fail("symlinked ancestor reached semantic reads")
