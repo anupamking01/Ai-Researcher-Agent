@@ -46,8 +46,13 @@ no files. The tool does not rerun a treatment, evaluator, or statistical test.
 
 The mandatory [reporting cover](../paper/MAIN_STUDY_REPORTING_COVER.md) is now
 checked against its **complete reviewed SHA-256**, not just a list of phrases.
-The reviewed 7 November cover bytes hash to
-`a1705941a5834ab391a75f063e5ce10c08617ae2e040cfa90292b4df6b248b2e`.
+The revised 27 November cover bytes hash to
+`353522d2014187d24954c24f999973ac473829fff9dedc8f26aa9062b09ec57c`.
+This revision incorporates the arm-concentrated evaluator recovery, temporal
+eligibility, incomplete factorial coverage and human measurement-scope
+limitations directly into the mandatory reading copy. The historical output
+pins remain unchanged. Prior qualified exports must be verified against their
+own source checkout and cover pin, not the revised cover.
 This prevents a changed cover containing contradictory visible assertions or
 caveats concealed in an HTML comment from passing merely by preserving the
 required phrase strings. A substantive future revision of the *noncanonical*

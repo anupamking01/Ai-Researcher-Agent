@@ -32,7 +32,7 @@ ORIGINAL_MARKDOWN_SHA256 = "9356cbad9711012850baef349c7d16a104d63987e1d7be2e5318
 # This is a repository-local reporting safety pin, NOT an independent archive
 # attestation. Deliberate disclosure revisions require reviewing the complete
 # replacement cover and updating this digest together.
-REVIEWED_REPORTING_COVER_SHA256 = "a1705941a5834ab391a75f063e5ce10c08617ae2e040cfa90292b4df6b248b2e"
+REVIEWED_REPORTING_COVER_SHA256 = "353522d2014187d24954c24f999973ac473829fff9dedc8f26aa9062b09ec57c"
 REQUIRED_QUALIFICATIONS = (
     "prospective precollection statistical preregistration is not established",
     "outcome blinding at the september 14 freeze is not established",
@@ -42,6 +42,10 @@ REQUIRED_QUALIFICATIONS = (
     "paired-bootstrap confidence intervals",
     "human validation remains pending",
     "original 40 treatment reports and traces are not independently authenticated",
+    "arm-concentrated evaluator-policy difference",
+    "actual cutoff compliance is unknown",
+    "scheduled browse caps are not equal total compute",
+    "claim-level classification accuracy",
 )
 
 

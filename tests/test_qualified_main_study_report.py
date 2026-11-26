@@ -146,3 +146,26 @@ def test_retained_disclosure_phrases_cannot_mask_altered_cover(tmp_path, rewrite
     )
     with pytest.raises(ValueError, match="reviewed qualification fingerprint"):
         qualified.assemble_qualified_report(repo_root=root)
+
+
+@pytest.mark.parametrize("phrase", [
+    "arm-concentrated evaluator-policy difference",
+    "actual cutoff compliance is unknown",
+    "scheduled browse caps are not equal total compute",
+    "claim-level classification accuracy",
+])
+def test_measurement_scope_qualification_is_required_before_export(tmp_path, phrase):
+    root = _checkout(tmp_path)
+    cover = root / qualified.COVER
+    original = cover.read_text(encoding="utf-8")
+    result = qualified.assemble_qualified_report(repo_root=root)
+    before, separator, _ = result.partition("## Original historically frozen inference")
+    assert separator
+    assert phrase in qualified._disclosure_text(before)
+    import re
+    pattern = r"\s+".join(re.escape(word) for word in phrase.split())
+    altered, count = re.subn(pattern, "qualification removed", original)
+    assert count == 1
+    cover.write_text(altered, encoding="utf-8")
+    with pytest.raises(ValueError, match="required scientific limitation"):
+        qualified.assemble_qualified_report(repo_root=root)

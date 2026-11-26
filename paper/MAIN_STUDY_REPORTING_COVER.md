@@ -72,3 +72,44 @@ estimate, exact sign-flip calculation, confidence interval, or adjusted
 p-value. Cite them as methodologically qualified calculations, not as
 randomized causal evidence or independently preregistered confirmation. See
 the [exact design-rank audit](../docs/MAIN_STUDY_DESIGN_IDENTIFIABILITY.md).
+
+## Measurement comparability and scope (27 November 2026)
+
+The common support measurement was intended to be separate from treatment
+verification, but the historical evaluator-only recovery changed the
+empty-evidence input policy. The historical workflow specifies three recovered
+cells, all in P6V (main-02, main-08, main-10). The frozen summary records
+`retrieved_evidence` for the first two and `zero_successful_sources` for
+main-10; the other 37 evidence-status fields are unspecified. This
+**arm-concentrated evaluator-policy difference** limits comparability,
+particularly P6V versus P6; neither actual provider input nor bias direction
+or magnitude is established. Do not exclude, replace or re-score these cells.
+See the [source-to-summary partition audit](../docs/HISTORICAL_EVALUATOR_MEASUREMENT_PARTITION.md).
+The [replacement-envelope frontier analysis](../docs/EVALUATOR_RECOVERY_FRONTIER_BOUNDS.md)
+is exploratory, not a correction to the observed frozen descriptive frontier.
+
+Strict support measures the historical model's judgments against retrieved
+evidence, not independently established factual accuracy. The
+[historical evaluator source audit](../docs/HISTORICAL_COMMON_EVALUATOR_SOURCE_POLICY.md)
+documents permissive raw-response normalization and requested-versus-returned
+model identity limitations; valid normalized counts do not establish
+raw-response schema compliance, resolved model identity or claim-label accuracy.
+The [task-freeze audit](../docs/MAIN_STUDY_TASK_FREEZE_CHRONOLOGY.md) also
+establishes that the historical live-web pipeline did not independently
+enforce main-09's September 1 information cutoff; actual cutoff compliance
+is unknown. The ten selected questions have one question per category.
+
+The [original protocol scope crosswalk](../docs/MAIN_STUDY_PROTOCOL_SCOPE.md)
+distinguishes four realized configurations from the eight originally proposed.
+The scheduled browse caps are not equal total compute; missing factorial cells
+preclude estimating planning-by-verification interactions, retrieval curvature
+or an optimal allocation policy. The descriptive cost-quality frontier is
+limited to the included configurations and measured endpoints; estimated costs
+are not authenticated provider bills.
+
+The planned five-dimension human ratings address report-level quality.
+Even if genuinely collected, they would not by themselves establish
+**claim-level classification accuracy** of the automated support evaluator.
+The independent claim-level reference study remains unperformed. These
+qualifications apply to the historical automated results without changing
+the frozen analysis or authorizing any new treatment or rating collection.
