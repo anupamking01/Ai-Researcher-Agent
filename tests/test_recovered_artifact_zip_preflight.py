@@ -655,6 +655,53 @@ def test_eocd_signature_in_comment_fails_before_zipfile(tmp_path, monkeypatch, c
         audit.audit_recovered_zip(path)
     assert path.read_bytes() == original
 
+@pytest.mark.parametrize("archive_comment", [b"", b"x" * 65535])
+@pytest.mark.parametrize("kind", ["embedded_zip64", "locator_only", "ordinary"])
+def test_zip64_locator_in_central_member_comment(tmp_path, monkeypatch, archive_comment, kind):
+    """A ZIP64 probe must not override our bounded ordinary EOCD."""
+    path = tmp_path / "member-comment.zip"
+    with zipfile.ZipFile(path, "w") as out:
+        info = zipfile.ZipInfo("report.md")
+        info.comment = b"x" * 76
+        out.writestr(info, b"evidence")
+        out.comment = archive_comment
+    raw = bytearray(path.read_bytes())
+    end = raw.rfind(b"PK\x05\x06")
+    record = struct.unpack_from("<4s4H2IH", raw, end)
+    size, cd = record[5:7]
+    if kind == "embedded_zip64":
+        # The ordinary EOCD and central record remain intact. CPython
+        # can instead read this ZIP64 record from the member comment.
+        raw[end - 76:end] = (
+            struct.pack("<4sQ2H2I4Q", b"PK\x06\x06", 44, 45, 45,
+                        0, 0, 1, 1, size - 76, cd)
+            + struct.pack("<4sIQI", b"PK\x06\x07", 0, end - 76, 1)
+        )
+    elif kind == "locator_only":
+        raw[end - 20:end - 16] = b"PK\x06\x07"
+    else:
+        # Non-probed positions in an ordinary comment remain supported.
+        raw[end - 21:end - 17] = b"PK\x06\x07"
+    path.write_bytes(raw)
+    assert cd + size == end
+    fields = struct.unpack_from("<4s6H3I5H2I", raw, cd)
+    assert cd + 46 + sum(fields[10:13]) == end
+    if kind == "ordinary":
+        receipt = audit.audit_recovered_zip(path)
+        assert receipt["files"] == [{
+            "path": "report.md", "uncompressed_bytes": 8,
+            "sha256": hashlib.sha256(b"evidence").hexdigest(),
+        }]
+    else:
+        def must_not_open(*args, **kwargs):
+            pytest.fail("ZIP64 locator must be rejected before ZipFile parses it")
+
+        monkeypatch.setattr(audit.zipfile, "ZipFile", must_not_open)
+        with pytest.raises(audit.RecoveredArchiveError, match="ZIP64 locator"):
+            audit.audit_recovered_zip(path)
+    assert path.read_bytes() == raw
+
+
 @pytest.mark.parametrize(("offset", "width", "replacement"), [
     (8, 2, zipfile.ZIP_STORED),  # local method differs from DEFLATED central record
     (6, 2, 0x0800),             # conflicting UTF-8 purpose flag on ASCII name

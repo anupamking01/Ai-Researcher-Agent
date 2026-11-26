@@ -247,6 +247,14 @@ def _preflight_central_directory(handle, archive_bytes: int) -> int:
         raise RecoveredArchiveError(
             "ZIP central-directory offsets are inconsistent or noncanonical"
         )
+    # CPython probes for a ZIP64 locator immediately before its selected
+    # EOCD, even when the ordinary EOCD has no ZIP64 sentinel values.
+    # A locator hidden inside a central member comment can therefore
+    # override the bounded directory we just validated.
+    if eocd_offset >= 20:
+        handle.seek(eocd_offset - 20)
+        if handle.read(4) == b"PK\x06\x07":
+            raise RecoveredArchiveError("ZIP64 locator is unsupported")
     offset = cd_offset
     for _ in range(count):
         if offset + CENTRAL_HEADER.size > eocd_offset:

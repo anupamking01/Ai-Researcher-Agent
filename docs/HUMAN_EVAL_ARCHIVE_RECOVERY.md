@@ -1,3 +1,18 @@
+## ZIP64 locator ambiguity in recovered ZIPs (26 November 2026)
+
+An ordinary, bounded end-of-central-directory (EOCD) record is not enough
+to rule out ZIP64 parsing. CPython also probes the 20 bytes immediately
+preceding the selected EOCD for a ZIP64 locator, regardless of ordinary
+EOCD sentinel values. A central member comment can contain a ZIP64 record
+and locator at that position, overriding the preflight's directory size
+and offset before the eager ZIP parser runs. A synthetic archive reproduced
+this discrepancy with the same readable report but a silently discarded
+member comment. Preflight now rejects the locator signature at that exact
+position before constructing ZipFile, even for a maximum-length archive
+comment. Non-probed occurrences remain allowed. This intentionally
+conservative rule enforces the existing non-ZIP64 recovery contract; it
+does not establish independent custody or authenticate historical evidence.
+
 ## Local ZIP filename checks before decompression reservation (26 November 2026)
 
 A local filename differing from its central-directory record was previously
