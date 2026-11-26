@@ -1699,6 +1699,21 @@ def main() -> int:
             "cost_method": "frozen uncached rates",
         }
         record["replay_provenance"] = _noncanonical_evaluator_replay_provenance()
+        # Apply the identical acceptance contract to fresh and resumed
+        # measurements. Cost estimation alone does not validate call counts
+        # or reconcile the aggregate token ledger with its model bucket.
+        _validate_cached_evaluation(
+            record,
+            path=out_path,
+            expected_variant=variant,
+            expected_task_id=task_id,
+            expected_run_id=run_id,
+            expected_evaluator_model=evaluator_model,
+            expected_temperature=evaluator_temperature,
+            expected_evidence_status=evidence_status,
+            pricing=pricing,
+            expected_input_fingerprints=item["input_fingerprints"],
+        )
         # A report/evidence mutation during the provider call must not be
         # published as a measurement from stable original local sources.
         _require_preflight_treatment_trace_unchanged(trace_path, trace_sha256)

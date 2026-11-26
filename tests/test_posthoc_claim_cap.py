@@ -912,6 +912,11 @@ def test_new_cache_binds_exact_evaluator_prompt_inputs(tmp_path, monkeypatch):
     assert cache["schema_version"] == 2
     assert cache["raw_response"] == {"text": _evaluator_result(), **_fingerprint_text(_evaluator_result())}
     evaluate_posthoc_support._validate_raw_response_receipt(cache)
+    assert _load_cached(
+        eval_root / "D3" / "main-01.json",
+        expected_evidence_status="zero_successful_sources",
+        expected_input_fingerprints=cache["input_fingerprints"],
+    ) == cache
     assert cache["replay_provenance"] == evaluate_posthoc_support._noncanonical_evaluator_replay_provenance()
     assert cache["input_fingerprints"] == _input_fingerprints(
         question=question,
@@ -1602,3 +1607,40 @@ def test_aggregate_cache_manifest_rejects_unbound_cells(tmp_path, monkeypatch, m
         rows.append(rows[0])
     with pytest.raises(SystemExit, match="Evaluator cache manifest"):
         evaluate_posthoc_support._evaluator_cache_manifest(rows, hashes)
+
+
+@pytest.mark.parametrize(
+    ("fault", "message"),
+    [
+        ("multiple_calls", "provider_usage_by_model is invalid"),
+        ("inconsistent_total", "total_tokens must equal provider usage"),
+    ],
+)
+def test_fresh_evaluator_record_must_pass_resume_accounting_before_publication(
+    tmp_path, monkeypatch, fault, message
+):
+    from agent.llm_utils import UsageTracker
+
+    eval_root = _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    original_snapshot = UsageTracker.snapshot
+
+    def complete_evaluation(**kwargs):
+        _record_evaluator_usage(kwargs)
+        if fault == "multiple_calls":
+            _record_evaluator_usage(kwargs)
+        return _evaluator_result()
+
+    def snapshot(tracker):
+        result = original_snapshot(tracker)
+        if fault == "inconsistent_total":
+            result["total_tokens"] += 1
+        return result
+
+    monkeypatch.setattr(UsageTracker, "snapshot", snapshot)
+    monkeypatch.setattr("agent.llm_utils.create_chat_completion", complete_evaluation)
+    with pytest.raises(SystemExit, match=message):
+        evaluate_posthoc_support.main()
+
+    assert not (eval_root / "D3" / "main-01.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
