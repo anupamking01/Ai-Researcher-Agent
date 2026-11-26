@@ -138,6 +138,46 @@ def inspect_evaluator(raw: bytes, *, recovered: bool) -> dict:
             raise HistoricalEvaluatorPolicyError("original empty-evidence rejection absent")
     return signatures
 
+# Pinned historical helper source, checked as AST rather than formatting.
+HISTORICAL_TEXT_READERS = r'''
+def _research_context(run_id: str) -> str:
+    run_dir = REPO_ROOT / "outputs" / run_id
+    parts = []
+    for path in sorted(run_dir.glob("research-query-*.txt")):
+        text = path.read_text(encoding="utf-8").strip()
+        if text:
+            parts.append(text)
+    return "\n\n".join(parts)
+
+
+def _report_text(run_id: str) -> str:
+    path = REPO_ROOT / "outputs" / run_id / "research_report.md"
+    if not path.is_file():
+        raise FileNotFoundError(f"Missing report markdown for run {run_id}: {path}")
+    return path.read_text(encoding="utf-8")
+'''
+
+
+def inspect_historical_text_readers(raw: bytes) -> None:
+    """Verify the historical UTF-8 text-mode input construction, not raw bytes.
+
+    Path.read_text uses universal newline translation. This matters for
+    embedded CRLF or CR in retrieved text and reports; current schema-v2
+    replay fingerprints instead bind strict raw UTF-8 decoding.
+    """
+    module = _parse(raw)
+    expected = ast.parse(HISTORICAL_TEXT_READERS)
+    for helper in expected.body:
+        matches = [
+            node for node in module.body
+            if isinstance(node, ast.FunctionDef) and node.name == helper.name
+        ]
+        if len(matches) != 1 or ast.dump(matches[0]) != ast.dump(helper):
+            raise HistoricalEvaluatorPolicyError(
+                f"historical evaluator text reader changed: {helper.name}"
+            )
+
+
 def inspect_workflow(raw: bytes, *, recovered: bool) -> None:
     """Read declared workflow model, temperature, evaluator invocation and source."""
     try:
@@ -213,6 +253,8 @@ def audit_checkout(root: Path) -> dict:
         if not source:
             raise HistoricalEvaluatorPolicyError("historical source is empty")
         sources[(commit, path)] = source
+    for commit in (ORIGINAL, RECOVERY):
+        inspect_historical_text_readers(sources[(commit, EVALUATOR_PATH)])
     original_core = inspect_evaluator(sources[(ORIGINAL, EVALUATOR_PATH)], recovered=False)
     recovery_core = inspect_evaluator(sources[(RECOVERY, EVALUATOR_PATH)], recovered=True)
     if original_core != recovery_core:
@@ -239,6 +281,10 @@ def audit_checkout(root: Path) -> dict:
         "prompt_generator_bytes_identical": True,
         "score_normalizer_bytes_identical": True,
         "evaluator_core_call_ast_identical": True,
+        "historical_text_reader_ast_verified": True,
+        "historical_report_and_evidence_newline_policy": "utf8-universal-newlines",
+        "historical_evidence_assembly": "sorted-query-files-strip-omit-empty-double-lf-join",
+        "historical_per_cell_prompt_bytes_authenticated": False,
         "shared_runtime_dependency_bytes_identical": True,
         "shared_runtime_source_sha256": runtime_fingerprints,
         "historical_installed_package_versions_authenticated": False,

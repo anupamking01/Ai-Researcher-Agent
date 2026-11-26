@@ -155,3 +155,57 @@ def test_historical_provider_client_pin_drift_rejected():
         sources[(commit, "requirements.txt")] = b"openai==1.0.0\n"
     with pytest.raises(audit.HistoricalEvaluatorPolicyError, match="client pin"):
         audit.inspect_shared_runtime_dependencies(sources)
+
+
+# Synthetic source fixture reproduces the historical text-mode reader contract.
+TEXT_READERS = r'''
+def _research_context(run_id: str) -> str:
+    run_dir = REPO_ROOT / "outputs" / run_id
+    parts = []
+    for path in sorted(run_dir.glob("research-query-*.txt")):
+        text = path.read_text(encoding="utf-8").strip()
+        if text:
+            parts.append(text)
+    return "\n\n".join(parts)
+
+
+def _report_text(run_id: str) -> str:
+    path = REPO_ROOT / "outputs" / run_id / "research_report.md"
+    if not path.is_file():
+        raise FileNotFoundError(f"Missing report markdown for run {run_id}: {path}")
+    return path.read_text(encoding="utf-8")
+'''
+
+
+def test_historical_text_reader_contract():
+    audit.inspect_historical_text_readers(TEXT_READERS.encode())
+
+
+@pytest.mark.parametrize("old,new", [
+    ('path.read_text(encoding="utf-8")', 'path.read_bytes().decode("utf-8")'),
+    ('sorted(run_dir.glob("research-query-*.txt"))', 'run_dir.glob("research-query-*.txt")'),
+    ('.strip()', ''),
+    ('"\\n\\n".join(parts)', '"\\n".join(parts)'),
+    ('path.read_text(encoding="utf-8")', 'path.read_text(encoding="latin-1")'),
+])
+def test_historical_text_reader_drift_rejected(old, new):
+    mutated = TEXT_READERS.replace(old, new)
+    assert mutated != TEXT_READERS
+    with pytest.raises(audit.HistoricalEvaluatorPolicyError, match="text reader changed"):
+        audit.inspect_historical_text_readers(mutated.encode())
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (b"one\ntwo", "one\ntwo"),
+    (b"one\r\ntwo", "one\ntwo"),
+    (b"one\rtwo", "one\ntwo"),
+])
+def test_historical_text_mode_differs_from_raw_utf8_replay(tmp_path, raw, expected):
+    from scripts import evaluate_posthoc_support as replay
+
+    path = tmp_path / "synthetic.txt"
+    path.write_bytes(raw)
+    assert path.read_text(encoding="utf-8") == expected
+    observed = replay._read_regular_text(path, label="synthetic fixture")
+    assert observed == raw.decode("utf-8")
+    assert (expected == observed) is (b"\r" not in raw)

@@ -591,7 +591,10 @@ def _snapshot_archived_evaluator_evidence(
                 # An evaluator's schema-v2 prompt hash must describe the
                 # *rendered historical 12-claim rubric*, not an arbitrary
                 # plausible SHA. Preserve Markdown newlines exactly as read
-                # by _report_text in the original evaluator.
+                # by the current schema-v2 replay reader (raw UTF-8).
+                # Historical schema-v1 Path.read_text translated CRLF/CR;
+                # it did not record input hashes. Do not infer exact historical
+                # provider prompt bytes from these schema-v2 checks.
                 report_path = f"{root}research_report.md"
                 report_size = cell["report_uncompressed_bytes"]
                 if not 0 < report_size <= MAX_EVALUATOR_PROMPT_REPORT_BYTES:
@@ -1469,6 +1472,9 @@ def compare_recovered_treatment_sources(
         "schema_v1_evaluator_evidence_input_binding_unavailable": True,
         "schema_v1_evaluator_question_input_binding_unavailable": True,
         "schema_v1_evaluator_prompt_input_binding_unavailable": True,
+        "schema_v2_evaluator_text_decode_policy": "raw-utf8",
+        "historical_schema_v1_text_decode_policy": "utf8-universal-newlines",
+        "historical_per_cell_prompt_bytes_authenticated": False,
         "evaluator_cache_json_duplicate_keys_rejected": True,
         "recovery_only_evaluator_cells": [
             {"treatment": variant, "task_id": task}
