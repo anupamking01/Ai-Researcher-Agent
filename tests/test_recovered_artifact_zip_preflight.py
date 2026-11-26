@@ -449,19 +449,46 @@ def test_directory_corrupt_deflate_stream_is_rejected(tmp_path):
         audit.audit_recovered_zip(path)
 
 
-def test_directory_local_name_disagreement_is_rejected(tmp_path):
-    """Local and central ZIP headers must agree for directories too."""
-    path = _zip(tmp_path / "bad-directory-local-header.zip", {
-        "folder/": b"",
-        "folder/report.md": b"# Synthetic",
+@pytest.mark.parametrize(("name", "replacement"), [
+    ("folder/", b"foldEr/"),
+    ("report.md", b"Report.md"),
+    ("é.md", b"\xff\xa9.md"),
+])
+def test_local_name_disagreement_rejected_before_decompression(tmp_path, name, replacement):
+    """Even a malformed last member must fail before any member budget is spent."""
+    path = _zip(tmp_path / "bad-local-header.zip", {
+        "valid.md": b"# Synthetic",
+        name: b"" if name.endswith("/") else b"synthetic",
     })
+    with zipfile.ZipFile(path) as archive:
+        start = archive.getinfo(name).header_offset + audit.LOCAL_HEADER.size
     raw = bytearray(path.read_bytes())
-    assert raw.startswith(b"PK\x03\x04")
-    assert raw[30:37] == b"folder/"
-    raw[30:37] = b"foldEr/"  # Same byte count; central entry remains "folder/".
+    encoded = name.encode("utf-8")
+    assert raw[start:start + len(encoded)] == encoded
+    assert len(replacement) == len(encoded)
+    raw[start:start + len(encoded)] = replacement
     path.write_bytes(raw)
-    with pytest.raises(audit.RecoveredArchiveError, match="cannot safely inspect ZIP"):
-        audit.audit_recovered_zip(path)
+    reserved = []
+    with pytest.raises(audit.RecoveredArchiveError, match="local ZIP filename"):
+        audit.audit_recovered_zip(path, reserve_uncompressed_bytes=reserved.append)
+    assert reserved == []
+    assert path.read_bytes() == raw
+
+
+def test_local_name_check_preserves_utf8_and_cp437_names(tmp_path):
+    path = _zip(tmp_path / "encoded-names.zip", {"é.md": b"utf8", "a.md": b"legacy"})
+    with zipfile.ZipFile(path) as archive:
+        offset = archive.getinfo("a.md").header_offset + audit.LOCAL_HEADER.size
+    raw = bytearray(path.read_bytes())
+    central = raw.index(b"PK\x01\x02")
+    central = raw.index(b"PK\x01\x02", central + 4)
+    assert raw[central + 46:central + 50] == b"a.md"
+    raw[offset] = raw[central + 46] = 0x82  # CP437 é, no UTF-8 flag.
+    # Use a different extension to avoid a normalized path collision.
+    raw[offset + 2] = raw[central + 48] = ord("t")
+    path.write_bytes(raw)
+    receipt = audit.audit_recovered_zip(path)
+    assert {row["path"] for row in receipt["files"]} == {"é.md", "é.td"}
 
 
 def test_central_directory_member_limit_checked_before_zipfile_open(tmp_path, monkeypatch):

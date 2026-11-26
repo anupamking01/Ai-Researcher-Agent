@@ -301,6 +301,15 @@ def _verify_local_header_metadata(handle, info: zipfile.ZipInfo, *, cd_offset: i
     extra_start = start + LOCAL_HEADER.size + name_length
     if extra_start + extra_length > cd_offset:
         raise RecoveredArchiveError("local ZIP extra fields extend into central directory")
+    # Compare the original encoded name before reserving decompression.
+    # ZipFile.open would detect a local/central name mismatch only later,
+    # after the batch ledger had charged this structurally invalid member.
+    handle.seek(start + LOCAL_HEADER.size)
+    expected_name = info.orig_filename.encode("utf-8" if flags & 0x800 else "cp437")
+    if name_length != len(expected_name) or handle.read(name_length) != expected_name:
+        raise RecoveredArchiveError(
+            "cannot safely inspect ZIP: local ZIP filename disagrees with central directory"
+        )
     handle.seek(extra_start)
     local_extra = handle.read(extra_length)
     if len(local_extra) != extra_length:

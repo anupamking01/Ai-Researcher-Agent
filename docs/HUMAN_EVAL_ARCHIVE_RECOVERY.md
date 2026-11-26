@@ -1,3 +1,20 @@
+## Local ZIP filename checks before decompression reservation (26 November 2026)
+
+A local filename differing from its central-directory record was previously
+detected only by opening the member after charging the batch decompression
+budget. A structurally invalid earlier candidate could therefore prevent
+inspection of a later intact candidate even though no decompression was
+necessary to detect the discrepancy. Preflight now compares the original
+encoded local filename with the central filename during bounded metadata
+inspection, before reserving decompression. Both UTF-8 and legacy CP437
+names are supported without rewriting. The raw archive reservation is
+still spent, and genuine post-reservation integrity failures still receive
+no refund. Synthetic tests cover a mismatched final member, malformed local
+UTF-8, valid encodings, and a two-candidate batch under a tight budget.
+This is structural verification only, not independent historical
+authentication or human-evaluation readiness; no treatment or rating was
+generated.
+
 ## Portable directory identity in recovered ZIPs (26 November 2026)
 
 Checking only full normalized member paths misses aliases of implicit

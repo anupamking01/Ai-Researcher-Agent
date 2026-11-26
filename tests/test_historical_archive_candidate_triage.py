@@ -464,6 +464,34 @@ def test_batch_decompression_budget_accounts_for_all_candidates_without_preferri
     assert [path.read_bytes() for path in (first, too_large_for_remaining, later_small)] == before
 
 
+def test_invalid_local_name_does_not_spend_later_candidate_decompression_budget(
+    tmp_path, monkeypatch,
+):
+    broken = _zip(tmp_path / "broken.zip")
+    later = _zip(tmp_path / "later.zip")
+    raw = bytearray(broken.read_bytes())
+    assert raw[30:49] == b"synthetic/report.md"
+    raw[30] = ord("S")
+    broken.write_bytes(raw)
+    declared = len("# Not a historical result\n")
+    monkeypatch.setattr(triage, "MAX_BATCH_UNCOMPRESSED_BYTES", declared)
+
+    receipt = triage.triage_candidates([
+        ("original_treatment", broken),
+        ("evaluator_recovery", later),
+    ])
+    assert [row["status"] for row in receipt["candidates"]] == [
+        "structural_preflight_failed",
+        "does_not_match_historical_github_provider_zip",
+    ]
+    assert receipt["batch_declared_uncompressed_bytes_reserved"] == declared
+    assert receipt["batch_candidates_not_inspected_due_to_budget"] == 0
+    assert receipt["batch_archive_bytes_reserved"] == broken.stat().st_size + later.stat().st_size
+    assert receipt["all_explicit_candidates_accounted_for"] is True
+    assert receipt["human_evaluation_ready"] is False
+    assert broken.read_bytes() == raw
+
+
 def test_invalid_stream_after_reservation_does_not_refund_batch_budget(
     tmp_path, monkeypatch,
 ):
