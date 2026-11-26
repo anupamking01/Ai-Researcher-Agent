@@ -1009,3 +1009,49 @@ def test_deflate_valid_multiple_chunks_and_empty_entries(tmp_path, monkeypatch):
         "folder/report.md": hashlib.sha256(data).hexdigest(),
     }
     assert receipt["historical_evidence_authenticated"] is False
+
+@pytest.mark.parametrize(("method", "flags"), [
+    (zipfile.ZIP_DEFLATED, 1 << bit)
+    for bit in (4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15)
+] + [(zipfile.ZIP_STORED, 2), (zipfile.ZIP_STORED, 4)])
+def test_unsupported_zip_flags_rejected_before_decompression(tmp_path, method, flags):
+    path = tmp_path / "flagged.zip"
+    with zipfile.ZipFile(path, "w", compression=method) as out:
+        out.writestr("report.md", b"synthetic")
+    raw = bytearray(path.read_bytes())
+    central = raw.index(b"PK\x01\x02")
+    # Both headers agree; the flag semantics themselves are unsupported.
+    struct.pack_into("<H", raw, 6, flags)
+    struct.pack_into("<H", raw, central + 8, flags)
+    path.write_bytes(raw)
+    reservations = []
+    with pytest.raises(audit.RecoveredArchiveError, match="unsupported ZIP general-purpose flags"):
+        audit.audit_recovered_zip(path, reserve_uncompressed_bytes=reservations.append)
+    assert reservations == []
+
+
+@pytest.mark.parametrize(("method", "flags"), [
+    (zipfile.ZIP_STORED, 0),
+    (zipfile.ZIP_STORED, 0x800),
+    (zipfile.ZIP_DEFLATED, 0),
+    (zipfile.ZIP_DEFLATED, 2),
+    (zipfile.ZIP_DEFLATED, 4),
+    (zipfile.ZIP_DEFLATED, 6),
+    (zipfile.ZIP_DEFLATED, 0x806),
+])
+def test_supported_zip_flags_preserve_payload_identity(tmp_path, method, flags):
+    path = tmp_path / "supported.zip"
+    content = b"synthetic"
+    with zipfile.ZipFile(path, "w", compression=method) as out:
+        out.writestr("report.md", content)
+    raw = bytearray(path.read_bytes())
+    central = raw.index(b"PK\x01\x02")
+    struct.pack_into("<H", raw, 6, flags)
+    struct.pack_into("<H", raw, central + 8, flags)
+    path.write_bytes(raw)
+    receipt = audit.audit_recovered_zip(path)
+    assert receipt["files"] == [{
+        "path": "report.md",
+        "uncompressed_bytes": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }]

@@ -171,6 +171,16 @@ def _inspect_member(info: zipfile.ZipInfo) -> tuple[str, bool]:
         raise RecoveredArchiveError(f"encrypted ZIP entry: {info.filename!r}")
     if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
         raise RecoveredArchiveError(f"unsupported ZIP compression: {info.filename!r}")
+    # Accept only flags with defined semantics in this ordinary STORED/DEFLATE
+    # recovery contract: streaming descriptor and UTF-8 names, plus the
+    # DEFLATE compression-option bits. Patched data, strong encryption,
+    # masked headers and reserved bits are not ordinary member payloads.
+    # Reject before reserving decompression, not at ZipFile.open().
+    allowed_flags = 0x0808
+    if info.compress_type == zipfile.ZIP_DEFLATED:
+        allowed_flags |= 0x0006
+    if info.flag_bits & ~allowed_flags:
+        raise RecoveredArchiveError(f"unsupported ZIP general-purpose flags: {info.filename!r}")
     if info.file_size < 0 or info.compress_size < 0:
         raise RecoveredArchiveError("negative ZIP member size")
     # STORED members have no compression: every payload byte must be

@@ -1,3 +1,21 @@
+## General-purpose ZIP flag semantics (26 November 2026)
+
+Recovery preflight accepts ordinary STORED and DEFLATE members only.
+Agreement between local and central flags is not sufficient: CPython
+rejects patched-data and strong-encryption flags at member open (after
+decompression reservation), and can silently ignore other reserved or
+unsupported flags. The metadata check now permits only the streaming
+descriptor and UTF-8 filename flags, plus DEFLATE's two compression-option
+bits. Encryption remains separately rejected. Unsupported flags fail
+before any decompression reservation, while raw ZIP reservations remain
+spent. Synthetic regressions cover unsupported bits in matching headers
+and valid flag combinations with unchanged member digests; existing
+streaming descriptor and Unicode-name tests remain applicable.
+
+This enforces the supported recovery format, not historical authenticity.
+It does not recover reports, authenticate original custody, authorize
+human distribution, or change frozen or exploratory scientific results.
+
 ## ZIP64 locator ambiguity in recovered ZIPs (26 November 2026)
 
 An ordinary, bounded end-of-central-directory (EOCD) record is not enough
