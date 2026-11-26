@@ -214,3 +214,93 @@ This is a retrospective source-policy qualification only. No pilot or
 frozen automated outcome is changed; the designated-primary analysis
 remains post-collection and qualified, retrospective diagnostics remain
 exploratory, and genuine human validation remains pending.
+
+## Requested model versus returned model identity (27 November 2026)
+
+The historical source contract makes a narrower distinction than the field
+names alone suggest. In both pinned revisions, the [chat adapter](https://github.com/anupamking01/Ai-Researcher-Agent/blob/c3c15e46a8eec3a8bbc24c968eedc0548172a897/agent/llm_utils.py)
+(blob `bbc8daec4ae972f26851195dc59dd0ca1966d865`) passes the **requested**
+model argument to both `openai.ChatCompletion.create` and
+`usage_tracker.record_response(model, response)`. The byte-identical
+[usage tracker](https://github.com/anupamking01/Ai-Researcher-Agent/blob/c3c15e46a8eec3a8bbc24c968eedc0548172a897/logic/usage.py)
+(blob `336b7d96967395d368a962a751001f34b4fb8091`) extracts token counters
+from the response's usage object but indexes its ledger by the argument
+`model`, not by any model identifier in the response.
+
+Both the original and recovery evaluator record writers set
+`evaluator_model` from `SMART_LLM_MODEL` and
+`provider_usage_by_model` from that tracker. Their shared
+[historical cost estimator](https://github.com/anupamking01/Ai-Researcher-Agent/blob/c3c15e46a8eec3a8bbc24c968eedc0548172a897/scripts/summarize_pilot.py)
+(blob `08413f9d9ab7748cfed78c30ec1c189610c7fd14`) looks up the frozen
+pricing rate by the ledger key. Thus:
+
+| Recorded quantity | What the historical source establishes |
+| --- | --- |
+| `evaluator_model` | Configured/requested identifier |
+| Keys of `provider_usage_by_model` | Requested identifiers associated with reported token counters |
+| `estimated_cost_usd` | Estimate at the frozen rates for those ledger keys; not invoiced cost |
+| Response model, completion ID, backend fingerprint (if supplied) | Not retained by this adapter/tracker or either historical evaluator record writer |
+
+A matching model name and a nonmissing usage ledger therefore do not
+independently demonstrate that both historical jobs received responses
+from the same resolved model snapshot or backend. A different returned
+model string would not itself prove that a different model served the
+request (aliases can resolve to dated identifiers), but the historical
+ledger does not even preserve that distinction for later inspection.
+
+### Offline demonstration
+
+The following reproduction loads only the byte-pinned historical usage
+module, which uses standard-library imports. All responses and counters
+below are **synthetic**, not observations of provider behavior. No provider
+call or treatment/evaluator execution is involved.
+
+```python
+import hashlib
+import subprocess
+
+rev = "c3c15e46a8eec3a8bbc24c968eedc0548172a897"
+src = subprocess.check_output(["git", "show", rev + ":logic/usage.py"])
+header = f"blob {len(src)}\0".encode()
+assert hashlib.sha1(header + src).hexdigest() == (
+    "336b7d96967395d368a962a751001f34b4fb8091"
+)
+scope = {}
+exec(compile(src, "<historical usage>", "exec"), scope)
+requested = "gpt-5.6-terra"
+usage = dict(prompt_tokens=100, completion_tokens=20, total_tokens=120)
+metadata = [
+    dict(model=requested, id="synthetic-a", system_fingerprint="synthetic-fp-a"),
+    dict(model="synthetic-other-model", id="synthetic-b",
+         system_fingerprint="synthetic-fp-b"),
+    {},
+]
+snapshots = []
+for meta in metadata:
+    tracker = scope["UsageTracker"]()
+    tracker.record_response(requested, {"usage": usage, **meta})
+    snap = tracker.snapshot()
+    assert set(snap["by_model"]) == {requested}
+    assert snap["unavailable_calls"] == 0 and snap["total_tokens"] == 120
+    snapshots.append(snap)
+assert snapshots[0] == snapshots[1] == snapshots[2]
+```
+
+All three cases produce identical snapshots (one model call, zero
+unavailable calls, 120 total tokens under the requested identifier).
+This was reproduced offline against a local copy whose Git blob hash
+matched the historical source. It demonstrates information loss in
+the recording contract, not any actual model substitution or cost error.
+
+For a separately authorized future study, retain per-call requested and
+returned identifiers and provider completion ID/backend fingerprint when
+available, under the applicable private evidence-retention policy. Record
+absent metadata as unknown; preserve raw envelopes independently when
+permitted. Do not assume a provider identifier alone authenticates model
+weights. If historical provider records are independently recovered,
+reconcile them without changing the frozen estimates or selecting cells
+by outcome. Until then, resolved-model continuity and actual billing
+remain unverified. The diagnostic pilot, qualified post-collection
+automated primary analysis, exploratory sensitivity analyses, and pending
+human validation remain distinct. No new measurement or rerun is warranted
+by this finding.
