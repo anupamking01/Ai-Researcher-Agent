@@ -85,6 +85,19 @@ def _expected_paths(csv_bytes: bytes, *, csv_path: Path) -> tuple[set[str], set[
     )
 
 
+def _evidence_namespace(name: str) -> tuple[bool, bool]:
+    """Recognize reserved evidence namespaces using the ZIP portability contract.
+
+    Exact original paths are still mandatory for selected evidence. Portable
+    aliases elsewhere in an archive must not escape the unselected inventory.
+    """
+    parts = preflight._path_key(name).split("/")
+    return (
+        "experiment_traces" in parts[:-1] or parts[-1] == "research_report.md",
+        "posthoc_evaluations" in parts[:-1],
+    )
+
+
 def _verify_member_paths(
     names: set[str], *, traces: set[str], reports: set[str],
 ) -> str:
@@ -106,12 +119,7 @@ def _verify_member_paths(
     expected = {prefix + name for name in traces | reports}
     unselected = {
         name for name in names
-        if (
-            name.startswith("experiment_traces/")
-            or "/experiment_traces/" in name
-            or name == "research_report.md"
-            or name.endswith("/research_report.md")
-        ) and name not in expected
+        if name not in expected and _evidence_namespace(name)[0]
     }
     if unselected:
         raise RecoveryMatrixError(
@@ -191,10 +199,7 @@ def audit_recovered_treatment_matrix(
     # membership and unchanged bytes for the 37 pre-existing outputs.
     evaluator_members = [
         entry for entry in archive_receipt["files"]
-        if (
-            entry["path"].startswith("posthoc_evaluations/")
-            or "/posthoc_evaluations/" in entry["path"]
-        )
+        if _evidence_namespace(entry["path"])[1]
     ]
     # The ZIP preflight can be lengthy. Do not authorize a result from an
     # evaluator CSV which changed or was replaced during archive inspection.

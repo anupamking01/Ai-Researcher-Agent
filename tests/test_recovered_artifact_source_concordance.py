@@ -656,6 +656,8 @@ def test_missing_preserved_original_evaluator_cell_fails(
 @pytest.mark.parametrize("unexpected_path", [
     "posthoc_evaluations/P6V/main-99.json",
     "unselected/posthoc_evaluations/D3/main-01.json",
+    "backup/POSTHOC_EVALUATIONS/D3/main-01.json",
+    "backup/ｐｏｓｔｈｏｃ＿ｅｖａｌｕａｔｉｏｎｓ/D3/main-01.json",
 ])
 def test_extra_or_mixed_layout_evaluator_cache_is_not_silently_ignored(
     tmp_path, monkeypatch, unexpected_path,

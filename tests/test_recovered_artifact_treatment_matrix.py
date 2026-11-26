@@ -98,6 +98,10 @@ def test_mislabelled_variant_trace_is_not_selected_by_count(tmp_path, monkeypatc
     "outputs/experiment_traces/D3/hidden.json",
     "extra-run/research_report.md",
     "research_report.md",
+    "archive/EXPERIMENT_TRACES/D3/hidden.json",
+    "backup/ｅｘｐｅｒｉｍｅｎｔ＿ｔｒａｃｅｓ/D3/hidden.json",
+    "extra-run/RESEARCH_REPORT.MD",
+    "extra-run/ｒｅｓｅａｒｃｈ＿ｒｅｐｏｒｔ.md",
 ])
 def test_unselected_evidence_cannot_hide_beside_complete_frozen_matrix(
     tmp_path, monkeypatch, extra
@@ -108,6 +112,28 @@ def test_unselected_evidence_cannot_hide_beside_complete_frozen_matrix(
     _anchor_zip(monkeypatch, path)
     with pytest.raises(matrix.RecoveryMatrixError, match="unselected treatment"):
         matrix.audit_recovered_treatment_matrix(path, artifact_role="original_treatment")
+
+
+@pytest.mark.parametrize("prefix", ["", "outputs/"])
+def test_unrelated_near_name_members_are_not_classified_as_evidence(
+    tmp_path, monkeypatch, prefix,
+):
+    def add(files, traces, reports):
+        for name in (
+            "backup/research_report.md.bak",
+            "backup/not_experiment_traces/file.txt",
+            "backup/posthoc_evaluations_notes/file.txt",
+        ):
+            files[name] = b"unrelated synthetic fixture"
+    path = _make_zip(tmp_path, prefix=prefix, edit=add)
+    _anchor_zip(monkeypatch, path)
+    receipt = matrix.audit_recovered_treatment_matrix(
+        path, artifact_role="original_treatment",
+    )
+    assert receipt["trace_members_matched"] == 40
+    assert receipt["report_members_matched"] == 40
+    assert receipt["observed_evaluator_cache_members"] == []
+    assert receipt["unselected_trace_or_report_members"] == 0
 
 
 def test_mixed_layouts_cannot_stand_in_for_an_exact_complete_matrix(tmp_path, monkeypatch):

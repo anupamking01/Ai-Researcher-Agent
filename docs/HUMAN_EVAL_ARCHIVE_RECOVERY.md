@@ -1476,3 +1476,18 @@ the earlier structural audit passed. The existing combined comparison-window
 checks remain in place. These are bounded local consistency checks, not an
 atomic multi-file snapshot or independent historical authentication. No
 treatments, evaluators or human ratings are generated.
+
+### Portable evidence namespace completeness
+
+The recovered 40-cell matrix inventory uses the structural ZIP preflight's
+portable path identity (NFKC normalization and case folding) to detect
+unselected trace/report members and to enumerate evaluator-cache candidates.
+For example, an extra `backup/EXPERIMENT_TRACES/D3/hidden.json` or
+`extra-run/RESEARCH_REPORT.MD` can otherwise escape a case-sensitive reserved
+namespace check without colliding with any selected full path. An alternate
+evaluator-cache namespace is included in the inventory so the original/recovery
+concordance check rejects it. Selected paths must still match the original
+case-sensitive published run identities exactly; no member is renamed or
+substituted. Unrelated filenames that merely contain similar substrings are
+not selected. This is a local completeness safeguard, not independent original
+custody, report authenticity, or authorization for human-evaluation handoff.
