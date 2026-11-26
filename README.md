@@ -123,6 +123,7 @@ A reviewer should be able to trace the project from question → treatment → e
 | Artifact | Role |
 |---|---|
 | **[paper/RESEARCH_PROTOCOL.md](paper/RESEARCH_PROTOCOL.md)** | Research question, hypotheses, budget principles, threats to validity |
+| **[docs/MAIN_STUDY_PROTOCOL_SCOPE.md](docs/MAIN_STUDY_PROTOCOL_SCOPE.md)** | Original protocol versus realized factor coverage and human-measurement scope |
 | **[paper/PILOT_RESULTS.md](paper/PILOT_RESULTS.md)** | Canonical diagnostic pilot and caveats |
 | **[paper/ANALYSIS_PLAN.md](paper/ANALYSIS_PLAN.md)** | Exact paired statistical plan, committed after treatment and evaluator recovery; not prospectively precollection-preregistered |
 | **[paper/MAIN_STUDY_INFERENCE.md](paper/MAIN_STUDY_INFERENCE.md)** | Unchanged historical automated inference; source report/trace custody remains unauthenticated, and reporting requires the qualification cover |
