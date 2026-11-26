@@ -1053,13 +1053,17 @@ def _verify_historical_query_output_members(
         next_query += 1
 
     root = f"{prefix}{run_id}/"
-    observed = {
-        name for name in source.namelist()
-        if name.startswith(root)
-        and "/" not in name[len(root):]
-        and name[len(root):].startswith("research-query-")
-        and name.endswith(".txt")
-    }
+    # Inventory the portable query namespace, but require exact original
+    # spelling for each scheduled file. An unscheduled case/Unicode alias
+    # need not collide with an existing full path and otherwise evades this
+    # check while potentially entering evidence on another filesystem.
+    observed = set()
+    for name in source.namelist():
+        if not name.startswith(root) or "/" in name[len(root):]:
+            continue
+        portable_basename = preflight._path_key(name).rsplit("/", 1)[-1]
+        if portable_basename.startswith("research-query-") and portable_basename.endswith(".txt"):
+            observed.add(name)
     if observed != set(expected):
         raise RecoveryConcordanceError(
             "historical saved query-output file set disagrees with executed "

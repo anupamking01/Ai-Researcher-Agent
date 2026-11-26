@@ -1491,3 +1491,13 @@ case-sensitive published run identities exactly; no member is renamed or
 substituted. Unrelated filenames that merely contain similar substrings are
 not selected. This is a local completeness safeguard, not independent original
 custody, report authenticity, or authorization for human-evaluation handoff.
+
+The per-run saved query-output schedule check applies the same portable
+namespace rule to direct `research-query-*.txt` members in each selected
+run directory. An unscheduled `RESEARCH-QUERY-99.TXT` or compatibility-Unicode
+alias is rejected even if it has no exact-path collision, and even if both
+archive copies contain it. Scheduled files still require exact original
+spelling; backup suffixes outside the query namespace remain unrelated.
+The evaluator-input reconstruction continues to read only exact original
+names; the broader inventory is a rejection check, not an alternate input
+selection or a change to historical evaluator semantics.

@@ -248,7 +248,11 @@ def _pair(
         member = f"{run_id}/research-query-{ordinal:02d}.txt"
         if action == "remove":
             del files[member]
-        elif action == "extra":
+        elif action in ("extra", "extra_case_alias", "extra_unicode_alias"):
+            if action == "extra_case_alias":
+                member = f"{run_id}/RESEARCH-QUERY-{ordinal:02d}.TXT"
+            elif action == "extra_unicode_alias":
+                member = f"{run_id}/ｒesearch-query-{ordinal:02d}.txt"
             assert member not in files
             files[member] = b""
         else:
@@ -1706,6 +1710,8 @@ def test_schema_v2_prompt_lineage_receipt_is_explicit(tmp_path, monkeypatch):
 @pytest.mark.parametrize(("action", "ordinal"), [
     ("remove", 2),
     ("extra", 99),
+    ("extra_case_alias", 99),
+    ("extra_unicode_alias", 99),
 ])
 def test_identical_archives_reject_incomplete_or_invented_query_output_schedule(
     tmp_path, monkeypatch, action, ordinal,
@@ -1730,6 +1736,13 @@ def test_identical_archives_reject_incomplete_or_invented_query_output_schedule(
     ({"research-query-01.txt": b"fake evidence"}, [], "content presence"),
     ({"research-query-01.txt": b"source", "research-query-02.txt": b""},
      ["url-one"], "file set"),
+    ({"research-query-01.txt": b"source", "RESEARCH-QUERY-99.TXT": b""},
+     ["url-one"], "file set"),
+    ({"research-query-01.txt": b"source", "ｒesearch-query-99.txt": b""},
+     ["url-one"], "file set"),
+    ({"RESEARCH-QUERY-01.TXT": b"source"}, ["url-one"], "file set"),
+    ({"research-query-01.txt": b"source", "RESEARCH-QUERY-99.TXT.bak": b""},
+     ["url-one"], None),
 ])
 def test_saved_query_outputs_bind_to_search_success_per_query(
     tmp_path, files, successful, expected_error,
