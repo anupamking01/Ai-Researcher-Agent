@@ -557,3 +557,25 @@ provider billing, or permission to replace frozen evidence. Synthetic
 offline tests exercise both late input changes and successful manifest
 publication. No pilot, frozen post-collection automated result, exploratory
 analysis, or pending human-validation outcome is changed.
+
+
+## Cell-level measurement origin disclosure
+
+Aggregate replay provenance previously retained only the total number of reused
+and newly measured cells. Those counts could not show whether fresh measurements
+were concentrated in a particular treatment arm or task, a relevant limitation
+when assessing evaluator comparability. New noncanonical summaries include a
+version-1 `measurement_origin_manifest` with a deterministic entry per cell
+(variant, task and run ID), labeled `reused_cache` or `new_this_replay`.
+The labels are derived from the validated preflight pending set; duplicate or
+unbound pending identities and duplicate measurement rows prevent publication.
+The manifest is covered by exact summary-generation verification and contains
+no raw responses or provider identifiers. Cache and CSV formats are unchanged.
+
+These labels are **invocation-relative**, not historical measurement dates or
+provider authentication: a cell measured on one replay becomes reused on a
+later replay. Reused caches may themselves contain earlier noncanonical
+measurements. Older summaries with only total counts do not establish the
+cell-level partition. This disclosure does not establish comparable backend
+execution, justify changing frozen outcomes, or resolve original archive
+custody or human validation. Synthetic tests use no live provider calls.

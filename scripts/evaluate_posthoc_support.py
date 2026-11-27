@@ -1555,6 +1555,31 @@ def _evaluator_cache_manifest(
     }
 
 
+def _measurement_origin_manifest(rows: list[dict], pending: list[dict]) -> dict:
+    """Identify measurements newly made in this invocation, not historical origin."""
+    new_cells = {
+        (item["variant"], item["task_id"], item["run_id"]) for item in pending
+    }
+    if len(new_cells) != len(pending):
+        raise SystemExit("Measurement origin manifest has duplicate pending cell")
+    cells = []
+    seen = set()
+    for row in sorted(rows, key=lambda r: (r["task_id"], VARIANTS.index(r["variant_id"]))):
+        identity = (row["variant_id"], row["task_id"], row["run_id"])
+        if identity in seen:
+            raise SystemExit("Measurement origin manifest has duplicate measurement cell")
+        seen.add(identity)
+        cells.append({
+            "variant_id": identity[0],
+            "task_id": identity[1],
+            "run_id": identity[2],
+            "origin": "new_this_replay" if identity in new_cells else "reused_cache",
+        })
+    if not new_cells <= seen:
+        raise SystemExit("Measurement origin manifest has unbound pending cell")
+    return {"schema_version": 1, "cells": cells}
+
+
 def _preflight_evaluator_resume(
     expected: list[tuple[str, Path, dict, str, str]],
     *,
@@ -1918,6 +1943,7 @@ def main() -> int:
     summary["treatment_trace_manifest"] = _treatment_trace_manifest(
         rows, trace_sources
     )
+    summary["measurement_origin_manifest"] = _measurement_origin_manifest(rows, pending)
     summary["governing_input_manifest"] = _governing_input_manifest(
         task_snapshot, pricing_snapshot
     )

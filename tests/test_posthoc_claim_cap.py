@@ -1689,7 +1689,17 @@ def test_aggregate_cache_manifest_discloses_mixed_raw_response_coverage(tmp_path
     assert len(calls) == 1
     new_path = eval_root / "D3" / "main-02.json"
     summary_path = tmp_path / "outputs" / "posthoc_support_summary.json"
-    manifest = json.loads(summary_path.read_text(encoding="utf-8"))["evaluator_cache_manifest"]
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    manifest = summary["evaluator_cache_manifest"]
+    assert summary["measurement_origin_manifest"] == {
+        "schema_version": 1,
+        "cells": [
+            {"variant_id": "D3", "task_id": "main-01", "run_id": "run-d3-main-01",
+             "origin": "reused_cache"},
+            {"variant_id": "D3", "task_id": "main-02", "run_id": "run-d3-main-02",
+             "origin": "new_this_replay"},
+        ],
+    }
     fingerprint = _fingerprint_text(_evaluator_result())
     assert manifest == {
         "schema_version": 2,
@@ -1906,6 +1916,11 @@ def test_cached_only_rebuilds_aggregates_without_credentials(tmp_path, monkeypat
     assert summary["n_evaluations"] == 1
     assert summary["replay_provenance"]["reused_cached_measurements"] == 1
     assert summary["replay_provenance"]["new_noncanonical_measurements"] == 0
+    assert summary["measurement_origin_manifest"] == {
+        "schema_version": 1,
+        "cells": [{"variant_id": "D3", "task_id": "main-01",
+                   "run_id": "run-d3-main-01", "origin": "reused_cache"}],
+    }
     assert summary["replay_provenance"]["can_replace_original_evaluator_evidence"] is False
     trace = evaluate_posthoc_support.TRACE_ROOT / "D3" / "run-d3-main-01.json"
     assert summary["treatment_trace_manifest"] == {
@@ -2017,3 +2032,17 @@ def test_treatment_trace_manifest_rejects_inconsistent_lineage(tmp_path, mutatio
         rows[0]["run_id"] = "other"
     with pytest.raises(SystemExit, match="Treatment trace manifest"):
         evaluate_posthoc_support._treatment_trace_manifest(rows, hashes)
+
+
+@pytest.mark.parametrize("fault", ["duplicate_pending", "duplicate_row", "unbound_pending"])
+def test_measurement_origin_manifest_rejects_ambiguous_lineage(fault):
+    rows = [_cached_evaluation()]
+    pending = [{"variant": "D3", "task_id": "main-01", "run_id": "run-d3-main-01"}]
+    if fault == "duplicate_pending":
+        pending.append(dict(pending[0]))
+    elif fault == "duplicate_row":
+        rows.append(dict(rows[0]))
+    else:
+        pending[0]["run_id"] = "different-run"
+    with pytest.raises(SystemExit, match="Measurement origin manifest"):
+        evaluate_posthoc_support._measurement_origin_manifest(rows, pending)
