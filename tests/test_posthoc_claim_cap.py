@@ -1915,7 +1915,47 @@ def test_cached_only_rebuilds_aggregates_without_credentials(tmp_path, monkeypat
             "trace_sha256": hashlib.sha256(trace.read_bytes()).hexdigest(),
         }],
     }
+    def fingerprint(path):
+        raw = path.read_bytes()
+        return {"size_bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+    assert summary["governing_input_manifest"] == {
+        "schema_version": 1,
+        "task_definition": fingerprint(evaluate_posthoc_support.TASK_FILE),
+        "pricing": fingerprint(evaluate_posthoc_support.PRICING_FILE),
+    }
     evaluate_posthoc_support._verify_aggregate_outputs(summary_path, csv_path)
+
+
+@pytest.mark.parametrize(
+    ("source", "role"), [("TASK_FILE", "task_definition"), ("PRICING_FILE", "pricing")]
+)
+def test_cached_only_rejects_changed_governing_input(tmp_path, monkeypatch, source, role):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    cache = eval_root / "D3" / "main-01.json"
+    cache.parent.mkdir(parents=True)
+    cache.write_text(json.dumps(_bound_zero_source_cache()), encoding="utf-8")
+    original = cache.read_bytes()
+    evaluate_posthoc_support.sys.argv.append("--cached-only")
+    _forbid_provider_import(monkeypatch)
+
+    check = evaluate_posthoc_support._require_final_evaluator_source_continuity
+
+    def mutate_after_preflight(*args, **kwargs):
+        check(*args, **kwargs)
+        path = getattr(evaluate_posthoc_support, source)
+        # Even a semantically equivalent JSON rewrite changes source identity.
+        path.write_bytes(path.read_bytes() + b"\n")
+
+    monkeypatch.setattr(
+        evaluate_posthoc_support, "_require_final_evaluator_source_continuity",
+        mutate_after_preflight,
+    )
+    with pytest.raises(SystemExit, match=f"Replay {role} changed after preflight"):
+        evaluate_posthoc_support.main()
+    assert cache.read_bytes() == original
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
 
 
 @pytest.mark.parametrize("credentials_present", [True, False])

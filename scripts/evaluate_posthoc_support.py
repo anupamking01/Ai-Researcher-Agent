@@ -351,15 +351,40 @@ def _require_preflight_treatment_trace_unchanged(
 
 
 def _load_frozen_task_contract(
-    path: Path | None = None,
-) -> tuple[str, dict[str, str]]:
-    """Load the exact task-set identity and question bound to each task ID."""
+    path: Path | None = None, *, include_snapshot: bool = False,
+) -> tuple[str, dict[str, str]] | tuple[str, dict[str, str], dict]:
+    """Load the task contract and optionally retain its parsed-byte identity."""
     from scripts.run_budget_main_study import _load_task_file
 
-    task_set_id, tasks, _snapshot = _load_task_file(
+    task_set_id, tasks, snapshot = _load_task_file(
         TASK_FILE if path is None else Path(path)
     )
-    return task_set_id, {task["id"]: task["question"] for task in tasks}
+    questions = {task["id"]: task["question"] for task in tasks}
+    return (task_set_id, questions, snapshot) if include_snapshot else (task_set_id, questions)
+
+
+def _governing_input_manifest(task_snapshot: dict, pricing_snapshot: dict) -> dict:
+    """Bind the exact governing input bytes, without exporting local paths."""
+    manifest = {"schema_version": 1}
+    for role, path, snapshot in (
+        ("task_definition", TASK_FILE, task_snapshot),
+        ("pricing", PRICING_FILE, pricing_snapshot),
+    ):
+        raw = _read_regular_bytes(
+            path, label=f"Replay {role}", max_bytes=MAX_EVALUATOR_JSON_BYTES
+        )
+        if (
+            len(raw) != snapshot["size_bytes"]
+            or hashlib.sha256(raw).hexdigest() != snapshot["sha256"]
+        ):
+            raise SystemExit(
+                f"Replay {role} changed after preflight; refusing aggregate publication"
+            )
+        manifest[role] = {
+            "size_bytes": snapshot["size_bytes"],
+            "sha256": snapshot["sha256"],
+        }
+    return manifest
 
 
 def _validate_trace_task_contract(
@@ -1630,8 +1655,10 @@ def main() -> int:
 
     from scripts.run_budget_main_study import _load_pricing, _validated_trace_cost
 
-    pricing, _pricing_snapshot = _load_pricing(PRICING_FILE)
-    task_set_id, expected_questions = _load_frozen_task_contract()
+    pricing, pricing_snapshot = _load_pricing(PRICING_FILE)
+    task_set_id, expected_questions, task_snapshot = _load_frozen_task_contract(
+        include_snapshot=True
+    )
     # A cached-only replay uses the frozen contract, not deployment settings.
     # It must be reproducible in a workspace with no provider credentials.
     if args.cached_only:
@@ -1890,6 +1917,9 @@ def main() -> int:
     )
     summary["treatment_trace_manifest"] = _treatment_trace_manifest(
         rows, trace_sources
+    )
+    summary["governing_input_manifest"] = _governing_input_manifest(
+        task_snapshot, pricing_snapshot
     )
 
     _require_noncanonical_aggregate_destinations_unchanged(

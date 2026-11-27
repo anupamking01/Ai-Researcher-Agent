@@ -538,3 +538,22 @@ or make the source tree an atomic snapshot. The synthetic regression tests
 use no historical treatments, provider calls or human ratings. Diagnostic
 pilot, post-collection frozen automated, exploratory and pending human
 validation claims are unchanged.
+
+## Governing task and pricing input lineage
+
+Future noncanonical aggregate summaries include a version-1
+`governing_input_manifest` with `task_definition` and `pricing` entries.
+Each entry records the byte count and SHA-256 from the exact parsed input
+snapshot used for matrix/question validation or cost recomputation. Local
+paths are excluded. Immediately before aggregate publication, both inputs
+are re-read through the bounded evaluator source reader and compared to
+those snapshots; even a semantically equivalent JSON rewrite prevents
+publication. Existing caches remain untouched in a failed cached-only replay.
+
+Older summaries without this manifest do not establish these input-byte
+identities. This is prospective local provenance, not authentication of
+original historical pricing or task custody, an atomic snapshot, actual
+provider billing, or permission to replace frozen evidence. Synthetic
+offline tests exercise both late input changes and successful manifest
+publication. No pilot, frozen post-collection automated result, exploratory
+analysis, or pending human-validation outcome is changed.
