@@ -30,9 +30,13 @@ GIT_STORAGE_OVERRIDES = (
 def _git(root: Path, *arguments: str) -> bytes:
     # A local refs/replace entry can redirect a pinned commit or tree while
     # rev-parse HEAD still reports the original SHA. Read literal objects.
+    # Do not invoke a locally configured filesystem-monitor hook while
+    # inspecting source: status runs after the byte checks and a hook can
+    # change already verified files or supply stale filesystem observations.
     try:
         return subprocess.run(
-            ["git", "--no-replace-objects", "-C", str(root), *arguments], check=True,
+            ["git", "--no-replace-objects", "-c", "core.fsmonitor=false",
+             "-C", str(root), *arguments], check=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
         ).stdout
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:

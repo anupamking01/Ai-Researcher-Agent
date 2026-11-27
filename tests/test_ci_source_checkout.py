@@ -250,3 +250,34 @@ def test_tracked_symlink_cannot_extend_verified_source_domain(checkout, target_k
     assert verify_source_checkout(root, expected_sha=_git(root, "rev-parse", "HEAD")) == (
         2 if target_kind == "ignored" else 1
     )
+
+
+@pytest.mark.parametrize("assume_unchanged", [False, True])
+def test_fsmonitor_hook_cannot_modify_already_verified_source(checkout, assume_unchanged):
+    root, sha = checkout
+    source = root / "source.py"
+    original = source.read_bytes()
+    if assume_unchanged:
+        _git(root, "update-index", "--assume-unchanged", "source.py")
+    hook = root / ".git" / "synthetic-monitor"
+    hook.write_text(
+        "#!/bin/sh\n"
+        "printf 'changed by monitor\\n' > source.py\n"
+        "touch .git/monitor-invoked\n"
+        "printf 'token\\000'\n"
+    )
+    hook.chmod(0o700)
+    _git(root, "config", "core.fsmonitor", str(hook))
+    assert verify_source_checkout(root, expected_sha=sha) == 1
+    assert source.read_bytes() == original
+    assert not (root / ".git" / "monitor-invoked").exists()
+
+    # Demonstrate that the fixture actually invokes a configured monitor
+    # during ordinary status, even when the index conceals the edited bytes.
+    status = _git(root, "status", "--porcelain")
+    assert (root / ".git" / "monitor-invoked").exists()
+    assert source.read_bytes() != original
+    if assume_unchanged:
+        assert status == ""
+    with pytest.raises(ValueError, match="source bytes differ"):
+        verify_source_checkout(root, expected_sha=sha)

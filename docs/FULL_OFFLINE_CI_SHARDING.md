@@ -448,3 +448,21 @@ attestation. Synthetic regressions exercise the staged-only bypass,
 restoration, and both empty and nonempty values of each selector.
 No treatment or evaluator is rerun, no frozen result is changed, and
 human validation remains pending.
+
+## Filesystem-monitor isolation for exact-source verification — 28 November 2026
+
+Git status can execute a locally configured `core.fsmonitor` hook after
+the exact-source verifier has already hashed every tracked file. In a
+synthetic Git checkout, a monitor that edits a file marked assume-unchanged
+can leave status empty while changing the verified source. This is a
+self-induced verification gap rather than evidence of historical tampering.
+
+The shared verifier now supplies `-c core.fsmonitor=false` on every Git
+inspection, without changing persistent configuration. Regression fixtures
+exercise both ordinary and assume-unchanged files, require no hook invocation
+or source mutation during verification, demonstrate that ordinary status
+actually executes the fixture hook, and reject the subsequently changed
+bytes. This disables one optional monitor mechanism, not every Git
+configuration hook, dependency, or external writer; it does not establish
+continuous source custody or independent runner attestation. No treatment,
+evaluator, frozen outcome or human rating is changed.
