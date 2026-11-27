@@ -702,7 +702,13 @@ def _publish_aggregate_outputs(
         csv_content
     ).hexdigest()
 
-    summary_content = json.dumps(summary, indent=2, sort_keys=True).encode("utf-8")
+    try:
+        summary_content = json.dumps(summary, indent=2, sort_keys=True).encode("utf-8")
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise SystemExit(
+            f"Refusing unreadable aggregate summary publication: {exc}; "
+            "existing outputs retained"
+        ) from exc
     # Enforce the same exact byte ceilings as the readback verifier before
     # staging either artifact. An unreadable generation must not displace a
     # previously valid pair, even if the new pair has consistent digests.
@@ -715,6 +721,16 @@ def _publish_aggregate_outputs(
                 f"Post-hoc aggregate {label} exceeds maximum publication "
                 f"size ({len(content)} > {limit} bytes); existing outputs retained"
             )
+    # A digest-consistent JSON generation can still violate the strict reader
+    # grammar (for example, an overlong sum of individually valid integers).
+    # Reject it before staging either file, not after replacing valid outputs.
+    try:
+        _decode_evaluator_json(summary_content)
+    except (ValueError, RecursionError) as exc:
+        raise SystemExit(
+            f"Refusing unreadable aggregate summary publication: {exc}; "
+            "existing outputs retained"
+        ) from exc
     intended_summary_sha256 = hashlib.sha256(summary_content).hexdigest()
     outputs = [
         (Path(summary_path), summary_content),

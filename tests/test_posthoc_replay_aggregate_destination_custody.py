@@ -236,3 +236,42 @@ def test_aggregate_writer_matches_reader_byte_ceiling(
         evaluator._verify_aggregate_outputs(
             summary_path, csv_path, intended_summary_sha256=digest
         )
+
+@pytest.mark.parametrize(
+    "metadata, reason",
+    [
+        ({"nested": [float("nan")]}, "nonstandard JSON numeric constant"),
+        ({"nested": [float("inf")]}, "nonstandard JSON numeric constant"),
+        ({"nested": [10**128]}, "oversized JSON numeric token"),
+        ({None: 1, "null": 2}, "not supported between instances"),
+    ],
+)
+@pytest.mark.parametrize("existing_pair", [False, True])
+def test_aggregate_writer_rejects_reader_invalid_summary(
+    tmp_path, monkeypatch, metadata, reason, existing_pair
+):
+    """Never stage a generation the strict aggregate reader cannot parse."""
+    summary_path, csv_path = _destinations(tmp_path)
+    if existing_pair:
+        _write_pair(summary_path, csv_path)
+        before = summary_path.read_bytes(), csv_path.read_bytes()
+
+    def fail_if_staged(*args, **kwargs):
+        pytest.fail("invalid summary must be rejected before any staging")
+
+    monkeypatch.setattr(evaluator, "_stage_durable_output", fail_if_staged)
+    candidate = {
+        "study_id": evaluator.STUDY_ID,
+        "replay_provenance": evaluator._noncanonical_evaluator_replay_provenance(),
+        "synthetic_metadata": metadata,
+    }
+    rows = [{"variant_id": "D3", "task_id": "main-01", "run_id": "synthetic"}]
+    with pytest.raises(SystemExit, match=reason) as failure:
+        evaluator._publish_aggregate_outputs(summary_path, csv_path, candidate, rows)
+    assert "Refusing unreadable aggregate summary publication" in str(failure.value)
+    if existing_pair:
+        assert (summary_path.read_bytes(), csv_path.read_bytes()) == before
+        evaluator._verify_aggregate_outputs(summary_path, csv_path)
+    else:
+        assert not summary_path.exists()
+        assert not csv_path.exists()

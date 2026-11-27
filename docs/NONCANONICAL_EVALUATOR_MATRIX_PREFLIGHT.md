@@ -616,3 +616,17 @@ measurement is not replaced or automatically retried; any provider spend
 already incurred is not undone. Existing caches and historical results are
 unchanged. This is local serialization compatibility, not independent
 authentication or additional experimental evidence.
+
+## Aggregate summary serialization compatibility
+
+The aggregate publisher validates the exact candidate summary bytes with the
+same strict JSON decoder used by aggregate readback, after the byte-ceiling
+checks and before either artifact is staged. This closes the gap where a
+digest-consistent generation could contain nonfinite numbers or overlong
+numeric tokens (including sums of individually bounded inputs), and then
+fail readback only after replacing valid outputs. Serialization errors also
+fail before staging. Synthetic regression tests exercise both empty and
+previously valid destinations. Existing artifacts, if any, remain byte-for-byte
+unchanged on these rejections. This is a local publication safeguard, not
+atomic two-file publication, independent historical authentication, or a new
+measurement.
