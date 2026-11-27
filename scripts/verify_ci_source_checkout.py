@@ -23,9 +23,11 @@ CHUNK_BYTES = 1024 * 1024
 
 
 def _git(root: Path, *arguments: str) -> bytes:
+    # A local refs/replace entry can redirect a pinned commit or tree while
+    # rev-parse HEAD still reports the original SHA. Read literal objects.
     try:
         return subprocess.run(
-            ["git", "-C", str(root), *arguments], check=True,
+            ["git", "--no-replace-objects", "-C", str(root), *arguments], check=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
         ).stdout
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:

@@ -64,6 +64,33 @@ def test_assume_unchanged_cannot_hide_modified_source(checkout):
         verify_source_checkout(root, expected_sha=sha)
 
 
+@pytest.mark.parametrize("object_kind", ["commit", "tree"])
+def test_git_replacement_objects_cannot_redirect_pinned_tree(checkout, object_kind):
+    root, sha = checkout
+    (root / "source.py").write_bytes(b"print('replacement')\n")
+    _git(root, "commit", "-qam", "replacement fixture")
+    alternative = _git(root, "rev-parse", "HEAD")
+    if object_kind == "tree":
+        original_object = _git(root, "rev-parse", f"{sha}^{{tree}}")
+        replacement_object = _git(root, "rev-parse", f"{alternative}^{{tree}}")
+    else:
+        original_object, replacement_object = sha, alternative
+    _git(root, "replace", original_object, replacement_object)
+    _git(root, "checkout", "-q", "--detach", sha)
+    # Default Git inspection sees a clean, substituted tree at the old SHA.
+    assert _git(root, "rev-parse", "HEAD") == sha
+    assert _git(root, "status", "--porcelain") == ""
+    assert (root / "source.py").read_bytes() == b"print('replacement')\n"
+    assert _git(root, "ls-tree", sha) != _git(
+        root, "--no-replace-objects", "ls-tree", sha
+    )
+    with pytest.raises(ValueError, match="source bytes differ"):
+        verify_source_checkout(root, expected_sha=sha)
+    # Restore the literal tree without removing the replacement ref.
+    _git(root, "--no-replace-objects", "reset", "--hard", sha)
+    assert verify_source_checkout(root, expected_sha=sha) == 1
+
+
 def test_nonignored_untracked_file_is_rejected(checkout):
     root, sha = checkout
     (root / "unexpected.py").write_text("print('untracked')")

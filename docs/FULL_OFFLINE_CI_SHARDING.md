@@ -385,3 +385,22 @@ blinded human evaluation remain distinct.
 The first private-namespace [full-suite run 45415545594](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45415545594) completed ten shard jobs successfully, failed five at the evidence-binding step, and cancelled one. For example, [shard 4](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/45415545594/job/138520631450) printed 303 passing tests followed by sudo hostname-resolution warnings during teardown. The receipt verifier correctly rejected the nonterminal pytest summary. This is a log-boundary conflict, not evidence that those jobs were certifiable or that the prior cancellation cause is proven.
 
 The two private-namespace receipt-bearing CI lanes now tee wrapper stdout only. The wrapper still merges **both pytest output streams** into the transcript, while all teardown output and other wrapper stderr remain visible in the GitHub job log rather than being appended to the receipt-bound pytest transcript. No lines are filtered, no synthetic success footer is generated, and the verifier's terminal-summary requirement is unchanged. Bash pipefail still prevents receipt binding on a nonzero wrapper exit, including failed post-pytest firewall checks or teardown. The archived transcript alone does not attest teardown success; require the successful job and source-bound replay as before. Legacy combined-stream callers are unchanged. The synthetic stream and failure regressions are included in the targeted lane. Full sixteen-shard replay remains required; no scientific results or human ratings are changed.
+
+
+## Literal Git object identity for exact-source gates — 27 November 2026
+
+A local Git replacement ref can substitute a different commit or tree
+without changing the SHA reported by `git rev-parse HEAD`. A checkout of
+that substituted tree can also appear clean to ordinary `git status`.
+The shared exact-source verifier now invokes Git with
+`--no-replace-objects` for every inspection, so the expected tree and
+cleanliness checks are based on literal objects rather than the local
+replacement view. This applies to both full offline pytest source gates
+and the exploratory measurement bundle replay that shares the verifier.
+
+Two synthetic Git-repository regressions exercise commit and tree
+replacement refs, reject the substituted working bytes, and accept the
+restored literal checkout without deleting the replacement refs. This
+does not sanitize other Git invocations, attest the runner or prove
+continuous source custody. No treatments, evaluator measurements, frozen
+automated estimates or human ratings are changed.
