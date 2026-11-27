@@ -572,7 +572,7 @@ def _serialized_evaluation_cache_bytes(record: dict) -> bytes:
 
 
 def _publish_evaluation_cache(path: Path, record: dict) -> None:
-    """Durably publish one evaluator result without exposing partial bytes."""
+    """Durably publish one private evaluator result without exposing partial bytes."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     content = _serialized_evaluation_cache_bytes(record)
@@ -584,7 +584,10 @@ def _publish_evaluation_cache(path: Path, record: dict) -> None:
     staging_path = Path(staging_name)
     try:
         with os.fdopen(descriptor, "wb") as handle:
-            os.fchmod(handle.fileno(), 0o644)
+            # Raw evaluator text can include source/report excerpts. Keep both
+            # the staging inode and its final hard link owner-only, regardless
+            # of the process umask; aggregates use a separate writer.
+            os.fchmod(handle.fileno(), 0o600)
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())

@@ -1317,6 +1317,7 @@ def test_cache_publication_is_invisible_until_atomic_commit(tmp_path, monkeypatc
             {
                 "destination_absent": not path.exists(),
                 "staged_payload": json.loads(source.read_text(encoding="utf-8")),
+                "staged_mode": source.stat().st_mode & 0o777,
             }
         )
         real_link(source, destination)
@@ -1326,8 +1327,13 @@ def test_cache_publication_is_invisible_until_atomic_commit(tmp_path, monkeypatc
     evaluate_posthoc_support._publish_evaluation_cache(path, expected)
 
     assert observed == [
-        {"destination_absent": True, "staged_payload": expected}
+        {
+            "destination_absent": True,
+            "staged_payload": expected,
+            "staged_mode": 0o600,
+        }
     ]
+    assert path.stat().st_mode & 0o777 == 0o600
     assert json.loads(path.read_text(encoding="utf-8")) == expected
     assert list(path.parent.glob(".main-01.json.*.tmp")) == []
 

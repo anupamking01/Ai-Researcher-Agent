@@ -328,7 +328,13 @@ an older record ever retained this text or that a new cache was not rewritten
 coherently before capture. Keep raw evaluator records coordinator-only;
 they may contain report or source excerpts and must not enter annotator
 bundles. The aggregate CSV continues to contain only the existing selected
-fields.
+fields. On POSIX filesystems, new cache files are published with mode
+`0600` (owner read/write only) on the staging inode before any bytes are
+written and retain that mode at the final hard link. This protects against
+ordinary group/other file access, not privileged or same-account readers,
+archive copies, or disclosure by a coordinator. Existing cache permissions
+are not silently changed; review and restrict them separately before sharing
+or archiving. Aggregate output permissions are unchanged.
 
 This prospective safeguard does not recover the historical raw responses,
 validate individual classification accuracy, or justify a treatment or
