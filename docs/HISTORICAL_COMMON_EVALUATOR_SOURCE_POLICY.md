@@ -365,3 +365,28 @@ ones. Neither a matching cache digest nor a receipt proves historical
 custody, provider identity, or classification correctness. Missing
 receipts remain missing evidence, not failed or incorrect measurements;
 no additional evaluator calls are authorized by the manifest.
+
+
+### Prospective provider-reported response identity
+
+New explicitly noncanonical evaluator caches now also retain
+`provider_response_identity`, a separate receipt for the response envelope's
+`model`, `id` and `system_fingerprint`. Each field records a status
+(`reported`, `unavailable`, or `invalid`) and the exact valid label or
+null. Missing/null metadata is unavailable; unreadable, nontext, blank,
+nonprintable or over-1024-UTF-8-byte labels are invalid. Nothing is inferred
+from the requested identifier. The ordinary token ledger and estimated
+cost still use the requested model and frozen rates. No treatment or
+streaming usage snapshot is changed.
+
+The evaluator opts into capture for its one non-streaming response;
+multiple calls still fail the existing accounting contract. Fresh receipts
+and any present receipt in a resumed cache are shape-validated, while older
+caches without the extension remain inspectable on their existing terms.
+The receipt resides in the owner-only cache, not the aggregate CSV or JSON
+manifest; the existing cache digest binds it to the aggregate. Keep response
+IDs private. A provider label is not cryptographic authentication of model
+weights, backend, execution time or billing, and a missing receipt is not
+evidence that the requested and resolved identifiers matched. Historical
+responses and the frozen primary analysis remain unchanged; this does not
+authorize any remeasurement.

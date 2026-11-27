@@ -31,6 +31,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from logic.usage import EvaluatorResponseUsageTracker, validate_response_identity
+
 TRACE_ROOT = REPO_ROOT / "outputs" / "experiment_traces"
 EVAL_ROOT = REPO_ROOT / "outputs" / "posthoc_evaluations"
 PRICING_FILE = REPO_ROOT / "experiments" / "openai_pricing_2026-09-08.json"
@@ -972,6 +974,8 @@ def _validate_cached_evaluation(
     try:
         _normalize_evaluator_output(json.dumps(payload))
         _validate_raw_response_receipt(payload)
+        if "provider_response_identity" in payload:
+            validate_response_identity(payload["provider_response_identity"])
     except (json.JSONDecodeError, TypeError, ValueError, RecursionError, KeyError) as exc:
         raise SystemExit(
             f"Cached post-hoc evaluation {path} is invalid: {exc}"
@@ -1654,7 +1658,7 @@ def main() -> int:
         _require_preflight_treatment_trace_unchanged(trace_path, trace_sha256)
         _require_preflight_evaluator_input_unchanged(item, trace=original_trace)
 
-        tracker = UsageTracker()
+        tracker: UsageTracker = EvaluatorResponseUsageTracker()
         prompt = item["prompt"]
         raw = create_chat_completion(
             model=evaluator_model,
@@ -1717,6 +1721,10 @@ def main() -> int:
             pricing=pricing,
             expected_input_fingerprints=item["input_fingerprints"],
         )
+        # Preserve the returned labels separately from the requested-model
+        # usage ledger. Missing/invalid provider fields are not guessed.
+        record["provider_response_identity"] = tracker.snapshot_response_identity()
+        validate_response_identity(record["provider_response_identity"])
         # A report/evidence mutation during the provider call must not be
         # published as a measurement from stable original local sources.
         _require_preflight_treatment_trace_unchanged(trace_path, trace_sha256)

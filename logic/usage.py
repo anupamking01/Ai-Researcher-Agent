@@ -134,3 +134,84 @@ class UsageTracker:
                     model: dict(values) for model, values in self._by_model.items()
                 },
             }
+
+
+# Keep response identity separate from the requested-model cost ledger. Only
+# the single-call evaluator opts in; treatment and streaming snapshots remain
+# unchanged. These are provider-reported labels, not authenticated identities.
+_RESPONSE_IDENTITY_FIELDS = ("model", "id", "system_fingerprint")
+_MAX_RESPONSE_IDENTITY_BYTES = 1024
+
+
+def _valid_response_identity_value(value: Any) -> bool:
+    if type(value) is not str or not value or len(value) > _MAX_RESPONSE_IDENTITY_BYTES:
+        return False
+    try:
+        return value.isprintable() and bool(value.strip()) and (
+            len(value.encode("utf-8")) <= _MAX_RESPONSE_IDENTITY_BYTES
+        )
+    except UnicodeError:
+        return False
+
+
+def _capture_response_identity(response: Any) -> dict:
+    fields = {}
+    for name in _RESPONSE_IDENTITY_FIELDS:
+        try:
+            try:
+                value = response.get(name, None)
+            except AttributeError:
+                value = getattr(response, name, None)
+        except Exception:
+            fields[name] = {"status": "invalid", "value": None}
+            continue
+        if value is None:
+            fields[name] = {"status": "unavailable", "value": None}
+        elif _valid_response_identity_value(value):
+            fields[name] = {"status": "reported", "value": value}
+        else:
+            fields[name] = {"status": "invalid", "value": None}
+    return fields
+
+
+def validate_response_identity(receipt: Any) -> None:
+    """Check the optional provider metadata receipt without inferring identity."""
+    if type(receipt) is not dict or set(receipt) != set(_RESPONSE_IDENTITY_FIELDS):
+        raise ValueError("provider_response_identity has invalid fields")
+    for entry in receipt.values():
+        if type(entry) is not dict or set(entry) != {"status", "value"}:
+            raise ValueError("provider_response_identity has invalid entry")
+        status, value = entry["status"], entry["value"]
+        if status == "reported" and _valid_response_identity_value(value):
+            continue
+        if status in ("unavailable", "invalid") and value is None:
+            continue
+        raise ValueError("provider_response_identity has invalid status/value")
+
+
+class EvaluatorResponseUsageTracker(UsageTracker):
+    """Opt-in metadata capture for the evaluator's one non-streaming call.
+
+    The ordinary token ledger still uses the requested model and frozen
+    pricing. Multiple responses cannot be represented as one receipt.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._response_identity: dict | None = None
+        self._response_identity_count = 0
+
+    def record_response(self, model: str, response: Any) -> None:
+        super().record_response(model, response)
+        identity = _capture_response_identity(response)
+        with self._lock:
+            self._response_identity_count += 1
+            self._response_identity = (
+                identity if self._response_identity_count == 1 else None
+            )
+
+    def snapshot_response_identity(self) -> dict:
+        with self._lock:
+            if self._model_calls != 1 or self._response_identity is None:
+                raise ValueError("provider_response_identity requires exactly one response")
+            return {name: dict(entry) for name, entry in self._response_identity.items()}

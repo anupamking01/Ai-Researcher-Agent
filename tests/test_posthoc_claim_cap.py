@@ -873,7 +873,7 @@ def test_resume_preflight_rejects_duplicate_evaluator_destination(
         )
 
 
-def _record_evaluator_usage(kwargs):
+def _record_evaluator_usage(kwargs, **metadata):
     kwargs["usage_tracker"].record_response(
         "gpt-5.6-terra",
         {
@@ -881,7 +881,8 @@ def _record_evaluator_usage(kwargs):
                 "prompt_tokens": 100,
                 "completion_tokens": 20,
                 "total_tokens": 120,
-            }
+            },
+            **metadata,
         },
     )
 
@@ -892,7 +893,7 @@ def test_new_cache_binds_exact_evaluator_prompt_inputs(tmp_path, monkeypatch):
 
     def complete_evaluation(**kwargs):
         captured.append(kwargs)
-        _record_evaluator_usage(kwargs)
+        _record_evaluator_usage(kwargs, model="synthetic-resolved-model", id="synthetic-id")
         return _evaluator_result()
 
     monkeypatch.setattr(
@@ -910,6 +911,13 @@ def test_new_cache_binds_exact_evaluator_prompt_inputs(tmp_path, monkeypatch):
     evidence = evaluate_posthoc_support.NO_EVIDENCE_SENTINEL
     assert captured[0]["temperature"] == 1.0
     assert cache["schema_version"] == 2
+    assert cache["provider_response_identity"] == {
+        "model": {"status": "reported", "value": "synthetic-resolved-model"},
+        "id": {"status": "reported", "value": "synthetic-id"},
+        "system_fingerprint": {"status": "unavailable", "value": None},
+    }
+    assert set(cache["provider_usage_by_model"]) == {"gpt-5.6-terra"}
+    assert cache["estimated_cost_usd"] == EXPECTED_COST
     assert cache["raw_response"] == {"text": _evaluator_result(), **_fingerprint_text(_evaluator_result())}
     evaluate_posthoc_support._validate_raw_response_receipt(cache)
     assert _load_cached(
@@ -1650,3 +1658,73 @@ def test_fresh_evaluator_record_must_pass_resume_accounting_before_publication(
     assert not (eval_root / "D3" / "main-01.json").exists()
     assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
     assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
+@pytest.mark.parametrize(
+    ("metadata", "status"),
+    [
+        ({}, "unavailable"),
+        ({"model": None}, "unavailable"),
+        ({"model": "resolved-snapshot"}, "reported"),
+        ({"model": 123}, "invalid"),
+        ({"model": ""}, "invalid"),
+        ({"model": "x" * 1025}, "invalid"),
+        ({"model": "é" * 513}, "invalid"),
+        ({"model": "bad\nlabel"}, "invalid"),
+    ],
+)
+def test_evaluator_response_identity_preserves_missingness_without_changing_usage(
+    metadata, status
+):
+    from logic.usage import EvaluatorResponseUsageTracker, UsageTracker, validate_response_identity
+
+    tracker = EvaluatorResponseUsageTracker()
+    baseline = UsageTracker()
+    _record_evaluator_usage({"usage_tracker": tracker}, **metadata)
+    _record_evaluator_usage({"usage_tracker": baseline}, **metadata)
+    receipt = tracker.snapshot_response_identity()
+    validate_response_identity(receipt)
+    assert tracker.snapshot() == baseline.snapshot()
+    assert receipt["model"] == {
+        "status": status,
+        "value": metadata["model"] if status == "reported" else None,
+    }
+    assert receipt["id"] == receipt["system_fingerprint"] == {
+        "status": "unavailable", "value": None,
+    }
+    receipt["model"]["status"] = "tampered"
+    assert tracker.snapshot_response_identity()["model"]["status"] == status
+
+
+def test_evaluator_response_identity_does_not_collapse_multiple_calls():
+    from logic.usage import EvaluatorResponseUsageTracker
+
+    tracker = EvaluatorResponseUsageTracker()
+    _record_evaluator_usage({"usage_tracker": tracker}, model="first")
+    _record_evaluator_usage({"usage_tracker": tracker}, model="second")
+    with pytest.raises(ValueError, match="exactly one response"):
+        tracker.snapshot_response_identity()
+
+
+@pytest.mark.parametrize("fault", ["null", "missing", "contradictory", "oversized", "extra"])
+def test_cached_evaluator_rejects_malformed_provider_response_identity(tmp_path, fault):
+    payload = _cached_evaluation()
+    receipt = {
+        name: {"status": "unavailable", "value": None}
+        for name in ("model", "id", "system_fingerprint")
+    }
+    if fault == "null":
+        receipt = None
+    elif fault == "missing":
+        del receipt["id"]
+    elif fault == "contradictory":
+        receipt["model"]["value"] = "not-unavailable"
+    elif fault == "oversized":
+        receipt["model"] = {"status": "reported", "value": "x" * 1025}
+    else:
+        receipt["extra"] = {"status": "unavailable", "value": None}
+    payload["provider_response_identity"] = receipt
+    path = tmp_path / "measurement.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(SystemExit, match="provider_response_identity"):
+        _load_cached(path)
