@@ -1034,8 +1034,15 @@ def _trace_report_content_status(
         return {**result, "status": "not_checked_without_original_run_task_manifest"}
 
     task_file = repo_root / "experiments/main_budget_tasks.json"
-    if _file_status(task_file) != "present_unverified":
-        return {**result, "status": "not_checked_without_frozen_task_manifest"}
+    # The task anchor already passed. A missing or unsafe file now is a
+    # late source failure, not a dependency skip: the earlier resource
+    # inventory may still say present and otherwise leave no blockers.
+    task_file_status = _file_status(task_file)
+    if task_file_status != "present_unverified":
+        return {
+            **result, "status": "invalid_frozen_task_or_evaluator",
+            "reason": f"frozen task manifest unavailable after source verification: {task_file_status}",
+        }
     source = repo_root / lineage.SUPPORT_REL
     main_source = repo_root / lineage.MAIN_REL
     try:

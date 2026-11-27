@@ -993,7 +993,13 @@ rechecked against its original-run source SHA-256 **after** its own later
 content load. A source replaced between the initial published/task-source
 verification and a subsequent run-identity, recovery-target, or trace-content
 read fails closed, even if the replacement is a well-formed table or task
-manifest. These per-capture checks do not make mutable directories an atomic
+manifest. If the previously anchored task manifest disappears or becomes
+unsafe before the content check, the audit now records
+`invalid_frozen_task_or_evaluator` and adds
+`original_trace_report_content_alignment` to the blockers, even when the
+earlier resource inventory was complete. Such a late failure is not a
+dependency skip and must not yield `candidate_inputs_present_not_verified`.
+These per-capture checks do not make mutable directories an atomic
 snapshot and do not authenticate missing historical reports.
 
 The additional `trace_report_content` preflight runs only after the

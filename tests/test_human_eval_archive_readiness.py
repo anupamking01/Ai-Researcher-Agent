@@ -1528,6 +1528,76 @@ def test_late_task_manifest_replacement_blocks_question_alignment(tmp_path, monk
     )
     assert "original_trace_report_content_alignment" in receipt["blockers"]
 
+
+@pytest.mark.parametrize("mutation", ["missing", "symlink", "directory"])
+def test_late_task_manifest_unavailability_blocks_otherwise_complete_inventory(
+    tmp_path, monkeypatch, mutation
+):
+    # Entirely synthetic 40-cell archive and stubbed published anchors.
+    _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    guide = tmp_path / "paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md"
+    guide.parent.mkdir(parents=True, exist_ok=True)
+    guide.write_text("synthetic guide", encoding="utf-8")
+    packet = tmp_path / "outputs/human_eval"
+    for name in exporter.COORDINATOR_ARTIFACTS:
+        path = packet / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("synthetic coordinator artifact", encoding="utf-8")
+    for order in ("canonical", "reverse"):
+        for name in exporter.ANNOTATOR_ARTIFACTS:
+            path = packet / f"annotator-{order}-v1" / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("synthetic annotator artifact", encoding="utf-8")
+    kwargs = {
+        "repo_root": tmp_path,
+        "research_manifest_sha256": hashlib.sha256(
+            (tmp_path / audit.published.MANIFEST).read_bytes()
+        ).hexdigest(),
+        "coordinator_manifest_sha256": hashlib.sha256(
+            (packet / "manifest.json").read_bytes()
+        ).hexdigest(),
+    }
+    baseline = audit.audit_archive_readiness(**kwargs)
+    assert baseline["status"] == "candidate_inputs_present_not_verified"
+    assert baseline["blockers"] == []
+    assert baseline["handoff_verified"] is False
+
+    task_file = tmp_path / "experiments/main_budget_tasks.json"
+
+    def change_after_stated_verification(**_kwargs):
+        original = task_file.read_bytes()
+        task_file.unlink()
+        if mutation == "symlink":
+            target = tmp_path / "unverified-task-copy.json"
+            target.write_bytes(original)
+            task_file.symlink_to(target)
+        elif mutation == "directory":
+            task_file.mkdir()
+        return {}
+
+    monkeypatch.setattr(
+        audit.frozen_tasks, "verify_frozen_task_manifest",
+        change_after_stated_verification,
+    )
+    receipt = audit.audit_archive_readiness(**kwargs)
+    assert receipt["resources"]["frozen_task_manifest"] == "present_unverified"
+    assert receipt["frozen_task_manifest_anchor"] == (
+        "original_treatment_run_task_manifest_matches"
+    )
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_frozen_task_or_evaluator"
+    )
+    assert receipt["trace_report_content"]["checked"] == 0
+    assert "unavailable after source verification" in (
+        receipt["trace_report_content"]["reason"]
+    )
+    assert receipt["blockers"] == ["original_trace_report_content_alignment"]
+    assert receipt["status"] == "blocked"
+    assert receipt["handoff_verified"] is False
+    assert receipt["human_ratings_used"] is False
+    assert receipt["treatments_rerun"] is False
+
+
 @pytest.mark.parametrize("field,bad_value,remove", [
     ("cost_accounting_status", "provider_billed", False),
     ("cost_accounting_status", "estimated_from_frozen_uncached_rates", False),
