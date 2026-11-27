@@ -602,3 +602,17 @@ The synthetic boundary tests cover both artifacts and verify successful
 readback at the limit. These checks do not make publication an atomic
 two-file transaction, authenticate historical custody, or change any
 treatment, evaluator or human outcome.
+
+## Create-only cache serialization compatibility
+
+The create-only cache writer now validates its exact serialized UTF-8 bytes
+against the same byte ceiling and strict JSON decoder used during resume.
+Nonfinite numeric constants, overlong numeric tokens, duplicate JSON keys,
+serialization errors and oversized records cannot create an unreadable cache
+that would block subsequent replay. The check runs before creating the
+destination directory or staging a file. Exact-limit valid bytes retain the
+existing owner-only, create-only publication contract. A rejected fresh
+measurement is not replaced or automatically retried; any provider spend
+already incurred is not undone. Existing caches and historical results are
+unchanged. This is local serialization compatibility, not independent
+authentication or additional experimental evidence.

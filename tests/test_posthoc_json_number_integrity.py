@@ -72,3 +72,39 @@ def test_numeric_gate_is_before_any_model_import():
         source.index("payload, trace_sha256 = _load_json(trace_path, include_sha256=True)")
         < source.index("from agent.llm_utils import ")
     )
+
+
+@pytest.mark.parametrize(
+    ("metadata", "reason"),
+    [
+        ({"nested": [float("nan")]}, "nonstandard JSON numeric constant"),
+        ({"nested": [float("inf")]}, "nonstandard JSON numeric constant"),
+        ({"nested": [10**128]}, "oversized JSON numeric token"),
+        ({None: 1, "null": 2}, "not supported between instances"),
+    ],
+)
+def test_cache_writer_rejects_reader_invalid_serialization(tmp_path, metadata, reason):
+    path = tmp_path / "new-cache-tree" / "cache.json"
+    with pytest.raises(SystemExit, match=reason) as failure:
+        evaluator._publish_evaluation_cache(path, {"metadata": metadata})
+    assert "Refusing unreadable evaluator cache publication" in str(failure.value)
+    assert not path.parent.exists()
+
+
+@pytest.mark.parametrize("extra_byte", [False, True])
+def test_cache_writer_enforces_exact_reader_byte_boundary(tmp_path, monkeypatch, extra_byte):
+    record = {"metadata": {"text": "é", "count": 1}}
+    serialized = evaluator._serialized_evaluation_cache_bytes(record)
+    path = tmp_path / "new-cache-tree" / "cache.json"
+    monkeypatch.setattr(
+        evaluator, "MAX_EVALUATOR_JSON_BYTES", len(serialized) - int(extra_byte)
+    )
+    if extra_byte:
+        with pytest.raises(SystemExit, match="cache exceeds maximum"):
+            evaluator._publish_evaluation_cache(path, record)
+        assert not path.parent.exists()
+    else:
+        evaluator._publish_evaluation_cache(path, record)
+        assert path.read_bytes() == serialized
+        assert evaluator._load_json(path) == record
+        assert path.stat().st_mode & 0o777 == 0o600

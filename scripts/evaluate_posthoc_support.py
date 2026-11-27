@@ -289,10 +289,8 @@ def _evaluator_input_fingerprints(
     }
 
 
-def _load_json(
-    path: Path, *, include_sha256: bool = False
-) -> dict | tuple[dict, str]:
-    """Reject nonfinite or pathological numbers, including unused metadata."""
+def _decode_evaluator_json(raw: bytes) -> dict:
+    """Shared strict JSON grammar for retained and newly published evaluator data."""
     from scripts.run_budget_main_study import _reject_duplicate_json_keys
 
     def reject_nonstandard_constant(token: str):
@@ -311,21 +309,29 @@ def _load_json(
             raise ValueError("nonfinite JSON numeric value")
         return number
 
+    payload = json.loads(
+        raw.decode("utf-8"),
+        object_pairs_hook=_reject_duplicate_json_keys,
+        parse_constant=reject_nonstandard_constant,
+        parse_int=bounded_integer,
+        parse_float=finite_float,
+    )
+    if not isinstance(payload, dict):
+        raise ValueError("top level must be an object")
+    return payload
+
+
+def _load_json(
+    path: Path, *, include_sha256: bool = False
+) -> dict | tuple[dict, str]:
+    """Reject nonfinite or pathological numbers, including unused metadata."""
     try:
         raw = _read_regular_bytes(
             path, label="JSON input", max_bytes=MAX_EVALUATOR_JSON_BYTES
         )
-        payload = json.loads(
-            raw.decode("utf-8"),
-            object_pairs_hook=_reject_duplicate_json_keys,
-            parse_constant=reject_nonstandard_constant,
-            parse_int=bounded_integer,
-            parse_float=finite_float,
-        )
+        payload = _decode_evaluator_json(raw)
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError) as exc:
         raise SystemExit(f"Invalid JSON file {path}: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise SystemExit(f"Invalid JSON file {path}: top level must be an object")
     # Bind replay source custody to the same captured bytes that were parsed.
     # Cache reads retain the original dict-only interface.
     return (payload, hashlib.sha256(raw).hexdigest()) if include_sha256 else payload
@@ -601,8 +607,20 @@ def _serialized_evaluation_cache_bytes(record: dict) -> bytes:
 def _publish_evaluation_cache(path: Path, record: dict) -> None:
     """Durably publish one private evaluator result without exposing partial bytes."""
     path = Path(path)
+    # Validate the actual serialization, not just the in-memory measurement.
+    # An unreadable create-only cache would permanently block later replay.
+    try:
+        content = _serialized_evaluation_cache_bytes(record)
+        if len(content) > MAX_EVALUATOR_JSON_BYTES:
+            raise ValueError(
+                f"cache exceeds maximum {MAX_EVALUATOR_JSON_BYTES} bytes"
+            )
+        _decode_evaluator_json(content)
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise SystemExit(
+            f"Refusing unreadable evaluator cache publication {path}: {exc}"
+        ) from exc
     path.parent.mkdir(parents=True, exist_ok=True)
-    content = _serialized_evaluation_cache_bytes(record)
     descriptor, staging_name = tempfile.mkstemp(
         prefix=f".{path.name}.",
         suffix=".tmp",
