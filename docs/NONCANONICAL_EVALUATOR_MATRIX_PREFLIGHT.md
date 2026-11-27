@@ -275,6 +275,28 @@ model calls. Diagnostic pilot, frozen automated confirmatory, exploratory,
 and pending blinded human-validation conclusions remain distinct and unchanged.
 
 
+### Final closed-world treatment trace inventory
+
+The preflight trace inventory was previously checked only once. The final
+per-trace SHA-256 loop detected changes to selected files but could not
+detect an additional trace appearing after preflight; a late rename after
+that loop could also escape the final report/evidence check. The evaluator
+now repeats the same bounded, closed-world trace inventory after the final
+report/evidence continuity check and compares the complete ordered path
+lists with the preflight inventory before aggregate publication. Added,
+removed, renamed or nonregular entries cause rejection even when all
+measurements were cached and the originally selected bytes were unchanged.
+
+The offline regression cases inject an extra JSON trace, a hidden backup
+and a rename after the selected-file checks, and require no aggregate
+publication or cache overwrite. This remains a bounded local consistency
+check, not an atomic filesystem snapshot: it cannot detect transient
+changes undone between checks or guarantee that no mutation occurs after
+the final scan. Preserve discrepancies for provenance review rather than
+selecting a subset or rerunning a treatment. No historical measurement
+or scientific claim is changed; original custody and human validation
+remain unresolved.
+
 ## Aggregate-publication source continuity for cached and pending cells
 
 Post-preflight report/evidence continuity originally bracketed **new model calls**

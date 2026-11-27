@@ -1513,6 +1513,62 @@ def test_cached_evaluator_mutation_after_preflight_blocks_aggregate(
     assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
 
 
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("added_json", "Treatment trace inventory changed after preflight"),
+        ("hidden_backup", "unselected treatment trace files"),
+        ("renamed", "Treatment trace inventory changed after preflight"),
+    ],
+)
+def test_late_trace_inventory_drift_blocks_all_cached_publication(
+    tmp_path, monkeypatch, mutation, message
+):
+    """Unchanged selected bytes alone cannot establish closed-world custody."""
+    eval_root = _configure_resume_main(
+        tmp_path, monkeypatch, task_ids=("main-01",)
+    )
+    cache_path = eval_root / "D3" / "main-01.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(
+        json.dumps(_bound_zero_source_cache()), encoding="utf-8"
+    )
+    cache_bytes = cache_path.read_bytes()
+    trace_path = (
+        evaluate_posthoc_support.TRACE_ROOT / "D3" / "run-d3-main-01.json"
+    )
+    trace_bytes = trace_path.read_bytes()
+
+    def fail_if_called(**_kwargs):
+        raise AssertionError("All evaluations are cached; no model calls allowed")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion", fail_if_called
+    )
+    original_guard = evaluate_posthoc_support._require_final_evaluator_source_continuity
+
+    def mutate_trace_inventory_after_source_check(*args, **kwargs):
+        original_guard(*args, **kwargs)
+        # At this point the original per-trace hash checks have already run.
+        if mutation == "added_json":
+            trace_path.with_name("alternate.json").write_bytes(trace_bytes)
+        elif mutation == "hidden_backup":
+            trace_path.with_name(".trace.json.bak").write_bytes(trace_bytes)
+        else:
+            trace_path.rename(trace_path.with_name("renamed.json"))
+
+    monkeypatch.setattr(
+        evaluate_posthoc_support,
+        "_require_final_evaluator_source_continuity",
+        mutate_trace_inventory_after_source_check,
+    )
+    with pytest.raises(SystemExit, match=message):
+        evaluate_posthoc_support.main()
+    assert cache_path.read_bytes() == cache_bytes
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
 def _cache_with_raw_response():
     payload = _cached_evaluation()
     raw = " \n" + json.dumps({

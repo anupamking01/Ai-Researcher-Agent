@@ -1817,6 +1817,15 @@ def main() -> int:
         _require_preflight_treatment_trace_unchanged(trace_path, trace_sha256)
     # This also covers cached cells that never entered the model-call loop.
     _require_final_evaluator_source_continuity(expected, rows)
+    # Re-inventory after all report/evidence checks. The per-file digest
+    # loop alone cannot detect an additional trace introduced during replay.
+    if _inventory_evaluator_treatment_trace_tree(
+        TRACE_ROOT, variants=VARIANTS
+    ) != trace_files:
+        raise SystemExit(
+            "Treatment trace inventory changed after preflight; refusing "
+            "aggregate publication without provenance review"
+        )
     _require_evaluator_cache_source_continuity(cache_source_hashes)
     summary["evaluator_cache_manifest"] = _evaluator_cache_manifest(
         rows, cache_source_hashes
