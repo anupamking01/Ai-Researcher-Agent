@@ -348,7 +348,7 @@ pending.
 
 A replay can mix older bound caches without raw response receipts with
 newer measurements that retain them. The aggregate summary now includes
-an additive `evaluator_cache_manifest` (initially version 1; current version 2) listing each cell's
+an additive `evaluator_cache_manifest` (initially version 1; current version 3) listing each cell's
 variant, task, run ID, exact cache-file SHA-256 and raw-response receipt
 SHA-256/UTF-8 byte length, or explicit nulls when no receipt is retained.
 It reports retained and missing receipt counts separately. The cache
@@ -398,3 +398,28 @@ weights, backend, execution time or billing, and a missing receipt is not
 evidence that the requested and resolved identifiers matched. Historical
 responses and the frozen primary analysis remain unchanged; this does not
 authorize any remeasurement.
+
+
+### Evaluator input fingerprints in aggregate lineage (27 November 2026)
+
+Version 3 of the coordinator-side aggregate cache manifest also retains the
+validated schema-2 `input_fingerprints` for each cell: SHA-256 and UTF-8
+byte length of the exact question, report, prepared evidence and evaluator
+prompt. This allows comparison against independently held candidate inputs
+without distributing the private evaluator cache (which may contain raw
+responses and provider identifiers). Every direct replay cell, whether
+reused or new, has its fingerprints checked against reconstructed inputs
+before publication. The manifest helper represents absent legacy bindings
+as null; such a record is not eligible for direct noncanonical replay.
+Version 1/2 summaries do not supply this direct input-level binding.
+
+The evidence fingerprint describes the **prepared** evidence string (joined,
+stripped selected query text or the explicit zero-source sentinel), not a
+byte-exact inventory of each underlying query file. These are equality checks
+against candidate inputs, not authentication of original archival custody or
+proof that the provider consumed those inputs. Hashes can disclose equality
+or enable guessing of short known text, and byte lengths also disclose
+metadata; keep the manifest coordinator-side, never in blinded annotator
+bundles. No input text or provider labels are added to aggregate outputs,
+no cache format or CSV columns change, and no historical results are revised.
+Mixed-cache and credential-free replay regressions use synthetic data only.

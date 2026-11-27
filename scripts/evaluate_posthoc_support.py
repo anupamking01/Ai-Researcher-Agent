@@ -1534,6 +1534,9 @@ def _evaluator_cache_manifest(
             "task_id": row["task_id"],
             "run_id": row["run_id"],
             "cache_sha256": cache_source_hashes[path],
+            # The direct replay validates these against the reconstructed inputs
+            # for every cell. Retain only fingerprints, never the input text.
+            "input_fingerprints": row.get("input_fingerprints"),
             "raw_response_sha256": receipt["sha256"] if receipt is not None else None,
             "raw_response_byte_size": receipt["byte_size"] if receipt is not None else None,
             "provider_response_identity_status": identity_status,
@@ -1546,7 +1549,7 @@ def _evaluator_cache_manifest(
         cell["provider_response_identity_status"] is not None for cell in cells
     )
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "cells": cells,
         "retained_raw_response_cells": retained,
         "missing_raw_response_cells": len(cells) - retained,

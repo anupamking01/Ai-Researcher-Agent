@@ -1702,7 +1702,7 @@ def test_aggregate_cache_manifest_discloses_mixed_raw_response_coverage(tmp_path
     }
     fingerprint = _fingerprint_text(_evaluator_result())
     assert manifest == {
-        "schema_version": 2,
+        "schema_version": 3,
         "retained_raw_response_cells": 1,
         "missing_raw_response_cells": 1,
         "retained_provider_identity_receipt_cells": 1,
@@ -1711,6 +1711,7 @@ def test_aggregate_cache_manifest_discloses_mixed_raw_response_coverage(tmp_path
             {
                 "variant_id": "D3", "task_id": "main-01", "run_id": "run-d3-main-01",
                 "cache_sha256": hashlib.sha256(old_path.read_bytes()).hexdigest(),
+                "input_fingerprints": json.loads(old_path.read_bytes())["input_fingerprints"],
                 "raw_response_sha256": None, "raw_response_byte_size": None,
                 "provider_response_identity_status": None,
                 "requested_returned_model_label_relation": "receipt_missing",
@@ -1718,6 +1719,7 @@ def test_aggregate_cache_manifest_discloses_mixed_raw_response_coverage(tmp_path
             {
                 "variant_id": "D3", "task_id": "main-02", "run_id": "run-d3-main-02",
                 "cache_sha256": hashlib.sha256(new_path.read_bytes()).hexdigest(),
+                "input_fingerprints": json.loads(new_path.read_bytes())["input_fingerprints"],
                 "raw_response_sha256": fingerprint["sha256"],
                 "raw_response_byte_size": fingerprint["byte_size"],
                 "provider_response_identity_status": {
@@ -1922,6 +1924,13 @@ def test_cached_only_rebuilds_aggregates_without_credentials(tmp_path, monkeypat
                    "run_id": "run-d3-main-01", "origin": "reused_cache"}],
     }
     assert summary["replay_provenance"]["can_replace_original_evaluator_evidence"] is False
+    manifest = summary["evaluator_cache_manifest"]
+    assert manifest["schema_version"] == 3
+    cell, = manifest["cells"]
+    assert cell["input_fingerprints"] == json.loads(original)["input_fingerprints"]
+    assert "Report for main-01" not in json.dumps(manifest)
+    assert "Question for main-01" not in json.dumps(manifest)
+    assert evaluate_posthoc_support.NO_EVIDENCE_SENTINEL not in json.dumps(manifest)
     trace = evaluate_posthoc_support.TRACE_ROOT / "D3" / "run-d3-main-01.json"
     assert summary["treatment_trace_manifest"] == {
         "schema_version": 1,
