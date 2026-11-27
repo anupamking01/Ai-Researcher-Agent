@@ -425,7 +425,6 @@ def test_malformed_evaluator_run_id_matrix_cannot_be_used_as_an_identity_gate(
 
 def _write_semantically_aligned_fixture(
     root: Path, monkeypatch, *, archive=None,
-    runtime_models=("synthetic-model", "synthetic-model"),
     latency_overrides=None,
 ):
     """Synthetic run/task/report corpus; publication pin is stubbed in tests."""
@@ -488,7 +487,7 @@ def _write_semantically_aligned_fixture(
         "currency": "USD", "unit": "per_1m_text_tokens",
         "models": {name: (dict(rates) if name != "expensive-model"
                            else {"input": 2.0, "output": 12.0})
-                   for name in ("synthetic-model", "model-a", "model-b",
+                   for name in ("gpt-5.6-terra", "gpt-5.6-luna", "model-a", "model-b",
                                 "expensive-model")}
     }), encoding="utf-8")
     monkeypatch.setattr(audit, "ORIGINAL_PRICING_SHA256",
@@ -563,9 +562,9 @@ def _write_semantically_aligned_fixture(
                     "usage_accounting_status": "provider_usage_complete",
                     "cost_accounting_status": audit.ORIGINAL_TRACE_COST_STATUS,
                     "estimated_cost_usd": 0.0,
-                    "smart_model": runtime_models[0],
-                    "fast_model": runtime_models[1],
-                    "temperature": 0.0,
+                    "smart_model": "gpt-5.6-terra",
+                    "fast_model": "gpt-5.6-luna",
+                    "temperature": 1.0,
                     "prompt_tokens": 100, "completion_tokens": 150,
                     "unavailable_usage_call_count": 0,
                     # These are emitted by the original RunTrace.to_dict(),
@@ -575,7 +574,7 @@ def _write_semantically_aligned_fixture(
                     "claim_support_rate": (0.5 if variant == "P6V" else 0.0),
                     "citation_precision_proxy": (0.75 if variant == "P6V" else 0.0),
                     "provider_usage_by_model": {
-                        runtime_models[0]: {
+                        "gpt-5.6-terra": {
                             "model_calls": 4, "unavailable_calls": 0,
                             "prompt_tokens": 100, "completion_tokens": 150,
                             "total_tokens": 250,
@@ -1036,6 +1035,40 @@ def test_original_runtime_llm_controls_cannot_drift_between_treatments(
     assert result["handoff_verified"] is False
 
 
+@pytest.mark.parametrize("field,replacement", [
+    ("smart_model", "model-a"),
+    ("fast_model", "model-b"),
+    ("temperature", 0.7),
+    ("temperature", 1),
+])
+def test_original_runtime_llm_controls_reject_uniform_matrix_substitution(
+    tmp_path, monkeypatch, field, replacement
+):
+    """Even unanimous controls and unchanged synthetic costs are insufficient."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    paths = sorted((outputs / "experiment_traces").glob("*/*.json"))
+    assert len(paths) == 40
+    for path in paths:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        trace = payload["trace"]
+        if field == "smart_model":
+            # Substitute the corresponding usage bucket at identical synthetic
+            # prices, preserving the frozen totals and ledger consistency.
+            ledger = trace["provider_usage_by_model"]
+            ledger[replacement] = ledger.pop(trace[field])
+        trace[field] = replacement
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["trace_to_published_evaluator"]["matched"] == 40
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert field in receipt["trace_report_content"]["first_failure"]
+    assert "original_trace_report_content_alignment" in receipt["blockers"]
+    assert receipt["handoff_verified"] is False
+
+
 @pytest.mark.parametrize("field,replacement,remove", [
     ("smart_model", "", False),
     ("fast_model", "  ", False),
@@ -1069,9 +1102,8 @@ def test_original_runtime_llm_controls_reject_nonfinite_in_memory(invalid):
     """The production JSON reader also rejects nonfinite numbers before this gate."""
     with pytest.raises(ValueError, match="temperature"):
         audit._validate_recovered_llm_controls(
-            {"smart_model": "model-a", "fast_model": "model-b",
+            {"smart_model": "gpt-5.6-terra", "fast_model": "gpt-5.6-luna",
              "temperature": invalid},
-            baseline=None,
         )
 
 
@@ -1243,7 +1275,7 @@ def test_recovered_provider_usage_rejects_inconsistent_per_model_counters(
     outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
     path = outputs / "experiment_traces/D3/d3-run-00.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["trace"]["provider_usage_by_model"]["synthetic-model"][field] = bad_value
+    payload["trace"]["provider_usage_by_model"]["gpt-5.6-terra"][field] = bad_value
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     receipt = audit.audit_archive_readiness(repo_root=tmp_path)
@@ -1263,7 +1295,7 @@ def test_recovered_model_usage_cannot_impersonate_an_unconfigured_model(
     path = outputs / "experiment_traces/D3/d3-run-00.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     provider = payload["trace"]["provider_usage_by_model"]
-    provider[replacement] = provider.pop("synthetic-model")
+    provider[replacement] = provider.pop("gpt-5.6-terra")
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     receipt = audit.audit_archive_readiness(repo_root=tmp_path)
@@ -1283,17 +1315,15 @@ def test_recovered_provider_usage_accepts_consistent_multi_model_accounting(
 ):
     # Both model names are fixed across all 40 recovered treatment traces;
     # a single run may legitimately consume tokens from each.
-    outputs = _write_semantically_aligned_fixture(
-        tmp_path, monkeypatch, runtime_models=("model-a", "model-b")
-    )
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
     path = outputs / "experiment_traces/D3/d3-run-00.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["trace"]["provider_usage_by_model"] = {
-        "model-a": {
+        "gpt-5.6-terra": {
             "model_calls": 2, "unavailable_calls": 0,
             "prompt_tokens": 70, "completion_tokens": 80, "total_tokens": 150,
         },
-        "model-b": {
+        "gpt-5.6-luna": {
             "model_calls": 2, "unavailable_calls": 0,
             "prompt_tokens": 30, "completion_tokens": 70, "total_tokens": 100,
         },
@@ -1713,7 +1743,7 @@ def test_archived_cost_rejects_model_substitution_with_same_token_totals(
     path = outputs / "experiment_traces/D3/d3-run-00.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     ledger = payload["trace"]["provider_usage_by_model"]
-    ledger[replacement] = ledger.pop("synthetic-model")
+    ledger[replacement] = ledger.pop("gpt-5.6-terra")
     path.write_text(json.dumps(payload), encoding="utf-8")
     receipt = audit.audit_archive_readiness(repo_root=tmp_path)
     assert receipt["trace_report_content"]["status"] == (
@@ -1729,7 +1759,7 @@ def test_modified_historical_pricing_bytes_block_cost_concordance(
     _write_semantically_aligned_fixture(tmp_path, monkeypatch)
     path = tmp_path / audit.FROZEN_PRICING_REL
     payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["models"]["synthetic-model"]["output"] = 1.3
+    payload["models"]["gpt-5.6-terra"]["output"] = 1.3
     path.write_text(json.dumps(payload), encoding="utf-8")
     receipt = audit.audit_archive_readiness(repo_root=tmp_path)
     assert receipt["trace_report_content"]["status"] == (

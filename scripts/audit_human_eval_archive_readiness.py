@@ -471,35 +471,29 @@ def _validate_recovered_persistence_time(
     return recorded
 
 
-def _validate_recovered_llm_controls(
-    trace: dict, *, baseline: tuple[str, str, float] | None
-) -> tuple[str, str, float]:
-    """Require constant runtime model controls across the original main study.
+# Historical workflow 34620917346, checkout c3c15e46, job study.env.
+# settings/config.py gives explicit environment values precedence over
+# dotenv; logic/run.py records the resulting CFG controls.
+ORIGINAL_RUNTIME_LLM_CONTROLS = {
+    "smart_model": "gpt-5.6-terra",
+    "fast_model": "gpt-5.6-luna",
+    "temperature": 1.0,
+}
 
-    The pinned September 2026 runner imports logic.run once and executes the
-    40 cells in the same process. logic.run records smart_model, fast_model,
-    and temperature from its module-level CFG in *every* RunTrace. Those are
-    shared evaluation conditions, not D3/D6/P6/P6V interventions. Per-run
-    published source/token/cost counts cannot detect a substituted control.
-    This checks only recovered-trace consistency, never original custody or
-    independently observed provider model identity.
+
+def _validate_recovered_llm_controls(trace: dict) -> None:
+    """Require the original workflow's configured controls for every cell.
+
+    Cross-trace agreement alone cannot reject a uniform substitution. This
+    is configuration concordance, not evidence of the actual provider model
+    served or of independent historical archive custody.
     """
-    controls = []
-    for field in ("smart_model", "fast_model"):
-        value = trace.get(field)
-        if type(value) is not str or not value.strip():
-            raise ValueError(f"recovered trace {field} must be a nonempty model name")
-        controls.append(value)
-    temperature = trace.get("temperature")
-    if type(temperature) not in (int, float) or not math.isfinite(temperature):
-        raise ValueError("recovered trace temperature must be a finite number")
-    observed = (controls[0], controls[1], float(temperature))
-    if baseline is not None and observed != baseline:
-        raise ValueError(
-            "recovered trace LLM controls differ across original treatment runs"
-        )
-    return observed
-
+    for field, expected in ORIGINAL_RUNTIME_LLM_CONTROLS.items():
+        observed = trace.get(field)
+        if type(observed) is not type(expected) or observed != expected:
+            raise ValueError(
+                f"recovered trace LLM controls differ from original workflow: {field}"
+            )
 
 
 def _validate_recovered_treatment_verification(trace: dict, *, variant: str) -> None:
@@ -1099,7 +1093,6 @@ def _trace_report_content_status(
     total_bytes = 0
     checked = 0
     candidate_pins: list[tuple] = []
-    llm_controls_baseline: tuple[str, str, float] | None = None
     run_starts: dict[tuple[str, str], datetime] = {}
     run_latencies: dict[tuple[str, str], float] = {}
     run_recordings: dict[tuple[str, str], datetime] = {}
@@ -1195,9 +1188,7 @@ def _trace_report_content_status(
                         f"treatment CSV {csv_field}"
                     )
             run_starts[(variant, task_id)] = _validate_recovered_start_time(trace)
-            llm_controls_baseline = _validate_recovered_llm_controls(
-                trace, baseline=llm_controls_baseline
-            )
+            _validate_recovered_llm_controls(trace)
             _validate_recovered_treatment_verification(trace, variant=variant)
             _validate_recovered_source_ledgers(trace, variant=variant)
             _validate_recovered_derived_telemetry(trace)

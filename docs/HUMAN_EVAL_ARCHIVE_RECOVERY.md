@@ -1428,20 +1428,25 @@ planned treatment interventions: drifting settings could confound arm
 comparisons without changing published browse counts, model-call counts,
 token totals, estimated cost, or report lengths.
 
-The read-only recovery preflight now requires nonblank model identifiers,
-a finite numeric (not boolean) temperature, and **one identical three-field
-runtime-control tuple across all 40 recovered trace candidates**. Synthetic
-whole-matrix tests alter each field in a later treatment cell or make an
-initial field missing/malformed while leaving frozen counts and reports
-unchanged; the candidate-alignment diagnostic must then block. No observed
-experimental outcomes or historical traces have been changed.
+The original treatment [workflow run 34620917346](https://github.com/anupamking01/Ai-Researcher-Agent/actions/runs/34620917346)
+identifies the checkout above. Its [job environment](https://github.com/anupamking01/Ai-Researcher-Agent/blob/c3c15e46a8eec3a8bbc24c968eedc0548172a897/.github/workflows/budget-main-study.yml)
+explicitly sets `SMART_LLM_MODEL=gpt-5.6-terra`,
+`FAST_LLM_MODEL=gpt-5.6-luna`, and `TEMPERATURE="1"`.
+The original `settings/config.py` gives these environment variables
+precedence over dotenv and converts temperature to a float. The recovery
+preflight therefore requires **those exact configured model names and the
+floating-point temperature 1.0 in every candidate**, not merely agreement
+across the matrix. Synthetic regressions include uniform substitutions of
+each model or temperature across all 40 cells, including a same-price
+synthetic usage-ledger substitution and an integer temperature, in addition
+to later-cell drift and malformed controls. No observed experimental
+outcomes or historical traces have been changed.
 
-This is an **internal cross-trace comparability check, not model attestation**.
+This is **source-anchored configuration concordance, not model attestation**.
 It cannot determine which particular models the original provider served,
-authenticate a recovered archive, or catch an identical fabricated control
-repeated consistently across all 40 traces. The original main-study manifest
-or independent original source custody is still needed for stronger identity
-claims. Human handoff remains blocked until independent original evidence
+prove the workflow environment was honored, or authenticate a recovered
+archive. Independent original source custody is still needed for stronger
+identity claims. Human handoff remains blocked until independent original evidence
 and eligible real blinded annotators are available. The five-task pilot is
 diagnostic, frozen automated results retain post-collection/ordering and
 historical evaluator limitations, and this gate adds neither confirmatory
