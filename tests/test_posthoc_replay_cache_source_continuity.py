@@ -112,5 +112,5 @@ def test_final_cache_check_precedes_aggregate_publication():
     ) < tail.index(
         "_require_evaluator_cache_source_continuity(cache_source_hashes)"
     ) < tail.index(
-        "_publish_aggregate_outputs(summary_path, csv_path, summary, rows)"
+        "_publish_aggregate_outputs("
     )

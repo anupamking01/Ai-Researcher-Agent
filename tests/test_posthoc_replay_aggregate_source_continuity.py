@@ -121,5 +121,9 @@ def test_final_guard_runs_before_aggregate_publication():
     tail = source.split("    rows = sorted(", 1)[1]
     trace_guard = "_require_preflight_treatment_trace_unchanged(trace_path, trace_sha256)"
     full_guard = "_require_final_evaluator_source_continuity(expected, rows)"
-    publish = "_publish_aggregate_outputs(summary_path, csv_path, summary, rows)"
-    assert tail.index(trace_guard) < tail.index(full_guard) < tail.index(publish)
+    publish = "_publish_aggregate_outputs("
+    verify = "_verify_aggregate_outputs("
+    assert (
+        tail.index(trace_guard) < tail.index(full_guard)
+        < tail.index(publish) < tail.index(verify)
+    )

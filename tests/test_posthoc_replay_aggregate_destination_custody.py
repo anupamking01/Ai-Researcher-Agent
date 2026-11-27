@@ -132,7 +132,7 @@ def test_aggregate_destinations_are_checked_before_provider_calls_and_publicatio
         main.index("aggregate_destination_snapshot = _snapshot_noncanonical_aggregate_destinations(")
         < main.index("from agent.llm_utils import ")
         < main.index("_require_noncanonical_aggregate_destinations_unchanged(")
-        < main.index("_publish_aggregate_outputs(summary_path, csv_path, summary, rows)")
+        < main.index("_publish_aggregate_outputs(")
     )
 
 
