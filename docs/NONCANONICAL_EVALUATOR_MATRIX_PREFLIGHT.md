@@ -512,3 +512,29 @@ readback continuity, not an atomic two-file transaction, a guarantee against
 changes after verification, or independent authentication of the missing
 historical artifacts. It does not alter frozen outcomes, authorize new
 measurements, or establish human-validation readiness.
+
+## Published treatment-trace lineage
+
+The exact JSON-byte SHA-256 values captured during treatment preflight and
+checked again before aggregate publication were previously discarded once
+the replay exited. Cache hashes alone bind evaluator records, not the full
+treatment traces (including non-prompt metadata and treatment cost fields).
+
+New noncanonical aggregate summaries include a version-1
+`treatment_trace_manifest` with one entry per measurement cell, keyed by
+variant, task and run ID and ordered by task then frozen variant order.
+Each `trace_sha256` is the digest of the original local bytes consumed by
+the preflight decoder, not a later pathname read or JSON reserialization.
+Missing, extra or duplicate trace bindings prevent publication. The manifest
+is included in the exact summary-generation verification; it contains no
+trace bodies or local absolute paths. Existing cache-manifest and CSV
+formats are unchanged. Older summaries without this field lack this
+published trace-level lineage and must not be retrospectively attributed
+to currently available trace bytes.
+
+This enables comparison against independently retained candidate traces
+but does not authenticate historical custody, prove provider execution,
+or make the source tree an atomic snapshot. The synthetic regression tests
+use no historical treatments, provider calls or human ratings. Diagnostic
+pilot, post-collection frozen automated, exploratory and pending human
+validation claims are unchanged.

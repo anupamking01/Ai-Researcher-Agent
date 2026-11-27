@@ -1454,6 +1454,30 @@ def _require_evaluator_cache_source_continuity(
             )
 
 
+def _treatment_trace_manifest(
+    rows: list[dict],
+    trace_sources: dict[tuple[str, str, str], tuple[Path, str]],
+) -> dict:
+    """Bind every aggregate cell to its exact preflight treatment JSON bytes."""
+    cells = []
+    seen = set()
+    for row in sorted(rows, key=lambda r: (r["task_id"], VARIANTS.index(r["variant_id"]))):
+        identity = (row["variant_id"], row["task_id"], row["run_id"])
+        if identity in seen or identity not in trace_sources:
+            raise SystemExit("Treatment trace manifest has duplicate or unbound cell")
+        seen.add(identity)
+        _path, trace_sha256 = trace_sources[identity]
+        cells.append({
+            "variant_id": identity[0],
+            "task_id": identity[1],
+            "run_id": identity[2],
+            "trace_sha256": trace_sha256,
+        })
+    if seen != set(trace_sources):
+        raise SystemExit("Treatment trace manifest has unexpected trace source")
+    return {"schema_version": 1, "cells": cells}
+
+
 def _evaluator_cache_manifest(
     rows: list[dict], cache_source_hashes: dict[Path, str]
 ) -> dict:
@@ -1863,6 +1887,9 @@ def main() -> int:
     _require_evaluator_cache_source_continuity(cache_source_hashes)
     summary["evaluator_cache_manifest"] = _evaluator_cache_manifest(
         rows, cache_source_hashes
+    )
+    summary["treatment_trace_manifest"] = _treatment_trace_manifest(
+        rows, trace_sources
     )
 
     _require_noncanonical_aggregate_destinations_unchanged(

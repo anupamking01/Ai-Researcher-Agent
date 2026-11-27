@@ -1907,6 +1907,14 @@ def test_cached_only_rebuilds_aggregates_without_credentials(tmp_path, monkeypat
     assert summary["replay_provenance"]["reused_cached_measurements"] == 1
     assert summary["replay_provenance"]["new_noncanonical_measurements"] == 0
     assert summary["replay_provenance"]["can_replace_original_evaluator_evidence"] is False
+    trace = evaluate_posthoc_support.TRACE_ROOT / "D3" / "run-d3-main-01.json"
+    assert summary["treatment_trace_manifest"] == {
+        "schema_version": 1,
+        "cells": [{
+            "variant_id": "D3", "task_id": "main-01", "run_id": "run-d3-main-01",
+            "trace_sha256": hashlib.sha256(trace.read_bytes()).hexdigest(),
+        }],
+    }
     evaluate_posthoc_support._verify_aggregate_outputs(summary_path, csv_path)
 
 
@@ -1929,3 +1937,43 @@ def test_cached_only_refuses_missing_measurements(tmp_path, monkeypatch, credent
     assert not (eval_root / "D3" / "main-02.json").exists()
     assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
     assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
+def test_treatment_trace_manifest_preserves_preflight_hashes_and_order(tmp_path):
+    rows = [
+        {"variant_id": "D6", "task_id": "main-01", "run_id": "b"},
+        {"variant_id": "D3", "task_id": "main-02", "run_id": "c"},
+        {"variant_id": "D3", "task_id": "main-01", "run_id": "a"},
+    ]
+    hashes = {
+        ("D6", "main-01", "b"): (tmp_path / "b.json", "b" * 64),
+        ("D3", "main-02", "c"): (tmp_path / "c.json", "c" * 64),
+        ("D3", "main-01", "a"): (tmp_path / "a.json", "a" * 64),
+    }
+    # The manifest uses preflight hashes, never a second read of a pathname.
+    manifest = evaluate_posthoc_support._treatment_trace_manifest(rows, hashes)
+    assert manifest == {
+        "schema_version": 1,
+        "cells": [
+            {"variant_id": "D3", "task_id": "main-01", "run_id": "a", "trace_sha256": "a" * 64},
+            {"variant_id": "D6", "task_id": "main-01", "run_id": "b", "trace_sha256": "b" * 64},
+            {"variant_id": "D3", "task_id": "main-02", "run_id": "c", "trace_sha256": "c" * 64},
+        ],
+    }
+    assert str(tmp_path) not in json.dumps(manifest)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra", "duplicate", "wrong_run"])
+def test_treatment_trace_manifest_rejects_inconsistent_lineage(tmp_path, mutation):
+    rows = [{"variant_id": "D3", "task_id": "main-01", "run_id": "a"}]
+    hashes = {("D3", "main-01", "a"): (tmp_path / "a.json", "a" * 64)}
+    if mutation == "missing":
+        hashes.clear()
+    elif mutation == "extra":
+        hashes[("D3", "main-02", "b")] = (tmp_path / "b.json", "b" * 64)
+    elif mutation == "duplicate":
+        rows.append(rows[0])
+    else:
+        rows[0]["run_id"] = "other"
+    with pytest.raises(SystemExit, match="Treatment trace manifest"):
+        evaluate_posthoc_support._treatment_trace_manifest(rows, hashes)
