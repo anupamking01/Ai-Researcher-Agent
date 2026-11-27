@@ -190,3 +190,49 @@ def test_digest_valid_aggregate_csv_has_exact_byte_ceiling(
             read_pair()
     else:
         read_pair()
+
+
+@pytest.mark.parametrize(
+    "artifact, limit_name",
+    [
+        ("summary", "MAX_EVALUATOR_JSON_BYTES"),
+        ("CSV", "MAX_EVALUATOR_AGGREGATE_CSV_BYTES"),
+    ],
+)
+@pytest.mark.parametrize("oversize", [False, True])
+def test_aggregate_writer_matches_reader_byte_ceiling(
+    tmp_path, monkeypatch, artifact, limit_name, oversize
+):
+    """An unreadable candidate must not replace an existing aggregate pair."""
+    summary_path, csv_path = _destinations(tmp_path)
+    candidate = {
+        "study_id": evaluator.STUDY_ID,
+        "replay_provenance": evaluator._noncanonical_evaluator_replay_provenance(),
+        "synthetic_metadata": "é" * 50,
+    }
+    rows = [{"variant_id": "D3", "task_id": "main-01", "run_id": "synthetic"}]
+    evaluator._publish_aggregate_outputs(summary_path, csv_path, candidate, rows)
+    expected = summary_path.read_bytes(), csv_path.read_bytes()
+    exact_size = len(expected[0 if artifact == "summary" else 1])
+
+    _write_pair(summary_path, csv_path)
+    before = summary_path.read_bytes(), csv_path.read_bytes()
+    monkeypatch.setattr(evaluator, limit_name, exact_size - int(oversize))
+    if oversize:
+        def fail_if_staged(*args, **kwargs):
+            pytest.fail("oversized generation must fail before any staging")
+
+        monkeypatch.setattr(evaluator, "_stage_durable_output", fail_if_staged)
+        with pytest.raises(
+            SystemExit, match=f"aggregate {artifact} exceeds maximum publication size"
+        ):
+            evaluator._publish_aggregate_outputs(summary_path, csv_path, candidate, rows)
+        assert (summary_path.read_bytes(), csv_path.read_bytes()) == before
+    else:
+        digest = evaluator._publish_aggregate_outputs(
+            summary_path, csv_path, candidate, rows
+        )
+        assert (summary_path.read_bytes(), csv_path.read_bytes()) == expected
+        evaluator._verify_aggregate_outputs(
+            summary_path, csv_path, intended_summary_sha256=digest
+        )

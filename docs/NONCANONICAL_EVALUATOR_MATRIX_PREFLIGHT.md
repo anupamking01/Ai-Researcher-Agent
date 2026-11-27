@@ -586,3 +586,19 @@ measurements. Older summaries with only total counts do not establish the
 cell-level partition. This disclosure does not establish comparable backend
 execution, justify changing frozen outcomes, or resolve original archive
 custody or human validation. Synthetic tests use no live provider calls.
+
+
+## Producer-side aggregate byte limits
+
+The bounded summary and CSV readers already reject oversized retained
+artifacts, even when their digests agree. The writer now checks the exact
+serialized UTF-8 byte lengths against those same independent limits before
+staging either output. Otherwise a candidate that cannot pass its own
+readback could displace a previously valid noncanonical pair. At the exact
+limit publication remains permitted; one additional byte aborts before any
+staging or replacement. The prior files remain unchanged on this rejection.
+
+The synthetic boundary tests cover both artifacts and verify successful
+readback at the limit. These checks do not make publication an atomic
+two-file transaction, authenticate historical custody, or change any
+treatment, evaluator or human outcome.

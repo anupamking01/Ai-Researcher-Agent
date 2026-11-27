@@ -685,6 +685,18 @@ def _publish_aggregate_outputs(
     ).hexdigest()
 
     summary_content = json.dumps(summary, indent=2, sort_keys=True).encode("utf-8")
+    # Enforce the same exact byte ceilings as the readback verifier before
+    # staging either artifact. An unreadable generation must not displace a
+    # previously valid pair, even if the new pair has consistent digests.
+    for label, content, limit in (
+        ("summary", summary_content, MAX_EVALUATOR_JSON_BYTES),
+        ("CSV", csv_content, MAX_EVALUATOR_AGGREGATE_CSV_BYTES),
+    ):
+        if len(content) > limit:
+            raise SystemExit(
+                f"Post-hoc aggregate {label} exceeds maximum publication "
+                f"size ({len(content)} > {limit} bytes); existing outputs retained"
+            )
     intended_summary_sha256 = hashlib.sha256(summary_content).hexdigest()
     outputs = [
         (Path(summary_path), summary_content),
