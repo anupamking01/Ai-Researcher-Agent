@@ -373,6 +373,13 @@ preflight captures byte-exact summary and CSV hashes and checks the pair
 again immediately before aggregate publication. This also prevents a new
 aggregate introduced while other cells are evaluated from being replaced.
 
+The required provenance marker values must also have their exact JSON types:
+numeric `0` is not boolean `false`, and floating-point run IDs are not the
+frozen integer run IDs, even when Python compares their values as equal.
+Malformed but digest-consistent pairs are preserved for review rather than
+accepted as authorization to replace them. This check is not proof of
+historical custody or authenticity.
+
 An internally consistent previously generated **noncanonical** pair may be
 refreshed when replay completes. Interrupted two-file publication is not an
 atomic directory transaction; a partial replacement remains detectable and

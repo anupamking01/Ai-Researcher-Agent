@@ -782,7 +782,14 @@ def _snapshot_noncanonical_aggregate_destinations(
     if (
         prior.get("study_id") != STUDY_ID
         or not isinstance(provenance, dict)
-        or any(provenance.get(key) != value for key, value in frozen_marker.items())
+        # Python equality conflates JSON booleans and numbers (False == 0),
+        # and integer run IDs with floats. Require the exact marker types.
+        or any(
+            key not in provenance
+            or type(provenance[key]) is not type(value)
+            or provenance[key] != value
+            for key, value in frozen_marker.items()
+        )
     ):
         raise SystemExit(
             "Refusing noncanonical aggregate replacement: existing summary "

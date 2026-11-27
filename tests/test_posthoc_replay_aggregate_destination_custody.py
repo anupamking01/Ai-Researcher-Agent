@@ -91,6 +91,33 @@ def test_forged_original_replacement_permission_cannot_authorize_overwrite(tmp_p
         _snapshot(summary, csv)
 
 
+@pytest.mark.parametrize(
+    "field, convert",
+    [
+        ("can_replace_original_evaluator_evidence", int),
+        ("historical_archive_custody_authenticated", int),
+        ("original_actions_evaluator_recovery_run_id", float),
+        ("original_actions_treatment_run_id", float),
+    ],
+)
+def test_numeric_alias_cannot_authorize_noncanonical_replacement(
+    tmp_path, field, convert
+):
+    """A digest-valid pair must carry the exact JSON marker types."""
+    summary, csv = _destinations(tmp_path)
+    record = _write_pair(summary, csv)
+    marker = record["replay_provenance"]
+    original = marker[field]
+    marker[field] = convert(original)
+    assert marker[field] == original  # The old Python equality check passed.
+    assert type(marker[field]) is not type(original)
+    summary.write_text(json.dumps(record), encoding="utf-8")
+    before = summary.read_bytes(), csv.read_bytes()
+    with pytest.raises(SystemExit, match="lacks matching explicit noncanonical"):
+        _snapshot(summary, csv)
+    assert (summary.read_bytes(), csv.read_bytes()) == before
+
+
 def test_byte_equivalent_summary_rewrite_is_detected_at_publication(tmp_path):
     summary, csv = _destinations(tmp_path)
     _write_pair(summary, csv)
