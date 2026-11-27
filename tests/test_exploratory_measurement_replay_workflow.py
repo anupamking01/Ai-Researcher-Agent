@@ -84,6 +84,7 @@ def test_relevant_source_changes_trigger_replay_but_not_other_branches():
 def test_bundle_verification_is_a_prerequisite_for_artifact_upload():
     text = _workflow()
     assert text.count('"scripts/verify_exploratory_measurement_bundle.py"') == 2
+    assert text.count('"scripts/verify_ci_source_checkout.py"') == 2
     assert text.count('"tests/test_exploratory_measurement_bundle_verification.py"') == 2
     invoked = text.index("python -m scripts.verify_exploratory_measurement_bundle")
     uploaded = text.index("name: Retain checked diagnostic JSONs")

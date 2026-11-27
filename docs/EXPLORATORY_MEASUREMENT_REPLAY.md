@@ -29,16 +29,17 @@ its **repository, exact workflow checkout commit, Actions run ID, and run
 attempt** from the GitHub Actions run page/API (not from the bundle itself).
 Check out that exact commit with the pinned frozen CSV inputs and run:
 
-The replay verifier now independently checks that the running source repository's
-Git `HEAD` equals the externally supplied checkout SHA, that the code is at
-the repository root, and that the tracked or untracked replay scripts and
-frozen source files have **no local changes**. Missing Git metadata, altered
-verifier code, untracked replacement scripts, or a mismatched checkout fail
-closed even when an extracted bundle rehashes consistently. A clean checkout
-is only a *local source-continuity condition*: Git HEAD and a clean worktree
-do not cryptographically attest GitHub's remote execution or the historical
-original report/trace custody. The two frozen CSV fingerprints remain required.
-
+The replay verifier checks the externally supplied Git HEAD and repository
+root, and compares **every tracked working-tree blob** with that commit's
+Git tree before and after independent replay. It also rejects staged edits
+and nonignored untracked files anywhere in the checkout. This reuses the
+offline CI exact-source gate rather than relying on Git status, which can
+hide modified bytes under assume-unchanged or skip-worktree flags. Keep
+the extracted bundle outside the source checkout. A clean exact-byte
+checkout is a *local source-continuity condition*: it does not authenticate
+GitHub's remote execution, ignored local build artifacts, already-loaded
+Python modules, or transient changes restored between checks. The two frozen
+CSV fingerprints remain required.
 
 ```bash
 python -m scripts.verify_exploratory_measurement_bundle \

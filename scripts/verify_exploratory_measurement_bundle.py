@@ -14,9 +14,9 @@ import stat
 import json
 from pathlib import Path
 import re
-import subprocess
 
 from scripts import audit_frozen_analysis_csv_inputs as audit
+from scripts.verify_ci_source_checkout import verify_source_checkout
 from scripts import verify_main_study_claim_denominator_artifact as denominators
 from scripts import verify_main_study_retrieval_exposure_artifact as exposure
 
@@ -216,38 +216,11 @@ def _positive_id(value: str, *, label: str) -> None:
              f"{label} must be a positive decimal identifier")
 
 
-# A bundle index can claim a GitHub checkout SHA without the independent
-# replay actually reading its code. Bound CLI and API replay to a clean,
-# matching local Git checkout before accepting source-derived receipts.
-REPLAY_SOURCE_PATHS = (
-    "scripts",
-    "outputs/main_study_runs.csv",
-    "outputs/posthoc_support_runs.csv",
-    "outputs/main_study_analysis_inputs_manifest.json",
-    "experiments/main_budget_tasks.json",
-)
-
-
 def _verify_source_checkout(checkout_sha: str) -> None:
-    root = Path(__file__).resolve().parents[1]
-
-    def git(*args: str) -> str:
-        try:
-            result = subprocess.run(
-                ["git", *args], cwd=root, check=True, capture_output=True,
-                text=True, timeout=15,
-            )
-        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            raise ValueError("bundle source checkout identity cannot be verified") from exc
-        return result.stdout.strip()
-
-    _require(git("rev-parse", "--verify", "HEAD") == checkout_sha,
-             "bundle replay checkout HEAD differs from externally pinned SHA")
-    _require(Path(git("rev-parse", "--show-toplevel")).resolve() == root,
-             "bundle replay sources are not at the checkout root")
-    _require(not git("status", "--porcelain=v1", "--untracked-files=all",
-                     "--", *REPLAY_SOURCE_PATHS),
-             "bundle replay has modified or untracked research source inputs")
+    # Git status alone trusts index flags such as assume-unchanged. Use the
+    # same byte-level Git tree verification as the offline unit-test gate.
+    verify_source_checkout(Path(__file__).resolve().parents[1],
+                           expected_sha=checkout_sha)
 
 
 def verify_bundle(directory: Path, *, repository: str, checkout_sha: str,
@@ -303,7 +276,10 @@ def verify_bundle(directory: Path, *, repository: str, checkout_sha: str,
             _require(recorded["diagnostic_sha256"] == digests[diagnostic],
                      f"{receipt} does not bind the diagnostic bytes")
 
-        # Detect observed content changes while independently replaying source rows.
+        # Check the source again before issuing a successful replay receipt.
+        # This catches persistent changes during replay, not transient changes
+        # restored before the second observation.
+        _verify_source_checkout(checkout_sha)
         return {
             "schema_version": 1,
             "status": STATUS,

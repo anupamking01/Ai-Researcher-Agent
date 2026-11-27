@@ -65,7 +65,7 @@ def _bundle(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setattr(bundle.exposure, "verify_published", lambda _: dict(receipts["retrieval_exposure_verification.json"]))
     monkeypatch.setattr(bundle.denominators, "verify_published", lambda _: dict(receipts["claim_denominators_verification.json"]))
     # These tests isolate bundle file/receipt checks; source checkout gating
-    # is exercised independently with a simulated Git subprocess below.
+    # is exercised independently with a real synthetic Git checkout below.
     monkeypatch.setattr(bundle, "_verify_source_checkout", lambda _: None)
     return tmp_path
 
@@ -209,61 +209,74 @@ def test_wrong_external_identity_rejected(tmp_path, monkeypatch):
             _verify(directory, **changes)
 
 
-def _simulated_source_git(monkeypatch, *, head=SHA, root=None, status="", fails=False):
-    expected_root = Path(bundle.__file__).resolve().parents[1]
-
-    def execute(command, **options):
-        assert options["cwd"] == expected_root
-        assert options["check"] is True
-        assert options["timeout"] == 15
-        if fails:
-            raise subprocess.CalledProcessError(128, command)
-        if command[1:3] == ["rev-parse", "--verify"]:
-            output = head
-        elif command[1:] == ["rev-parse", "--show-toplevel"]:
-            output = str(root if root is not None else expected_root)
-        elif command[1] == "status":
-            assert command[-len(bundle.REPLAY_SOURCE_PATHS):] == list(bundle.REPLAY_SOURCE_PATHS)
-            output = status
-        else:
-            raise AssertionError(f"unexpected Git command: {command}")
-        return subprocess.CompletedProcess(command, 0, stdout=output + "\n", stderr="")
-
-    monkeypatch.setattr(bundle.subprocess, "run", execute)
+def _git(root, *args):
+    return subprocess.check_output(
+        ["git", "-C", str(root), *args], text=True,
+    ).strip()
 
 
-def test_source_checkout_matches_external_sha_and_is_clean(monkeypatch):
-    _simulated_source_git(monkeypatch)
-    bundle._verify_source_checkout(SHA)
+@pytest.fixture
+def source_checkout(tmp_path, monkeypatch):
+    root = tmp_path / "checkout"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "fixture@example.invalid")
+    _git(root, "config", "user.name", "VERA synthetic fixture")
+    (root / "scripts").mkdir()
+    source = root / "scripts" / "fixture.py"
+    source.write_text("value = 1\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "fixture")
+    sha = _git(root, "rev-parse", "HEAD")
+    monkeypatch.setattr(bundle, "__file__",
+                        str(root / "scripts" / "verify_exploratory_measurement_bundle.py"))
+    return root, source, sha
 
 
-def test_source_checkout_rejects_wrong_head_even_with_valid_bundle_metadata(monkeypatch):
-    _simulated_source_git(monkeypatch, head="b" * 40)
-    with pytest.raises(ValueError, match="HEAD differs"):
+def test_source_checkout_matches_external_sha_and_is_clean(source_checkout):
+    _, _, sha = source_checkout
+    bundle._verify_source_checkout(sha)
+
+
+def test_source_checkout_rejects_wrong_head_even_with_valid_bundle_metadata(source_checkout):
+    with pytest.raises(ValueError, match="HEAD does not match"):
+        bundle._verify_source_checkout("b" * 40)
+
+
+@pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
+def test_source_checkout_rejects_edits_hidden_from_status(source_checkout, flag):
+    root, source, sha = source_checkout
+    _git(root, "update-index", flag, "scripts/fixture.py")
+    source.write_text("value = 2\n")
+    assert _git(root, "status", "--porcelain") == ""
+    with pytest.raises(ValueError, match="source bytes differ"):
+        bundle._verify_source_checkout(sha)
+
+
+def test_source_checkout_rejects_untracked_files(source_checkout):
+    root, _, sha = source_checkout
+    (root / "scripts" / "unexpected.py").write_text("value = 2\n")
+    with pytest.raises(ValueError, match="untracked files"):
+        bundle._verify_source_checkout(sha)
+
+
+def test_source_checkout_rejects_missing_git(monkeypatch, tmp_path):
+    monkeypatch.setattr(bundle, "__file__", str(tmp_path / "scripts" / "fixture.py"))
+    with pytest.raises(ValueError, match="unable to inspect"):
         bundle._verify_source_checkout(SHA)
 
 
-def test_source_checkout_rejects_nested_unrelated_repository(monkeypatch, tmp_path):
-    _simulated_source_git(monkeypatch, root=tmp_path)
-    with pytest.raises(ValueError, match="checkout root"):
-        bundle._verify_source_checkout(SHA)
-
-
-@pytest.mark.parametrize("dirty", [
-    " M scripts/verify_main_study_retrieval_exposure_artifact.py",
-    "?? scripts/shadow_replay_module.py",
-    " M outputs/main_study_runs.csv",
-])
-def test_source_checkout_rejects_dirty_inputs_even_at_correct_head(monkeypatch, dirty):
-    _simulated_source_git(monkeypatch, status=dirty)
-    with pytest.raises(ValueError, match="modified or untracked"):
-        bundle._verify_source_checkout(SHA)
-
-
-def test_source_checkout_rejects_unavailable_git_or_inaccessible_checkout(monkeypatch):
-    _simulated_source_git(monkeypatch, fails=True)
-    with pytest.raises(ValueError, match="cannot be verified"):
-        bundle._verify_source_checkout(SHA)
+def test_source_rechecked_after_independent_replay(tmp_path, monkeypatch):
+    directory = _bundle(tmp_path, monkeypatch)
+    checks = []
+    def verify_source(sha):
+        checks.append(sha)
+        if len(checks) == 2:
+            raise ValueError("source changed during replay")
+    monkeypatch.setattr(bundle, "_verify_source_checkout", verify_source)
+    with pytest.raises(ValueError, match="source changed during replay"):
+        _verify(directory)
+    assert checks == [SHA, SHA]
 
 
 def test_same_byte_leaf_replacement_during_replay_rejected(tmp_path, monkeypatch):
