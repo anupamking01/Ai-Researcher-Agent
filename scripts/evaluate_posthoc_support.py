@@ -1451,6 +1451,20 @@ def _evaluator_cache_manifest(
             raise SystemExit("Evaluator cache manifest has duplicate or unbound cell")
         seen.add(path)
         receipt = row.get("raw_response")
+        identity_status = None
+        model_label_relation = "receipt_missing"
+        if "provider_response_identity" in row:
+            identity = row["provider_response_identity"]
+            validate_response_identity(identity)
+            identity_status = {
+                name: entry["status"] for name, entry in identity.items()
+            }
+            model = identity["model"]
+            model_label_relation = model["status"]
+            if model["status"] == "reported":
+                model_label_relation = (
+                    "equal" if model["value"] == row["evaluator_model"] else "different"
+                )
         cells.append({
             "variant_id": row["variant_id"],
             "task_id": row["task_id"],
@@ -1458,15 +1472,22 @@ def _evaluator_cache_manifest(
             "cache_sha256": cache_source_hashes[path],
             "raw_response_sha256": receipt["sha256"] if receipt is not None else None,
             "raw_response_byte_size": receipt["byte_size"] if receipt is not None else None,
+            "provider_response_identity_status": identity_status,
+            "requested_returned_model_label_relation": model_label_relation,
         })
     if seen != set(cache_source_hashes):
         raise SystemExit("Evaluator cache manifest has unexpected cache source")
     retained = sum(cell["raw_response_sha256"] is not None for cell in cells)
+    identity_retained = sum(
+        cell["provider_response_identity_status"] is not None for cell in cells
+    )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "cells": cells,
         "retained_raw_response_cells": retained,
         "missing_raw_response_cells": len(cells) - retained,
+        "retained_provider_identity_receipt_cells": identity_retained,
+        "missing_provider_identity_receipt_cells": len(cells) - identity_retained,
     }
 
 

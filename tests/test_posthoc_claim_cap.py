@@ -1589,20 +1589,29 @@ def test_aggregate_cache_manifest_discloses_mixed_raw_response_coverage(tmp_path
     manifest = json.loads(summary_path.read_text(encoding="utf-8"))["evaluator_cache_manifest"]
     fingerprint = _fingerprint_text(_evaluator_result())
     assert manifest == {
-        "schema_version": 1,
+        "schema_version": 2,
         "retained_raw_response_cells": 1,
         "missing_raw_response_cells": 1,
+        "retained_provider_identity_receipt_cells": 1,
+        "missing_provider_identity_receipt_cells": 1,
         "cells": [
             {
                 "variant_id": "D3", "task_id": "main-01", "run_id": "run-d3-main-01",
                 "cache_sha256": hashlib.sha256(old_path.read_bytes()).hexdigest(),
                 "raw_response_sha256": None, "raw_response_byte_size": None,
+                "provider_response_identity_status": None,
+                "requested_returned_model_label_relation": "receipt_missing",
             },
             {
                 "variant_id": "D3", "task_id": "main-02", "run_id": "run-d3-main-02",
                 "cache_sha256": hashlib.sha256(new_path.read_bytes()).hexdigest(),
                 "raw_response_sha256": fingerprint["sha256"],
                 "raw_response_byte_size": fingerprint["byte_size"],
+                "provider_response_identity_status": {
+                    "model": "unavailable", "id": "unavailable",
+                    "system_fingerprint": "unavailable",
+                },
+                "requested_returned_model_label_relation": "unavailable",
             },
         ],
     }
@@ -1728,3 +1737,35 @@ def test_cached_evaluator_rejects_malformed_provider_response_identity(tmp_path,
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(SystemExit, match="provider_response_identity"):
         _load_cached(path)
+
+
+@pytest.mark.parametrize(
+    ("status", "value", "relation"),
+    [
+        ("reported", "gpt-5.6-terra", "equal"),
+        ("reported", "private-resolved-label", "different"),
+        ("unavailable", None, "unavailable"),
+        ("invalid", None, "invalid"),
+    ],
+)
+def test_aggregate_cache_manifest_discloses_identity_status_not_labels(
+    tmp_path, monkeypatch, status, value, relation
+):
+    monkeypatch.setattr(evaluate_posthoc_support, "EVAL_ROOT", tmp_path)
+    row = _cached_evaluation(provider_response_identity={
+        "model": {"status": status, "value": value},
+        "id": {"status": "reported", "value": "private-completion-id"},
+        "system_fingerprint": {"status": "reported", "value": "private-backend"},
+    })
+    hashes = {tmp_path / "D3" / "main-01.json": "a" * 64}
+    manifest = evaluate_posthoc_support._evaluator_cache_manifest([row], hashes)
+    cell, = manifest["cells"]
+    assert cell["provider_response_identity_status"] == {
+        "model": status, "id": "reported", "system_fingerprint": "reported",
+    }
+    assert cell["requested_returned_model_label_relation"] == relation
+    assert manifest["retained_provider_identity_receipt_cells"] == 1
+    assert manifest["missing_provider_identity_receipt_cells"] == 0
+    serialized = json.dumps(manifest)
+    for private in ("private-resolved-label", "private-completion-id", "private-backend", "gpt-5.6-terra"):
+        assert private not in serialized

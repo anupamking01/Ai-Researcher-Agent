@@ -348,7 +348,7 @@ pending.
 
 A replay can mix older bound caches without raw response receipts with
 newer measurements that retain them. The aggregate summary now includes
-an additive `evaluator_cache_manifest` (version 1) listing each cell's
+an additive `evaluator_cache_manifest` (initially version 1; current version 2) listing each cell's
 variant, task, run ID, exact cache-file SHA-256 and raw-response receipt
 SHA-256/UTF-8 byte length, or explicit nulls when no receipt is retained.
 It reports retained and missing receipt counts separately. The cache
@@ -383,9 +383,17 @@ The evaluator opts into capture for its one non-streaming response;
 multiple calls still fail the existing accounting contract. Fresh receipts
 and any present receipt in a resumed cache are shape-validated, while older
 caches without the extension remain inspectable on their existing terms.
-The receipt resides in the owner-only cache, not the aggregate CSV or JSON
-manifest; the existing cache digest binds it to the aggregate. Keep response
-IDs private. A provider label is not cryptographic authentication of model
+The receipt values reside in the owner-only cache, not the aggregate CSV
+or JSON manifest; the existing cache digest binds them to the aggregate.
+Keep response IDs private. Version 2 of the aggregate cache manifest adds
+per-cell field statuses only (null for a missing receipt), separate counts
+of retained and missing identity receipts, and an exact requested-versus-
+returned model label relation: `equal`, `different`, `unavailable`,
+`invalid`, or `receipt_missing`. No provider label values are exported.
+A retained receipt may still contain only unavailable fields; equality is
+string equality, not proof of identical execution, and difference may
+reflect normal alias resolution. Version 1 summaries lack this coverage
+information and must not be interpreted as evidence of matching identities. A provider label is not cryptographic authentication of model
 weights, backend, execution time or billing, and a missing receipt is not
 evidence that the requested and resolved identifiers matched. Historical
 responses and the frozen primary analysis remain unchanged; this does not
