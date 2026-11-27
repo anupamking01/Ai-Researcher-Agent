@@ -404,3 +404,25 @@ restored literal checkout without deleting the replacement refs. This
 does not sanitize other Git invocations, attest the runner or prove
 continuous source custody. No treatments, evaluator measurements, frozen
 automated estimates or human ratings are changed.
+
+## Ambient Git storage isolation for exact-source gates — 28 November 2026
+
+Git's `-C` option selects a directory but does not cancel inherited Git
+storage selectors. In a synthetic repository, staging an edit and restoring
+the original working bytes yields `MM source.py`. Pointing
+`GIT_INDEX_FILE` at a saved clean index hides this staged edit from
+`git status` even with the literal-object flag, while HEAD and the
+working-tree bytes still match the pinned revision.
+
+The shared exact-source verifier now fails before Git inspection if any of
+`GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_INDEX_FILE`,
+`GIT_OBJECT_DIRECTORY` or `GIT_ALTERNATE_OBJECT_DIRECTORIES` is present
+in the inherited environment, including an empty value. Run from the
+intended checkout with these variables unset; ordinary linked worktrees
+discovered through their on-disk Git metadata are not prohibited by this
+environment check. This is a fail-closed local storage-view requirement,
+not general Git configuration sanitization or independent runner
+attestation. Synthetic regressions exercise the staged-only bypass,
+restoration, and both empty and nonempty values of each selector.
+No treatment or evaluator is rerun, no frozen result is changed, and
+human validation remains pending.

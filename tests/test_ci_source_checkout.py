@@ -55,6 +55,49 @@ def test_staged_source_edit_is_rejected(checkout):
         verify_source_checkout(root, expected_sha=sha)
 
 
+def test_alternate_index_cannot_hide_staged_only_edit(checkout, monkeypatch):
+    root, sha = checkout
+    clean_index = root / ".git" / "alternate-clean-index"
+    clean_index.write_bytes((root / ".git" / "index").read_bytes())
+    source = root / "source.py"
+    original = source.read_bytes()
+    source.write_bytes(b"print('staged only')\n")
+    _git(root, "add", "source.py")
+    source.write_bytes(original)
+    assert _git(root, "status", "--porcelain") == "MM source.py"
+    with pytest.raises(ValueError, match="staged changes"):
+        verify_source_checkout(root, expected_sha=sha)
+
+    # Git still reports the pinned HEAD and sees the original working bytes,
+    # but status examines a clean alternate index, not the real staged edit.
+    monkeypatch.setenv("GIT_INDEX_FILE", str(clean_index))
+    assert _git(root, "rev-parse", "HEAD") == sha
+    assert _git(root, "status", "--porcelain") == ""
+    with pytest.raises(ValueError, match="ambient Git storage overrides.*GIT_INDEX_FILE"):
+        verify_source_checkout(root, expected_sha=sha)
+    monkeypatch.delenv("GIT_INDEX_FILE")
+    assert _git(root, "status", "--porcelain") == "MM source.py"
+    _git(root, "reset", "--hard", sha)
+    assert verify_source_checkout(root, expected_sha=sha) == 1
+
+
+@pytest.mark.parametrize("variable", [
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+])
+@pytest.mark.parametrize("value", ["", "/unused-alternate-git-storage"])
+def test_ambient_git_storage_selector_fails_before_inspection(
+    checkout, monkeypatch, variable, value
+):
+    root, sha = checkout
+    monkeypatch.setenv(variable, value)
+    def unexpected_git(*args, **kwargs):
+        pytest.fail("Git inspection must not run with redirected storage")
+    monkeypatch.setattr("scripts.verify_ci_source_checkout._git", unexpected_git)
+    with pytest.raises(ValueError, match=f"ambient Git storage overrides.*{variable}"):
+        verify_source_checkout(root, expected_sha=sha)
+
+
 def test_assume_unchanged_cannot_hide_modified_source(checkout):
     root, sha = checkout
     _git(root, "update-index", "--assume-unchanged", "source.py")

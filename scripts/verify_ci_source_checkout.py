@@ -20,6 +20,11 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 COMMIT_SHA = re.compile(r"[0-9a-f]{40}\Z")
 CHUNK_BYTES = 1024 * 1024
+# -C does not override these ambient Git repository/index selectors.
+GIT_STORAGE_OVERRIDES = (
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+)
 
 
 def _git(root: Path, *arguments: str) -> bytes:
@@ -98,6 +103,12 @@ def verify_source_checkout(root: Path, *, expected_sha: str) -> int:
     """
     if type(expected_sha) is not str or not COMMIT_SHA.fullmatch(expected_sha):
         raise ValueError("expected checkout SHA must be 40 lowercase hex characters")
+    # A redirected index can hide staged edits even when working bytes match
+    # HEAD exactly. Reject alternate repository/storage views before any Git
+    # command; do not silently verify a different index or object database.
+    overrides = [name for name in GIT_STORAGE_OVERRIDES if name in os.environ]
+    if overrides:
+        raise ValueError("ambient Git storage overrides are unsupported: " + ", ".join(overrides))
     root = root.resolve(strict=True)
     top = Path(os.fsdecode(_git(root, "rev-parse", "--show-toplevel").strip())).resolve()
     if top != root:
