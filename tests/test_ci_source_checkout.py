@@ -213,3 +213,40 @@ def test_workflow_gates_both_sides_of_tests_before_evidence_publication():
         assert step["run"].strip().splitlines() == [
             f'python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase {phase}'
         ]
+
+
+@pytest.mark.parametrize("target_kind", ["external_absolute", "external_relative", "ignored", "tracked"])
+def test_tracked_symlink_cannot_extend_verified_source_domain(checkout, target_kind):
+    root, _ = checkout
+    if target_kind == "tracked":
+        target = root / "source.py"
+        link_target = "source.py"
+    elif target_kind == "ignored":
+        target = root / "ignored.py"
+        (root / ".gitignore").write_text("ignored.py\n")
+        _git(root, "add", ".gitignore")
+        link_target = "ignored.py"
+    else:
+        target = root.parent / f"{root.name}-external.py"
+        link_target = str(target) if target_kind == "external_absolute" else f"../{target.name}"
+    if target_kind != "tracked":
+        target.write_bytes(b"print('initial')\n")
+    pointer = root / "pointer.py"
+    pointer.symlink_to(link_target)
+    _git(root, "add", "pointer.py")
+    _git(root, "commit", "-qm", "add tracked symlink")
+    sha = _git(root, "rev-parse", "HEAD")
+    assert _git(root, "status", "--porcelain") == ""
+    if target_kind != "tracked":
+        # The committed link text is unchanged, but code reached by reading it is not.
+        target.write_bytes(b"print('substituted')\n")
+        assert pointer.read_bytes() == b"print('substituted')\n"
+        assert _git(root, "status", "--porcelain") == ""
+    with pytest.raises(ValueError, match="tracked symlinks are unsupported"):
+        verify_source_checkout(root, expected_sha=sha)
+    # Ordinary exact regular-file checkouts remain accepted.
+    _git(root, "rm", "pointer.py")
+    _git(root, "commit", "-qm", "remove tracked symlink")
+    assert verify_source_checkout(root, expected_sha=_git(root, "rev-parse", "HEAD")) == (
+        2 if target_kind == "ignored" else 1
+    )

@@ -1,3 +1,25 @@
+## Regular-file source domain (28 November 2026)
+
+A tracked symbolic link binds only its target pathname in Git, not the bytes
+obtained by opening that pathname. A clean checkout could therefore contain
+a tracked Python source link to a mutable external file or ignored file,
+and the exact-source verifier would accept it even after the target changed.
+This was reproduced in synthetic Git repositories with both absolute and
+relative external targets and an ignored in-tree target.
+
+The shared offline CI and exploratory replay source verifier now rejects
+all tracked symbolic links (including links to tracked files). The pinned
+research tree at the predecessor contains no symlink entries, so this is a
+conservative regular-file domain rather than a change to existing study
+inputs. Any future need for symlinks requires a reviewed target-identity and
+custody policy. Four synthetic regression cases also check clean ordinary
+checkout acceptance after removing the link. This does not prevent arbitrary
+code from opening other untracked files or attest dependencies, the runner,
+or the interval between verification gates. It does not recover historical
+report/trace custody or establish human validation; pilot, post-collection
+automated primary analysis and retrospective exploratory claims remain
+distinct. No treatment, evaluator, frozen result or human rating is changed.
+
 # Fail closed on pytest collection warnings — 19 November 2026
 
 The ordinary firewalled pytest entrypoint now treats

@@ -48,11 +48,9 @@ def _source_blob_digest(path: Path, mode: bytes) -> str:
         if before.st_nlink != 1:
             raise ValueError("tracked source must be single-link (no hardlink aliases)")
         if mode == b"120000":
-            if not stat.S_ISLNK(before.st_mode):
-                raise ValueError("tracked symlink was replaced")
-            payload = os.fsencode(os.readlink(path))
-            after = path.lstat()
-            digest = hashlib.sha1(b"blob %d\0" % len(payload) + payload).hexdigest()
+            # Git binds only the link text, not bytes read through the link.
+            # VERA's regular-file source domain does not need symlinks.
+            raise ValueError("tracked symlinks are unsupported by exact-source verification")
         elif mode in (b"100644", b"100755"):
             if not stat.S_ISREG(before.st_mode):
                 raise ValueError("tracked regular file was replaced")
@@ -98,7 +96,7 @@ def _generation(value: os.stat_result) -> tuple[int, ...]:
 def verify_source_checkout(root: Path, *, expected_sha: str) -> int:
     """Require HEAD and every tracked file's current bytes to match Git HEAD.
 
-    Reject nonignored untracked files too. Ignored build/cache output and
+    Reject tracked symlinks and nonignored untracked files too. Ignored build/cache output and
     mid-test changes restored before this gate remain outside its guarantee.
     """
     if type(expected_sha) is not str or not COMMIT_SHA.fullmatch(expected_sha):
