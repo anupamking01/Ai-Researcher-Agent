@@ -137,5 +137,6 @@ def test_cache_inventory_runs_before_any_model_import():
     source = Path(evaluator.__file__).read_text(encoding="utf-8")
     assert (
         source.index("existing_paths = _inventory_evaluator_cache_tree(EVAL_ROOT)")
-        < source.index("from agent.llm_utils import UsageTracker")
+        < source.index("rows, pending, cache_source_hashes = _preflight_evaluator_resume(")
+        < source.index("from agent.llm_utils import ")
     )

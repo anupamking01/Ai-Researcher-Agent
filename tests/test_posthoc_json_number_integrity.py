@@ -70,5 +70,5 @@ def test_numeric_gate_is_before_any_model_import():
     source = open(evaluator.__file__, encoding="utf-8").read()
     assert (
         source.index("payload, trace_sha256 = _load_json(trace_path, include_sha256=True)")
-        < source.index("from agent.llm_utils import UsageTracker")
+        < source.index("from agent.llm_utils import ")
     )

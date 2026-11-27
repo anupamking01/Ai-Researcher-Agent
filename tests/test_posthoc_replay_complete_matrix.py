@@ -95,6 +95,6 @@ def test_main_calls_matrix_guard_before_any_model_import():
     assert (
         source.index("trace_files = _inventory_evaluator_treatment_trace_tree(")
         < source.index("_require_complete_frozen_treatment_matrix(expected, expected_questions)")
-        < source.index("from agent.llm_utils import UsageTracker")
+        < source.index("from agent.llm_utils import ")
     )
     assert "Refusing evaluator replay: incomplete treatment trace" in source

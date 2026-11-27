@@ -123,5 +123,6 @@ def test_inventory_precedes_model_import():
     source = Path(evaluator.__file__).read_text(encoding="utf-8")
     assert (
         source.index("_inventory_evaluator_run_evidence(run_dir)")
-        < source.index("from agent.llm_utils import UsageTracker")
+        < source.index("rows, pending, cache_source_hashes = _preflight_evaluator_resume(")
+        < source.index("from agent.llm_utils import ")
     )
