@@ -1190,6 +1190,53 @@ def test_aggregate_summary_binds_exact_published_csv_bytes(tmp_path, monkeypatch
     }
 
 
+@pytest.mark.parametrize("substitute_csv", [False, True])
+def test_aggregate_publication_rejects_self_consistent_substitution(
+    tmp_path, monkeypatch, substitute_csv
+):
+    eval_root = _configure_resume_main(
+        tmp_path, monkeypatch, task_ids=("main-01",)
+    )
+    cache_path = eval_root / "D3" / "main-01.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(
+        json.dumps(_bound_zero_source_cache()), encoding="utf-8"
+    )
+    cache_bytes = cache_path.read_bytes()
+
+    def fail_if_called(**_kwargs):
+        raise AssertionError("cached evaluation should avoid a model call")
+
+    monkeypatch.setattr("agent.llm_utils.create_chat_completion", fail_if_called)
+    real_publish = evaluate_posthoc_support._publish_aggregate_outputs
+
+    def substitute_after_publish(summary_path, csv_path, summary, rows):
+        intended_digest = real_publish(summary_path, csv_path, summary, rows)
+        changed = json.loads(summary_path.read_text(encoding="utf-8"))
+        changed["n_evaluations"] = 0
+        if substitute_csv:
+            substituted = b"generation\nsubstituted\n"
+            csv_path.write_bytes(substituted)
+            changed["posthoc_support_runs_sha256"] = hashlib.sha256(
+                substituted
+            ).hexdigest()
+        summary_path.write_text(json.dumps(changed), encoding="utf-8")
+        # The older pair-consistency contract cannot detect this substitution.
+        evaluate_posthoc_support._verify_aggregate_outputs(summary_path, csv_path)
+        return intended_digest
+
+    monkeypatch.setattr(
+        evaluate_posthoc_support, "_publish_aggregate_outputs",
+        substitute_after_publish,
+    )
+    with pytest.raises(SystemExit, match="differs from the intended summary"):
+        evaluate_posthoc_support.main()
+    assert cache_path.read_bytes() == cache_bytes
+    # Preserve suspect outputs for explicit provenance review.
+    assert (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
 def test_aggregate_publication_stages_every_file_before_replacing_existing_outputs(
     tmp_path, monkeypatch
 ):

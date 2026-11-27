@@ -633,8 +633,8 @@ def _publish_aggregate_outputs(
     csv_path: Path,
     summary: dict,
     rows: list[dict],
-) -> None:
-    """Stage every aggregate artifact before replacing either final file."""
+) -> str:
+    """Stage both artifacts and return the intended summary's exact SHA-256."""
     fieldnames = [
         "variant_id",
         "task_id",
@@ -659,11 +659,10 @@ def _publish_aggregate_outputs(
         csv_content
     ).hexdigest()
 
+    summary_content = json.dumps(summary, indent=2, sort_keys=True).encode("utf-8")
+    intended_summary_sha256 = hashlib.sha256(summary_content).hexdigest()
     outputs = [
-        (
-            Path(summary_path),
-            json.dumps(summary, indent=2, sort_keys=True).encode("utf-8"),
-        ),
+        (Path(summary_path), summary_content),
         (Path(csv_path), csv_content),
     ]
     staged: list[tuple[Path, Path]] = []
@@ -685,11 +684,27 @@ def _publish_aggregate_outputs(
     finally:
         for _final_path, staging_path in staged:
             staging_path.unlink(missing_ok=True)
+    return intended_summary_sha256
 
 
-def _verify_aggregate_outputs(summary_path: Path, csv_path: Path) -> None:
-    """Require the aggregate summary to bind the exact run-level CSV bytes."""
-    summary = _load_json(Path(summary_path))
+def _verify_aggregate_outputs(
+    summary_path: Path,
+    csv_path: Path,
+    *,
+    intended_summary_sha256: str | None = None,
+) -> None:
+    """Verify CSV binding and, during publication, the intended summary bytes."""
+    summary, observed_summary_sha256 = _load_json(
+        Path(summary_path), include_sha256=True
+    )
+    if (
+        intended_summary_sha256 is not None
+        and observed_summary_sha256 != intended_summary_sha256
+    ):
+        raise SystemExit(
+            "Post-hoc aggregate publication mismatch: retained summary differs "
+            "from the intended summary; preserve both outputs for provenance review"
+        )
     expected = summary.get("posthoc_support_runs_sha256")
     if (
         not isinstance(expected, str)
@@ -1853,8 +1868,12 @@ def main() -> int:
     _require_noncanonical_aggregate_destinations_unchanged(
         summary_path, csv_path, aggregate_destination_snapshot
     )
-    _publish_aggregate_outputs(summary_path, csv_path, summary, rows)
-    _verify_aggregate_outputs(summary_path, csv_path)
+    intended_summary_sha256 = _publish_aggregate_outputs(
+        summary_path, csv_path, summary, rows
+    )
+    _verify_aggregate_outputs(
+        summary_path, csv_path, intended_summary_sha256=intended_summary_sha256
+    )
     print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
     return 0
 

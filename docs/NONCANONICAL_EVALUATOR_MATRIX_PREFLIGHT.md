@@ -493,3 +493,22 @@ or validation of the evaluator's scientific judgments. The original
 40 report/trace pairs and genuine blinded ratings remain outstanding; no
 pilot, frozen post-collection automated analysis, or exploratory outcome is
 replaced.
+
+## Verify the intended aggregate generation after publication
+
+The existing readback checked whether the published summary bound the CSV,
+but a modified summary retaining the same CSV digest, or a different
+self-consistent pair, could pass. Publication now captures the SHA-256 of
+the exact serialized summary **before staging**, returns that intended digest,
+and requires the post-publication readback to match it in addition to the
+existing CSV binding. A summary-only substitution or a coherent pair
+substitution is rejected, even in cache-only replay. Suspect files are
+retained for provenance review; no measurement cache is deleted or replaced.
+The standalone pair-consistency verifier retains its existing behavior
+when no independently captured intended digest is supplied.
+
+Synthetic offline regressions exercise both substitutions. This is local
+readback continuity, not an atomic two-file transaction, a guarantee against
+changes after verification, or independent authentication of the missing
+historical artifacts. It does not alter frozen outcomes, authorize new
+measurements, or establish human-validation readiness.
