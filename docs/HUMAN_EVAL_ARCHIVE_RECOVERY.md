@@ -1367,9 +1367,16 @@ source budgets, result counts, costs, latency and report words still agree.
 
 The read-only archive-readiness audit now checks the trace's planning and
 verification modes against its frozen D3/D6/P6/P6V treatment arm and
-requires finite positive, exactly concordant config/trace timeout values.
+requires the exact original config and trace timeout defaults:
+`browse_timeout_seconds=60.0` and `run_timeout_seconds=480.0` (JSON
+floating-point values). The pinned `c3c15e46` variant factory did not
+override either default, the main-study runner replaced only task IDs,
+and `logic/run.py` copied the configured values into the trace.
 Synthetic 40-cell regressions cover both direct/planner arm substitutions,
-missing or mistyped trace mode, and changed timeout values on either side.
+missing or mistyped trace mode, changed timeout values on either side,
+and concordant changes to both copies (including integer substitutes).
+Agreement between duplicated metadata is not sufficient to establish
+fidelity to the original censoring guardrails.
 This does **not** authenticate original custody, prove the guardrails were
 honored during execution, recover missing artifacts, or establish a new
 confirmatory or human-evaluation result. The five-task pilot remains

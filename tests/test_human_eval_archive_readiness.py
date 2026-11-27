@@ -949,6 +949,33 @@ def test_recovered_trace_execution_metadata_must_match_original_config(
     assert result["handoff_verified"] is False
 
 
+@pytest.mark.parametrize("field,replacement", [
+    ("browse_timeout_seconds", 120.0),
+    ("run_timeout_seconds", 960.0),
+    ("browse_timeout_seconds", 60),
+    ("run_timeout_seconds", 480),
+])
+def test_recovered_timeouts_must_match_original_defaults_even_when_concordant(
+    tmp_path, monkeypatch, field, replacement
+):
+    """Two concordant edits cannot redefine the original censoring guardrails."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces/P6/p6-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["experiment"][field] = replacement
+    payload["trace"][field] = replacement
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    # All frozen counts, costs, latencies and report bytes remain unchanged.
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_to_published_evaluator"]["matched"] == 40
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert field in result["trace_report_content"]["first_failure"]
+    assert "original_trace_report_content_alignment" in result["blockers"]
+    assert result["handoff_verified"] is False
+
+
 @pytest.mark.parametrize("variant,field,bad_value,remove", [
     ("D3", "search_candidate_multiplier", 2, False),
     ("P6V", "search_candidate_multiplier", True, False),

@@ -1161,20 +1161,21 @@ def _trace_report_content_status(
                     raise ValueError(
                         f"recovered trace {field} differs from frozen treatment arm"
                     )
-            # The historical runner also copied both execution timeouts from
-            # that same config into its trace. They describe censoring and
-            # infrastructure guardrails, so inconsistencies affect how a
-            # recovered run may be interpreted even if latency is unchanged.
-            for field in ("browse_timeout_seconds", "run_timeout_seconds"):
+            # The original c3c15e46 ExperimentConfig.from_variant() kept
+            # both float defaults; the main runner replaced only task IDs,
+            # and run_agent copied these values into the trace. Agreement
+            # between two edited values does not establish source fidelity.
+            for field, expected in (
+                ("browse_timeout_seconds", 60.0),
+                ("run_timeout_seconds", 480.0),
+            ):
                 configured = experiment.get(field)
                 recorded = trace.get(field)
                 if (
-                    type(configured) not in (int, float)
-                    or type(recorded) not in (int, float)
-                    or not math.isfinite(configured)
-                    or not math.isfinite(recorded)
-                    or configured <= 0
-                    or recorded != configured
+                    type(configured) is not float
+                    or type(recorded) is not float
+                    or configured != expected
+                    or recorded != expected
                 ):
                     raise ValueError(
                         f"recovered trace {field} differs from original experiment config"
