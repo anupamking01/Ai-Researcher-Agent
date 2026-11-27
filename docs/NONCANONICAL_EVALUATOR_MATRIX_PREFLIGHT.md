@@ -462,3 +462,34 @@ Synthetic offline boundary tests exercise both paths and deliberately use
 self-consistent CSV digests. This is an operational resource and provenance
 guard, not authentication of unavailable historical source artifacts or
 permission to rerun any research treatment or evaluator.
+
+## Credential-free, cache-only aggregate replay
+
+The direct evaluator previously required live-provider configuration and
+imported the provider client even when all measurements were already cached.
+A missing cache could also trigger a paid measurement during an intended
+offline reproduction. To make the operator's intent enforceable, use:
+
+```sh
+python scripts/evaluate_posthoc_support.py \
+  --noncanonical-evaluator-replay-ack NONCANONICAL_EVALUATOR_RECOVERY \
+  --cached-only
+```
+
+This mode uses the frozen model and temperature constants, without requiring
+or consulting the deployment environment variables `OPENAI_API_KEY`,
+`SMART_LLM_MODEL` or `TEMPERATURE`. After complete treatment and cache
+preflight, any missing evaluator cell aborts before provider import, cache
+publication or aggregate publication, even when credentials are present.
+A fully validated cache can produce the same noncanonical aggregates
+without importing the provider client. All existing source continuity,
+accounting, spend-cap, and destination safeguards still apply. Omitting
+the flag preserves the normal explicitly acknowledged measurement mode and
+its configuration requirements.
+
+This is a local, offline aggregate reconstruction from already retained
+measurements, not historical artifact recovery, independent authentication,
+or validation of the evaluator's scientific judgments. The original
+40 report/trace pairs and genuine blinded ratings remain outstanding; no
+pilot, frozen post-collection automated analysis, or exploratory outcome is
+replaced.

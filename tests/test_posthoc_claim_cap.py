@@ -1825,3 +1825,60 @@ def test_aggregate_cache_manifest_discloses_identity_status_not_labels(
     serialized = json.dumps(manifest)
     for private in ("private-resolved-label", "private-completion-id", "private-backend", "gpt-5.6-terra"):
         assert private not in serialized
+
+def _forbid_provider_import(monkeypatch):
+    import builtins
+
+    original_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name == "agent.llm_utils" or name == "openai" or name.startswith("openai."):
+            raise AssertionError("Cached-only replay must not import a provider client")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+
+
+def test_cached_only_rebuilds_aggregates_without_credentials(tmp_path, monkeypatch):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    cache = eval_root / "D3" / "main-01.json"
+    cache.parent.mkdir(parents=True)
+    cache.write_text(json.dumps(_bound_zero_source_cache()), encoding="utf-8")
+    original = cache.read_bytes()
+    for name in ("OPENAI_API_KEY", "SMART_LLM_MODEL", "TEMPERATURE"):
+        monkeypatch.delenv(name, raising=False)
+    evaluate_posthoc_support.sys.argv.append("--cached-only")
+    _forbid_provider_import(monkeypatch)
+
+    assert evaluate_posthoc_support.main() == 0
+    assert cache.read_bytes() == original
+    summary_path = tmp_path / "outputs" / "posthoc_support_summary.json"
+    csv_path = tmp_path / "outputs" / "posthoc_support_runs.csv"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert csv_path.is_file()
+    assert summary["n_evaluations"] == 1
+    assert summary["replay_provenance"]["reused_cached_measurements"] == 1
+    assert summary["replay_provenance"]["new_noncanonical_measurements"] == 0
+    assert summary["replay_provenance"]["can_replace_original_evaluator_evidence"] is False
+    evaluate_posthoc_support._verify_aggregate_outputs(summary_path, csv_path)
+
+
+@pytest.mark.parametrize("credentials_present", [True, False])
+def test_cached_only_refuses_missing_measurements(tmp_path, monkeypatch, credentials_present):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch)
+    cache = eval_root / "D3" / "main-01.json"
+    cache.parent.mkdir(parents=True)
+    cache.write_text(json.dumps(_bound_zero_source_cache()), encoding="utf-8")
+    original = cache.read_bytes()
+    if not credentials_present:
+        for name in ("OPENAI_API_KEY", "SMART_LLM_MODEL", "TEMPERATURE"):
+            monkeypatch.delenv(name, raising=False)
+    evaluate_posthoc_support.sys.argv.append("--cached-only")
+    _forbid_provider_import(monkeypatch)
+
+    with pytest.raises(SystemExit, match="Cached-only replay requires all evaluator measurements; 1 missing"):
+        evaluate_posthoc_support.main()
+    assert cache.read_bytes() == original
+    assert not (eval_root / "D3" / "main-02.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()

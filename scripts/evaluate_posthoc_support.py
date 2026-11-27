@@ -1567,6 +1567,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-evaluator-cost-usd", type=float, default=1.25)
     parser.add_argument("--noncanonical-evaluator-replay-ack", default=None)
+    parser.add_argument(
+        "--cached-only", action="store_true",
+        help="Rebuild noncanonical aggregates from a complete validated cache; "
+             "never import the provider client or make new measurements.",
+    )
     args = parser.parse_args()
     _require_noncanonical_evaluator_replay_ack(args.noncanonical_evaluator_replay_ack)
     print(
@@ -1579,16 +1584,23 @@ def main() -> int:
         or args.max_evaluator_cost_usd <= 0
     ):
         raise SystemExit("--max-evaluator-cost-usd must be finite and positive")
-    for name in ("OPENAI_API_KEY", "SMART_LLM_MODEL", "TEMPERATURE"):
-        if not os.getenv(name):
-            raise SystemExit(f"Missing required environment variable: {name}")
+    if not args.cached_only:
+        for name in ("OPENAI_API_KEY", "SMART_LLM_MODEL", "TEMPERATURE"):
+            if not os.getenv(name):
+                raise SystemExit(f"Missing required environment variable: {name}")
 
     from scripts.run_budget_main_study import _load_pricing, _validated_trace_cost
 
     pricing, _pricing_snapshot = _load_pricing(PRICING_FILE)
     task_set_id, expected_questions = _load_frozen_task_contract()
-    evaluator_model = os.environ["SMART_LLM_MODEL"]
-    evaluator_temperature = float(os.environ["TEMPERATURE"])
+    # A cached-only replay uses the frozen contract, not deployment settings.
+    # It must be reproducible in a workspace with no provider credentials.
+    if args.cached_only:
+        evaluator_model = FROZEN_EVALUATOR_MODEL
+        evaluator_temperature = FROZEN_EVALUATOR_TEMPERATURE
+    else:
+        evaluator_model = os.environ["SMART_LLM_MODEL"]
+        evaluator_temperature = float(os.environ["TEMPERATURE"])
     if not math.isfinite(evaluator_temperature):
         raise SystemExit("TEMPERATURE must be finite")
     _validate_frozen_evaluator_config(evaluator_model, evaluator_temperature)
@@ -1648,14 +1660,21 @@ def main() -> int:
         evaluator_temperature=evaluator_temperature,
         capture_cache_source_hashes=True,
     )
+    if args.cached_only and pending:
+        raise SystemExit(
+            f"Cached-only replay requires all evaluator measurements; "
+            f"{len(pending)} missing. No new measurements authorized."
+        )
     spent = sum(float(row["estimated_cost_usd"]) for row in rows)
     original_traces = {
         (variant, task_id, run_id): trace
         for variant, _trace_path, trace, task_id, run_id in expected
     }
 
-    from agent.llm_utils import UsageTracker, create_chat_completion
     for item in pending:
+        # Keep the provider client out of the complete-cache execution path.
+        from agent.llm_utils import create_chat_completion
+
         variant = item["variant"]
         task_id = item["task_id"]
         run_id = item["run_id"]
@@ -1679,7 +1698,7 @@ def main() -> int:
         _require_preflight_treatment_trace_unchanged(trace_path, trace_sha256)
         _require_preflight_evaluator_input_unchanged(item, trace=original_trace)
 
-        tracker: UsageTracker = EvaluatorResponseUsageTracker()
+        tracker = EvaluatorResponseUsageTracker()
         prompt = item["prompt"]
         raw = create_chat_completion(
             model=evaluator_model,
