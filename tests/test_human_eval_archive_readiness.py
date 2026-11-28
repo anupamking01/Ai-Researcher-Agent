@@ -2823,3 +2823,59 @@ def test_concordant_instruction_substitutions_do_not_define_new_rubric(
     ]
     assert receipt["status"] == "blocked"
     assert receipt["handoff_verified"] is False
+
+
+@pytest.mark.parametrize("order,extra,late", [
+    ("canonical", "blinding_key.csv", False),
+    ("reverse", "blinding_key.csv", False),
+    ("canonical", "blinding_key.csv", True),
+    ("reverse", "manifest.json", True),
+    ("reverse", "unexpected-directory", False),
+])
+def test_contaminated_annotator_inventory_blocks_complete_readiness(
+    tmp_path, monkeypatch, order, extra, late,
+):
+    packet, kwargs = _complete_readiness_inventory(tmp_path, monkeypatch)
+    bundle = packet / f"annotator-{order}-v1"
+    baseline = audit.audit_archive_readiness(**kwargs)
+    assert baseline["blockers"] == []
+    before = {name: (bundle / name).read_bytes()
+              for name in exporter.ANNOTATOR_ARTIFACTS}
+
+    def contaminate():
+        candidate = bundle / extra
+        if extra == "unexpected-directory":
+            candidate.mkdir()
+        else:
+            # Synthetic coordinator-only content, not genuine ratings.
+            candidate.write_bytes((packet / extra).read_bytes())
+
+    if late:
+        original = audit._trace_report_content_status
+
+        def contaminate_after_content_check(**arguments):
+            result = original(**arguments)
+            assert result["checked"] == 40
+            contaminate()
+            return result
+
+        monkeypatch.setattr(
+            audit, "_trace_report_content_status", contaminate_after_content_check
+        )
+    else:
+        contaminate()
+
+    receipt = audit.audit_archive_readiness(**kwargs)
+    assert receipt["trace_report_content"]["checked"] == 40
+    assert receipt["trace_report_content"]["status"] == (
+        "40_trace_report_contents_align_to_frozen_cells_not_authenticated"
+    )
+    assert before == {name: (bundle / name).read_bytes()
+                      for name in exporter.ANNOTATOR_ARTIFACTS}
+    label = f"{order}/artifact_inventory"
+    assert receipt["resources"][label] == "annotator_bundle_artifact_set_mismatch"
+    assert receipt["blockers"] == [label]
+    assert receipt["status"] == "blocked"
+    assert receipt["handoff_verified"] is False
+    assert receipt["human_ratings_used"] is False
+    assert receipt["treatments_rerun"] is False

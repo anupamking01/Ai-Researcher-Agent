@@ -355,6 +355,27 @@ def _resource_inventory(sources: dict[str, Path]) -> dict[str, str]:
     integrated handoff verifier; presence is not authentication.
     """
     statuses = {label: _file_status(path) for label, path in sources.items()}
+    # Presence of the four expected files is not enough: an extra file
+    # (especially the coordinator-only blinding key) makes the bundle
+    # unsuitable even for a zero-blocker candidate inventory. Reuse the
+    # exporter's bounded exact-set check; do not open any extra entries.
+    # Missing/unsafe required files already block readiness and retain
+    # their more specific per-file diagnostics.
+    for order in ("canonical", "reverse"):
+        labels = [f"{order}/{name}" for name in exporter.ANNOTATOR_ARTIFACTS]
+        if not all(statuses[label] == "present_unverified" for label in labels):
+            continue
+        root = sources[labels[0]].parent
+        label = f"{order}/artifact_inventory"
+        if _directory_status(root) != "present_unverified":
+            statuses[label] = "unsafe_annotator_bundle_directory"
+            continue
+        try:
+            exporter._require_annotator_artifact_set(root)
+        except OSError:
+            statuses[label] = "annotator_bundle_inventory_inaccessible"
+        except ValueError:
+            statuses[label] = "annotator_bundle_artifact_set_mismatch"
     for label in (
         "frozen_annotator_guide",
         "canonical/annotator_instructions.md",

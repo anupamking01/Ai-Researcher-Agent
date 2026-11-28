@@ -1,3 +1,27 @@
+## Exact annotator distribution inventory (28 November 2026)
+
+The preliminary archive-readiness audit previously checked the required
+annotator files but did not reject additional entries in either distribution
+bundle. A copied coordinator-only blinding key or manifest could therefore
+coexist with all four expected files and an otherwise zero-blocker receipt.
+The existing exporter already forbids such contaminated bundles.
+
+Readiness now reuses the exporter's bounded exact-artifact-set check for
+each bundle with all required files present and safe. The initial and final
+resource checks both enforce this condition. Extra entries are not opened;
+an inventory mismatch is recorded as an explicit
+`canonical/artifact_inventory` or `reverse/artifact_inventory` blocker.
+Missing or unsafe required files retain their existing specific diagnostics.
+Synthetic full-matrix tests cover initial and late coordinator-file
+contamination and an unexpected directory while leaving all required files
+and frozen observations unchanged.
+
+This checks local directory membership only. It does not prove that a
+blinding key was never disclosed, verify the contents or presentation order
+of a bundle, or authorize distribution. Independent historical custody,
+the integrated handoff verifier and genuine human annotations remain
+mandatory. No treatment, evaluator or human rating is generated.
+
 ## Frozen scoring-instruction concordance (28 November 2026)
 
 The archive-readiness inventory previously checked only whether the frozen
