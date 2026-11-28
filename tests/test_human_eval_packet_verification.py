@@ -1399,3 +1399,51 @@ def test_packet_reader_does_not_stringify_numeric_report():
     raw = (json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
     with pytest.raises(ValueError, match="report_markdown must be non-empty, already-trimmed text"):
         packet_verifier._read_packet(raw, task_manifest={"tasks": {"main-01": row["question"]}})
+
+@pytest.mark.parametrize(
+    "field_path, diagnostic",
+    [
+        (("schema_version",), "packet manifest schema_version"),
+        (("n_reports",), "packet report count"),
+        (("n_tasks",), "packet task count"),
+        (("task_manifest", "bytes"), "task-manifest provenance"),
+        (("task_manifest", "n_tasks"), "task-manifest provenance"),
+        (("artifacts", "packet", "bytes"), "packet fingerprint"),
+        (("artifacts", "ratings_template", "bytes"), "ratings_template fingerprint"),
+        (("artifacts", "blinding_key", "bytes"), "blinding_key fingerprint"),
+        (("source_artifacts", 0, "trace", "bytes"), "source trace fingerprint"),
+        (("source_artifacts", 0, "report", "bytes"), "source report fingerprint"),
+        (("content_validator", "bytes"), "content validator source contract"),
+        (("content_validator_runtime", "schema_version"), "content validator runtime contract"),
+        (("content_validator_runtime", "markdown_options", "html"), "content validator runtime contract"),
+    ],
+)
+def test_packet_manifest_requires_exact_json_numeric_types(
+    packet_case, field_path, diagnostic
+):
+    """Numerically equal substitutes do not attest to the generator schema."""
+    path = packet_case["output_root"] / "manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    parent = manifest
+    for segment in field_path[:-1]:
+        parent = parent[segment]
+    key = field_path[-1]
+    original = parent[key]
+    assert type(original) in (int, bool)
+    substitute = int(original) if type(original) is bool else float(original)
+    assert substitute == original and type(substitute) is not type(original)
+    parent[key] = substitute
+    path.write_text(json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=diagnostic + " mismatch"):
+        _verify(packet_case)
+
+
+def test_packet_manifest_rejects_boolean_runtime_schema_version(packet_case):
+    path = packet_case["output_root"] / "manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    assert manifest["content_validator_runtime"]["schema_version"] == 1
+    manifest["content_validator_runtime"]["schema_version"] = True
+    path.write_text(json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="content validator runtime contract mismatch"):
+        _verify(packet_case)

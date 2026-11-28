@@ -319,3 +319,17 @@ for *future* packet handoff, not independent recovery of historical 2026
 source reports, an attestation that annotators were blinded, or evidence that
 any human scores were collected. Preserve rejected bytes as a deviation;
 do not silently repair or reblind an issued packet.
+
+## Exact JSON contract types
+
+The independent coordinator verifier compares manifest contract values
+recursively without Python's numeric equality coercions. An integer schema
+version, report count, task count or byte count is not interchangeable with
+a numerically equal JSON floating-point value; a Boolean rendering option
+is not interchangeable with an integer. This applies to nested task,
+artifact, original-source and content-validator fingerprints as well as
+the top-level manifest counts. A reserialized manifest with unchanged
+artifact bytes must not receive a successful verification receipt for a
+different schema. Correctly typed generator output is unchanged. This is
+local schema consistency, not independent historical authentication or
+evidence of genuine human ratings.

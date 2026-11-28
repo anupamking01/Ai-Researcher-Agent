@@ -121,8 +121,27 @@ def _fingerprint(content: bytes, *, path: str) -> dict:
     return {"path": path, **build._byte_fingerprint(content)}
 
 
+def _contract_equal(actual, expected) -> bool:
+    """Compare JSON contracts without Python's bool/int/float coercion."""
+    if type(expected) is dict:
+        return (
+            type(actual) is dict
+            and actual.keys() == expected.keys()
+            and all(_contract_equal(actual[key], value) for key, value in expected.items())
+        )
+    if type(expected) is list:
+        return (
+            type(actual) is list
+            and len(actual) == len(expected)
+            and all(_contract_equal(a, e) for a, e in zip(actual, expected))
+        )
+    if type(expected) in (bool, int, float):
+        return type(actual) is type(expected) and actual == expected
+    return actual == expected
+
+
 def _require_equal(actual, expected, *, label: str) -> None:
-    if actual != expected:
+    if not _contract_equal(actual, expected):
         raise ValueError(f"{label} mismatch: expected {expected!r}, got {actual!r}")
 
 
