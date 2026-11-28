@@ -1675,7 +1675,8 @@ def _complete_readiness_inventory(tmp_path, monkeypatch):
     # These are synthetic text rows, never historical reports or human scores.
     rows = [
         {"blind_id": f"H{i:03d}", "task_id": f"main-{(i - 1) // 4 + 1:02d}",
-         "question": "Synthetic question", "report_markdown": f"Synthetic report {i}"}
+         "question": f"Synthetic question for main-{(i - 1) // 4 + 1:02d}",
+         "report_markdown": f"Synthetic report {i}"}
         for i in range(1, 41)
     ]
     (packet / "packet.jsonl").write_text(
@@ -3043,6 +3044,69 @@ def test_self_consistent_short_distribution_pair_is_not_main_study_ready(
     ]
     for label in receipt["blockers"]:
         assert receipt["resources"][label] == "annotator_distribution_identity_mismatch"
+    assert receipt["handoff_verified"] is False
+    assert receipt["human_ratings_used"] is False
+    assert receipt["treatments_rerun"] is False
+
+
+@pytest.mark.parametrize("mutation,late,expected_status", [
+    ("unbalanced", False, "annotator_task_coverage_mismatch"),
+    ("wrong_question", False, "annotator_question_mismatch"),
+    ("swapped_questions", False, "annotator_question_mismatch"),
+    ("wrong_question", True, "annotator_question_mismatch"),
+])
+def test_complete_distribution_pair_requires_frozen_task_coverage_and_questions(
+    tmp_path, monkeypatch, mutation, late, expected_status,
+):
+    packet, kwargs = _complete_readiness_inventory(tmp_path, monkeypatch)
+    assert audit.audit_archive_readiness(**kwargs)["blockers"] == []
+
+    def mutate():
+        path = packet / "packet.jsonl"
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        if mutation == "unbalanced":
+            rows[0]["task_id"] = rows[4]["task_id"]
+            rows[0]["question"] = rows[4]["question"]
+        elif mutation == "wrong_question":
+            rows[0]["question"] += " altered prompt"
+        else:
+            rows[0]["question"], rows[4]["question"] = (
+                rows[4]["question"], rows[0]["question"],
+            )
+        path.write_text(
+            "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+        for order in ("canonical", "reverse"):
+            bundle = packet / f"annotator-{order}-v1"
+            names = ("packet.jsonl", "ratings_template.csv")
+            ordered = exporter._ordered_artifacts(
+                path.read_bytes(), (packet / names[1]).read_bytes(),
+                presentation_order=order,
+            )
+            for name, content in zip(names, ordered):
+                (bundle / name).write_bytes(content)
+            _write_synthetic_annotator_manifest(bundle, order)
+            assert exporter.verify_annotator_bundle(bundle)["n_reports"] == 40
+
+    if late:
+        original = audit._trace_report_content_status
+
+        def change_after_content_check(**arguments):
+            result = original(**arguments)
+            assert result["checked"] == 40
+            mutate()
+            return result
+
+        monkeypatch.setattr(audit, "_trace_report_content_status", change_after_content_check)
+    else:
+        mutate()
+
+    receipt = audit.audit_archive_readiness(**kwargs)
+    assert receipt["trace_report_content"]["checked"] == 40
+    assert receipt["resources"]["annotator_presentation_pair"] == expected_status
+    assert receipt["blockers"] == ["annotator_presentation_pair"]
+    assert receipt["status"] == "blocked"
     assert receipt["handoff_verified"] is False
     assert receipt["human_ratings_used"] is False
     assert receipt["treatments_rerun"] is False

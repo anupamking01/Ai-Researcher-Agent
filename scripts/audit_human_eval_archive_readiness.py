@@ -374,7 +374,28 @@ def _presentation_pair_status(sources: dict[str, Path], statuses: dict[str, str]
                 )
                 if actual != expected_bytes:
                     return "annotator_presentation_pair_mismatch"
-    except (OSError, ValueError):
+        rows = exporter._read_jsonl_packet(packet)
+        # Cardinality alone cannot establish balanced task coverage. A pair
+        # with 40 distinct blinded IDs can repeat a task or change its prompt
+        # while remaining internally self-consistent. The short-packet
+        # diagnostic remains the standalone distribution verifier's job.
+        if len(rows) == EXPECTED_TRACES:
+            counts = {task: 0 for task in lineage.TASKS}
+            for row in rows:
+                task = row["task_id"]
+                if task not in counts:
+                    return "annotator_task_coverage_mismatch"
+                counts[task] += 1
+            if any(count != len(VARIANTS) for count in counts.values()):
+                return "annotator_task_coverage_mismatch"
+            if statuses["frozen_task_manifest"] == "present_unverified":
+                tasks = packet_builder._load_task_manifest(sources["frozen_task_manifest"])
+                if (tasks["sha256"] != frozen_tasks.ORIGINAL_TASK_MANIFEST_SHA256
+                        or set(tasks["tasks"]) != set(lineage.TASKS)):
+                    return "annotator_task_anchor_mismatch"
+                if any(row["question"] != tasks["tasks"][row["task_id"]] for row in rows):
+                    return "annotator_question_mismatch"
+    except (OSError, ValueError, RecursionError):
         return "annotator_presentation_pair_unreadable_or_invalid"
     return None
 

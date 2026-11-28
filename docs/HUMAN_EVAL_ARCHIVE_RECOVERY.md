@@ -1,3 +1,25 @@
+## Frozen task coverage in recovered annotator packets (28 November 2026)
+
+A pair of internally consistent 40-report distributions with distinct blind
+IDs can still omit a main-study task's fourth report, overrepresent another
+task, or show annotators the wrong question. Readiness now checks the
+coordinator packet bytes already compared against both presentation orders:
+a complete packet must contain exactly four rows per frozen task, and each
+question must match the original byte-pinned task manifest. This applies at
+initial and final resource verification. The existing standalone verifier
+still diagnoses short distributions. Missing or unsafe task-manifest paths
+retain their ordinary resource blockers. Failures use generic status codes
+without emitting blinded report or question content.
+
+Synthetic complete-matrix regressions exercise a rehashed 40-report pair
+with unbalanced tasks, an altered prompt, swapped prompts, and a late prompt
+change. No human ratings or experimental observations are created.
+
+Task/question concordance does not establish one report per treatment, bind
+blind IDs to the original report bytes, authenticate historical custody,
+or authorize distribution. The integrated source-pinned handoff remains
+mandatory. No frozen data, prompts or scoring rules are changed.
+
 ## Local annotator distribution-manifest verification (28 November 2026)
 
 A candidate can have the correct packet/template ordering and the frozen
