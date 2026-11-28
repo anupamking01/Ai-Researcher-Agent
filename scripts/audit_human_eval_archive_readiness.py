@@ -945,6 +945,28 @@ def _validate_recovered_provider_model_identity(trace: dict) -> None:
         )
 
 
+def _validate_recovered_model_call_roles(trace: dict, *, variant: str) -> None:
+    """Check recorded call allocation against the original completed-run path.
+
+    At c3c15e46 the distinct smart model performs one report call, one
+    additional call for planner arms and one for treatment verification.
+    The fast model performs at most one summary per scheduled browse.
+    Failed browses can still record usage (e.g. no relevant evidence or
+    a late response before the snapshot), so do not equate fast calls
+    with successful sources. A successful source needs a recorded call.
+    These are bounds on tracker records, not provider HTTP requests.
+    """
+    planning, verification = FROZEN_EXECUTION_MODES[variant]
+    expected_smart = 1 + (planning == "planner") + (verification == "verify")
+    ledger = trace["provider_usage_by_model"]
+    smart_calls = ledger.get(trace["smart_model"], {}).get("model_calls", 0)
+    fast_calls = ledger.get(trace["fast_model"], {}).get("model_calls", 0)
+    if smart_calls != expected_smart:
+        raise ValueError("recovered smart model call count differs from original treatment roles")
+    if not trace["successful_source_count"] <= fast_calls <= trace["source_count"]:
+        raise ValueError("recovered fast model call count contradicts original browse outcomes")
+
+
 def _validate_recovered_trace_cost_provenance(trace: dict) -> None:
     """Keep historical raw trace cost placeholders separate from priced analysis.
 
@@ -1240,6 +1262,7 @@ def _trace_report_content_status(
                 latency_seconds=trace["latency_seconds"],
             )
             _validate_recovered_provider_model_identity(trace)
+            _validate_recovered_model_call_roles(trace, variant=variant)
             declared_report = trace.get("report_path")
             if not isinstance(declared_report, str):
                 raise ValueError("trace has no valid original report path")

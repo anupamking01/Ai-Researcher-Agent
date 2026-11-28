@@ -454,7 +454,7 @@ def _write_semantically_aligned_fixture(
                     "source_budget": audit.main_input_contract.FROZEN_SOURCE_BUDGETS[variant],
                     "successful_sources": 2, "failed_sources": 1,
                     "search_calls": (1 if variant in ("D3", "D6") else 4),
-                    "model_calls": 4,
+                    "model_calls": (5 if variant == "P6V" else 4),
                     "total_tokens": 250, "report_words": 50,
                     "treatment_cost_usd": 0.0002,
                     "cost_status": "estimated_from_frozen_uncached_rates",
@@ -553,7 +553,8 @@ def _write_semantically_aligned_fixture(
                     "browse_timeout_seconds": 60.0,
                     "run_timeout_seconds": 480.0,
                     "successful_source_count": 2, "failed_source_count": 1,
-                    "search_call_count": len(records), "model_call_count": 4,
+                    "search_call_count": len(records),
+                    "model_call_count": (5 if variant == "P6V" else 4),
                     "total_tokens": 250, "report_words": 50,
                     "research_context_words": 24,
                     "latency_seconds": latency,
@@ -576,9 +577,17 @@ def _write_semantically_aligned_fixture(
                     "citation_precision_proxy": (0.75 if variant == "P6V" else 0.0),
                     "provider_usage_by_model": {
                         "gpt-5.6-terra": {
-                            "model_calls": 4, "unavailable_calls": 0,
-                            "prompt_tokens": 100, "completion_tokens": 150,
-                            "total_tokens": 250,
+                            "model_calls": (3 if variant == "P6V" else
+                                            2 if variant == "P6" else 1),
+                            "unavailable_calls": 0,
+                            "prompt_tokens": 70, "completion_tokens": 80,
+                            "total_tokens": 150,
+                        },
+                        "gpt-5.6-luna": {
+                            "model_calls": (2 if variant in ("P6", "P6V") else 3),
+                            "unavailable_calls": 0,
+                            "prompt_tokens": 30, "completion_tokens": 70,
+                            "total_tokens": 100,
                         },
                     },
                     "scheduled_urls": [
@@ -1350,12 +1359,12 @@ def test_recovered_provider_usage_accepts_consistent_multi_model_accounting(
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["trace"]["provider_usage_by_model"] = {
         "gpt-5.6-terra": {
-            "model_calls": 2, "unavailable_calls": 0,
-            "prompt_tokens": 70, "completion_tokens": 80, "total_tokens": 150,
+            "model_calls": 1, "unavailable_calls": 0,
+            "prompt_tokens": 60, "completion_tokens": 90, "total_tokens": 150,
         },
         "gpt-5.6-luna": {
-            "model_calls": 2, "unavailable_calls": 0,
-            "prompt_tokens": 30, "completion_tokens": 70, "total_tokens": 100,
+            "model_calls": 3, "unavailable_calls": 0,
+            "prompt_tokens": 40, "completion_tokens": 60, "total_tokens": 100,
         },
     }
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -2468,3 +2477,54 @@ def test_original_retrieval_context_word_bound(urls, words, valid):
     else:
         with pytest.raises(ValueError, match="contradicts original source summaries"):
             audit._validate_recovered_context_words(trace)
+
+
+@pytest.mark.parametrize("variant,smart_delta", [
+    ("D3", 1), ("D6", 1), ("P6", -1), ("P6V", -1),
+])
+def test_original_model_call_roles_reject_reallocated_calls(
+    tmp_path, monkeypatch, variant, smart_delta
+):
+    """Preserve total calls, tokens, costs and all frozen CSV/report bytes."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces" / variant / f"{variant.lower()}-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    ledger = payload["trace"]["provider_usage_by_model"]
+    ledger["gpt-5.6-terra"]["model_calls"] += smart_delta
+    ledger["gpt-5.6-luna"]["model_calls"] -= smart_delta
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert receipt["trace_to_published_evaluator"]["matched"] == 40
+    assert receipt["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "smart model call count" in receipt["trace_report_content"]["first_failure"]
+    assert "original_trace_report_content_alignment" in receipt["blockers"]
+    assert receipt["handoff_verified"] is False
+
+
+@pytest.mark.parametrize("variant,smart,fast,success,scheduled,valid", [
+    ("D3", 1, 0, 0, 3, True),
+    ("D3", 1, 2, 2, 3, True),
+    ("D3", 1, 3, 2, 3, True),
+    ("D3", 1, 1, 2, 3, False),
+    ("D6", 1, 7, 2, 6, False),
+    ("P6", 2, 4, 3, 6, True),
+    ("P6V", 3, 4, 0, 6, True),
+])
+def test_original_model_call_role_source_bounds(
+    variant, smart, fast, success, scheduled, valid
+):
+    trace = {
+        "smart_model": "gpt-5.6-terra", "fast_model": "gpt-5.6-luna",
+        "successful_source_count": success, "source_count": scheduled,
+        "provider_usage_by_model": {
+            "gpt-5.6-terra": {"model_calls": smart},
+            **({"gpt-5.6-luna": {"model_calls": fast}} if fast else {}),
+        },
+    }
+    if valid:
+        audit._validate_recovered_model_call_roles(trace, variant=variant)
+    else:
+        with pytest.raises(ValueError, match="fast model call count"):
+            audit._validate_recovered_model_call_roles(trace, variant=variant)

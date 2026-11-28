@@ -1,3 +1,31 @@
+## Original treatment model-call role provenance (28 November 2026)
+
+In the pinned treatment checkout `c3c15e46`, `logic/research_agent.py`
+uses the smart model once for the report, once additionally for planner
+arms, and once additionally for P6V treatment verification. The original
+`scrape/web_scrape.py` and `text_preprocess/text.py` make at most one fast
+summary call per scheduled browse. Every successful source requires that
+call; a failed source may still have recorded usage (including an empty
+or no-evidence response, or a late response recorded before the snapshot).
+`logic/usage.py` counts recorded completions by requested model name.
+The historically configured smart and fast names are distinct.
+
+The recovered trace must therefore record exactly 1/1/2/3 smart calls for
+D3/D6/P6/P6V respectively, and between the successful and scheduled
+source counts (inclusive) fast calls. An absent fast bucket is permissible
+only when these bounds allow zero. The frozen treatment CSV's 40 cells
+are compatible with these bounds after subtracting the expected smart
+calls from each recorded total. Earlier ledger identity and aggregate
+checks alone permitted reallocating counts between the configured
+models without changing token counts, total calls, or estimated cost.
+Synthetic matrix and boundary tests exercise that distinction.
+
+This is a necessary consistency condition for the historical tracker
+snapshot, not a count of network requests/retries, evidence of provider
+model identity, or proof of report/trace custody. It does not change any
+frozen measurement, establish prospective confirmatory evidence, or
+complete human validation. No treatment or evaluator is rerun.
+
 ## Original retrieved-context word-count provenance (28 November 2026)
 
 The pinned treatment checkout `c3c15e46` records
