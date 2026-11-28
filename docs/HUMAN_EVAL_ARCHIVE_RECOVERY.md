@@ -1,3 +1,28 @@
+## Local annotator distribution-manifest verification (28 November 2026)
+
+A candidate can have the correct packet/template ordering and the frozen
+guide but still ship a malformed, stale, or coordinator-metadata-bearing
+annotator manifest. Readiness now invokes the existing standalone
+`verify_annotator_bundle` for each otherwise eligible bundle, checking
+its manifest schema, content-validator contract, artifact fingerprints,
+blinded ID/template coverage and presentation order. The returned local
+receipt must also identify the expected order and all 40 main-study reports;
+a coherently rehashed shorter pair is insufficient. This applies during
+initial and final resource verification. Earlier specific inventory, guide
+and presentation-pair blockers are preserved. Failures use generic status
+codes rather than copying possibly confidential manifest values into the
+readiness receipt.
+
+Synthetic complete-matrix regressions cover malformed JSON, coordinator
+metadata, stale fingerprints, incorrect declared order, late contamination
+and a self-consistent 39-report pair. These are software test fixtures,
+not human scores or new experimental observations.
+
+Standalone verification is unpinned local consistency only. The candidate
+coordinator manifest, original source/report linkage and independent
+historical custody still require the integrated source-pinned handoff.
+No distribution is authorized and no frozen observations are changed.
+
 ## Candidate presentation-pair concordance (28 November 2026)
 
 Exact directory membership and frozen instructions do not establish

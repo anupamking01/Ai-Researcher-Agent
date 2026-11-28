@@ -385,6 +385,7 @@ def _resource_inventory(sources: dict[str, Path]) -> dict[str, str]:
     All three guide copies must match the exporter's fixed protocol pin,
     not merely each other. Other packet contents still require the
     integrated handoff verifier; presence is not authentication.
+    Standalone distribution verification is a necessary local check only.
     """
     statuses = {label: _file_status(path) for label, path in sources.items()}
     # Presence of the four expected files is not enough: an extra file
@@ -423,6 +424,28 @@ def _resource_inventory(sources: dict[str, Path]) -> dict[str, str]:
     pair_status = _presentation_pair_status(sources, statuses)
     if pair_status is not None:
         statuses["annotator_presentation_pair"] = pair_status
+    else:
+        # Matching packet/template bytes do not validate the manifest shipped
+        # alongside them. It could leak coordinator metadata, declare the
+        # wrong presentation, or fingerprint stale files. Reuse the actual
+        # standalone verifier, but never promote its unpinned receipt to a
+        # source-authenticated handoff. Preserve more specific prior blockers.
+        for order in ("canonical", "reverse"):
+            labels = [f"{order}/{name}" for name in exporter.ANNOTATOR_ARTIFACTS]
+            if (any(statuses[label] != "present_unverified" for label in labels)
+                    or f"{order}/artifact_inventory" in statuses):
+                continue
+            label = f"{order}/distribution_manifest"
+            try:
+                receipt = exporter.verify_annotator_bundle(sources[labels[0]].parent)
+            except (OSError, ValueError, RecursionError):
+                # Do not copy potentially sensitive manifest contents or
+                # verifier exception text into a recovery receipt.
+                statuses[label] = "annotator_distribution_verification_failed"
+            else:
+                if (receipt["presentation_order"] != order
+                        or receipt["n_reports"] != EXPECTED_TRACES):
+                    statuses[label] = "annotator_distribution_identity_mismatch"
     return statuses
 
 

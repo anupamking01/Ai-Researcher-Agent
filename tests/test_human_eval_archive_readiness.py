@@ -1626,6 +1626,32 @@ def test_late_task_manifest_replacement_blocks_question_alignment(tmp_path, monk
 
 
 
+def _write_synthetic_annotator_manifest(bundle, order):
+    artifacts = {
+        role: {"path": name, **exporter._fingerprint((bundle / name).read_bytes())}
+        for role, name in (
+            ("packet", "packet.jsonl"),
+            ("ratings_template", "ratings_template.csv"),
+            ("annotator_instructions", "annotator_instructions.md"),
+        )
+    }
+    manifest = {
+        "schema_version": 2,
+        "study_id": "budget-main-v1",
+        "status": "human_eval_annotator_distribution",
+        "coordinator_artifacts_included": False,
+        "presentation_order": order,
+        "n_reports": len(exporter._read_jsonl_packet((bundle / "packet.jsonl").read_bytes())),
+        "content_validator": exporter._content_validator_source_contract(),
+        "content_validator_runtime": audit.packet_builder.content_validator_runtime_contract(),
+        "artifacts": artifacts,
+        "distribution_note": exporter.DISTRIBUTION_NOTE,
+    }
+    (bundle / "annotator_manifest.json").write_text(
+        json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8",
+    )
+
+
 def _complete_readiness_inventory(tmp_path, monkeypatch):
     # Synthetic evidence only; the independent handoff is never asserted.
     _write_semantically_aligned_fixture(tmp_path, monkeypatch)
@@ -1668,6 +1694,7 @@ def _complete_readiness_inventory(tmp_path, monkeypatch):
         )
         for name, content in zip(("packet.jsonl", "ratings_template.csv"), expected):
             (packet / f"annotator-{order}-v1" / name).write_bytes(content)
+        _write_synthetic_annotator_manifest(packet / f"annotator-{order}-v1", order)
     kwargs = {
         "repo_root": tmp_path,
         "research_manifest_sha256": hashlib.sha256(
@@ -2928,6 +2955,94 @@ def test_presentation_pair_requires_actual_exported_order(
     )
     assert receipt["blockers"] == ["annotator_presentation_pair"]
     assert receipt["status"] == "blocked"
+    assert receipt["handoff_verified"] is False
+    assert receipt["human_ratings_used"] is False
+    assert receipt["treatments_rerun"] is False
+
+
+@pytest.mark.parametrize("order,mutation,late", [
+    ("canonical", "malformed", False),
+    ("reverse", "coordinator_metadata", False),
+    ("canonical", "stale_fingerprint", False),
+    ("reverse", "wrong_order", False),
+    ("reverse", "coordinator_metadata", True),
+])
+def test_distribution_manifest_must_verify_even_when_presentation_bytes_match(
+    tmp_path, monkeypatch, order, mutation, late,
+):
+    packet, kwargs = _complete_readiness_inventory(tmp_path, monkeypatch)
+    bundle = packet / f"annotator-{order}-v1"
+    path = bundle / "annotator_manifest.json"
+    assert audit.audit_archive_readiness(**kwargs)["blockers"] == []
+    before = {name: (bundle / name).read_bytes()
+              for name in exporter.ANNOTATOR_ARTIFACTS if name != path.name}
+
+    def mutate():
+        if mutation == "malformed":
+            path.write_text("{", encoding="utf-8")
+            return
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        if mutation == "coordinator_metadata":
+            manifest["blinding_key"] = "synthetic confidential marker"
+        elif mutation == "stale_fingerprint":
+            manifest["artifacts"]["packet"]["sha256"] = "0" * 64
+        elif mutation == "wrong_order":
+            manifest["presentation_order"] = "canonical"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    if late:
+        original = audit._trace_report_content_status
+
+        def change_after_content_check(**arguments):
+            result = original(**arguments)
+            assert result["checked"] == 40
+            mutate()
+            return result
+
+        monkeypatch.setattr(audit, "_trace_report_content_status", change_after_content_check)
+    else:
+        mutate()
+
+    receipt = audit.audit_archive_readiness(**kwargs)
+    assert receipt["trace_report_content"]["checked"] == 40
+    label = f"{order}/distribution_manifest"
+    assert receipt["resources"][label] == "annotator_distribution_verification_failed"
+    assert receipt["blockers"] == [label]
+    assert receipt["status"] == "blocked"
+    assert "synthetic confidential marker" not in json.dumps(receipt)
+    assert before == {name: (bundle / name).read_bytes() for name in before}
+    assert receipt["handoff_verified"] is False
+    assert receipt["human_ratings_used"] is False
+    assert receipt["treatments_rerun"] is False
+
+
+def test_self_consistent_short_distribution_pair_is_not_main_study_ready(
+    tmp_path, monkeypatch,
+):
+    packet, kwargs = _complete_readiness_inventory(tmp_path, monkeypatch)
+    names = ("packet.jsonl", "ratings_template.csv")
+    for name in names:
+        path = packet / name
+        path.write_bytes(b"".join(path.read_bytes().splitlines(keepends=True)[:-1]))
+    for order in ("canonical", "reverse"):
+        bundle = packet / f"annotator-{order}-v1"
+        ordered = exporter._ordered_artifacts(
+            (packet / names[0]).read_bytes(), (packet / names[1]).read_bytes(),
+            presentation_order=order,
+        )
+        for name, content in zip(names, ordered):
+            (bundle / name).write_bytes(content)
+        _write_synthetic_annotator_manifest(bundle, order)
+        assert exporter.verify_annotator_bundle(bundle)["n_reports"] == 39
+
+    receipt = audit.audit_archive_readiness(**kwargs)
+    assert receipt["trace_report_content"]["checked"] == 40
+    assert receipt["status"] == "blocked"
+    assert receipt["blockers"] == [
+        "canonical/distribution_manifest", "reverse/distribution_manifest",
+    ]
+    for label in receipt["blockers"]:
+        assert receipt["resources"][label] == "annotator_distribution_identity_mismatch"
     assert receipt["handoff_verified"] is False
     assert receipt["human_ratings_used"] is False
     assert receipt["treatments_rerun"] is False
