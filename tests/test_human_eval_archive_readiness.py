@@ -1739,6 +1739,8 @@ def _complete_readiness_inventory(tmp_path, monkeypatch):
             (packet / name).read_bytes(), path=name,
         )
     (packet / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    for name in audit.packet_builder.COORDINATOR_PRIVATE_ARTIFACTS:
+        (packet / name).chmod(0o600)
     kwargs = {
         "repo_root": tmp_path,
         "research_manifest_sha256": hashlib.sha256(
@@ -3378,3 +3380,68 @@ def test_pinned_coordinator_manifest_must_bind_raw_original_source_bytes(
     assert receipt["handoff_verified"] is False
     assert receipt["human_ratings_used"] is False
     assert receipt["treatments_rerun"] is False
+
+
+@pytest.mark.parametrize("filename,mode", [
+    ("manifest.json", 0o640),
+    ("manifest.json", 0o604),
+    ("blinding_key.csv", 0o640),
+    ("blinding_key.csv", 0o604),
+    ("blinding_key.csv", 0o620),
+])
+def test_byte_valid_private_coordinator_artifact_requires_private_mode(
+    tmp_path, monkeypatch, filename, mode,
+):
+    packet, kwargs = _complete_readiness_inventory(tmp_path, monkeypatch)
+    assert audit.audit_archive_readiness(**kwargs)["blockers"] == []
+    path = packet / filename
+    before = path.read_bytes()
+    path.chmod(mode)
+    if path.stat().st_mode & 0o777 != mode:
+        pytest.skip("POSIX permission modes unavailable on this filesystem")
+
+    receipt = audit.audit_archive_readiness(**kwargs)
+    assert path.read_bytes() == before
+    assert path.stat().st_mode & 0o777 == mode  # read-only audit
+    assert receipt["trace_report_content"]["checked"] == 40
+    assert receipt["independent_pins"]["coordinator_manifest_file"] == (
+        "pin_matches_file_not_authenticated"
+    )
+    assert receipt["resources"]["candidate_coordinator_artifacts"] == (
+        "candidate_coordinator_private_permissions_unsafe"
+    )
+    assert receipt["blockers"] == ["candidate_coordinator_artifacts"]
+    assert receipt["status"] == "blocked"
+    assert receipt["handoff_verified"] is False
+    assert receipt["human_ratings_used"] is False
+
+
+@pytest.mark.parametrize("filename", ["manifest.json", "blinding_key.csv"])
+def test_late_private_coordinator_mode_change_blocks_readiness(
+    tmp_path, monkeypatch, filename,
+):
+    packet, kwargs = _complete_readiness_inventory(tmp_path, monkeypatch)
+    assert audit.audit_archive_readiness(**kwargs)["blockers"] == []
+    path = packet / filename
+    before = path.read_bytes()
+    path.chmod(0o644)
+    if path.stat().st_mode & 0o777 != 0o644:
+        pytest.skip("POSIX permission modes unavailable on this filesystem")
+    path.chmod(0o600)
+    original = audit._verify_recovery_candidate_window
+
+    def change_mode_after_capture(pins):
+        if any(item[0] == path for item in pins):
+            path.chmod(0o644)
+        return original(pins)
+
+    monkeypatch.setattr(
+        audit, "_verify_recovery_candidate_window", change_mode_after_capture,
+    )
+    receipt = audit.audit_archive_readiness(**kwargs)
+    assert path.read_bytes() == before
+    assert receipt["resources"]["candidate_coordinator_artifacts"] == (
+        "candidate_coordinator_artifacts_unreadable_or_unstable"
+    )
+    assert receipt["blockers"] == ["candidate_coordinator_artifacts"]
+    assert receipt["handoff_verified"] is False

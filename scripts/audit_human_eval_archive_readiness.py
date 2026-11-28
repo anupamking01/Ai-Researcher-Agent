@@ -461,6 +461,11 @@ def _candidate_coordinator_artifact_status(
         )
         if hashlib.sha256(raw).hexdigest() != expected_pin:
             return "candidate_coordinator_manifest_pin_mismatch"
+        # Inspect permissions from the same captured generation as the
+        # private bytes, not a separate pathname observation. The final
+        # snapshot recheck also detects mode changes during verification.
+        if stat.S_IMODE(manifest_snapshot[2][2]) & 0o077:
+            return "candidate_coordinator_private_permissions_unsafe"
         manifest = packet_builder._load_json_object(raw, label="candidate coordinator manifest")
         artifacts = manifest.get("artifacts")
         if not isinstance(artifacts, dict) or set(artifacts) != packet_builder.ARTIFACT_KEYS:
@@ -484,6 +489,9 @@ def _candidate_coordinator_artifact_status(
                 sources[f"coordinator/{filename}"], label="candidate coordinator artifact"
             )
             snapshots.append(snapshot)
+            if (filename in packet_builder.COORDINATOR_PRIVATE_ARTIFACTS
+                    and stat.S_IMODE(snapshot[2][2]) & 0o077):
+                return "candidate_coordinator_private_permissions_unsafe"
             if entry != packet_verifier._fingerprint(content, path=filename):
                 return "candidate_coordinator_artifact_fingerprint_mismatch"
             if role == "blinding_key":

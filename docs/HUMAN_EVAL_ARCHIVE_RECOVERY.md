@@ -1,3 +1,22 @@
+## Coordinator private-file permissions (28 November 2026)
+
+A matching manifest pin and matching artifact/source hashes do not establish
+local blinding-secret protection. The readiness diagnostic now requires
+the captured coordinator manifest and blinding key to have no group or
+other permission bits, consistent with the existing packet verifier and
+the builder's private-file creation policy. It checks the modes from
+the same file generations used to verify the bytes; the final captured
+generation recheck also rejects mode-only changes observed during that
+verification. The audit does not change permissions or expose private
+contents. Synthetic complete-matrix tests cover group/other access,
+unchanged byte fingerprints, and late mode-only changes.
+
+This is a local POSIX mode-bit check, not proof that secrets were never
+accessed, an ACL/ownership audit, independent historical authentication,
+or authorization to distribute. The integrated handoff and independent
+custody remain mandatory. No treatments, evaluator measurements, or
+human ratings are generated or modified.
+
 ## Coordinator manifest original-source fingerprint concordance (28 November 2026)
 
 Matching the coordinator packet, template and key artifact fingerprints
