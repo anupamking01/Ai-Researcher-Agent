@@ -1,3 +1,24 @@
+## Original retrieved-context word-count provenance (28 November 2026)
+
+The pinned treatment checkout `c3c15e46` records
+`research_context_words = len(assistant.research_summary.split())` in
+`logic/run.py`. Its `scrape/web_scrape.py` returns each successful browse
+as `Information gathered from url {url}: {normalized_summary}`, where the
+stripped summary is nonempty. In `logic/research_agent.py` these summaries
+are joined with whitespace; a nonempty cached context would bypass query
+creation and is already excluded by the original query-plan checks.
+
+Archive readiness now requires a nonnegative integer context word count,
+zero when no sources succeeded, and otherwise at least the sum of each
+original URL-labelled prefix's word count plus one summary word.
+Previously this trace field could be absent or contradict the recorded
+retrieval outcomes while every frozen CSV measurement still agreed.
+Synthetic full-matrix and boundary regressions check these cases without
+changing report bytes or frozen counters. This is only a necessary source
+contract invariant: it does not reconstruct context text, verify actual
+retrieval, authenticate original custody, or imply that a report is
+supported. No treatment, evaluator, or human rating is generated.
+
 ## Original source-outcome ordering (28 November 2026)
 
 The pinned treatment implementation (commit `c3c15e46`,

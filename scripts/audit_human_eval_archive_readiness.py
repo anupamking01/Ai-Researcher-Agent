@@ -853,6 +853,22 @@ def _validate_recovered_query_budget_allocation(trace: dict, *, variant: str) ->
         )
 
 
+def _validate_recovered_context_words(trace: dict) -> None:
+    """Check the minimum context implied by original successful source summaries."""
+    words = trace.get("research_context_words")
+    if type(words) is not int or words < 0:
+        raise ValueError("recovered trace research_context_words must be a nonnegative integer")
+    # Original async_browse returned the URL-labelled prefix plus a stripped,
+    # nonempty summary. conduct_research joined these with whitespace only.
+    # A nonempty cached context would bypass query creation, already rejected
+    # by the original query-plan checks. No exact context text is reconstructed.
+    urls = trace["successful_urls"]
+    minimum = sum(len(f"Information gathered from url {url}:".split()) + 1
+                  for url in urls)
+    if words < minimum or (not urls and words != 0):
+        raise ValueError("recovered trace research_context_words contradicts original source summaries")
+
+
 def _validate_recovered_provider_usage(trace: dict) -> None:
     """Validate the frozen run's per-model usage and aggregate cost basis.
 
@@ -1212,6 +1228,7 @@ def _trace_report_content_status(
             _validate_recovered_derived_telemetry(trace)
             _validate_recovered_search_provenance(trace)
             _validate_recovered_query_budget_allocation(trace, variant=variant)
+            _validate_recovered_context_words(trace)
             _validate_recovered_provider_usage(trace)
             _validate_recovered_trace_cost_provenance(trace)
             _validate_recovered_efficiency_measurements(
