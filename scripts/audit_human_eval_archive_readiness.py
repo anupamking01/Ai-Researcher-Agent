@@ -172,15 +172,20 @@ def _verify_frozen_content_input_window(repo_root: Path) -> None:
 
 
 def _file_status(path: Path) -> str:
-    """Do not silently classify symlinks or nonregular evidence as available."""
+    """Inventory only single-link regular files without symlink ancestors."""
     try:
-        mode = path.lstat().st_mode
+        observed = path.lstat()
     except FileNotFoundError:
         return "missing"
     except OSError:
         return "inaccessible"
-    if not stat.S_ISREG(mode):
+    if not stat.S_ISREG(observed.st_mode):
         return "unsafe_file_type"
+    # The downstream packet/manifest readers require a single-link inode.
+    # Count aliases as unsafe even in a partial archive where content
+    # validation is skipped, or for coordinator-only blinding artifacts.
+    if observed.st_nlink != 1:
+        return "unsafe_hardlink"
     try:
         if any(parent.is_symlink() for parent in path.parents):
             return "unsafe_parent_symlink"

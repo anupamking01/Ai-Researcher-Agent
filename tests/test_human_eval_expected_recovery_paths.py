@@ -121,6 +121,36 @@ def test_unsafe_recovered_candidates_are_separate_from_missing(
     assert targets["unsafe_traces"][0]["run_id"] == "d3-main-01"
 
 
+
+def test_hardlinked_partial_archive_remains_on_unsafe_recovery_list(
+    tmp_path, monkeypatch
+):
+    root = _frozen_stub(tmp_path, monkeypatch)
+    outputs = root / "outputs"
+    trace = outputs / "experiment_traces/D3/d3-main-01.json"
+    report = outputs / "d3-main-01/research_report.md"
+    for index, candidate in enumerate((trace, report)):
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_text("synthetic candidate", encoding="utf-8")
+        try:
+            (root / f"unselected-alias-{index}").hardlink_to(candidate)
+        except (OSError, NotImplementedError):
+            pytest.skip("hardlinks unavailable on this test filesystem")
+
+    receipt = audit.audit_archive_readiness(repo_root=root)
+    targets = receipt["expected_recovery_paths"]
+    assert receipt["trace_candidates"]["status"] == "unsafe_trace_file_type"
+    assert targets["status"] == "expected_paths_missing_or_unsafe"
+    assert (targets["traces_present"], targets["reports_present"]) == (0, 0)
+    assert len(targets["missing_traces"]) == len(targets["missing_reports"]) == 39
+    for kind in ("traces", "reports"):
+        assert len(targets[f"unsafe_{kind}"]) == 1
+        assert targets[f"unsafe_{kind}"][0]["reason"] == "unsafe_hardlink"
+        assert targets[f"unsafe_{kind}"][0]["run_id"] == "d3-main-01"
+    assert "original_expected_run_archive_paths" in receipt["blockers"]
+    assert receipt["handoff_verified"] is False
+
+
 def test_missing_published_anchor_never_exposes_untrusted_expected_ids(tmp_path):
     targets = audit._expected_recovery_paths(
         repo_root=tmp_path,

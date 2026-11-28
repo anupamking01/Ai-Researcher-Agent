@@ -1,3 +1,23 @@
+## Single-link recovery inventory (28 November 2026)
+
+The read-only readiness inventory previously counted a hardlinked regular
+file as present, including incomplete archives that skip content checks and
+non-manifest coordinator or annotator artifacts that are inventoried only.
+The packet source reader already requires a single-link regular file, and
+the annotator exporter explicitly rejects hardlinked coordinator artifacts
+to protect the blinding key. An external alias is a second pathname to the
+same inode, not independent evidence or safe separation of blinding secrets.
+
+The shared readiness file classifier now reports `unsafe_hardlink` for
+regular files with a link count other than one. Exact recovery targets list
+these candidates under unsafe rather than present or missing; the readiness
+receipt also blocks hardlinked coordinator/annotator resources even when all
+40 synthetic cells otherwise align. This is a point-in-time metadata check,
+not proof that an alias was never present or that anyone accessed it.
+Keep original bytes unchanged and investigate custody before handoff;
+a copied file alone cannot establish independent historical authenticity.
+No experimental results, evaluator outputs or human ratings are created.
+
 ## Original treatment model-call role provenance (28 November 2026)
 
 In the pinned treatment checkout `c3c15e46`, `logic/research_agent.py`
