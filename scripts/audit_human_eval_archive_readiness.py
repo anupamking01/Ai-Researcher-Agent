@@ -1146,6 +1146,13 @@ def _trace_report_content_status(
                 raise ValueError("trace task-set identity or frozen question mismatch")
             if trace.get("completed") is not True:
                 raise ValueError("incomplete treatment cannot enter the human packet")
+            # Original logic/run.py records these keys only when run_error
+            # is not None, which also makes completed False. Even null or
+            # empty placeholders contradict the original successful trace.
+            if "error_type" in trace or "error_message" in trace:
+                raise ValueError(
+                    "recovered completed treatment contains original run-error metadata"
+                )
             frozen_row = main_matrix[(variant, task_id)]
             if frozen_row.get("completed") != "True":
                 raise ValueError("frozen treatment CSV does not record a completed run")

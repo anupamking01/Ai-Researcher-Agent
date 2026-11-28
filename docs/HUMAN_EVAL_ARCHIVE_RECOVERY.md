@@ -1537,3 +1537,25 @@ spelling; backup suffixes outside the query namespace remain unrelated.
 The evaluator-input reconstruction continues to read only exact original
 names; the broader inventory is a rejection check, not an alternate input
 selection or a change to historical evaluator semantics.
+
+
+### Completed-treatment error metadata
+
+In the pinned original treatment implementation
+[`logic/run.py` at `c3c15e46`](https://github.com/anupamking01/Ai-Researcher-Agent/blob/c3c15e46a8eec3a8bbc24c968eedc0548172a897/logic/run.py),
+`completed` is true only when the report is nonempty and `run_error` is
+absent. The runner adds the trace-level `error_type` and `error_message`
+keys only when that same error is present. Recovered completed cells
+therefore must omit both keys entirely, not merely hold empty or null
+values. A timeout or other run error cannot coexist with a completed
+original treatment, even if the frozen report length and all numerical
+measurements agree. Per-query search errors and treatment-verification
+status are separate and are not rejected by this check.
+
+The readiness audit now fails closed on either contradictory key.
+Synthetic whole-matrix regressions cover timeout/error pairs and isolated
+null/empty keys. The existing aligned synthetic matrix remains a
+positive control for content alignment only. This check neither proves
+successful historical execution nor authenticates original custody; it
+does not change frozen automated results, diagnostic pilot findings,
+exploratory analysis, or the pending human-evaluation gate.

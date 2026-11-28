@@ -796,6 +796,35 @@ def test_mismatched_embedded_trace_metadata_blocks_archive_readiness(
     assert result["handoff_verified"] is False
 
 
+@pytest.mark.parametrize("variant,error_fields", [
+    ("D3", {"error_type": "TimeoutError", "error_message": "synthetic timeout"}),
+    ("P6V", {"error_type": "RuntimeError", "error_message": "synthetic error"}),
+    ("D3", {"error_type": None}),
+    ("P6V", {"error_message": ""}),
+])
+def test_completed_recovered_treatment_cannot_contain_run_error_metadata(
+    tmp_path, monkeypatch, variant, error_fields
+):
+    """Original completed traces never contain top-level run-error keys."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces" / variant / f"{variant.lower()}-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["trace"]["completed"] is True
+    payload["trace"].update(error_fields)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_to_published_evaluator"]["matched"] == 40
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "completed treatment contains original run-error metadata" in (
+        result["trace_report_content"]["first_failure"]
+    )
+    assert "original_trace_report_content_alignment" in result["blockers"]
+    assert result["handoff_verified"] is False
+
+
 def test_duplicate_trace_json_member_cannot_hide_altered_run_identity(
     tmp_path, monkeypatch
 ):
