@@ -445,6 +445,51 @@ def _candidate_packet_source_status(
     return None
 
 
+def _candidate_coordinator_artifact_status(
+    sources: dict[str, Path], expected_pin: str,
+) -> str | None:
+    """Bind the supplied manifest pin to the actual coordinator artifact bytes.
+
+    A matching digest of the manifest alone says nothing about whether its
+    packet, template and key are still the ones it describes. Do not follow
+    paths declared by the candidate manifest or expose its private contents.
+    """
+    try:
+        raw, manifest_snapshot = _capture_recovery_candidate(
+            sources["coordinator/manifest.json"], label="candidate coordinator manifest"
+        )
+        if hashlib.sha256(raw).hexdigest() != expected_pin:
+            return "candidate_coordinator_manifest_pin_mismatch"
+        manifest = packet_builder._load_json_object(raw, label="candidate coordinator manifest")
+        artifacts = manifest.get("artifacts")
+        if not isinstance(artifacts, dict) or set(artifacts) != packet_builder.ARTIFACT_KEYS:
+            return "candidate_coordinator_artifact_table_invalid"
+        snapshots = [manifest_snapshot]
+        for role, filename in (
+            ("packet", "packet.jsonl"),
+            ("ratings_template", "ratings_template.csv"),
+            ("blinding_key", "blinding_key.csv"),
+        ):
+            entry = artifacts[role]
+            if (
+                manifest.get(role) != filename or not isinstance(entry, dict)
+                or set(entry) != {"path", "bytes", "sha256"}
+                or type(entry["bytes"]) is not int
+                or entry["path"] != filename
+            ):
+                return "candidate_coordinator_artifact_table_invalid"
+            content, snapshot = _capture_recovery_candidate(
+                sources[f"coordinator/{filename}"], label="candidate coordinator artifact"
+            )
+            snapshots.append(snapshot)
+            if entry != packet_verifier._fingerprint(content, path=filename):
+                return "candidate_coordinator_artifact_fingerprint_mismatch"
+        _verify_recovery_candidate_window(snapshots)
+    except (OSError, ValueError, RecursionError):
+        return "candidate_coordinator_artifacts_unreadable_or_unstable"
+    return None
+
+
 def _resource_inventory(sources: dict[str, Path]) -> dict[str, str]:
     """Inventory resources and verify the frozen scoring instructions.
 
@@ -1817,6 +1862,17 @@ def audit_archive_readiness(
         if source_status is not None:
             resources["candidate_packet_source_linkage"] = source_status
             gaps.append("candidate_packet_source_linkage")
+
+    # The supplied coordinator pin must also bind the actual packet, key and
+    # template bytes. Local source concordance alone cannot detect a stale
+    # manifest after a path-only key edit or a reissued presentation pair.
+    if not gaps:
+        artifact_status = _candidate_coordinator_artifact_status(
+            sources, coordinator_manifest_sha256
+        )
+        if artifact_status is not None:
+            resources["candidate_coordinator_artifacts"] = artifact_status
+            gaps.append("candidate_coordinator_artifacts")
 
     return {
         "schema_version": 1,

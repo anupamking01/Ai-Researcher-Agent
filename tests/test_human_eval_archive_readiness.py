@@ -1715,6 +1715,19 @@ def _complete_readiness_inventory(tmp_path, monkeypatch):
         for name, content in zip(("packet.jsonl", "ratings_template.csv"), expected):
             (packet / f"annotator-{order}-v1" / name).write_bytes(content)
         _write_synthetic_annotator_manifest(packet / f"annotator-{order}-v1", order)
+    # This is a synthetic manifest artifact table, not a historically
+    # authenticated coordinator manifest or a complete handoff fixture.
+    manifest = {"artifacts": {}}
+    for role, name in (
+        ("packet", "packet.jsonl"),
+        ("ratings_template", "ratings_template.csv"),
+        ("blinding_key", "blinding_key.csv"),
+    ):
+        manifest[role] = name
+        manifest["artifacts"][role] = audit.packet_verifier._fingerprint(
+            (packet / name).read_bytes(), path=name,
+        )
+    (packet / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     kwargs = {
         "repo_root": tmp_path,
         "research_manifest_sha256": hashlib.sha256(
@@ -3213,3 +3226,82 @@ def test_recovered_packet_must_link_blind_ids_to_captured_report_cells(
     assert receipt["handoff_verified"] is False
     assert receipt["human_ratings_used"] is False
     assert receipt["treatments_rerun"] is False
+
+
+@pytest.mark.parametrize("mutation,expected", [
+    ("stale_key", "candidate_coordinator_artifact_fingerprint_mismatch"),
+    ("stale_packet_digest", "candidate_coordinator_artifact_fingerprint_mismatch"),
+    ("wrong_template_size", "candidate_coordinator_artifact_fingerprint_mismatch"),
+    ("float_size", "candidate_coordinator_artifact_table_invalid"),
+    ("alternate_path", "candidate_coordinator_artifact_table_invalid"),
+    ("missing_table", "candidate_coordinator_artifact_table_invalid"),
+    ("malformed_json", "candidate_coordinator_artifacts_unreadable_or_unstable"),
+])
+def test_matching_coordinator_manifest_pin_must_bind_artifact_bytes(
+    tmp_path, monkeypatch, mutation, expected,
+):
+    packet, kwargs = _complete_readiness_inventory(tmp_path, monkeypatch)
+    assert audit.audit_archive_readiness(**kwargs)["blockers"] == []
+    path = packet / "manifest.json"
+    manifest = json.loads(path.read_bytes())
+    if mutation == "stale_key":
+        # A path-only edit preserves the previously checked blind-ID/cell
+        # and report content concordance, but invalidates the pinned key.
+        key = packet / "blinding_key.csv"
+        key.write_bytes(key.read_bytes().replace(
+            b"outputs/experiment_traces/", b"other/experiment_traces/", 1
+        ))
+    else:
+        if mutation == "stale_packet_digest":
+            manifest["artifacts"]["packet"]["sha256"] = "0" * 64
+        elif mutation == "wrong_template_size":
+            manifest["artifacts"]["ratings_template"]["bytes"] += 1
+        elif mutation == "float_size":
+            entry = manifest["artifacts"]["packet"]
+            entry["bytes"] = float(entry["bytes"])
+        elif mutation == "alternate_path":
+            manifest["artifacts"]["packet"]["path"] = "other/packet.jsonl"
+        elif mutation == "missing_table":
+            del manifest["artifacts"]
+        path.write_text(
+            "{invalid private manifest" if mutation == "malformed_json"
+            else json.dumps(manifest), encoding="utf-8",
+        )
+        # Deliberately supply a matching local pin, not independent custody.
+        kwargs["coordinator_manifest_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    receipt = audit.audit_archive_readiness(**kwargs)
+    assert receipt["trace_report_content"]["checked"] == 40
+    assert receipt["independent_pins"]["coordinator_manifest_file"] == (
+        "pin_matches_file_not_authenticated"
+    )
+    assert receipt["resources"]["candidate_coordinator_artifacts"] == expected
+    assert receipt["blockers"] == ["candidate_coordinator_artifacts"]
+    assert receipt["status"] == "blocked"
+    assert "invalid private manifest" not in json.dumps(receipt)
+    assert "other/experiment_traces/" not in json.dumps(receipt)
+    assert receipt["handoff_verified"] is False
+    assert receipt["human_ratings_used"] is False
+    assert receipt["treatments_rerun"] is False
+
+
+def test_late_coordinator_key_change_during_artifact_check_blocks_readiness(
+    tmp_path, monkeypatch,
+):
+    packet, kwargs = _complete_readiness_inventory(tmp_path, monkeypatch)
+    assert audit.audit_archive_readiness(**kwargs)["blockers"] == []
+    original = audit._verify_recovery_candidate_window
+
+    def change_after_coordinator_capture(pins):
+        if any(item[0] == packet / "manifest.json" for item in pins):
+            key = packet / "blinding_key.csv"
+            key.write_bytes(key.read_bytes() + b"\\n")
+        return original(pins)
+
+    monkeypatch.setattr(audit, "_verify_recovery_candidate_window", change_after_coordinator_capture)
+    receipt = audit.audit_archive_readiness(**kwargs)
+    assert receipt["trace_report_content"]["checked"] == 40
+    assert receipt["resources"]["candidate_coordinator_artifacts"] == (
+        "candidate_coordinator_artifacts_unreadable_or_unstable"
+    )
+    assert receipt["blockers"] == ["candidate_coordinator_artifacts"]
+    assert receipt["handoff_verified"] is False

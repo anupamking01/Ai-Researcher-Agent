@@ -1,3 +1,24 @@
+## Coordinator manifest-to-artifact concordance (28 November 2026)
+
+A supplied coordinator manifest SHA-256 can match while the packet,
+ratings template or private blinding key no longer matches the artifact
+fingerprints recorded in that manifest. After the existing local
+source-linkage checks pass, readiness now captures the pinned manifest
+and the three fixed coordinator artifact paths, verifies their declared
+byte sizes and SHA-256 values, and rechecks the four captured generations
+and fingerprints. Candidate-declared paths are never used to select
+files. Malformed tables, non-integer byte counts, stale fingerprints and
+observed changes block readiness without disclosing private content.
+
+Synthetic tests cover a path-only edit to the key (which leaves its cell
+mapping intact), stale packet and template fingerprints, malformed
+manifest declarations with a matching supplied pin, and a late key edit.
+This is local artifact-table concordance, not validation of the complete
+coordinator manifest schema, source-path identity, seeded blinding,
+historical custody, or authorization to distribute. The independently
+source-pinned integrated handoff remains mandatory. No treatment,
+evaluator, frozen observation or human rating is changed.
+
 ## Candidate blinded-report source linkage (28 November 2026)
 
 A correctly counterbalanced, balanced, rehashed distribution pair can still
