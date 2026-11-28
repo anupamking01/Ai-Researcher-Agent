@@ -1715,9 +1715,20 @@ def _complete_readiness_inventory(tmp_path, monkeypatch):
         for name, content in zip(("packet.jsonl", "ratings_template.csv"), expected):
             (packet / f"annotator-{order}-v1" / name).write_bytes(content)
         _write_synthetic_annotator_manifest(packet / f"annotator-{order}-v1", order)
-    # This is a synthetic manifest artifact table, not a historically
+    # Synthetic artifact and raw source tables, not a historically
     # authenticated coordinator manifest or a complete handoff fixture.
-    manifest = {"artifacts": {}}
+    manifest = {"artifacts": {}, "source_artifacts": [
+        {
+            "blind_id": row["blind_id"],
+            "trace": audit.packet_builder._byte_fingerprint(
+                (tmp_path / row["trace_path"]).read_bytes()
+            ),
+            "report": audit.packet_builder._byte_fingerprint(
+                (tmp_path / row["report_path"]).read_bytes()
+            ),
+        }
+        for row in key_rows
+    ]}
     for role, name in (
         ("packet", "packet.jsonl"),
         ("ratings_template", "ratings_template.csv"),
@@ -3305,3 +3316,65 @@ def test_late_coordinator_key_change_during_artifact_check_blocks_readiness(
     )
     assert receipt["blockers"] == ["candidate_coordinator_artifacts"]
     assert receipt["handoff_verified"] is False
+
+
+@pytest.mark.parametrize("mutation,expected", [
+    ("missing_table", "candidate_coordinator_source_table_invalid"),
+    ("swapped_entries", "candidate_coordinator_source_table_invalid"),
+    ("float_size", "candidate_coordinator_source_table_invalid"),
+    ("stale_trace_digest", "candidate_coordinator_source_fingerprint_mismatch"),
+    ("raw_report_whitespace", "candidate_coordinator_source_fingerprint_mismatch"),
+    ("swapped_fingerprints", "candidate_coordinator_source_fingerprint_mismatch"),
+    ("rehash_wrong_key_path", "candidate_coordinator_source_path_mismatch"),
+])
+def test_pinned_coordinator_manifest_must_bind_raw_original_source_bytes(
+    tmp_path, monkeypatch, mutation, expected,
+):
+    packet, kwargs = _complete_readiness_inventory(tmp_path, monkeypatch)
+    assert audit.audit_archive_readiness(**kwargs)["blockers"] == []
+    path = packet / "manifest.json"
+    manifest = json.loads(path.read_bytes())
+    entries = manifest["source_artifacts"]
+    if mutation == "missing_table":
+        del manifest["source_artifacts"]
+    elif mutation == "swapped_entries":
+        entries[0], entries[1] = entries[1], entries[0]
+    elif mutation == "float_size":
+        entries[0]["trace"]["bytes"] = float(entries[0]["trace"]["bytes"])
+    elif mutation == "stale_trace_digest":
+        entries[0]["trace"]["sha256"] = "0" * 64
+    elif mutation == "raw_report_whitespace":
+        # The stripped packet text and frozen word count remain identical.
+        report = tmp_path / "outputs/d3-run-00/research_report.md"
+        report.write_bytes(report.read_bytes() + b"\n")
+    elif mutation == "swapped_fingerprints":
+        entries[0]["report"], entries[1]["report"] = (
+            entries[1]["report"], entries[0]["report"],
+        )
+    else:
+        key = packet / "blinding_key.csv"
+        key.write_bytes(key.read_bytes().replace(
+            b"outputs/experiment_traces/", b"private-alternative/", 1
+        ))
+        manifest["artifacts"]["blinding_key"] = audit.packet_verifier._fingerprint(
+            key.read_bytes(), path=key.name,
+        )
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    # Even a matching caller-supplied pin cannot establish source concordance.
+    kwargs["coordinator_manifest_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    receipt = audit.audit_archive_readiness(**kwargs)
+    assert receipt["trace_report_content"]["checked"] == 40
+    assert receipt["trace_report_content"]["status"] == (
+        "40_trace_report_contents_align_to_frozen_cells_not_authenticated"
+    )
+    assert receipt["independent_pins"]["coordinator_manifest_file"] == (
+        "pin_matches_file_not_authenticated"
+    )
+    assert receipt["resources"]["candidate_coordinator_artifacts"] == expected
+    assert receipt["blockers"] == ["candidate_coordinator_artifacts"]
+    assert receipt["status"] == "blocked"
+    assert "private-alternative/" not in json.dumps(receipt)
+    assert "H001" not in json.dumps(receipt)
+    assert receipt["handoff_verified"] is False
+    assert receipt["human_ratings_used"] is False
+    assert receipt["treatments_rerun"] is False

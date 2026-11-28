@@ -447,8 +447,9 @@ def _candidate_packet_source_status(
 
 def _candidate_coordinator_artifact_status(
     sources: dict[str, Path], expected_pin: str,
+    source_fingerprints: dict[tuple[str, str, str], dict],
 ) -> str | None:
-    """Bind the supplied manifest pin to the actual coordinator artifact bytes.
+    """Bind the supplied manifest pin to coordinator and original source bytes.
 
     A matching digest of the manifest alone says nothing about whether its
     packet, template and key are still the ones it describes. Do not follow
@@ -465,6 +466,7 @@ def _candidate_coordinator_artifact_status(
         if not isinstance(artifacts, dict) or set(artifacts) != packet_builder.ARTIFACT_KEYS:
             return "candidate_coordinator_artifact_table_invalid"
         snapshots = [manifest_snapshot]
+        key_bytes = b""
         for role, filename in (
             ("packet", "packet.jsonl"),
             ("ratings_template", "ratings_template.csv"),
@@ -484,6 +486,51 @@ def _candidate_coordinator_artifact_status(
             snapshots.append(snapshot)
             if entry != packet_verifier._fingerprint(content, path=filename):
                 return "candidate_coordinator_artifact_fingerprint_mismatch"
+            if role == "blinding_key":
+                key_bytes = content
+
+        # A pinned artifact table can be correct while the manifest's raw
+        # source fingerprints describe different trace/report bytes. Match
+        # by the already audited cell; never resolve a key-declared path.
+        key = packet_verifier._read_csv(
+            key_bytes, fields=packet_verifier.KEY_FIELDS,
+            label="candidate coordinator key",
+        )
+        declared = manifest.get("source_artifacts")
+        if (
+            type(declared) is not list or len(declared) != EXPECTED_TRACES
+            or len(key) != EXPECTED_TRACES
+            or len(source_fingerprints) != EXPECTED_TRACES
+            or any(type(entry) is not dict
+                   or set(entry) != {"blind_id", "trace", "report"}
+                   for entry in declared)
+            or [entry["blind_id"] for entry in declared]
+            != [row["blind_id"] for row in key]
+            or len({row["blind_id"] for row in key}) != EXPECTED_TRACES
+        ):
+            return "candidate_coordinator_source_table_invalid"
+        cells = {(row["variant_id"], row["task_id"], row["run_id"]) for row in key}
+        if cells != set(source_fingerprints):
+            return "candidate_coordinator_source_table_invalid"
+        for row, entry in zip(key, declared):
+            variant, task, run_id = row["variant_id"], row["task_id"], row["run_id"]
+            # These are original logical paths, including when the actual
+            # recovery candidates are inspected under external roots.
+            if (
+                row["trace_path"] != f"outputs/experiment_traces/{variant}/{run_id}.json"
+                or row["report_path"] != f"outputs/{run_id}/research_report.md"
+            ):
+                return "candidate_coordinator_source_path_mismatch"
+            for role in ("trace", "report"):
+                fingerprint = entry[role]
+                if (
+                    type(fingerprint) is not dict
+                    or set(fingerprint) != {"bytes", "sha256"}
+                    or type(fingerprint["bytes"]) is not int
+                ):
+                    return "candidate_coordinator_source_table_invalid"
+                if fingerprint != source_fingerprints[(variant, task, run_id)][role]:
+                    return "candidate_coordinator_source_fingerprint_mismatch"
         _verify_recovery_candidate_window(snapshots)
     except (OSError, ValueError, RecursionError):
         return "candidate_coordinator_artifacts_unreadable_or_unstable"
@@ -1304,6 +1351,7 @@ def _trace_report_content_status(
     run_alignment_status: str,
     task_anchor_status: str,
     report_digests: dict[tuple[str, str, str], str] | None = None,
+    source_fingerprints: dict[tuple[str, str, str], dict] | None = None,
 ) -> dict:
     """Diagnose archived trace/report *content* against frozen run/task cells.
 
@@ -1384,6 +1432,7 @@ def _trace_report_content_status(
     checked = 0
     candidate_pins: list[tuple] = []
     captured_report_digests: dict[tuple[str, str, str], str] = {}
+    captured_source_fingerprints: dict[tuple[str, str, str], dict] = {}
     run_starts: dict[tuple[str, str], datetime] = {}
     run_latencies: dict[tuple[str, str], float] = {}
     run_recordings: dict[tuple[str, str], datetime] = {}
@@ -1536,9 +1585,16 @@ def _trace_report_content_status(
             )
             # Match the packet builder's exact UTF-8 decode/strip transform;
             # retain only digests, not a second copy of report text.
-            captured_report_digests[(variant, task_id, run_id)] = hashlib.sha256(
+            cell = (variant, task_id, run_id)
+            captured_report_digests[cell] = hashlib.sha256(
                 report_text.strip().encode("utf-8")
             ).hexdigest()
+            # The coordinator manifest fingerprints the raw archived bytes,
+            # not the stripped Markdown visible to annotators.
+            captured_source_fingerprints[cell] = {
+                "trace": {"bytes": len(trace_bytes), "sha256": trace_pin[3].hex()},
+                "report": {"bytes": len(report_bytes), "sha256": report_pin[3].hex()},
+            }
         except (OSError, ValueError, UnicodeDecodeError, KeyError) as exc:
             return {"status": "invalid_or_mismatched_trace_report_content",
                     "checked": checked, "expected": EXPECTED_TRACES,
@@ -1635,6 +1691,8 @@ def _trace_report_content_status(
         }
     if report_digests is not None:
         report_digests.update(captured_report_digests)
+    if source_fingerprints is not None:
+        source_fingerprints.update(captured_source_fingerprints)
     return {"status": "40_trace_report_contents_align_to_frozen_cells_not_authenticated",
             "checked": checked, "expected": EXPECTED_TRACES}
 
@@ -1797,10 +1855,12 @@ def audit_archive_readiness(
         located_ids=located_ids, published_input_anchor=input_anchor,
     )
     report_digests: dict[tuple[str, str, str], str] = {}
+    source_fingerprints: dict[tuple[str, str, str], dict] = {}
     content_status = _trace_report_content_status(
         repo_root=root, trace_root=traces, report_root=reports,
         located_ids=located_ids, run_alignment_status=run_alignment["status"],
         task_anchor_status=task_anchor, report_digests=report_digests,
+        source_fingerprints=source_fingerprints,
     )
     recovery_targets = _expected_recovery_paths(
         repo_root=root, trace_root=traces, report_root=reports,
@@ -1868,7 +1928,7 @@ def audit_archive_readiness(
     # manifest after a path-only key edit or a reissued presentation pair.
     if not gaps:
         artifact_status = _candidate_coordinator_artifact_status(
-            sources, coordinator_manifest_sha256
+            sources, coordinator_manifest_sha256, source_fingerprints
         )
         if artifact_status is not None:
             resources["candidate_coordinator_artifacts"] = artifact_status

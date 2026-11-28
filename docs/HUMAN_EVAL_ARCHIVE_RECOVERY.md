@@ -1,3 +1,26 @@
+## Coordinator manifest original-source fingerprint concordance (28 November 2026)
+
+Matching the coordinator packet, template and key artifact fingerprints
+does not bind the raw original report and trace bytes recorded in the
+manifest's separate `source_artifacts` table. Readiness now retains the
+raw byte counts and SHA-256 fingerprints from the successfully completed
+40-cell content audit and compares all 80 source entries by the
+coordinator key's blind-ID sequence and audited cell identity. Original
+logical trace/report paths must also match the frozen run identities;
+the key never selects files to read, including with external recovery roots.
+
+The raw report fingerprint is distinct from the stripped text used in
+the blinded packet: a whitespace-only source change can preserve the
+word count and packet text but violate the pinned source record.
+Synthetic regressions cover that case, stale and swapped fingerprints,
+invalid source tables, and a rehashed key with an alternate path.
+Diagnostics do not expose private mappings. This is local concordance
+with the observed candidates and caller-supplied pin, not independent
+historical authentication, full coordinator schema or seed validation,
+atomic custody, or authorization to distribute. The integrated handoff
+remains mandatory. No treatment, evaluator, frozen observation or human
+rating is changed.
+
 ## Coordinator manifest-to-artifact concordance (28 November 2026)
 
 A supplied coordinator manifest SHA-256 can match while the packet,
