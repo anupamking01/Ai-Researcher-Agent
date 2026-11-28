@@ -1,0 +1,175 @@
+name: full-ci-job-completion-fast-ci
+
+# Offline regressions for synthetic and retained historical CI evidence.
+# A green result is NOT a substitute for the sixteen-shard aggregate replay.
+on:
+  push:
+    branches:
+      - "research-*"
+    paths:
+      - .github/workflows/full-ci-job-completion-fast-ci.yml
+      - .github/workflows/tests.yml
+      - scripts/audit_full_ci_job_completion.py
+      - scripts/stage_historical_ci_package.py
+      - tests/test_stage_historical_ci_package.py
+      - tests/test_full_ci_job_completion_triage.py
+      - tests/test_full_ci_completion_fast_ci_workflow.py
+      - tests/test_full_ci_shard_selection.py
+      - tests/test_full_ci_shard_set_verification.py
+      - tests/test_full_ci_shard_set_ci_workflow.py
+      - tests/test_offline_ci_network_firewall.py
+      - .github/workflows/live-pilot.yml
+      - .github/workflows/live-app-smoke.yml
+      - scripts/select_full_ci_shard.py
+      - scripts/verify_full_ci_shard_set.py
+      - scripts/verify_ci_early_gate_evidence.py
+      - logic/evaluation.py
+      - tests/test_evaluation_stdlib_gate.py
+      - tests/conftest.py
+      - docs/FULL_OFFLINE_CI_SHARD_SET_REPLAY.md
+      - research-evidence/offline-ci-45526533438-attempt-1/**
+      - research-evidence/offline-ci-aggregate-45526533438-attempt-1.zip
+      - research-evidence/historical-replay-45646023560-attempt-1/**
+      - docs/FULL_CI_JOB_COMPLETION_TRIAGE.md
+      - scripts/run_offline_pytest_firewalled.sh
+      - scripts/verify_ci_python_runtime.py
+      - scripts/verify_ci_source_checkout.py
+      - scripts/verify_ci_test_evidence.py
+      - scripts/verify_retained_ci_test_evidence.py
+      - requirements.txt
+      - requirements-ci.lock
+      - .python-version
+  pull_request:
+    paths:
+      - .github/workflows/full-ci-job-completion-fast-ci.yml
+      - .github/workflows/tests.yml
+      - scripts/audit_full_ci_job_completion.py
+      - scripts/stage_historical_ci_package.py
+      - tests/test_stage_historical_ci_package.py
+      - tests/test_full_ci_job_completion_triage.py
+      - tests/test_full_ci_completion_fast_ci_workflow.py
+      - tests/test_full_ci_shard_selection.py
+      - tests/test_full_ci_shard_set_verification.py
+      - tests/test_full_ci_shard_set_ci_workflow.py
+      - tests/test_offline_ci_network_firewall.py
+      - .github/workflows/live-pilot.yml
+      - .github/workflows/live-app-smoke.yml
+      - scripts/select_full_ci_shard.py
+      - scripts/verify_full_ci_shard_set.py
+      - scripts/verify_ci_early_gate_evidence.py
+      - logic/evaluation.py
+      - tests/test_evaluation_stdlib_gate.py
+      - tests/conftest.py
+      - docs/FULL_OFFLINE_CI_SHARD_SET_REPLAY.md
+      - research-evidence/offline-ci-45526533438-attempt-1/**
+      - research-evidence/offline-ci-aggregate-45526533438-attempt-1.zip
+      - research-evidence/historical-replay-45646023560-attempt-1/**
+      - docs/FULL_CI_JOB_COMPLETION_TRIAGE.md
+      - scripts/run_offline_pytest_firewalled.sh
+      - scripts/verify_ci_python_runtime.py
+      - scripts/verify_ci_source_checkout.py
+      - scripts/verify_ci_test_evidence.py
+      - scripts/verify_retained_ci_test_evidence.py
+      - requirements.txt
+      - requirements-ci.lock
+      - .python-version
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  completion-auditor-regressions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout source without credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Pin Python interpreter
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.17"
+          pip-version: "26.2.1"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-ci.lock
+
+      - name: Verify runtime and exact checkout before dependencies
+        run: |
+          python -m scripts.verify_ci_python_runtime --phase before-tests
+          python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
+
+      - name: Install pinned, offline test dependencies only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-deps \
+            --only-binary=:all: --retries 1 --timeout 15 \
+            --constraint requirements-ci.lock --constraint requirements.txt \
+            pytest pluggy iniconfig packaging PyYAML
+          python -m pip check
+
+      - name: Compile auditor and targeted tests
+        run: |
+          python -m py_compile \
+            scripts/audit_full_ci_job_completion.py \
+            scripts/stage_historical_ci_package.py \
+            tests/test_stage_historical_ci_package.py \
+            tests/test_full_ci_job_completion_triage.py \
+            tests/test_full_ci_completion_fast_ci_workflow.py \
+            tests/test_full_ci_shard_selection.py \
+            tests/test_full_ci_shard_set_verification.py \
+            tests/test_full_ci_shard_set_ci_workflow.py \
+            tests/test_offline_ci_network_firewall.py \
+            scripts/select_full_ci_shard.py \
+            scripts/verify_full_ci_shard_set.py \
+            scripts/verify_ci_early_gate_evidence.py
+
+      - name: Verify exact checkout before targeted tests
+        run: python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase before-tests
+
+      - name: Run firewalled completion-auditor regressions
+        shell: bash
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+          VERA_CI_PRIVATE_NETNS: "1"
+        run: |
+          set -euo pipefail
+          bash scripts/run_offline_pytest_firewalled.sh tests/test_full_ci_job_completion_triage.py tests/test_full_ci_completion_fast_ci_workflow.py tests/test_full_ci_shard_selection.py tests/test_full_ci_shard_set_verification.py tests/test_full_ci_shard_set_ci_workflow.py tests/test_offline_ci_network_firewall.py tests/test_stage_historical_ci_package.py | tee "$RUNNER_TEMP/vera-ci-completion-tests.log"
+
+      - name: Verify runtime and checkout after targeted tests
+        run: |
+          python -m scripts.verify_ci_source_checkout --checkout-sha "$GITHUB_SHA" --phase after-tests
+          python -m scripts.verify_ci_python_runtime --phase after-tests
+
+      - name: Bind exact-commit completion-auditor receipt
+        run: |
+          python -m scripts.verify_ci_test_evidence \
+            --log "$RUNNER_TEMP/vera-ci-completion-tests.log" \
+            --out "$RUNNER_TEMP/vera-ci-completion-test-receipt.json"
+
+      - name: Replay completion-auditor receipt before retention
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.verify_retained_ci_test_evidence \
+            --log "$RUNNER_TEMP/vera-ci-completion-tests.log" \
+            --receipt "$RUNNER_TEMP/vera-ci-completion-test-receipt.json" \
+            --checkout-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --event "$GITHUB_EVENT_NAME"
+
+      - name: Retain source-bound completion-auditor evidence (90 days)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vera-ci-completion-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/vera-ci-completion-tests.log
+            ${{ runner.temp }}/vera-ci-completion-test-receipt.json
+          if-no-files-found: error
+          retention-days: 90

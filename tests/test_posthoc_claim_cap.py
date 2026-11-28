@@ -1,0 +1,2057 @@
+import hashlib
+import json
+
+import pytest
+
+from scripts import evaluate_posthoc_support
+
+
+PRICING = {
+    "unit": "per_1m_text_tokens",
+    "models": {
+        "gpt-5.6-terra": {"input": 2.0, "output": 12.0},
+    }
+}
+EXPECTED_COST = (100 / 1_000_000) * 2.0 + (20 / 1_000_000) * 12.0
+
+
+@pytest.fixture(autouse=True)
+def _isolate_legacy_small_fixture_from_full_matrix_gate(monkeypatch):
+    """Existing cache tests intentionally use only 1–2 synthetic trace cells.
+
+    Full-matrix completeness is independently exercised by
+    test_posthoc_replay_complete_matrix.py; this scoped stub keeps cache,
+    source-fingerprint and publication tests focused on their original gates.
+    The production evaluator preflight remains enforced.
+    """
+    monkeypatch.setattr(
+        evaluate_posthoc_support,
+        "_require_complete_frozen_treatment_matrix",
+        lambda *_args, **_kwargs: None,
+    )
+
+
+def _cached_evaluation(**overrides):
+    payload = {
+        "schema_version": 1,
+        "study_id": "budget-main-v1",
+        "variant_id": "D3",
+        "task_id": "main-01",
+        "run_id": "run-d3-main-01",
+        "max_claims": 12,
+        "claims_checked": 12,
+        "supported": 8,
+        "partially_supported": 2,
+        "unsupported": 1,
+        "contradicted": 1,
+        "strict_support_rate": 8 / 12,
+        "examples": [],
+        "evaluator_model": "gpt-5.6-terra",
+        "temperature": 1.0,
+        "evidence_status": "retrieved_evidence",
+        "provider_usage_by_model": {
+            "gpt-5.6-terra": {
+                "model_calls": 1,
+                "unavailable_calls": 0,
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+            }
+        },
+        "total_tokens": 120,
+        "estimated_cost_usd": EXPECTED_COST,
+        "cost_method": "frozen uncached rates",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _fingerprint_text(text):
+    content = text.encode("utf-8")
+    return {
+        "byte_size": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
+def _input_fingerprints(*, question, report, evidence, prompt):
+    return {
+        "algorithm": "sha256",
+        "encoding": "utf-8",
+        "question": _fingerprint_text(question),
+        "report": _fingerprint_text(report),
+        "evidence": _fingerprint_text(evidence),
+        "prompt": _fingerprint_text(prompt),
+    }
+
+
+def _load_cached(path, **overrides):
+    kwargs = {
+        "expected_variant": "D3",
+        "expected_task_id": "main-01",
+        "expected_run_id": "run-d3-main-01",
+        "expected_evaluator_model": "gpt-5.6-terra",
+        "expected_temperature": 1.0,
+        "expected_evidence_status": "retrieved_evidence",
+        "pricing": PRICING,
+    }
+    kwargs.update(overrides)
+    return evaluate_posthoc_support._load_cached_evaluation(path, **kwargs)
+
+
+
+def test_posthoc_common_evaluator_rejects_ambiguous_raw_label_counts():
+    # Enforce the same raw-JSON integrity on the common measurement path,
+    # before any result can be normalized into an evaluator cache.
+    raw = (
+        '{"claims_checked":1,"supported":1,"supported":0,'
+        '"partially_supported":1,"unsupported":0,"contradicted":0,"examples":[]}'
+    )
+    with pytest.raises(ValueError, match="duplicate JSON key 'supported'"):
+        evaluate_posthoc_support._normalize_evaluator_output(raw)
+
+
+def test_posthoc_normalizer_enforces_frozen_claim_cap():
+    raw = json.dumps(
+        _cached_evaluation(
+            claims_checked=13,
+            supported=9,
+        )
+    )
+
+    with pytest.raises(ValueError, match="exceeds max_claims=12"):
+        evaluate_posthoc_support._normalize_evaluator_output(raw)
+
+
+def test_cached_posthoc_evaluation_rejects_claims_above_cap(tmp_path):
+    path = tmp_path / "cached.json"
+    path.write_text(
+        json.dumps(
+            _cached_evaluation(
+                claims_checked=13,
+                supported=9,
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="exceeds max_claims=12"):
+        _load_cached(path)
+
+
+@pytest.mark.parametrize("declared_cap", [None, True, 11, 13, "12"])
+def test_cached_posthoc_evaluation_requires_frozen_cap_metadata(
+    tmp_path, declared_cap
+):
+    path = tmp_path / "cached.json"
+    path.write_text(
+        json.dumps(_cached_evaluation(max_claims=declared_cap)),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="max_claims metadata must equal 12"):
+        _load_cached(path)
+
+
+def test_cached_posthoc_evaluation_accepts_valid_record(tmp_path):
+    expected = _cached_evaluation()
+    path = tmp_path / "cached.json"
+    path.write_text(json.dumps(expected), encoding="utf-8")
+
+    assert _load_cached(path) == expected
+
+
+def test_cached_posthoc_evaluation_rejects_symlinked_input(tmp_path):
+    target = tmp_path / "outside-cache.json"
+    target.write_text(json.dumps(_cached_evaluation()), encoding="utf-8")
+    path = tmp_path / "cached.json"
+    path.symlink_to(target)
+
+    with pytest.raises(SystemExit, match="must be a regular non-symlink file"):
+        _load_cached(path)
+
+
+def test_cached_posthoc_evaluation_derives_missing_legacy_evidence_status(tmp_path):
+    expected = _cached_evaluation()
+    expected.pop("evidence_status")
+    path = tmp_path / "cached.json"
+    path.write_text(json.dumps(expected), encoding="utf-8")
+
+    loaded = _load_cached(path)
+
+    assert loaded["evidence_status"] == "retrieved_evidence"
+
+
+def test_schema_v2_cache_requires_explicit_evidence_status(tmp_path):
+    question = "Question"
+    report = "Report\n"
+    evidence = "Evidence\n"
+    from logic.prompts import generate_verification_prompt
+
+    prompt = generate_verification_prompt(
+        question,
+        report,
+        evidence,
+        max_claims=evaluate_posthoc_support.MAX_CLAIMS,
+    )
+    path = tmp_path / "cached.json"
+    path.write_text(
+        json.dumps(
+            _cached_evaluation(
+                schema_version=2,
+                evidence_status=None,
+                input_fingerprints=_input_fingerprints(
+                    question=question,
+                    report=report,
+                    evidence=evidence,
+                    prompt=prompt,
+                ),
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="evidence_status must equal"):
+        _load_cached(path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("schema_version", 3, "schema_version must equal 1 or 2"),
+        ("schema_version", True, "schema_version must equal 1"),
+        ("schema_version", 1.0, "schema_version must equal 1"),
+        ("study_id", "other-study", "study_id must equal budget-main-v1"),
+        ("variant_id", "D6", "variant_id must equal D3"),
+        ("task_id", "main-02", "task_id must equal main-01"),
+        ("run_id", "other-run", "run_id must equal run-d3-main-01"),
+    ],
+)
+def test_cached_posthoc_evaluation_is_bound_to_expected_trace_identity(
+    tmp_path, field, value, message
+):
+    path = tmp_path / "cached.json"
+    path.write_text(
+        json.dumps(_cached_evaluation(**{field: value})),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match=message):
+        _load_cached(path)
+
+
+@pytest.mark.parametrize(
+    "rate", [None, True, "0.6667", -0.1, 0.7, (8 / 12) + 5e-13]
+)
+def test_cached_posthoc_evaluation_rejects_invalid_or_inconsistent_rate(
+    tmp_path, rate
+):
+    path = tmp_path / "cached.json"
+    path.write_text(
+        json.dumps(_cached_evaluation(strict_support_rate=rate)),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="strict_support_rate must equal supported / claims_checked"):
+        _load_cached(path)
+
+
+def _completed_trace_payload(**trace_overrides):
+    trace = {
+        "completed": True,
+        "variant_id": "D3",
+        "task_set_id": "main-budget-v1-test",
+        "task_id": "main-01",
+        "question": "Question for main-01",
+        "run_id": "run-d3-main-01",
+        "source_budget": 3,
+        "source_count": 0,
+        "successful_source_count": 0,
+        "failed_source_count": 0,
+        "query_count": 1,
+        "search_call_count": 1,
+        "scheduled_urls": [],
+        "successful_urls": [],
+        "failed_urls": [],
+        "latency_seconds": 1.0,
+        "report_words": 100,
+        "usage_accounting_status": "provider_usage_complete",
+        "provider_usage_by_model": {
+            "gpt-5.6-terra": {
+                "model_calls": 1,
+                "unavailable_calls": 0,
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+            }
+        },
+        "model_call_count": 1,
+        "unavailable_usage_call_count": 0,
+        "prompt_tokens": 100,
+        "completion_tokens": 20,
+        "total_tokens": 120,
+    }
+    trace.update(trace_overrides)
+    return {
+        "schema_version": 2,
+        "experiment": {
+            "variant_id": "D3",
+            "task_set_id": "main-budget-v1-test",
+            "task_id": "main-01",
+            "source_budget": 3,
+        },
+        "trace": trace,
+    }
+
+
+def test_cached_posthoc_evaluation_rejects_duplicate_json_keys(tmp_path):
+    path = tmp_path / "cached.json"
+    raw = json.dumps(_cached_evaluation())
+    raw = raw.replace(
+        '"task_id": "main-01"',
+        '"task_id": "main-99", "task_id": "main-01"',
+        1,
+    )
+    path.write_text(raw, encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="duplicate JSON key: task_id"):
+        _load_cached(path)
+
+
+def test_completed_trace_identity_is_bound_to_directory_filename_and_metadata(
+    tmp_path
+):
+    path = tmp_path / "D3" / "run-d3-main-01.json"
+
+    trace, task_id, run_id = evaluate_posthoc_support._validated_completed_trace(
+        path,
+        _completed_trace_payload(),
+        expected_variant="D3",
+    )
+
+    assert trace["completed"] is True
+    assert task_id == "main-01"
+    assert run_id == "run-d3-main-01"
+
+
+@pytest.mark.parametrize(
+    ("path_variant", "filename", "expected_variant", "payload", "message"),
+    [
+        (
+            "D3",
+            "run-d3-main-01.json",
+            "D3",
+            _completed_trace_payload(variant_id="D6"),
+            "variant_id mismatch",
+        ),
+        (
+            "D3",
+            "run-d3-main-01.json",
+            "D3",
+            {
+                **_completed_trace_payload(),
+                "experiment": {"variant_id": "D6", "task_id": "main-01"},
+            },
+            "variant_id mismatch",
+        ),
+        (
+            "D3",
+            "run-d3-main-01.json",
+            "D3",
+            _completed_trace_payload(task_id=None),
+            "missing task_id",
+        ),
+        (
+            "D3",
+            "wrong-run.json",
+            "D3",
+            _completed_trace_payload(),
+            "filename does not match run_id",
+        ),
+    ],
+)
+def test_completed_trace_identity_rejects_misbound_inputs(
+    tmp_path, path_variant, filename, expected_variant, payload, message
+):
+    path = tmp_path / path_variant / filename
+
+    with pytest.raises(SystemExit, match=message):
+        evaluate_posthoc_support._validated_completed_trace(
+            path,
+            payload,
+            expected_variant=expected_variant,
+        )
+
+
+def test_cached_posthoc_evaluation_rejects_zero_claims(tmp_path):
+    path = tmp_path / "cached.json"
+    path.write_text(
+        json.dumps(
+            _cached_evaluation(
+                claims_checked=0,
+                supported=0,
+                partially_supported=0,
+                unsupported=0,
+                contradicted=0,
+                strict_support_rate=0.0,
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="claims_checked must be positive"):
+        _load_cached(path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("evaluator_model", "gpt-5.6-luna", "evaluator_model must equal"),
+        ("temperature", True, "temperature must equal"),
+        ("temperature", "1", "temperature must equal"),
+        ("temperature", 0.0, "temperature must equal"),
+        ("evidence_status", "zero_successful_sources", "evidence_status must equal"),
+        ("cost_method", "provider invoice", "cost_method must equal"),
+        ("total_tokens", True, "total_tokens must equal provider usage"),
+        ("total_tokens", 121, "total_tokens must equal provider usage"),
+        ("estimated_cost_usd", True, "estimated_cost_usd must equal recomputed cost"),
+        ("estimated_cost_usd", -1.0, "estimated_cost_usd must equal recomputed cost"),
+        ("estimated_cost_usd", EXPECTED_COST + 1e-12, "estimated_cost_usd must equal recomputed cost"),
+    ],
+)
+def test_cached_posthoc_evaluation_rejects_provenance_or_cost_drift(
+    tmp_path, field, value, message
+):
+    path = tmp_path / "cached.json"
+    path.write_text(
+        json.dumps(_cached_evaluation(**{field: value})),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match=message):
+        _load_cached(path)
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {},
+        {"gpt-5.6-luna": {"model_calls": 1, "unavailable_calls": 0, "prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}},
+        {"gpt-5.6-terra": {"model_calls": True, "unavailable_calls": 0, "prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}},
+        {"gpt-5.6-terra": {"model_calls": 1, "unavailable_calls": 1, "prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}},
+        {"gpt-5.6-terra": {"model_calls": 1, "unavailable_calls": 0, "prompt_tokens": -1, "completion_tokens": 20, "total_tokens": 19}},
+        {"gpt-5.6-terra": {"model_calls": 1, "unavailable_calls": 0, "prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 999}},
+    ],
+)
+def test_cached_posthoc_evaluation_rejects_invalid_provider_usage(tmp_path, usage):
+    path = tmp_path / "cached.json"
+    path.write_text(
+        json.dumps(_cached_evaluation(provider_usage_by_model=usage)),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="provider_usage_by_model is invalid"):
+        _load_cached(path)
+
+
+def test_existing_evaluator_cost_rejects_invalid_cached_accounting(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "posthoc_evaluations"
+    path = root / "D3" / "main-01.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(_cached_evaluation(estimated_cost_usd=-1.0)),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(evaluate_posthoc_support, "EVAL_ROOT", root)
+
+    with pytest.raises(SystemExit, match="estimated_cost_usd must equal recomputed cost"):
+        evaluate_posthoc_support._existing_evaluator_cost(
+            PRICING,
+            expected_evaluator_model="gpt-5.6-terra",
+            expected_temperature=1.0,
+        )
+
+
+def _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01", "main-02")):
+    trace_root = tmp_path / "outputs" / "experiment_traces"
+    eval_root = tmp_path / "outputs" / "posthoc_evaluations"
+    pricing_file = tmp_path / "experiments" / "pricing.json"
+    pricing_file.parent.mkdir(parents=True)
+    pricing_file.write_text(json.dumps(PRICING), encoding="utf-8")
+    task_file = tmp_path / "experiments" / "tasks.json"
+    task_file.write_text(
+        json.dumps(
+            {
+                "task_set_id": "main-budget-v1-test",
+                "tasks": [
+                    {
+                        "id": task_id,
+                        "category": "synthetic",
+                        "question": f"Question for {task_id}",
+                    }
+                    for task_id in task_ids
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    for task_id in task_ids:
+        run_id = f"run-d3-{task_id}"
+        trace_path = trace_root / "D3" / f"{run_id}.json"
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        trace_payload = _completed_trace_payload(
+            task_id=task_id,
+            run_id=run_id,
+            question=f"Question for {task_id}",
+            successful_source_count=0,
+        )
+        trace_payload["experiment"]["task_id"] = task_id
+        trace_path.write_text(
+            json.dumps(trace_payload),
+            encoding="utf-8",
+        )
+        report_path = tmp_path / "outputs" / run_id / "research_report.md"
+        report_path.parent.mkdir(parents=True)
+        report_path.write_text(f"Report for {task_id}\n", encoding="utf-8")
+
+    monkeypatch.setattr(evaluate_posthoc_support, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(evaluate_posthoc_support, "TRACE_ROOT", trace_root)
+    monkeypatch.setattr(evaluate_posthoc_support, "EVAL_ROOT", eval_root)
+    monkeypatch.setattr(evaluate_posthoc_support, "PRICING_FILE", pricing_file)
+    monkeypatch.setattr(evaluate_posthoc_support, "TASK_FILE", task_file)
+    monkeypatch.setattr(evaluate_posthoc_support, "VARIANTS", ("D3",))
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SMART_LLM_MODEL", "gpt-5.6-terra")
+    monkeypatch.setenv("TEMPERATURE", "1")
+    monkeypatch.setattr(
+        evaluate_posthoc_support.sys,
+        "argv",
+        ["evaluate_posthoc_support.py", "--max-evaluator-cost-usd", "1.25",
+         "--noncanonical-evaluator-replay-ack",
+         evaluate_posthoc_support.NONCANONICAL_EVALUATOR_REPLAY_ACK],
+    )
+    return eval_root
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda payload: payload["trace"].update(question="Changed question"),
+            "question must match frozen task definition",
+        ),
+        (
+            lambda payload: payload["experiment"].update(task_set_id="other-set"),
+            "task_set_id must match frozen task set",
+        ),
+    ],
+)
+def test_resume_rejects_trace_task_definition_drift_before_first_model_call(
+    tmp_path, monkeypatch, mutate, message
+):
+    eval_root = _configure_resume_main(
+        tmp_path, monkeypatch, task_ids=("main-01",)
+    )
+    trace_path = (
+        tmp_path
+        / "outputs"
+        / "experiment_traces"
+        / "D3"
+        / "run-d3-main-01.json"
+    )
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    mutate(payload)
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    model_calls = []
+
+    def fail_if_called(**kwargs):
+        model_calls.append(kwargs)
+        raise AssertionError("model call occurred before task binding was validated")
+
+    monkeypatch.setattr("agent.llm_utils.create_chat_completion", fail_if_called)
+
+    with pytest.raises(SystemExit, match=message):
+        evaluate_posthoc_support.main()
+
+    assert model_calls == []
+    assert list(eval_root.glob("*/*.json")) == []
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
+def test_resume_rejects_drifted_incomplete_trace_before_any_completed_cell(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(
+        tmp_path, monkeypatch, task_ids=("main-01",)
+    )
+    invalid_path = (
+        tmp_path
+        / "outputs"
+        / "experiment_traces"
+        / "D3"
+        / "run-d3-main-99.json"
+    )
+    invalid = _completed_trace_payload(
+        completed=False,
+        task_set_id="other-set",
+        task_id="main-99",
+        question="Changed question",
+        run_id="run-d3-main-99",
+    )
+    invalid["experiment"].update(
+        task_set_id="other-set",
+        task_id="main-99",
+    )
+    invalid_path.write_text(json.dumps(invalid), encoding="utf-8")
+
+    model_calls = []
+
+    def fail_if_called(**kwargs):
+        model_calls.append(kwargs)
+        raise AssertionError("model call occurred before task binding was validated")
+
+    monkeypatch.setattr("agent.llm_utils.create_chat_completion", fail_if_called)
+
+    with pytest.raises(SystemExit, match="task_set_id must match frozen task set"):
+        evaluate_posthoc_support.main()
+
+    assert model_calls == []
+    assert list(eval_root.glob("*/*.json")) == []
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
+@pytest.mark.parametrize(
+    ("env_name", "env_value", "message"),
+    [
+        (
+            "SMART_LLM_MODEL",
+            "gpt-5.6-luna",
+            "SMART_LLM_MODEL must equal frozen evaluator model gpt-5.6-terra",
+        ),
+        (
+            "TEMPERATURE",
+            "0",
+            "TEMPERATURE must equal frozen evaluator temperature 1.0",
+        ),
+    ],
+)
+def test_resume_rejects_nonfrozen_evaluator_configuration_before_model_call(
+    tmp_path, monkeypatch, env_name, env_value, message
+):
+    eval_root = _configure_resume_main(
+        tmp_path, monkeypatch, task_ids=("main-01",)
+    )
+    monkeypatch.setenv(env_name, env_value)
+    model_calls = []
+
+    def fail_if_called(**kwargs):
+        model_calls.append(kwargs)
+        raise AssertionError("model call occurred before frozen config validation")
+
+    monkeypatch.setattr("agent.llm_utils.create_chat_completion", fail_if_called)
+
+    with pytest.raises(SystemExit, match=message):
+        evaluate_posthoc_support.main()
+
+    assert model_calls == []
+    assert list(eval_root.glob("*/*.json")) == []
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
+def test_resume_preflights_later_cached_identity_before_first_model_call(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch)
+    invalid_cache = eval_root / "D3" / "main-02.json"
+    invalid_cache.parent.mkdir(parents=True)
+    invalid_cache.write_text(
+        json.dumps(
+            _cached_evaluation(
+                task_id="main-99",
+                run_id="run-d3-main-02",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    model_calls = []
+
+    def fail_if_called(**kwargs):
+        model_calls.append(kwargs)
+        raise AssertionError("model call occurred before cache preflight completed")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        fail_if_called,
+    )
+
+    with pytest.raises(SystemExit, match="task_id must equal main-02"):
+        evaluate_posthoc_support.main()
+
+    assert model_calls == []
+
+
+def test_resume_preflights_nonregular_later_cache_before_first_model_call(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch)
+    invalid_cache = eval_root / "D3" / "main-02.json"
+    invalid_cache.mkdir(parents=True)
+
+    model_calls = []
+
+    def fail_if_called(**kwargs):
+        model_calls.append(kwargs)
+        raise AssertionError("model call occurred before cache preflight completed")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        fail_if_called,
+    )
+
+    with pytest.raises(SystemExit, match="must be a regular non-symlink file"):
+        evaluate_posthoc_support.main()
+
+    assert model_calls == []
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda trace: trace.update(source_count=1),
+            "source count ledger mismatch",
+        ),
+        (
+            lambda trace: trace.update(completed=1),
+            "completed must be a boolean",
+        ),
+    ],
+)
+def test_resume_preflights_treatment_ledgers_before_first_model_call(
+    tmp_path, monkeypatch, mutate, message
+):
+    _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    trace_path = (
+        tmp_path
+        / "outputs"
+        / "experiment_traces"
+        / "D3"
+        / "run-d3-main-01.json"
+    )
+    payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    mutate(payload["trace"])
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    model_calls = []
+
+    def fail_if_called(**kwargs):
+        model_calls.append(kwargs)
+        raise AssertionError("model call occurred before trace preflight completed")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        fail_if_called,
+    )
+
+    with pytest.raises(SystemExit, match=message):
+        evaluate_posthoc_support.main()
+
+    assert model_calls == []
+
+
+def test_resume_rejects_symlinked_report_before_first_model_call(
+    tmp_path, monkeypatch
+):
+    _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    report_path = (
+        tmp_path
+        / "outputs"
+        / "run-d3-main-01"
+        / "research_report.md"
+    )
+    outside_report = tmp_path / "outside-report.md"
+    outside_report.write_text(report_path.read_text(encoding="utf-8"), encoding="utf-8")
+    report_path.unlink()
+    report_path.symlink_to(outside_report)
+
+    model_calls = []
+
+    def fail_if_called(**kwargs):
+        model_calls.append(kwargs)
+        raise AssertionError("model call occurred before report preflight completed")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        fail_if_called,
+    )
+
+    with pytest.raises(SystemExit, match="report must be a regular non-symlink file"):
+        evaluate_posthoc_support.main()
+
+    assert model_calls == []
+
+
+def test_resume_preflight_rejects_cached_files_outside_trace_matrix(
+    tmp_path, monkeypatch
+):
+    eval_root = tmp_path / "outputs" / "posthoc_evaluations"
+    unexpected = eval_root / "D6" / "main-99.json"
+    unexpected.parent.mkdir(parents=True)
+    unexpected.write_text(json.dumps(_cached_evaluation()), encoding="utf-8")
+
+    run_id = "run-d3-main-01"
+    report_path = tmp_path / "outputs" / run_id / "research_report.md"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text("Report for main-01\n", encoding="utf-8")
+    expected = [
+        (
+            "D3",
+            tmp_path / "outputs" / "experiment_traces" / "D3" / f"{run_id}.json",
+            {
+                "run_id": run_id,
+                "question": "Question for main-01",
+                "successful_source_count": 0,
+            },
+            "main-01",
+            run_id,
+        )
+    ]
+
+    monkeypatch.setattr(evaluate_posthoc_support, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(evaluate_posthoc_support, "EVAL_ROOT", eval_root)
+
+    with pytest.raises(SystemExit, match="Unexpected cached post-hoc evaluation"):
+        evaluate_posthoc_support._preflight_evaluator_resume(
+            expected,
+            pricing=PRICING,
+            evaluator_model="gpt-5.6-terra",
+            evaluator_temperature=1.0,
+        )
+
+
+def test_resume_preflight_rejects_duplicate_evaluator_destination(
+    tmp_path, monkeypatch
+):
+    eval_root = tmp_path / "outputs" / "posthoc_evaluations"
+    expected = []
+    for suffix in ("a", "b"):
+        run_id = f"run-d3-main-01-{suffix}"
+        report_path = tmp_path / "outputs" / run_id / "research_report.md"
+        report_path.parent.mkdir(parents=True)
+        report_path.write_text(f"Report {suffix}\n", encoding="utf-8")
+        expected.append(
+            (
+                "D3",
+                tmp_path / "outputs" / "experiment_traces" / "D3" / f"{run_id}.json",
+                {
+                    "run_id": run_id,
+                    "question": "Question for main-01",
+                    "successful_source_count": 0,
+                },
+                "main-01",
+                run_id,
+            )
+        )
+
+    monkeypatch.setattr(evaluate_posthoc_support, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(evaluate_posthoc_support, "EVAL_ROOT", eval_root)
+
+    with pytest.raises(SystemExit, match="duplicate evaluator destination"):
+        evaluate_posthoc_support._preflight_evaluator_resume(
+            expected,
+            pricing=PRICING,
+            evaluator_model="gpt-5.6-terra",
+            evaluator_temperature=1.0,
+        )
+
+
+def _record_evaluator_usage(kwargs, **metadata):
+    kwargs["usage_tracker"].record_response(
+        "gpt-5.6-terra",
+        {
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+            },
+            **metadata,
+        },
+    )
+
+
+def test_new_cache_binds_exact_evaluator_prompt_inputs(tmp_path, monkeypatch):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    captured = []
+
+    def complete_evaluation(**kwargs):
+        captured.append(kwargs)
+        _record_evaluator_usage(kwargs, model="synthetic-resolved-model", id="synthetic-id")
+        return _evaluator_result()
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        complete_evaluation,
+    )
+
+    assert evaluate_posthoc_support.main() == 0
+
+    cache = json.loads(
+        (eval_root / "D3" / "main-01.json").read_text(encoding="utf-8")
+    )
+    question = "Question for main-01"
+    report = "Report for main-01\n"
+    evidence = evaluate_posthoc_support.NO_EVIDENCE_SENTINEL
+    assert captured[0]["temperature"] == 1.0
+    assert cache["schema_version"] == 2
+    assert cache["provider_response_identity"] == {
+        "model": {"status": "reported", "value": "synthetic-resolved-model"},
+        "id": {"status": "reported", "value": "synthetic-id"},
+        "system_fingerprint": {"status": "unavailable", "value": None},
+    }
+    assert set(cache["provider_usage_by_model"]) == {"gpt-5.6-terra"}
+    assert cache["estimated_cost_usd"] == EXPECTED_COST
+    assert cache["raw_response"] == {"text": _evaluator_result(), **_fingerprint_text(_evaluator_result())}
+    evaluate_posthoc_support._validate_raw_response_receipt(cache)
+    assert _load_cached(
+        eval_root / "D3" / "main-01.json",
+        expected_evidence_status="zero_successful_sources",
+        expected_input_fingerprints=cache["input_fingerprints"],
+    ) == cache
+    assert cache["replay_provenance"] == evaluate_posthoc_support._noncanonical_evaluator_replay_provenance()
+    assert cache["input_fingerprints"] == _input_fingerprints(
+        question=question,
+        report=report,
+        evidence=evidence,
+        prompt=captured[0]["messages"][0]["content"],
+    )
+
+
+def test_resume_rejects_cache_bound_to_different_report_before_model_call(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    question = "Question for main-01"
+    original_report = "Original report\n"
+    evidence = evaluate_posthoc_support.NO_EVIDENCE_SENTINEL
+    from logic.prompts import generate_verification_prompt
+
+    original_prompt = generate_verification_prompt(
+        question,
+        original_report,
+        evidence,
+        max_claims=evaluate_posthoc_support.MAX_CLAIMS,
+    )
+    cache_path = eval_root / "D3" / "main-01.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(
+        json.dumps(
+            _cached_evaluation(
+                schema_version=2,
+                input_fingerprints=_input_fingerprints(
+                    question=question,
+                    report=original_report,
+                    evidence=evidence,
+                    prompt=original_prompt,
+                ),
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    model_calls = []
+
+    def fail_if_called(**kwargs):
+        model_calls.append(kwargs)
+        raise AssertionError("model call occurred before cache input validation")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        fail_if_called,
+    )
+
+    with pytest.raises(SystemExit, match="input_fingerprints must match"):
+        evaluate_posthoc_support.main()
+
+    assert model_calls == []
+
+
+def test_bound_resume_rejects_fingerprintless_legacy_cache_before_model_call(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    cache_path = eval_root / "D3" / "main-01.json"
+    cache_path.parent.mkdir(parents=True)
+    historical_style_record = _zero_source_cache()
+    cache_path.write_text(json.dumps(historical_style_record), encoding="utf-8")
+
+    model_calls = []
+
+    def fail_if_called(**kwargs):
+        model_calls.append(kwargs)
+        raise AssertionError("legacy cache must fail before any model invocation")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        fail_if_called,
+    )
+
+    with pytest.raises(SystemExit, match="unbound legacy schema_version 1"):
+        evaluate_posthoc_support.main()
+
+    assert model_calls == []
+    assert json.loads(cache_path.read_text(encoding="utf-8")) == historical_style_record
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
+def test_legacy_record_can_still_be_inspected_without_claiming_source_binding(
+    tmp_path,
+):
+    path = tmp_path / "historical-cache.json"
+    original_record = _zero_source_cache()
+    path.write_text(json.dumps(original_record), encoding="utf-8")
+
+    assert _load_cached(
+        path,
+        expected_evidence_status="zero_successful_sources",
+        expected_input_fingerprints=None,
+    ) == original_record
+
+
+def test_explicit_fingerprint_binding_rejects_legacy_schema_in_direct_loader(
+    tmp_path,
+):
+    path = tmp_path / "historical-cache.json"
+    path.write_text(json.dumps(_zero_source_cache()), encoding="utf-8")
+    expected = evaluate_posthoc_support._evaluator_input_fingerprints(
+        question="Question for main-01",
+        report="Report for main-01\n",
+        evidence=evaluate_posthoc_support.NO_EVIDENCE_SENTINEL,
+        prompt="Synthetic current verification prompt",
+    )
+    with pytest.raises(SystemExit, match="no input_fingerprints"):
+        _load_cached(
+            path,
+            expected_evidence_status="zero_successful_sources",
+            expected_input_fingerprints=expected,
+        )
+
+
+def _evaluator_result():
+    # Resume-main fixtures intentionally have zero successfully retrieved
+    # sources: the evidence-only rubric must not invent support or partial
+    # support while testing unrelated cache/publication mechanics.
+    return json.dumps(
+        {
+            "claims_checked": 12,
+            "supported": 0,
+            "partially_supported": 0,
+            "unsupported": 12,
+            "contradicted": 0,
+            "examples": [],
+        }
+    )
+
+
+def test_resume_fails_closed_if_later_cache_appears_after_preflight(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch)
+    later_cache = eval_root / "D3" / "main-02.json"
+    model_calls = []
+
+    def publish_later_cache(**kwargs):
+        model_calls.append(kwargs)
+        _record_evaluator_usage(kwargs)
+        if len(model_calls) == 1:
+            later_cache.parent.mkdir(parents=True, exist_ok=True)
+            later_cache.write_text(
+                json.dumps(
+                    _cached_evaluation(
+                        task_id="main-02",
+                        run_id="run-d3-main-02",
+                    )
+                ),
+                encoding="utf-8",
+            )
+        return _evaluator_result()
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        publish_later_cache,
+    )
+
+    with pytest.raises(SystemExit, match="resume state changed after preflight"):
+        evaluate_posthoc_support.main()
+
+    assert len(model_calls) == 1
+    assert json.loads(later_cache.read_text(encoding="utf-8"))["supported"] == 8
+
+
+def test_resume_never_overwrites_cache_published_during_model_call(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    concurrent_cache = eval_root / "D3" / "main-01.json"
+
+    def publish_current_cache(**kwargs):
+        _record_evaluator_usage(kwargs)
+        concurrent_cache.parent.mkdir(parents=True, exist_ok=True)
+        concurrent_cache.write_text(
+            json.dumps(_cached_evaluation()),
+            encoding="utf-8",
+        )
+        return _evaluator_result()
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        publish_current_cache,
+    )
+
+    with pytest.raises(SystemExit, match="cache appeared during model call"):
+        evaluate_posthoc_support.main()
+
+    assert json.loads(concurrent_cache.read_text(encoding="utf-8"))["supported"] == 8
+
+
+def test_overspend_preserves_cell_cache_without_publishing_aggregate_outputs(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    monkeypatch.setattr(
+        evaluate_posthoc_support.sys,
+        "argv",
+        ["evaluate_posthoc_support.py", "--max-evaluator-cost-usd", "0.0001",
+         "--noncanonical-evaluator-replay-ack",
+         evaluate_posthoc_support.NONCANONICAL_EVALUATOR_REPLAY_ACK],
+    )
+
+    def complete_evaluation(**kwargs):
+        _record_evaluator_usage(kwargs)
+        return _evaluator_result()
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        complete_evaluation,
+    )
+
+    with pytest.raises(SystemExit, match="Evaluator completed but exceeded cap"):
+        evaluate_posthoc_support.main()
+
+    cached = eval_root / "D3" / "main-01.json"
+    assert json.loads(cached.read_text(encoding="utf-8"))["task_id"] == "main-01"
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
+def test_aggregate_summary_binds_exact_published_csv_bytes(tmp_path, monkeypatch):
+    eval_root = _configure_resume_main(
+        tmp_path, monkeypatch, task_ids=("main-01",)
+    )
+    cache_path = eval_root / "D3" / "main-01.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(
+        json.dumps(
+            _bound_zero_source_cache()
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_if_called(**_kwargs):
+        raise AssertionError("cached evaluation should avoid a model call")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        fail_if_called,
+    )
+
+    assert evaluate_posthoc_support.main() == 0
+
+    outputs = tmp_path / "outputs"
+    summary = json.loads(
+        (outputs / "posthoc_support_summary.json").read_text(encoding="utf-8")
+    )
+    csv_bytes = (outputs / "posthoc_support_runs.csv").read_bytes()
+    assert summary["posthoc_support_runs_sha256"] == hashlib.sha256(
+        csv_bytes
+    ).hexdigest()
+    assert summary["replay_provenance"] == {
+        **evaluate_posthoc_support._noncanonical_evaluator_replay_provenance(),
+        "reused_cached_measurements": 1,
+        "new_noncanonical_measurements": 0,
+    }
+
+
+@pytest.mark.parametrize("substitute_csv", [False, True])
+def test_aggregate_publication_rejects_self_consistent_substitution(
+    tmp_path, monkeypatch, substitute_csv
+):
+    eval_root = _configure_resume_main(
+        tmp_path, monkeypatch, task_ids=("main-01",)
+    )
+    cache_path = eval_root / "D3" / "main-01.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(
+        json.dumps(_bound_zero_source_cache()), encoding="utf-8"
+    )
+    cache_bytes = cache_path.read_bytes()
+
+    def fail_if_called(**_kwargs):
+        raise AssertionError("cached evaluation should avoid a model call")
+
+    monkeypatch.setattr("agent.llm_utils.create_chat_completion", fail_if_called)
+    real_publish = evaluate_posthoc_support._publish_aggregate_outputs
+
+    def substitute_after_publish(summary_path, csv_path, summary, rows):
+        intended_digest = real_publish(summary_path, csv_path, summary, rows)
+        changed = json.loads(summary_path.read_text(encoding="utf-8"))
+        changed["n_evaluations"] = 0
+        if substitute_csv:
+            substituted = b"generation\nsubstituted\n"
+            csv_path.write_bytes(substituted)
+            changed["posthoc_support_runs_sha256"] = hashlib.sha256(
+                substituted
+            ).hexdigest()
+        summary_path.write_text(json.dumps(changed), encoding="utf-8")
+        # The older pair-consistency contract cannot detect this substitution.
+        evaluate_posthoc_support._verify_aggregate_outputs(summary_path, csv_path)
+        return intended_digest
+
+    monkeypatch.setattr(
+        evaluate_posthoc_support, "_publish_aggregate_outputs",
+        substitute_after_publish,
+    )
+    with pytest.raises(SystemExit, match="differs from the intended summary"):
+        evaluate_posthoc_support.main()
+    assert cache_path.read_bytes() == cache_bytes
+    # Preserve suspect outputs for explicit provenance review.
+    assert (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
+def test_aggregate_publication_stages_every_file_before_replacing_existing_outputs(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(
+        tmp_path, monkeypatch, task_ids=("main-01",)
+    )
+    cache_path = eval_root / "D3" / "main-01.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(
+        json.dumps(
+            _bound_zero_source_cache()
+        ),
+        encoding="utf-8",
+    )
+
+    outputs = tmp_path / "outputs"
+    summary_path = outputs / "posthoc_support_summary.json"
+    csv_path = outputs / "posthoc_support_runs.csv"
+    previous_csv = b"generation\nprevious\n"
+    previous_summary = json.dumps({
+        "study_id": evaluate_posthoc_support.STUDY_ID,
+        "replay_provenance": evaluate_posthoc_support._noncanonical_evaluator_replay_provenance(),
+        "posthoc_support_runs_sha256": hashlib.sha256(previous_csv).hexdigest(),
+    }).encode("utf-8")
+    summary_path.write_bytes(previous_summary)
+    csv_path.write_bytes(previous_csv)
+
+    def fail_if_called(**_kwargs):
+        raise AssertionError("cached evaluation should avoid a model call")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        fail_if_called,
+    )
+    real_mkstemp = evaluate_posthoc_support.tempfile.mkstemp
+    staging_attempts = []
+
+    def fail_second_staging(*args, **kwargs):
+        staging_attempts.append(kwargs.get("prefix"))
+        if len(staging_attempts) == 2:
+            raise OSError("synthetic aggregate staging failure")
+        return real_mkstemp(*args, **kwargs)
+
+    monkeypatch.setattr(
+        evaluate_posthoc_support.tempfile,
+        "mkstemp",
+        fail_second_staging,
+    )
+
+    with pytest.raises(OSError, match="synthetic aggregate staging failure"):
+        evaluate_posthoc_support.main()
+
+    assert summary_path.read_bytes() == previous_summary
+    assert csv_path.read_bytes() == previous_csv
+    assert list(outputs.glob(".posthoc_support_*.*.tmp")) == []
+
+
+def test_interrupted_second_replacement_leaves_detectable_mixed_generation(
+    tmp_path, monkeypatch
+):
+    eval_root = _configure_resume_main(
+        tmp_path, monkeypatch, task_ids=("main-01",)
+    )
+    cache_path = eval_root / "D3" / "main-01.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(
+        json.dumps(
+            _bound_zero_source_cache()
+        ),
+        encoding="utf-8",
+    )
+
+    outputs = tmp_path / "outputs"
+    summary_path = outputs / "posthoc_support_summary.json"
+    csv_path = outputs / "posthoc_support_runs.csv"
+    previous_csv = b"generation\nprevious\n"
+    csv_path.write_bytes(previous_csv)
+    summary_path.write_text(
+        json.dumps(
+            {
+                "study_id": evaluate_posthoc_support.STUDY_ID,
+                "replay_provenance": evaluate_posthoc_support._noncanonical_evaluator_replay_provenance(),
+                "posthoc_support_runs_sha256": hashlib.sha256(
+                    previous_csv
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_if_called(**_kwargs):
+        raise AssertionError("cached evaluation should avoid a model call")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion",
+        fail_if_called,
+    )
+    real_replace = evaluate_posthoc_support.os.replace
+    replacements = []
+
+    def fail_second_replacement(source, destination):
+        replacements.append((source, destination))
+        if len(replacements) == 2:
+            raise OSError("synthetic second replacement failure")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(
+        evaluate_posthoc_support.os,
+        "replace",
+        fail_second_replacement,
+    )
+
+    with pytest.raises(OSError, match="synthetic second replacement failure"):
+        evaluate_posthoc_support.main()
+
+    assert csv_path.read_bytes() == previous_csv
+    with pytest.raises(SystemExit, match="post-hoc aggregate generation mismatch"):
+        evaluate_posthoc_support._verify_aggregate_outputs(
+            summary_path,
+            csv_path,
+        )
+    assert list(outputs.glob(".posthoc_support_*.*.tmp")) == []
+
+
+def test_cache_publication_is_invisible_until_atomic_commit(tmp_path, monkeypatch):
+    path = tmp_path / "posthoc_evaluations" / "D3" / "main-01.json"
+    expected = _cached_evaluation()
+    real_link = evaluate_posthoc_support.os.link
+    observed = []
+
+    def inspect_then_link(source, destination):
+        observed.append(
+            {
+                "destination_absent": not path.exists(),
+                "staged_payload": json.loads(source.read_text(encoding="utf-8")),
+                "staged_mode": source.stat().st_mode & 0o777,
+            }
+        )
+        real_link(source, destination)
+
+    monkeypatch.setattr(evaluate_posthoc_support.os, "link", inspect_then_link)
+
+    evaluate_posthoc_support._publish_evaluation_cache(path, expected)
+
+    assert observed == [
+        {
+            "destination_absent": True,
+            "staged_payload": expected,
+            "staged_mode": 0o600,
+        }
+    ]
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert json.loads(path.read_text(encoding="utf-8")) == expected
+    assert list(path.parent.glob(".main-01.json.*.tmp")) == []
+
+
+def test_cache_publication_preserves_concurrent_winner(tmp_path, monkeypatch):
+    path = tmp_path / "posthoc_evaluations" / "D3" / "main-01.json"
+    winner = b'{"owner":"concurrent evaluator"}\n'
+
+    def publish_winner_then_collide(_source, destination):
+        destination.write_bytes(winner)
+        raise FileExistsError(destination)
+
+    monkeypatch.setattr(
+        evaluate_posthoc_support.os,
+        "link",
+        publish_winner_then_collide,
+    )
+
+    with pytest.raises(FileExistsError):
+        evaluate_posthoc_support._publish_evaluation_cache(
+            path,
+            _cached_evaluation(),
+        )
+
+    assert path.read_bytes() == winner
+    assert list(path.parent.glob(".main-01.json.*.tmp")) == []
+
+
+def test_cache_publication_cleans_staging_after_write_sync_failure(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "posthoc_evaluations" / "D3" / "main-01.json"
+
+    def fail_sync(_descriptor):
+        raise OSError("synthetic fsync failure")
+
+    monkeypatch.setattr(evaluate_posthoc_support.os, "fsync", fail_sync)
+
+    with pytest.raises(OSError, match="synthetic fsync failure"):
+        evaluate_posthoc_support._publish_evaluation_cache(
+            path,
+            _cached_evaluation(),
+        )
+
+    assert not path.exists()
+    assert list(path.parent.glob(".main-01.json.*.tmp")) == []
+
+
+def _bound_zero_source_cache(**overrides):
+    """Synthetic v2 cache bound to the exact synthetic main-01 prompt."""
+    from logic.prompts import generate_verification_prompt
+
+    question = "Question for main-01"
+    report = "Report for main-01\n"
+    evidence = evaluate_posthoc_support.NO_EVIDENCE_SENTINEL
+    prompt = generate_verification_prompt(
+        question,
+        report,
+        evidence,
+        max_claims=evaluate_posthoc_support.MAX_CLAIMS,
+    )
+    return _zero_source_cache(
+        schema_version=2,
+        input_fingerprints=_input_fingerprints(
+            question=question,
+            report=report,
+            evidence=evidence,
+            prompt=prompt,
+        ),
+        **overrides,
+    )
+
+
+def _zero_source_cache(**overrides):
+    record = _cached_evaluation()
+    record.update(
+        evidence_status="zero_successful_sources",
+        supported=0,
+        partially_supported=0,
+        unsupported=12,
+        contradicted=0,
+        strict_support_rate=0.0,
+    )
+    record.update(overrides)
+    return record
+
+
+def test_cached_zero_source_measurement_all_unsupported_is_valid(tmp_path):
+    path = tmp_path / "zero-source.json"
+    expected = _zero_source_cache()
+    path.write_text(json.dumps(expected), encoding="utf-8")
+
+    assert _load_cached(
+        path, expected_evidence_status="zero_successful_sources"
+    ) == expected
+
+
+@pytest.mark.parametrize("false_label", ["supported", "partially_supported", "contradicted"])
+def test_cached_zero_source_measurement_rejects_unavailable_evidence_labels(
+    tmp_path, false_label
+):
+    # Counts and strict-support rate remain internally consistent: only the
+    # no-retrieved-evidence contract detects this scientific contradiction.
+    record = _zero_source_cache(unsupported=11)
+    record[false_label] = 1
+    if false_label == "supported":
+        record["strict_support_rate"] = 1 / 12
+    path = tmp_path / "zero-source.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="zero successful sources requires every"):
+        _load_cached(path, expected_evidence_status="zero_successful_sources")
+
+
+def test_live_evaluator_guard_checks_zero_source_before_persistence():
+    # The same invariant applies to a freshly normalized evaluator response,
+    # before it may be published as a cache or exported into the study.
+    with pytest.raises(SystemExit, match="zero successful sources requires every"):
+        evaluate_posthoc_support._require_zero_evidence_classifications(
+            _zero_source_cache(supported=1, unsupported=11, strict_support_rate=1 / 12),
+            evidence_status="zero_successful_sources",
+            label="test live evaluator",
+        )
+
+
+def test_no_evidence_rule_does_not_relabel_evidence_backed_measurements():
+    evaluate_posthoc_support._require_zero_evidence_classifications(
+        _cached_evaluation(),
+        evidence_status="retrieved_evidence",
+        label="control",
+    )
+
+
+def test_cached_evaluator_mutation_after_preflight_blocks_aggregate(
+    tmp_path, monkeypatch
+):
+    """Even an all-cached replay cannot publish from no-longer-retained bytes."""
+    eval_root = _configure_resume_main(
+        tmp_path, monkeypatch, task_ids=("main-01",)
+    )
+    cache_path = eval_root / "D3" / "main-01.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(
+        json.dumps(_bound_zero_source_cache()), encoding="utf-8"
+    )
+
+    def fail_if_called(**_kwargs):
+        raise AssertionError("All evaluations are cached; no model calls allowed")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion", fail_if_called
+    )
+    original_guard = evaluate_posthoc_support._require_final_evaluator_source_continuity
+
+    def mutate_cache_after_source_check(*args, **kwargs):
+        original_guard(*args, **kwargs)
+        # Semantically identical JSON with different bytes must not be
+        # attributed to the preflight-validated measurement snapshot.
+        cache_path.write_bytes(cache_path.read_bytes() + b"\n")
+
+    monkeypatch.setattr(
+        evaluate_posthoc_support,
+        "_require_final_evaluator_source_continuity",
+        mutate_cache_after_source_check,
+    )
+    with pytest.raises(SystemExit, match="Evaluator cache changed during replay"):
+        evaluate_posthoc_support.main()
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("added_json", "Treatment trace inventory changed after preflight"),
+        ("hidden_backup", "unselected treatment trace files"),
+        ("renamed", "Treatment trace inventory changed after preflight"),
+    ],
+)
+def test_late_trace_inventory_drift_blocks_all_cached_publication(
+    tmp_path, monkeypatch, mutation, message
+):
+    """Unchanged selected bytes alone cannot establish closed-world custody."""
+    eval_root = _configure_resume_main(
+        tmp_path, monkeypatch, task_ids=("main-01",)
+    )
+    cache_path = eval_root / "D3" / "main-01.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(
+        json.dumps(_bound_zero_source_cache()), encoding="utf-8"
+    )
+    cache_bytes = cache_path.read_bytes()
+    trace_path = (
+        evaluate_posthoc_support.TRACE_ROOT / "D3" / "run-d3-main-01.json"
+    )
+    trace_bytes = trace_path.read_bytes()
+
+    def fail_if_called(**_kwargs):
+        raise AssertionError("All evaluations are cached; no model calls allowed")
+
+    monkeypatch.setattr(
+        "agent.llm_utils.create_chat_completion", fail_if_called
+    )
+    original_guard = evaluate_posthoc_support._require_final_evaluator_source_continuity
+
+    def mutate_trace_inventory_after_source_check(*args, **kwargs):
+        original_guard(*args, **kwargs)
+        # At this point the original per-trace hash checks have already run.
+        if mutation == "added_json":
+            trace_path.with_name("alternate.json").write_bytes(trace_bytes)
+        elif mutation == "hidden_backup":
+            trace_path.with_name(".trace.json.bak").write_bytes(trace_bytes)
+        else:
+            trace_path.rename(trace_path.with_name("renamed.json"))
+
+    monkeypatch.setattr(
+        evaluate_posthoc_support,
+        "_require_final_evaluator_source_continuity",
+        mutate_trace_inventory_after_source_check,
+    )
+    with pytest.raises(SystemExit, match=message):
+        evaluate_posthoc_support.main()
+    assert cache_path.read_bytes() == cache_bytes
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
+def _cache_with_raw_response():
+    payload = _cached_evaluation()
+    raw = " \n" + json.dumps({
+        field: payload[field] for field in (
+            "claims_checked", "supported", "partially_supported", "unsupported",
+            "contradicted", "examples",
+        )
+    }) + "\n"
+    payload["raw_response"] = {"text": raw, **_fingerprint_text(raw)}
+    return payload
+
+
+def test_raw_response_cache_round_trip_preserves_exact_text(tmp_path):
+    payload = _cache_with_raw_response()
+    path = tmp_path / "cache.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert _load_cached(path) == payload
+
+
+@pytest.mark.parametrize("mutation", ["text", "digest", "size", "boolean_size", "missing_field", "counts", "examples", "duplicate_key"])
+def test_raw_response_cache_rejects_inconsistent_evidence(tmp_path, mutation):
+    payload = _cache_with_raw_response()
+    receipt = payload["raw_response"]
+    if mutation == "text":
+        receipt["text"] += " "
+    elif mutation == "digest":
+        receipt["sha256"] = "0" * 64
+    elif mutation == "size":
+        receipt["byte_size"] += 1
+    elif mutation == "boolean_size":
+        receipt["byte_size"] = True
+    elif mutation == "missing_field":
+        del receipt["sha256"]
+    elif mutation == "counts":
+        payload.update(supported=7, unsupported=2, strict_support_rate=7 / 12)
+    elif mutation == "examples":
+        payload["examples"] = [{"claim": "synthetic"}]
+    elif mutation == "duplicate_key":
+        raw = receipt["text"].replace('"supported": 8', '"supported": 8, "supported": 8')
+        payload["raw_response"] = {"text": raw, **_fingerprint_text(raw)}
+    path = tmp_path / "cache.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(SystemExit, match="raw evaluator response|duplicate JSON key"):
+        _load_cached(path)
+
+
+def test_raw_response_receipt_bounds_utf8_bytes(monkeypatch):
+    monkeypatch.setattr(evaluate_posthoc_support, "MAX_RAW_EVALUATOR_RESPONSE_BYTES", 4)
+    assert evaluate_posthoc_support._raw_response_receipt("éé") == {
+        "text": "éé", **_fingerprint_text("éé"),
+    }
+    with pytest.raises(ValueError, match="byte limit"):
+        evaluate_posthoc_support._raw_response_receipt("ééé")
+
+
+def test_aggregate_cache_manifest_discloses_mixed_raw_response_coverage(tmp_path, monkeypatch):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch)
+    old_path = eval_root / "D3" / "main-01.json"
+    old_path.parent.mkdir(parents=True)
+    old_path.write_text(json.dumps(_bound_zero_source_cache()), encoding="utf-8")
+
+    calls = []
+
+    def complete_evaluation(**kwargs):
+        calls.append(kwargs)
+        _record_evaluator_usage(kwargs)
+        return _evaluator_result()
+
+    monkeypatch.setattr("agent.llm_utils.create_chat_completion", complete_evaluation)
+    assert evaluate_posthoc_support.main() == 0
+    assert len(calls) == 1
+    new_path = eval_root / "D3" / "main-02.json"
+    summary_path = tmp_path / "outputs" / "posthoc_support_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    manifest = summary["evaluator_cache_manifest"]
+    assert summary["measurement_origin_manifest"] == {
+        "schema_version": 1,
+        "cells": [
+            {"variant_id": "D3", "task_id": "main-01", "run_id": "run-d3-main-01",
+             "origin": "reused_cache"},
+            {"variant_id": "D3", "task_id": "main-02", "run_id": "run-d3-main-02",
+             "origin": "new_this_replay"},
+        ],
+    }
+    fingerprint = _fingerprint_text(_evaluator_result())
+    assert manifest == {
+        "schema_version": 3,
+        "retained_raw_response_cells": 1,
+        "missing_raw_response_cells": 1,
+        "retained_provider_identity_receipt_cells": 1,
+        "missing_provider_identity_receipt_cells": 1,
+        "cells": [
+            {
+                "variant_id": "D3", "task_id": "main-01", "run_id": "run-d3-main-01",
+                "cache_sha256": hashlib.sha256(old_path.read_bytes()).hexdigest(),
+                "input_fingerprints": json.loads(old_path.read_bytes())["input_fingerprints"],
+                "raw_response_sha256": None, "raw_response_byte_size": None,
+                "provider_response_identity_status": None,
+                "requested_returned_model_label_relation": "receipt_missing",
+            },
+            {
+                "variant_id": "D3", "task_id": "main-02", "run_id": "run-d3-main-02",
+                "cache_sha256": hashlib.sha256(new_path.read_bytes()).hexdigest(),
+                "input_fingerprints": json.loads(new_path.read_bytes())["input_fingerprints"],
+                "raw_response_sha256": fingerprint["sha256"],
+                "raw_response_byte_size": fingerprint["byte_size"],
+                "provider_response_identity_status": {
+                    "model": "unavailable", "id": "unavailable",
+                    "system_fingerprint": "unavailable",
+                },
+                "requested_returned_model_label_relation": "unavailable",
+            },
+        ],
+    }
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra", "duplicate"])
+def test_aggregate_cache_manifest_rejects_unbound_cells(tmp_path, monkeypatch, mutation):
+    monkeypatch.setattr(evaluate_posthoc_support, "EVAL_ROOT", tmp_path)
+    rows = [_cached_evaluation()]
+    hashes = {tmp_path / "D3" / "main-01.json": "a" * 64}
+    if mutation == "missing":
+        hashes.clear()
+    elif mutation == "extra":
+        hashes[tmp_path / "D3" / "main-02.json"] = "b" * 64
+    else:
+        rows.append(rows[0])
+    with pytest.raises(SystemExit, match="Evaluator cache manifest"):
+        evaluate_posthoc_support._evaluator_cache_manifest(rows, hashes)
+
+
+@pytest.mark.parametrize(
+    ("fault", "message"),
+    [
+        ("multiple_calls", "provider_usage_by_model is invalid"),
+        ("inconsistent_total", "total_tokens must equal provider usage"),
+    ],
+)
+def test_fresh_evaluator_record_must_pass_resume_accounting_before_publication(
+    tmp_path, monkeypatch, fault, message
+):
+    from agent.llm_utils import UsageTracker
+
+    eval_root = _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    original_snapshot = UsageTracker.snapshot
+
+    def complete_evaluation(**kwargs):
+        _record_evaluator_usage(kwargs)
+        if fault == "multiple_calls":
+            _record_evaluator_usage(kwargs)
+        return _evaluator_result()
+
+    def snapshot(tracker):
+        result = original_snapshot(tracker)
+        if fault == "inconsistent_total":
+            result["total_tokens"] += 1
+        return result
+
+    monkeypatch.setattr(UsageTracker, "snapshot", snapshot)
+    monkeypatch.setattr("agent.llm_utils.create_chat_completion", complete_evaluation)
+    with pytest.raises(SystemExit, match=message):
+        evaluate_posthoc_support.main()
+
+    assert not (eval_root / "D3" / "main-01.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
+@pytest.mark.parametrize(
+    ("metadata", "status"),
+    [
+        ({}, "unavailable"),
+        ({"model": None}, "unavailable"),
+        ({"model": "resolved-snapshot"}, "reported"),
+        ({"model": 123}, "invalid"),
+        ({"model": ""}, "invalid"),
+        ({"model": "x" * 1025}, "invalid"),
+        ({"model": "é" * 513}, "invalid"),
+        ({"model": "bad\nlabel"}, "invalid"),
+    ],
+)
+def test_evaluator_response_identity_preserves_missingness_without_changing_usage(
+    metadata, status
+):
+    from logic.usage import EvaluatorResponseUsageTracker, UsageTracker, validate_response_identity
+
+    tracker = EvaluatorResponseUsageTracker()
+    baseline = UsageTracker()
+    _record_evaluator_usage({"usage_tracker": tracker}, **metadata)
+    _record_evaluator_usage({"usage_tracker": baseline}, **metadata)
+    receipt = tracker.snapshot_response_identity()
+    validate_response_identity(receipt)
+    assert tracker.snapshot() == baseline.snapshot()
+    assert receipt["model"] == {
+        "status": status,
+        "value": metadata["model"] if status == "reported" else None,
+    }
+    assert receipt["id"] == receipt["system_fingerprint"] == {
+        "status": "unavailable", "value": None,
+    }
+    receipt["model"]["status"] = "tampered"
+    assert tracker.snapshot_response_identity()["model"]["status"] == status
+
+
+def test_evaluator_response_identity_does_not_collapse_multiple_calls():
+    from logic.usage import EvaluatorResponseUsageTracker
+
+    tracker = EvaluatorResponseUsageTracker()
+    _record_evaluator_usage({"usage_tracker": tracker}, model="first")
+    _record_evaluator_usage({"usage_tracker": tracker}, model="second")
+    with pytest.raises(ValueError, match="exactly one response"):
+        tracker.snapshot_response_identity()
+
+
+@pytest.mark.parametrize("fault", ["null", "missing", "contradictory", "oversized", "extra"])
+def test_cached_evaluator_rejects_malformed_provider_response_identity(tmp_path, fault):
+    payload = _cached_evaluation()
+    receipt = {
+        name: {"status": "unavailable", "value": None}
+        for name in ("model", "id", "system_fingerprint")
+    }
+    if fault == "null":
+        receipt = None
+    elif fault == "missing":
+        del receipt["id"]
+    elif fault == "contradictory":
+        receipt["model"]["value"] = "not-unavailable"
+    elif fault == "oversized":
+        receipt["model"] = {"status": "reported", "value": "x" * 1025}
+    else:
+        receipt["extra"] = {"status": "unavailable", "value": None}
+    payload["provider_response_identity"] = receipt
+    path = tmp_path / "measurement.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(SystemExit, match="provider_response_identity"):
+        _load_cached(path)
+
+
+@pytest.mark.parametrize(
+    ("status", "value", "relation"),
+    [
+        ("reported", "gpt-5.6-terra", "equal"),
+        ("reported", "private-resolved-label", "different"),
+        ("unavailable", None, "unavailable"),
+        ("invalid", None, "invalid"),
+    ],
+)
+def test_aggregate_cache_manifest_discloses_identity_status_not_labels(
+    tmp_path, monkeypatch, status, value, relation
+):
+    monkeypatch.setattr(evaluate_posthoc_support, "EVAL_ROOT", tmp_path)
+    row = _cached_evaluation(provider_response_identity={
+        "model": {"status": status, "value": value},
+        "id": {"status": "reported", "value": "private-completion-id"},
+        "system_fingerprint": {"status": "reported", "value": "private-backend"},
+    })
+    hashes = {tmp_path / "D3" / "main-01.json": "a" * 64}
+    manifest = evaluate_posthoc_support._evaluator_cache_manifest([row], hashes)
+    cell, = manifest["cells"]
+    assert cell["provider_response_identity_status"] == {
+        "model": status, "id": "reported", "system_fingerprint": "reported",
+    }
+    assert cell["requested_returned_model_label_relation"] == relation
+    assert manifest["retained_provider_identity_receipt_cells"] == 1
+    assert manifest["missing_provider_identity_receipt_cells"] == 0
+    serialized = json.dumps(manifest)
+    for private in ("private-resolved-label", "private-completion-id", "private-backend", "gpt-5.6-terra"):
+        assert private not in serialized
+
+def _forbid_provider_import(monkeypatch):
+    import builtins
+
+    original_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name == "agent.llm_utils" or name == "openai" or name.startswith("openai."):
+            raise AssertionError("Cached-only replay must not import a provider client")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+
+
+def test_cached_only_rebuilds_aggregates_without_credentials(tmp_path, monkeypatch):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    cache = eval_root / "D3" / "main-01.json"
+    cache.parent.mkdir(parents=True)
+    cache.write_text(json.dumps(_bound_zero_source_cache()), encoding="utf-8")
+    original = cache.read_bytes()
+    for name in ("OPENAI_API_KEY", "SMART_LLM_MODEL", "TEMPERATURE"):
+        monkeypatch.delenv(name, raising=False)
+    evaluate_posthoc_support.sys.argv.append("--cached-only")
+    _forbid_provider_import(monkeypatch)
+
+    assert evaluate_posthoc_support.main() == 0
+    assert cache.read_bytes() == original
+    summary_path = tmp_path / "outputs" / "posthoc_support_summary.json"
+    csv_path = tmp_path / "outputs" / "posthoc_support_runs.csv"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert csv_path.is_file()
+    assert summary["n_evaluations"] == 1
+    assert summary["replay_provenance"]["reused_cached_measurements"] == 1
+    assert summary["replay_provenance"]["new_noncanonical_measurements"] == 0
+    assert summary["measurement_origin_manifest"] == {
+        "schema_version": 1,
+        "cells": [{"variant_id": "D3", "task_id": "main-01",
+                   "run_id": "run-d3-main-01", "origin": "reused_cache"}],
+    }
+    assert summary["replay_provenance"]["can_replace_original_evaluator_evidence"] is False
+    manifest = summary["evaluator_cache_manifest"]
+    assert manifest["schema_version"] == 3
+    cell, = manifest["cells"]
+    assert cell["input_fingerprints"] == json.loads(original)["input_fingerprints"]
+    assert "Report for main-01" not in json.dumps(manifest)
+    assert "Question for main-01" not in json.dumps(manifest)
+    assert evaluate_posthoc_support.NO_EVIDENCE_SENTINEL not in json.dumps(manifest)
+    trace = evaluate_posthoc_support.TRACE_ROOT / "D3" / "run-d3-main-01.json"
+    assert summary["treatment_trace_manifest"] == {
+        "schema_version": 1,
+        "cells": [{
+            "variant_id": "D3", "task_id": "main-01", "run_id": "run-d3-main-01",
+            "trace_sha256": hashlib.sha256(trace.read_bytes()).hexdigest(),
+        }],
+    }
+    def fingerprint(path):
+        raw = path.read_bytes()
+        return {"size_bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+    assert summary["governing_input_manifest"] == {
+        "schema_version": 1,
+        "task_definition": fingerprint(evaluate_posthoc_support.TASK_FILE),
+        "pricing": fingerprint(evaluate_posthoc_support.PRICING_FILE),
+    }
+    evaluate_posthoc_support._verify_aggregate_outputs(summary_path, csv_path)
+
+
+@pytest.mark.parametrize(
+    ("source", "role"), [("TASK_FILE", "task_definition"), ("PRICING_FILE", "pricing")]
+)
+def test_cached_only_rejects_changed_governing_input(tmp_path, monkeypatch, source, role):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch, task_ids=("main-01",))
+    cache = eval_root / "D3" / "main-01.json"
+    cache.parent.mkdir(parents=True)
+    cache.write_text(json.dumps(_bound_zero_source_cache()), encoding="utf-8")
+    original = cache.read_bytes()
+    evaluate_posthoc_support.sys.argv.append("--cached-only")
+    _forbid_provider_import(monkeypatch)
+
+    check = evaluate_posthoc_support._require_final_evaluator_source_continuity
+
+    def mutate_after_preflight(*args, **kwargs):
+        check(*args, **kwargs)
+        path = getattr(evaluate_posthoc_support, source)
+        # Even a semantically equivalent JSON rewrite changes source identity.
+        path.write_bytes(path.read_bytes() + b"\n")
+
+    monkeypatch.setattr(
+        evaluate_posthoc_support, "_require_final_evaluator_source_continuity",
+        mutate_after_preflight,
+    )
+    with pytest.raises(SystemExit, match=f"Replay {role} changed after preflight"):
+        evaluate_posthoc_support.main()
+    assert cache.read_bytes() == original
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
+@pytest.mark.parametrize("credentials_present", [True, False])
+def test_cached_only_refuses_missing_measurements(tmp_path, monkeypatch, credentials_present):
+    eval_root = _configure_resume_main(tmp_path, monkeypatch)
+    cache = eval_root / "D3" / "main-01.json"
+    cache.parent.mkdir(parents=True)
+    cache.write_text(json.dumps(_bound_zero_source_cache()), encoding="utf-8")
+    original = cache.read_bytes()
+    if not credentials_present:
+        for name in ("OPENAI_API_KEY", "SMART_LLM_MODEL", "TEMPERATURE"):
+            monkeypatch.delenv(name, raising=False)
+    evaluate_posthoc_support.sys.argv.append("--cached-only")
+    _forbid_provider_import(monkeypatch)
+
+    with pytest.raises(SystemExit, match="Cached-only replay requires all evaluator measurements; 1 missing"):
+        evaluate_posthoc_support.main()
+    assert cache.read_bytes() == original
+    assert not (eval_root / "D3" / "main-02.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_summary.json").exists()
+    assert not (tmp_path / "outputs" / "posthoc_support_runs.csv").exists()
+
+
+def test_treatment_trace_manifest_preserves_preflight_hashes_and_order(tmp_path):
+    rows = [
+        {"variant_id": "D6", "task_id": "main-01", "run_id": "b"},
+        {"variant_id": "D3", "task_id": "main-02", "run_id": "c"},
+        {"variant_id": "D3", "task_id": "main-01", "run_id": "a"},
+    ]
+    hashes = {
+        ("D6", "main-01", "b"): (tmp_path / "b.json", "b" * 64),
+        ("D3", "main-02", "c"): (tmp_path / "c.json", "c" * 64),
+        ("D3", "main-01", "a"): (tmp_path / "a.json", "a" * 64),
+    }
+    # The manifest uses preflight hashes, never a second read of a pathname.
+    manifest = evaluate_posthoc_support._treatment_trace_manifest(rows, hashes)
+    assert manifest == {
+        "schema_version": 1,
+        "cells": [
+            {"variant_id": "D3", "task_id": "main-01", "run_id": "a", "trace_sha256": "a" * 64},
+            {"variant_id": "D6", "task_id": "main-01", "run_id": "b", "trace_sha256": "b" * 64},
+            {"variant_id": "D3", "task_id": "main-02", "run_id": "c", "trace_sha256": "c" * 64},
+        ],
+    }
+    assert str(tmp_path) not in json.dumps(manifest)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra", "duplicate", "wrong_run"])
+def test_treatment_trace_manifest_rejects_inconsistent_lineage(tmp_path, mutation):
+    rows = [{"variant_id": "D3", "task_id": "main-01", "run_id": "a"}]
+    hashes = {("D3", "main-01", "a"): (tmp_path / "a.json", "a" * 64)}
+    if mutation == "missing":
+        hashes.clear()
+    elif mutation == "extra":
+        hashes[("D3", "main-02", "b")] = (tmp_path / "b.json", "b" * 64)
+    elif mutation == "duplicate":
+        rows.append(rows[0])
+    else:
+        rows[0]["run_id"] = "other"
+    with pytest.raises(SystemExit, match="Treatment trace manifest"):
+        evaluate_posthoc_support._treatment_trace_manifest(rows, hashes)
+
+
+@pytest.mark.parametrize("fault", ["duplicate_pending", "duplicate_row", "unbound_pending"])
+def test_measurement_origin_manifest_rejects_ambiguous_lineage(fault):
+    rows = [_cached_evaluation()]
+    pending = [{"variant": "D3", "task_id": "main-01", "run_id": "run-d3-main-01"}]
+    if fault == "duplicate_pending":
+        pending.append(dict(pending[0]))
+    elif fault == "duplicate_row":
+        rows.append(dict(rows[0]))
+    else:
+        pending[0]["run_id"] = "different-run"
+    with pytest.raises(SystemExit, match="Measurement origin manifest"):
+        evaluate_posthoc_support._measurement_origin_manifest(rows, pending)

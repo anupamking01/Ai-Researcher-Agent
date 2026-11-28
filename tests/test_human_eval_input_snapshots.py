@@ -1,0 +1,279 @@
+"""Synthetic tests: provenance must bind the bytes actually validated.
+
+These fixtures are not human annotations or experimental results. Mutations
+simulate an editor saving an input while a freeze is in progress, without
+threads, sleeps, model calls, or nondeterministic timing.
+"""
+import csv
+import hashlib
+import io
+import json
+from pathlib import Path
+
+import pytest
+
+from scripts import freeze_human_eval_ratings as freeze
+from scripts import export_human_eval_annotator_bundle as exporter
+from human_eval_test_support import write_valid_annotator_attestations
+
+
+def _csv_bytes(*, annotator="synthetic-a", score="2", notes="", newline="\r\n"):
+    with io.StringIO(newline="") as stream:
+        writer = csv.writer(stream, lineterminator=newline)
+        writer.writerow(freeze.RATING_FIELDS)
+        writer.writerow([annotator, "H001", score, "3", "4", "4", "3", notes])
+        return stream.getvalue().encode("utf-8")
+
+
+@pytest.fixture
+def inputs(tmp_path):
+    packet = tmp_path / "packet.jsonl"
+    packet.write_bytes(
+        (json.dumps({"blind_id": "H001", "task_id": "main-01",
+                     "question": "Synthetic Q", "report_markdown": "Fixture"}) + "\n")
+        .encode("utf-8")
+    )
+    protocol = tmp_path / "protocol.md"
+    protocol.write_bytes(freeze.DEFAULT_PROTOCOL.read_bytes())
+    assignment = tmp_path / "assignment.md"
+    assignment.write_bytes(freeze.DEFAULT_ASSIGNMENT_PLAN.read_bytes())
+    annotator_guide = tmp_path / "annotator-guide.md"
+    annotator_guide.write_bytes(freeze.DEFAULT_ANNOTATOR_GUIDE.read_bytes())
+    rating_paths = [tmp_path / "ratings-a.csv", tmp_path / "ratings-b.csv"]
+    for path, annotator in zip(rating_paths, ("synthetic-a", "synthetic-b")):
+        path.write_bytes(_csv_bytes(annotator=annotator))
+    return rating_paths, {
+        "annotator_attestations_path": write_valid_annotator_attestations(
+            tmp_path / "annotator_attestations.csv",
+            ("synthetic-a", "synthetic-b"),
+        ),
+        "packet_path": packet,
+        "protocol_path": protocol,
+        "assignment_plan_path": assignment,
+        "annotator_guide_path": annotator_guide,
+        "output_root": tmp_path / "freeze",
+    }
+
+
+def _frozen_rows(options):
+    with (options["output_root"] / "frozen_ratings.csv").open(encoding="utf-8", newline="") as handle:
+        return list(csv.DictReader(handle))
+
+
+@pytest.mark.parametrize(
+    ("option", "label"),
+    [
+        ("protocol_path", "protocol"),
+        ("assignment_plan_path", "assignment plan"),
+        ("annotator_guide_path", "annotator guide"),
+    ],
+)
+def test_governing_document_drift_is_rejected_before_ratings_are_read(
+    inputs, monkeypatch, option, label
+):
+    rating_paths, options = inputs
+    options[option].write_text("# Changed after preregistration\n", encoding="utf-8")
+
+    def forbid_rating_read(*args, **kwargs):
+        raise AssertionError("ratings opened before governing-document verification")
+
+    monkeypatch.setattr(freeze, "_load_ratings", forbid_rating_read)
+    with pytest.raises(ValueError, match=f"frozen human-evaluation {label} fingerprint"):
+        freeze.freeze_ratings(rating_paths, **options)
+
+
+def test_repository_governing_documents_match_production_anchors():
+    assert hashlib.sha256(freeze.DEFAULT_PROTOCOL.read_bytes()).hexdigest() == (
+        freeze.FROZEN_PROTOCOL_SHA256
+    )
+    assert hashlib.sha256(freeze.DEFAULT_ASSIGNMENT_PLAN.read_bytes()).hexdigest() == (
+        freeze.FROZEN_ASSIGNMENT_PLAN_SHA256
+    )
+    assert hashlib.sha256(freeze.DEFAULT_ANNOTATOR_GUIDE.read_bytes()).hexdigest() == (
+        freeze.FROZEN_ANNOTATOR_GUIDE_SHA256
+    )
+    assert freeze.FROZEN_ANNOTATOR_GUIDE_SHA256 == (
+        exporter.FROZEN_ANNOTATOR_GUIDE_SHA256
+    )
+
+
+def test_freeze_rejects_symlinked_raw_rating_input(inputs):
+    rating_paths, options = inputs
+    submitted = rating_paths[0]
+    displaced = submitted.with_name("displaced-ratings-a.csv")
+    submitted.rename(displaced)
+    submitted.symlink_to(displaced)
+
+    with pytest.raises(ValueError, match="ratings input 1 must be a regular file"):
+        freeze.freeze_ratings(rating_paths, **options)
+    assert not options["output_root"].exists()
+
+
+@pytest.mark.parametrize(
+    ("option", "label"),
+    [
+        ("packet_path", "blinded packet"),
+        ("protocol_path", "frozen human-evaluation protocol"),
+        ("assignment_plan_path", "frozen human-evaluation assignment plan"),
+        ("annotator_guide_path", "frozen human-evaluation annotator guide"),
+    ],
+)
+def test_freeze_rejects_symlinked_governing_input(inputs, option, label):
+    rating_paths, options = inputs
+    submitted = options[option]
+    displaced = submitted.with_name(f"displaced-{submitted.name}")
+    submitted.rename(displaced)
+    submitted.symlink_to(displaced)
+
+    with pytest.raises(ValueError, match=f"{label} must be a regular file"):
+        freeze.freeze_ratings(rating_paths, **options)
+    assert not options["output_root"].exists()
+
+
+@pytest.mark.parametrize(
+    ("module", "label"),
+    [
+        (freeze, "ratings freezer implementation"),
+        (freeze.packet_build, "annotator content validator implementation"),
+    ],
+)
+def test_freeze_rejects_symlinked_producer_source(
+    inputs, tmp_path, monkeypatch, module, label
+):
+    rating_paths, options = inputs
+    original = Path(module.__file__).read_bytes()
+    backing = tmp_path / f"backing-{Path(module.__file__).name}"
+    backing.write_bytes(original)
+    linked = tmp_path / f"linked-{Path(module.__file__).name}"
+    linked.symlink_to(backing)
+    monkeypatch.setattr(module, "__file__", str(linked))
+
+    with pytest.raises(ValueError, match=f"{label} must be a regular file"):
+        freeze.freeze_ratings(rating_paths, **options)
+    assert not options["output_root"].exists()
+
+
+@pytest.mark.parametrize("replacement_notes", ["", "An editor saved a longer version."])
+def test_rating_digest_and_scores_use_the_same_snapshot(inputs, monkeypatch, replacement_notes):
+    rating_paths, options = inputs
+    ratings = rating_paths[0]
+    original = ratings.read_bytes()
+    replacement = _csv_bytes(score="4", notes=replacement_notes)
+    reader = csv.DictReader
+    saves = []
+
+    def save_before_parsing(handle, *args, **kwargs):
+        if not saves:
+            # In-place save after input capture but before CSV field parsing.
+            # The original importer hashed the old bytes then read the new ones.
+            ratings.write_bytes(replacement)
+            saves.append(True)
+        return reader(handle, *args, **kwargs)
+
+    with monkeypatch.context() as context:
+        context.setattr(freeze.csv, "DictReader", save_before_parsing)
+        manifest = freeze.freeze_ratings(rating_paths, **options)
+
+    assert saves == [True]
+    assert ratings.read_bytes() == replacement
+    assert manifest["rating_inputs"][0]["sha256"] == hashlib.sha256(original).hexdigest()
+    assert manifest["rating_inputs"][0]["bytes"] == len(original)
+    assert [row["correctness_1_5"] for row in _frozen_rows(options)] == ["2", "2"]
+    assert [row["notes"] for row in _frozen_rows(options)] == ["", ""]
+
+
+@pytest.mark.parametrize("remove_after_validation", [False, True])
+def test_packet_manifest_uses_validated_bytes_not_a_later_version(inputs, monkeypatch, remove_after_validation):
+    rating_paths, options = inputs
+    ratings = rating_paths[0]
+    packet = options["packet_path"]
+    original = packet.read_bytes()
+    agreement = freeze.build_agreement
+
+    def edit_after_validation(rows):
+        if remove_after_validation:
+            packet.unlink(missing_ok=True)
+        else:
+            packet.write_bytes(b'{"blind_id":"H999","question":"replacement"}\n')
+        return agreement(rows)
+
+    monkeypatch.setattr(freeze, "build_agreement", edit_after_validation)
+    manifest = freeze.freeze_ratings(rating_paths, **options)
+    assert manifest["packet"]["sha256"] == hashlib.sha256(original).hexdigest()
+    assert manifest["packet"]["bytes"] == len(original)
+    assert manifest["packet"]["n_blind_ids"] == 1
+    assert {row["blind_id"] for row in _frozen_rows(options)} == {"H001"}
+
+
+@pytest.mark.parametrize("option,entry", [
+    ("protocol_path", "protocol"),
+    ("assignment_plan_path", "assignment_plan"),
+    ("annotator_guide_path", "annotator_guide"),
+])
+def test_plan_provenance_is_captured_before_processing_ratings(inputs, monkeypatch, option, entry):
+    rating_paths, options = inputs
+    ratings = rating_paths[0]
+    path = options[option]
+    original = path.read_bytes()
+    agreement = freeze.build_agreement
+
+    def edit_after_validation(rows):
+        path.write_bytes(b"# Changed after rating validation\n")
+        return agreement(rows)
+
+    monkeypatch.setattr(freeze, "build_agreement", edit_after_validation)
+    manifest = freeze.freeze_ratings(rating_paths, **options)
+    assert manifest[entry]["sha256"] == hashlib.sha256(original).hexdigest()
+    assert path.read_bytes() != original
+
+
+@pytest.mark.parametrize("option", ["ratings", "packet_path"])
+def test_data_input_is_opened_for_reading_once(inputs, monkeypatch, option):
+    rating_paths, options = inputs
+    ratings = rating_paths[0]
+    watched = ratings if option == "ratings" else options[option]
+    watched_parent = watched.parent.stat()
+    watched_parent_identity = (watched_parent.st_dev, watched_parent.st_ino)
+    opened = []
+    os_open = freeze.os.open
+
+    def count_descriptor_reads(path, flags, *args, **kwargs):
+        dir_fd = kwargs.get("dir_fd")
+        if path == watched.name and dir_fd is not None:
+            opened_parent = freeze.os.fstat(dir_fd)
+            if (opened_parent.st_dev, opened_parent.st_ino) == watched_parent_identity:
+                opened.append(flags)
+        return os_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(freeze.os, "open", count_descriptor_reads)
+    freeze.freeze_ratings(rating_paths, **options)
+    assert len(opened) == 1, opened
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize("notes", ["", 'Synthetic note, with "quotes"\r\nSecond line: caf\u00e9 / \u03bb.'])
+def test_snapshot_preserves_raw_fingerprints_and_valid_csv_content(inputs, newline, notes):
+    rating_paths, options = inputs
+    ratings = rating_paths[0]
+    original = _csv_bytes(notes=notes, newline=newline)
+    ratings.write_bytes(original)
+    rating_paths[1].write_bytes(_csv_bytes(annotator="synthetic-b", notes=notes, newline=newline))
+    packet = options["packet_path"].read_bytes()
+    manifest = freeze.freeze_ratings(rating_paths, **options)
+    assert ratings.read_bytes() == original
+    assert manifest["rating_inputs"][0]["bytes"] == len(original)
+    assert manifest["rating_inputs"][0]["sha256"] == hashlib.sha256(original).hexdigest()
+    assert manifest["packet"]["bytes"] == len(packet)
+    assert manifest["packet"]["sha256"] == hashlib.sha256(packet).hexdigest()
+    assert [row["notes"] for row in _frozen_rows(options)] == [notes, notes]
+
+
+@pytest.mark.parametrize("option", ["ratings", "packet_path"])
+def test_invalid_utf8_snapshot_cannot_publish_results(inputs, option):
+    rating_paths, options = inputs
+    ratings = rating_paths[0]
+    path = ratings if option == "ratings" else options[option]
+    path.write_bytes(b"\xff\xfeinvalid UTF-8")
+    with pytest.raises(UnicodeDecodeError):
+        freeze.freeze_ratings(rating_paths, **options)
+    assert not options["output_root"].exists()

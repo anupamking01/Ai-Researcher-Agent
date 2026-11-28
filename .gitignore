@@ -5,6 +5,7 @@ env/
 #Ignore generated outputs
 outputs/
 #Ignore pycache
+.pytest_cache/
 **/__pycache__/
 *.yml
 Dockerfile
