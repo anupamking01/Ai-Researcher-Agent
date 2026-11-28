@@ -472,6 +472,8 @@ def _candidate_coordinator_artifact_status(
             return "candidate_coordinator_artifact_table_invalid"
         snapshots = [manifest_snapshot]
         key_bytes = b""
+        packet_bytes = b""
+        template_bytes = b""
         for role, filename in (
             ("packet", "packet.jsonl"),
             ("ratings_template", "ratings_template.csv"),
@@ -496,6 +498,10 @@ def _candidate_coordinator_artifact_status(
                 return "candidate_coordinator_artifact_fingerprint_mismatch"
             if role == "blinding_key":
                 key_bytes = content
+            elif role == "packet":
+                packet_bytes = content
+            else:
+                template_bytes = content
 
         # A pinned artifact table can be correct while the manifest's raw
         # source fingerprints describe different trace/report bytes. Match
@@ -539,6 +545,23 @@ def _candidate_coordinator_artifact_status(
                     return "candidate_coordinator_source_table_invalid"
                 if fingerprint != source_fingerprints[(variant, task, run_id)][role]:
                     return "candidate_coordinator_source_fingerprint_mismatch"
+
+        # Byte-consistent packets can still be predictably unblinded using
+        # the publicly disclosed legacy seed, or claim a different shuffle.
+        # Use the captured artifacts and the integrated verifier's ordering
+        # contract. Never expose the private seed or mapping in the receipt.
+        seed = manifest.get("blind_seed")
+        if (type(seed) is not int
+                or not 0 <= seed < (1 << packet_builder.BLINDING_SEED_BITS)
+                or seed == 20260915):
+            return "candidate_coordinator_blinding_seed_invalid"
+        try:
+            packet_verifier._verify_seeded_blinding_order(
+                seed, exporter._read_jsonl_packet(packet_bytes), key,
+                [row["blind_id"] for row in exporter._read_ratings_template(template_bytes)],
+            )
+        except ValueError:
+            return "candidate_coordinator_blinding_order_mismatch"
         _verify_recovery_candidate_window(snapshots)
     except (OSError, ValueError, RecursionError):
         return "candidate_coordinator_artifacts_unreadable_or_unstable"

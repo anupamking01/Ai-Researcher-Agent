@@ -2,6 +2,7 @@
 import csv
 import hashlib
 import json
+import random
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -1694,6 +1695,18 @@ def _complete_readiness_inventory(tmp_path, monkeypatch):
                 "blind_id": blind_id, "variant_id": variant, "task_id": task,
                 "run_id": run_id, "trace_path": trace_rel, "report_path": report_rel,
             })
+    # Match the production seeded assignment, using a public synthetic seed
+    # solely for tests. Reassign IDs after shuffling the linked rows.
+    seed = 1007
+    linked = sorted(zip(rows, key_rows), key=lambda pair: (
+        pair[1]["task_id"], pair[1]["variant_id"], pair[1]["run_id"],
+    ))
+    random.Random(seed).shuffle(linked)
+    rows, key_rows = [], []
+    for index, (row, key_row) in enumerate(linked, 1):
+        row["blind_id"] = key_row["blind_id"] = f"H{index:03d}"
+        rows.append(row)
+        key_rows.append(key_row)
     with (packet / "blinding_key.csv").open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=audit.packet_verifier.KEY_FIELDS)
         writer.writeheader()
@@ -1717,7 +1730,7 @@ def _complete_readiness_inventory(tmp_path, monkeypatch):
         _write_synthetic_annotator_manifest(packet / f"annotator-{order}-v1", order)
     # Synthetic artifact and raw source tables, not a historically
     # authenticated coordinator manifest or a complete handoff fixture.
-    manifest = {"artifacts": {}, "source_artifacts": [
+    manifest = {"blind_seed": seed, "artifacts": {}, "source_artifacts": [
         {
             "blind_id": row["blind_id"],
             "trace": audit.packet_builder._byte_fingerprint(
@@ -3109,14 +3122,15 @@ def test_complete_distribution_pair_requires_frozen_task_coverage_and_questions(
     def mutate():
         path = packet / "packet.jsonl"
         rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        other = next(row for row in rows if row["task_id"] != rows[0]["task_id"])
         if mutation == "unbalanced":
-            rows[0]["task_id"] = rows[4]["task_id"]
-            rows[0]["question"] = rows[4]["question"]
+            rows[0]["task_id"] = other["task_id"]
+            rows[0]["question"] = other["question"]
         elif mutation == "wrong_question":
             rows[0]["question"] += " altered prompt"
         else:
-            rows[0]["question"], rows[4]["question"] = (
-                rows[4]["question"], rows[0]["question"],
+            rows[0]["question"], other["question"] = (
+                other["question"], rows[0]["question"],
             )
         path.write_text(
             "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
@@ -3209,8 +3223,9 @@ def test_recovered_packet_must_link_blind_ids_to_captured_report_cells(
                 for field in audit.packet_verifier.KEY_FIELDS[1:]:
                     rows[0][field] = rows[1][field]
             else:
+                other = next(row for row in rows[1:] if row["task_id"] == rows[0]["task_id"])
                 for field in audit.packet_verifier.KEY_FIELDS[1:]:
-                    rows[0][field], rows[1][field] = rows[1][field], rows[0][field]
+                    rows[0][field], other[field] = other[field], rows[0][field]
             with path.open("w", encoding="utf-8", newline="") as stream:
                 writer = csv.DictWriter(stream, fieldnames=audit.packet_verifier.KEY_FIELDS)
                 writer.writeheader()
@@ -3445,3 +3460,43 @@ def test_late_private_coordinator_mode_change_blocks_readiness(
     )
     assert receipt["blockers"] == ["candidate_coordinator_artifacts"]
     assert receipt["handoff_verified"] is False
+
+
+@pytest.mark.parametrize("seed,expected", [
+    (None, "candidate_coordinator_blinding_seed_invalid"),
+    (True, "candidate_coordinator_blinding_seed_invalid"),
+    (1007.0, "candidate_coordinator_blinding_seed_invalid"),
+    (-1, "candidate_coordinator_blinding_seed_invalid"),
+    (1 << 256, "candidate_coordinator_blinding_seed_invalid"),
+    (20260915, "candidate_coordinator_blinding_seed_invalid"),
+    (1008, "candidate_coordinator_blinding_order_mismatch"),
+])
+def test_pinned_coordinator_blinding_seed_must_be_valid_and_replay_assignment(
+    tmp_path, monkeypatch, seed, expected,
+):
+    packet, kwargs = _complete_readiness_inventory(tmp_path, monkeypatch)
+    assert audit.audit_archive_readiness(**kwargs)["blockers"] == []
+    path = packet / "manifest.json"
+    manifest = json.loads(path.read_bytes())
+    if seed is None:
+        del manifest["blind_seed"]
+    else:
+        manifest["blind_seed"] = seed
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    # All actual artifacts and their fingerprints remain unchanged.
+    kwargs["coordinator_manifest_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    receipt = audit.audit_archive_readiness(**kwargs)
+    assert receipt["trace_report_content"]["checked"] == 40
+    assert receipt["independent_pins"]["coordinator_manifest_file"] == (
+        "pin_matches_file_not_authenticated"
+    )
+    assert receipt["resources"]["candidate_coordinator_artifacts"] == expected
+    assert receipt["blockers"] == ["candidate_coordinator_artifacts"]
+    assert receipt["status"] == "blocked"
+    serialized = json.dumps(receipt)
+    assert "H001" not in serialized
+    assert "20260915" not in serialized
+    assert "1008" not in serialized
+    assert receipt["handoff_verified"] is False
+    assert receipt["human_ratings_used"] is False
+    assert receipt["treatments_rerun"] is False

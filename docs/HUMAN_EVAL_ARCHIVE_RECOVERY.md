@@ -1875,3 +1875,24 @@ positive control for content alignment only. This check neither proves
 successful historical execution nor authenticates original custody; it
 does not change frozen automated results, diagnostic pilot findings,
 exploratory analysis, or the pending human-evaluation gate.
+
+
+### Coordinator blinding-seed validity and assignment replay (28 November 2026)
+
+A correctly fingerprinted candidate coordinator manifest must still declare
+an integer seed in the original 256-bit domain. The archive readiness audit
+rejects the publicly disclosed legacy seed `20260915`, which permits
+reconstruction of the treatment assignment from the known study cells.
+Using the already captured coordinator packet, unscored template and
+private key, it also reuses the integrated packet verifier's seeded
+assignment check: the H001–H040 sequence and cell ordering must match the
+declared seed. A locally re-pinned manifest with an incorrect seed cannot
+pass solely because its source and artifact fingerprints match.
+
+The audit reports only categorical failures, not the private seed or
+mapping. These are local consistency safeguards, not evidence of seed
+entropy, past secrecy, independent custody, or authorization to distribute.
+The synthetic tests do not generate treatments, evaluator results, or
+human ratings; the five-task pilot stays diagnostic, the frozen automated
+analysis retains its post-collection qualifications, and exploratory and
+human-validation claims remain separate.
