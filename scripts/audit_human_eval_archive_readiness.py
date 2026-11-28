@@ -347,6 +347,28 @@ def _pin_status(value: str | None, path: Path) -> str:
     )
 
 
+def _resource_inventory(sources: dict[str, Path]) -> dict[str, str]:
+    """Inventory resources and verify the frozen scoring instructions.
+
+    All three guide copies must match the exporter's fixed protocol pin,
+    not merely each other. Other packet contents still require the
+    integrated handoff verifier; presence is not authentication.
+    """
+    statuses = {label: _file_status(path) for label, path in sources.items()}
+    for label in (
+        "frozen_annotator_guide",
+        "canonical/annotator_instructions.md",
+        "reverse/annotator_instructions.md",
+    ):
+        if statuses[label] != "present_unverified":
+            continue
+        pin = _pin_status(exporter.FROZEN_ANNOTATOR_GUIDE_SHA256, sources[label])
+        if pin == "pin_mismatch":
+            statuses[label] = "frozen_guide_fingerprint_mismatch"
+        elif pin != "pin_matches_file_not_authenticated":
+            statuses[label] = "frozen_guide_unreadable_or_unstable"
+    return statuses
+
 
 def _trace_run_alignment(
     *,
@@ -1530,7 +1552,7 @@ def audit_archive_readiness(
         for artifact in exporter.ANNOTATOR_ARTIFACTS:
             sources[f"{order}/{artifact}"] = bundle / artifact
 
-    resources = {label: _file_status(path) for label, path in sources.items()}
+    resources = _resource_inventory(sources)
     traces = Path(trace_root) if trace_root is not None else root / "outputs/experiment_traces"
     reports = Path(report_root) if report_root is not None else root / "outputs"
     trace_candidates, located_ids = _trace_status(traces)
@@ -1619,7 +1641,7 @@ def audit_archive_readiness(
     # required resource paths and both manifest pins. Never upgrade an
     # initially blocked observation just because a resource appeared later.
     if not gaps:
-        resources = {label: _file_status(path) for label, path in sources.items()}
+        resources = _resource_inventory(sources)
         pins = {
             "research_manifest_file": _pin_status(research_manifest_sha256, manifest),
             "coordinator_manifest_file": _pin_status(

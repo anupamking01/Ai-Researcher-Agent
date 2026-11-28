@@ -1631,7 +1631,7 @@ def _complete_readiness_inventory(tmp_path, monkeypatch):
     _write_semantically_aligned_fixture(tmp_path, monkeypatch)
     guide = tmp_path / "paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md"
     guide.parent.mkdir(parents=True, exist_ok=True)
-    guide.write_text("synthetic guide", encoding="utf-8")
+    guide.write_bytes(exporter.DEFAULT_ANNOTATOR_GUIDE.read_bytes())
     packet = tmp_path / "outputs/human_eval"
     for name in exporter.COORDINATOR_ARTIFACTS:
         path = packet / name
@@ -1641,7 +1641,10 @@ def _complete_readiness_inventory(tmp_path, monkeypatch):
         for name in exporter.ANNOTATOR_ARTIFACTS:
             path = packet / f"annotator-{order}-v1" / name
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("synthetic annotator artifact", encoding="utf-8")
+            if name == "annotator_instructions.md":
+                path.write_bytes(guide.read_bytes())
+            else:
+                path.write_text("synthetic annotator artifact", encoding="utf-8")
     kwargs = {
         "repo_root": tmp_path,
         "research_manifest_sha256": hashlib.sha256(
@@ -1689,7 +1692,7 @@ def test_late_task_manifest_unavailability_blocks_otherwise_complete_inventory(
     _write_semantically_aligned_fixture(tmp_path, monkeypatch)
     guide = tmp_path / "paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md"
     guide.parent.mkdir(parents=True, exist_ok=True)
-    guide.write_text("synthetic guide", encoding="utf-8")
+    guide.write_bytes(exporter.DEFAULT_ANNOTATOR_GUIDE.read_bytes())
     packet = tmp_path / "outputs/human_eval"
     for name in exporter.COORDINATOR_ARTIFACTS:
         path = packet / name
@@ -1699,7 +1702,10 @@ def test_late_task_manifest_unavailability_blocks_otherwise_complete_inventory(
         for name in exporter.ANNOTATOR_ARTIFACTS:
             path = packet / f"annotator-{order}-v1" / name
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("synthetic annotator artifact", encoding="utf-8")
+            if name == "annotator_instructions.md":
+                path.write_bytes(guide.read_bytes())
+            else:
+                path.write_text("synthetic annotator artifact", encoding="utf-8")
     kwargs = {
         "repo_root": tmp_path,
         "research_manifest_sha256": hashlib.sha256(
@@ -2756,3 +2762,64 @@ def test_final_inventory_and_pins_cannot_report_stale_zero_blockers(
     assert receipt["handoff_verified"] is False
     assert receipt["human_ratings_used"] is False
     assert receipt["treatments_rerun"] is False
+
+
+@pytest.mark.parametrize("relative,resource", [
+    ("paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md", "frozen_annotator_guide"),
+    ("outputs/human_eval/annotator-canonical-v1/annotator_instructions.md",
+     "canonical/annotator_instructions.md"),
+    ("outputs/human_eval/annotator-reverse-v1/annotator_instructions.md",
+     "reverse/annotator_instructions.md"),
+])
+@pytest.mark.parametrize("late", [False, True])
+def test_frozen_instruction_bytes_required_for_complete_readiness(
+    tmp_path, monkeypatch, relative, resource, late,
+):
+    _, kwargs = _complete_readiness_inventory(tmp_path, monkeypatch)
+    candidate = tmp_path / relative
+
+    def change_guide():
+        candidate.write_bytes(candidate.read_bytes() + b"\nChanged scoring instructions.\n")
+
+    if late:
+        original = audit._trace_report_content_status
+
+        def change_after_content_check(**arguments):
+            result = original(**arguments)
+            assert result["checked"] == 40
+            change_guide()
+            return result
+
+        monkeypatch.setattr(audit, "_trace_report_content_status", change_after_content_check)
+    else:
+        change_guide()
+
+    receipt = audit.audit_archive_readiness(**kwargs)
+    assert receipt["trace_report_content"]["checked"] == 40
+    assert receipt["resources"][resource] == "frozen_guide_fingerprint_mismatch"
+    assert receipt["blockers"] == [resource]
+    assert receipt["status"] == "blocked"
+    assert receipt["handoff_verified"] is False
+    assert receipt["human_ratings_used"] is False
+    assert receipt["treatments_rerun"] is False
+
+
+def test_concordant_instruction_substitutions_do_not_define_new_rubric(
+    tmp_path, monkeypatch,
+):
+    packet, kwargs = _complete_readiness_inventory(tmp_path, monkeypatch)
+    for candidate in (
+        tmp_path / "paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md",
+        packet / "annotator-canonical-v1/annotator_instructions.md",
+        packet / "annotator-reverse-v1/annotator_instructions.md",
+    ):
+        candidate.write_bytes(b"Identical but unfrozen scoring instructions.")
+    receipt = audit.audit_archive_readiness(**kwargs)
+    assert receipt["trace_report_content"]["checked"] == 40
+    assert receipt["blockers"] == [
+        "canonical/annotator_instructions.md",
+        "frozen_annotator_guide",
+        "reverse/annotator_instructions.md",
+    ]
+    assert receipt["status"] == "blocked"
+    assert receipt["handoff_verified"] is False

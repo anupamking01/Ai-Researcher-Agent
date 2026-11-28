@@ -1,3 +1,29 @@
+## Frozen scoring-instruction concordance (28 November 2026)
+
+The archive-readiness inventory previously checked only whether the frozen
+annotator guide and both distributed instruction files were present and safe
+regular files. Changed scoring instructions could therefore accompany a
+zero-blocker candidate receipt even when the 40 treatment cells aligned.
+The canonical and reverse bundles must use the same **frozen** scoring
+instructions to avoid confounding presentation order with rubric wording.
+
+Both the initial resource inventory and the final zero-blocker resource
+recheck now compare all three instruction files to the existing
+`FROZEN_ANNOTATOR_GUIDE_SHA256` from
+`scripts/export_human_eval_annotator_bundle.py`, using the bounded manifest
+pin reader. A mismatch is reported on the affected resource as
+`frozen_guide_fingerprint_mismatch`; an unreadable or unstable capture also
+blocks readiness. Agreement among three substituted files is insufficient.
+Existing missing/unsafe file diagnostics remain intact. Synthetic matrix
+regressions exercise initial and late substitutions and concordant changes
+to all three copies. No guide, frozen rubric, or historical outcome is edited.
+
+This is a necessary scoring-protocol byte check, not validation of the full
+annotator bundles, proof that a human used the instructions, historical
+authentication, or permission to distribute. The integrated handoff
+verifier and independent real annotations remain mandatory. No treatments
+or evaluators are rerun.
+
 ## Final readiness resource and manifest-pin recheck (28 November 2026)
 
 The read-only auditor may spend substantially longer on the 40-cell content
