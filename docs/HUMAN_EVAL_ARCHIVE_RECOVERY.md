@@ -1,3 +1,21 @@
+## Original source-outcome ordering (28 November 2026)
+
+The pinned treatment implementation (commit `c3c15e46`,
+`logic/research_agent.py`) awaits each query sequentially and appends
+successful and failed URLs by iterating `zip(new_search_urls, responses)`
+after `asyncio.gather`. Gather returns responses in input order, not
+completion order. Consequently each outcome ledger is an ordered
+projection of the scheduled URL ledger. Set partition and frozen source
+counts alone previously accepted reversed outcome ledgers.
+
+Archive readiness now requires the exact relative scheduling order within
+both outcome ledgers. Synthetic full-matrix regressions reverse successful
+URLs in direct and planner arms without altering frozen counters; focused
+tests cover both outcome ledgers and valid interleaved successes/failures.
+This checks source-contract consistency, not browser completion timing,
+actual retrieval, historical custody or human validation. It does not
+modify or rerun any treatment, evaluator, or frozen result.
+
 ## Combined source snapshot path custody (26 November 2026)
 
 The source-concordance comparator fingerprints both historical archives

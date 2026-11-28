@@ -596,6 +596,17 @@ def _validate_recovered_source_ledgers(trace: dict, *, variant: str) -> None:
     ):
         raise ValueError("recovered trace source URL ledger partition is inconsistent")
 
+    # Original async_search awaited gather(), then iterated zip(new_search_urls,
+    # responses) in scheduling order. Queries were awaited sequentially. Thus
+    # each outcome ledger must be an order-preserving projection of the global
+    # scheduled ledger, regardless of asynchronous browser completion order.
+    for name in ("successful_urls", "failed_urls"):
+        expected_order = [
+            url for url in trace["scheduled_urls"] if url in ledgers[name]
+        ]
+        if trace[name] != expected_order:
+            raise ValueError(f"recovered trace {name} violates original source outcome order")
+
 
 
 

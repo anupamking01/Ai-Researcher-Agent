@@ -2354,3 +2354,44 @@ def test_original_trace_save_must_precede_next_treatment_start(
         result["trace_report_content"]["first_failure"]
     )
     assert result["handoff_verified"] is False
+
+
+@pytest.mark.parametrize("variant", ["D3", "P6V"])
+def test_recovered_source_outcome_order_blocks_full_matrix_readiness(
+    tmp_path, monkeypatch, variant
+):
+    """Reordering outcomes changes provenance without changing frozen counts."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    path = outputs / "experiment_traces" / variant / f"{variant.lower()}-run-00.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["trace"]["successful_urls"].reverse()
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert result["trace_to_published_evaluator"]["matched"] == 40
+    assert result["trace_report_content"]["status"] == (
+        "invalid_or_mismatched_trace_report_content"
+    )
+    assert "successful_urls violates original source outcome order" in (
+        result["trace_report_content"]["first_failure"]
+    )
+    assert "original_trace_report_content_alignment" in result["blockers"]
+    assert result["handoff_verified"] is False
+
+
+@pytest.mark.parametrize("reversed_ledger", [None, "successful_urls", "failed_urls"])
+def test_original_source_outcome_ledgers_preserve_scheduling_order(reversed_ledger):
+    trace = {
+        "source_count": 4, "query_count": 4, "search_call_count": 4,
+        "successful_source_count": 2, "failed_source_count": 2,
+        "usage_accounting_status": "provider_usage_complete",
+        "scheduled_urls": ["a", "b", "c", "d"],
+        "successful_urls": ["a", "c"],
+        "failed_urls": ["b", "d"],
+    }
+    if reversed_ledger is None:
+        audit._validate_recovered_source_ledgers(trace, variant="P6V")
+    else:
+        trace[reversed_ledger].reverse()
+        with pytest.raises(ValueError, match=f"{reversed_ledger} violates original source outcome order"):
+            audit._validate_recovered_source_ledgers(trace, variant="P6V")
