@@ -2528,3 +2528,48 @@ def test_original_model_call_role_source_bounds(
     else:
         with pytest.raises(ValueError, match="fast model call count"):
             audit._validate_recovered_model_call_roles(trace, variant=variant)
+
+
+@pytest.mark.parametrize("addition", [None, "D3/unexpected.json", "extra"])
+def test_late_trace_inventory_addition_blocks_matrix_content_alignment(
+    tmp_path, monkeypatch, addition,
+):
+    """The complete inventory must remain exact, not only its pinned files."""
+    outputs = _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    trace_root = outputs / "experiment_traces"
+    original_validator = audit.packet_builder.validate_annotator_facing_content
+    checked = 0
+
+    def change_after_last_content_check(*args, **kwargs):
+        nonlocal checked
+        result = original_validator(*args, **kwargs)
+        checked += 1
+        if checked == 40 and addition is not None:
+            extra = trace_root / addition
+            if extra.suffix == ".json":
+                extra.write_text("{}", encoding="utf-8")
+            else:
+                extra.mkdir()
+        return result
+
+    monkeypatch.setattr(
+        audit.packet_builder, "validate_annotator_facing_content",
+        change_after_last_content_check,
+    )
+    result = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert checked == 40
+    assert result["trace_to_published_evaluator"]["matched"] == 40
+    assert result["trace_report_content"]["checked"] == 40
+    if addition is None:
+        assert result["trace_report_content"]["status"] == (
+            "40_trace_report_contents_align_to_frozen_cells_not_authenticated"
+        )
+        assert "original_trace_report_content_alignment" not in result["blockers"]
+    else:
+        assert result["trace_report_content"]["status"] == (
+            "recovered_candidates_changed_during_audit"
+        )
+        assert "recovered trace inventory changed" in result["trace_report_content"]["reason"]
+        assert "original_trace_report_content_alignment" in result["blockers"]
+        assert result["status"] == "blocked"
+    assert result["handoff_verified"] is False

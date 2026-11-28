@@ -460,6 +460,17 @@ returned. An observed change now blocks readiness instead of producing a
 misleading complete 40-cell consistency finding. Synthetic tests cover
 unchanged candidates, rewrites, replacements, and redirected parent paths.
 
+**28 November 2026 extension:** Per-file pins do not detect an additional
+trace or variant directory inserted after the initial inventory; all 80
+original candidate files can remain byte-identical while the trace matrix
+is no longer exact. After re-reading the candidate files, the diagnostic
+now repeats the bounded trace-root inventory and requires the same 40
+(treatment, run ID) identities and valid directory structure. Synthetic
+matrix regressions insert an extra JSON trace or an unexpected variant
+directory during the final content check, alongside an unchanged control.
+A late inventory discrepancy blocks content alignment even when all 40
+expected filenames still match the frozen evaluator.
+
 This is a two-observation local consistency check, not an atomic snapshot;
 transient replace-and-restore cannot be ruled out. Historical report/trace
 custody remains unauthenticated; independent source-pinned handoff and actual

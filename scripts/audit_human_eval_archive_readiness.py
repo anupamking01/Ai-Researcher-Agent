@@ -1358,6 +1358,18 @@ def _trace_report_content_status(
 
     try:
         _verify_recovery_candidate_window(candidate_pins)
+        # Per-file pins do not cover directory membership: an extra trace
+        # or variant directory can appear without changing any pinned file.
+        # Reuse the bounded inventory check after the full content window.
+        final_inventory, final_ids = _trace_status(trace_root)
+        if (
+            final_inventory["status"] != "40_matrix_candidates_unverified"
+            or final_ids != located_ids
+        ):
+            raise ValueError(
+                "recovered trace inventory changed during matrix audit: "
+                f"{final_inventory['status']}"
+            )
     except (OSError, ValueError) as exc:
         return {
             "status": "recovered_candidates_changed_during_audit",
