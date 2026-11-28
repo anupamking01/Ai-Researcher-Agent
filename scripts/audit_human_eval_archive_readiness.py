@@ -347,6 +347,38 @@ def _pin_status(value: str | None, path: Path) -> str:
     )
 
 
+def _presentation_pair_status(sources: dict[str, Path], statuses: dict[str, str]) -> str | None:
+    """Check actual packet/template bytes against the exporter's two orders.
+
+    This is local concordance with the candidate coordinator packet, not
+    source authentication or a substitute for the integrated handoff.
+    """
+    names = ("packet.jsonl", "ratings_template.csv")
+    labels = [f"{role}/{name}" for role in ("coordinator", "canonical", "reverse")
+              for name in names]
+    if any(statuses[label] != "present_unverified" for label in labels):
+        return None  # Retain the existing per-file blockers.
+    if any(f"{order}/artifact_inventory" in statuses for order in ("canonical", "reverse")):
+        return None  # A contaminated directory already blocks readiness.
+    try:
+        packet, template = (
+            exporter._regular_bytes(sources[f"coordinator/{name}"],
+                                    label="coordinator presentation input")
+            for name in names
+        )
+        reverse = exporter._ordered_artifacts(packet, template, presentation_order="reverse")
+        for order, expected in (("canonical", (packet, template)), ("reverse", reverse)):
+            for name, expected_bytes in zip(names, expected):
+                actual = exporter._regular_bytes(
+                    sources[f"{order}/{name}"], label="annotator presentation input"
+                )
+                if actual != expected_bytes:
+                    return "annotator_presentation_pair_mismatch"
+    except (OSError, ValueError):
+        return "annotator_presentation_pair_unreadable_or_invalid"
+    return None
+
+
 def _resource_inventory(sources: dict[str, Path]) -> dict[str, str]:
     """Inventory resources and verify the frozen scoring instructions.
 
@@ -388,6 +420,9 @@ def _resource_inventory(sources: dict[str, Path]) -> dict[str, str]:
             statuses[label] = "frozen_guide_fingerprint_mismatch"
         elif pin != "pin_matches_file_not_authenticated":
             statuses[label] = "frozen_guide_unreadable_or_unstable"
+    pair_status = _presentation_pair_status(sources, statuses)
+    if pair_status is not None:
+        statuses["annotator_presentation_pair"] = pair_status
     return statuses
 
 

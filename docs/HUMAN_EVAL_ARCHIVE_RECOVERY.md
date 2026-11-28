@@ -1,3 +1,23 @@
+## Candidate presentation-pair concordance (28 November 2026)
+
+Exact directory membership and frozen instructions do not establish
+counterbalanced presentation: a copy of the canonical packet or ratings
+template could be placed in the reverse directory, with all required files
+present. Readiness now compares both actual packet/template pairs against the
+candidate coordinator bytes, using the exporter's existing reverse-order
+transformation. It checks this during initial and final resource inventory
+when the relevant files are safe and the distribution inventories are clean.
+A mismatch (or unreadable/invalid capture) blocks candidate readiness; missing
+and unsafe file diagnostics are preserved. Synthetic complete-matrix
+regressions cover duplicated packets/templates, swapped packets, altered
+report text and a late duplicate.
+
+This is local byte concordance with the candidate coordinator packet only,
+not independent evidence authentication, verification of the distributed
+manifest or proof that an annotator used the assigned order. The integrated
+source-pinned handoff and genuine independent human ratings remain mandatory.
+No frozen data, scoring rules or experimental outcomes are changed.
+
 ## Exact annotator distribution inventory (28 November 2026)
 
 The preliminary archive-readiness audit previously checked the required

@@ -1645,6 +1645,29 @@ def _complete_readiness_inventory(tmp_path, monkeypatch):
                 path.write_bytes(guide.read_bytes())
             else:
                 path.write_text("synthetic annotator artifact", encoding="utf-8")
+    # Produce the same byte-level canonical/reverse transformation as export.
+    # These are synthetic text rows, never historical reports or human scores.
+    rows = [
+        {"blind_id": f"H{i:03d}", "task_id": f"main-{(i - 1) // 4 + 1:02d}",
+         "question": "Synthetic question", "report_markdown": f"Synthetic report {i}"}
+        for i in range(1, 41)
+    ]
+    (packet / "packet.jsonl").write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    with (packet / "ratings_template.csv").open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(audit.packet_builder.RATING_FIELDS))
+        writer.writeheader()
+        writer.writerows({"blind_id": row["blind_id"]} for row in rows)
+    for order in ("canonical", "reverse"):
+        expected = exporter._ordered_artifacts(
+            (packet / "packet.jsonl").read_bytes(),
+            (packet / "ratings_template.csv").read_bytes(),
+            presentation_order=order,
+        )
+        for name, content in zip(("packet.jsonl", "ratings_template.csv"), expected):
+            (packet / f"annotator-{order}-v1" / name).write_bytes(content)
     kwargs = {
         "repo_root": tmp_path,
         "research_manifest_sha256": hashlib.sha256(
@@ -1688,33 +1711,7 @@ def test_hardlink_alias_blocks_otherwise_complete_inventory(
 def test_late_task_manifest_unavailability_blocks_otherwise_complete_inventory(
     tmp_path, monkeypatch, mutation
 ):
-    # Entirely synthetic 40-cell archive and stubbed published anchors.
-    _write_semantically_aligned_fixture(tmp_path, monkeypatch)
-    guide = tmp_path / "paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md"
-    guide.parent.mkdir(parents=True, exist_ok=True)
-    guide.write_bytes(exporter.DEFAULT_ANNOTATOR_GUIDE.read_bytes())
-    packet = tmp_path / "outputs/human_eval"
-    for name in exporter.COORDINATOR_ARTIFACTS:
-        path = packet / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("synthetic coordinator artifact", encoding="utf-8")
-    for order in ("canonical", "reverse"):
-        for name in exporter.ANNOTATOR_ARTIFACTS:
-            path = packet / f"annotator-{order}-v1" / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if name == "annotator_instructions.md":
-                path.write_bytes(guide.read_bytes())
-            else:
-                path.write_text("synthetic annotator artifact", encoding="utf-8")
-    kwargs = {
-        "repo_root": tmp_path,
-        "research_manifest_sha256": hashlib.sha256(
-            (tmp_path / audit.published.MANIFEST).read_bytes()
-        ).hexdigest(),
-        "coordinator_manifest_sha256": hashlib.sha256(
-            (packet / "manifest.json").read_bytes()
-        ).hexdigest(),
-    }
+    _, kwargs = _complete_readiness_inventory(tmp_path, monkeypatch)
     baseline = audit.audit_archive_readiness(**kwargs)
     assert baseline["status"] == "candidate_inputs_present_not_verified"
     assert baseline["blockers"] == []
@@ -2875,6 +2872,61 @@ def test_contaminated_annotator_inventory_blocks_complete_readiness(
     label = f"{order}/artifact_inventory"
     assert receipt["resources"][label] == "annotator_bundle_artifact_set_mismatch"
     assert receipt["blockers"] == [label]
+    assert receipt["status"] == "blocked"
+    assert receipt["handoff_verified"] is False
+    assert receipt["human_ratings_used"] is False
+    assert receipt["treatments_rerun"] is False
+
+
+@pytest.mark.parametrize("mutation,late", [
+    ("duplicate_packet", False),
+    ("duplicate_template", False),
+    ("swapped_packets", False),
+    ("changed_report", False),
+    ("duplicate_packet", True),
+])
+def test_presentation_pair_requires_actual_exported_order(
+    tmp_path, monkeypatch, mutation, late,
+):
+    packet, kwargs = _complete_readiness_inventory(tmp_path, monkeypatch)
+    canonical = packet / "annotator-canonical-v1"
+    reverse = packet / "annotator-reverse-v1"
+    assert audit.audit_archive_readiness(**kwargs)["blockers"] == []
+
+    def mutate():
+        if mutation == "duplicate_packet":
+            (reverse / "packet.jsonl").write_bytes((canonical / "packet.jsonl").read_bytes())
+        elif mutation == "duplicate_template":
+            (reverse / "ratings_template.csv").write_bytes(
+                (canonical / "ratings_template.csv").read_bytes()
+            )
+        elif mutation == "swapped_packets":
+            first = (canonical / "packet.jsonl").read_bytes()
+            (canonical / "packet.jsonl").write_bytes((reverse / "packet.jsonl").read_bytes())
+            (reverse / "packet.jsonl").write_bytes(first)
+        else:
+            path = reverse / "packet.jsonl"
+            path.write_bytes(path.read_bytes().replace(b"Synthetic report 40", b"Different report 40"))
+
+    if late:
+        original = audit._trace_report_content_status
+
+        def change_after_content_check(**arguments):
+            result = original(**arguments)
+            assert result["checked"] == 40
+            mutate()
+            return result
+
+        monkeypatch.setattr(audit, "_trace_report_content_status", change_after_content_check)
+    else:
+        mutate()
+
+    receipt = audit.audit_archive_readiness(**kwargs)
+    assert receipt["trace_report_content"]["checked"] == 40
+    assert receipt["resources"]["annotator_presentation_pair"] == (
+        "annotator_presentation_pair_mismatch"
+    )
+    assert receipt["blockers"] == ["annotator_presentation_pair"]
     assert receipt["status"] == "blocked"
     assert receipt["handoff_verified"] is False
     assert receipt["human_ratings_used"] is False
