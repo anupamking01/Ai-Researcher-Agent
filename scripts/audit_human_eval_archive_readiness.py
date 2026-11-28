@@ -148,6 +148,29 @@ def _capture_published_csv(repo_root: Path, relative: str, *, label: str) -> byt
     return raw
 
 
+def _verify_frozen_content_input_window(repo_root: Path) -> None:
+    """Recheck the byte-pinned inputs that governed the matrix content checks."""
+    for relative, expected in (
+        ("experiments/main_budget_tasks.json",
+         frozen_tasks.ORIGINAL_TASK_MANIFEST_SHA256),
+        (lineage.MAIN_REL, PUBLISHED_CSV_FILE_SHA256[lineage.MAIN_REL]),
+        (lineage.SUPPORT_REL, PUBLISHED_CSV_FILE_SHA256[lineage.SUPPORT_REL]),
+        (FROZEN_PRICING_REL, ORIGINAL_PRICING_SHA256),
+    ):
+        try:
+            raw = packet_builder._read_regular_file_captured(
+                repo_root / relative, label=f"final frozen content input {relative}"
+            )
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"frozen content input unavailable during matrix audit: {relative}: {exc}"
+            ) from exc
+        if hashlib.sha256(raw).hexdigest() != expected:
+            raise ValueError(
+                f"frozen content input changed during matrix audit: {relative}"
+            )
+
+
 def _file_status(path: Path) -> str:
     """Do not silently classify symlinks or nonregular evidence as available."""
     try:
@@ -1373,6 +1396,16 @@ def _trace_report_content_status(
     except (OSError, ValueError) as exc:
         return {
             "status": "recovered_candidates_changed_during_audit",
+            "checked": checked, "expected": EXPECTED_TRACES,
+            "reason": str(exc),
+        }
+    # Candidate fingerprints alone do not cover the frozen question,
+    # measurement, and pricing inputs that governed the content checks.
+    try:
+        _verify_frozen_content_input_window(repo_root)
+    except (OSError, ValueError) as exc:
+        return {
+            "status": "invalid_frozen_task_or_evaluator",
             "checked": checked, "expected": EXPECTED_TRACES,
             "reason": str(exc),
         }

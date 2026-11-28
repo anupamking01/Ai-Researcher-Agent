@@ -471,6 +471,21 @@ directory during the final content check, alongside an unchanged control.
 A late inventory discrepancy blocks content alignment even when all 40
 expected filenames still match the frozen evaluator.
 
+**Governing-input extension (28 November 2026):** Before reporting full
+content alignment, the diagnostic also rereads the byte-pinned task
+manifest, treatment CSV, common-evaluator CSV and original dated pricing
+table using the bounded, no-follow, single-link file reader. Each must
+still match its existing historical SHA-256 pin. Previously, a persistent
+late change or disappearance of a governing input could leave the
+content-alignment status based on stale bytes even if the 80 candidates
+and their directory membership were unchanged. A failure is reported as
+`invalid_frozen_task_or_evaluator`, blocking content alignment even when
+all 40 per-cell checks finished. Synthetic matrix tests cover a byte
+change in each input, a missing price table, a same-byte task-manifest
+symlink and an unchanged control. This is a second byte observation, not
+a filesystem-generation guarantee for the governing inputs; it permits
+a byte-identical regular-file replacement and does not establish custody.
+
 This is a two-observation local consistency check, not an atomic snapshot;
 transient replace-and-restore cannot be ruled out. Historical report/trace
 custody remains unauthenticated; independent source-pinned handoff and actual

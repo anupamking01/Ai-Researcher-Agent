@@ -2573,3 +2573,62 @@ def test_late_trace_inventory_addition_blocks_matrix_content_alignment(
         assert "original_trace_report_content_alignment" in result["blockers"]
         assert result["status"] == "blocked"
     assert result["handoff_verified"] is False
+
+
+@pytest.mark.parametrize("relative,mutation", [
+    (None, None),
+    ("experiments/main_budget_tasks.json", "append"),
+    (audit.lineage.MAIN_REL, "append"),
+    (audit.lineage.SUPPORT_REL, "append"),
+    (audit.FROZEN_PRICING_REL, "append"),
+    (audit.FROZEN_PRICING_REL, "missing"),
+    ("experiments/main_budget_tasks.json", "symlink"),
+])
+def test_late_frozen_content_input_change_blocks_matrix_alignment(
+    tmp_path, monkeypatch, relative, mutation,
+):
+    """Unchanged candidate bytes cannot compensate for stale governing inputs."""
+    _write_semantically_aligned_fixture(tmp_path, monkeypatch)
+    original_validator = audit.packet_builder.validate_annotator_facing_content
+    checked = 0
+
+    def change_after_last_content_check(*args, **kwargs):
+        nonlocal checked
+        result = original_validator(*args, **kwargs)
+        checked += 1
+        if checked == 40 and relative is not None:
+            path = tmp_path / relative
+            if mutation == "append":
+                path.write_bytes(path.read_bytes() + b"\n")
+            elif mutation == "missing":
+                path.unlink()
+            elif mutation == "symlink":
+                target = tmp_path / "unverified-task-copy.json"
+                target.write_bytes(path.read_bytes())
+                path.unlink()
+                path.symlink_to(target)
+        return result
+
+    monkeypatch.setattr(
+        audit.packet_builder, "validate_annotator_facing_content",
+        change_after_last_content_check,
+    )
+    receipt = audit.audit_archive_readiness(repo_root=tmp_path)
+    assert checked == 40
+    assert receipt["trace_to_published_evaluator"]["matched"] == 40
+    assert receipt["trace_report_content"]["checked"] == 40
+    if relative is None:
+        assert receipt["trace_report_content"]["status"] == (
+            "40_trace_report_contents_align_to_frozen_cells_not_authenticated"
+        )
+        assert "original_trace_report_content_alignment" not in receipt["blockers"]
+    else:
+        assert receipt["trace_report_content"]["status"] == (
+            "invalid_frozen_task_or_evaluator"
+        )
+        assert relative in receipt["trace_report_content"]["reason"]
+        assert "original_trace_report_content_alignment" in receipt["blockers"]
+        assert receipt["status"] == "blocked"
+    assert receipt["handoff_verified"] is False
+    assert receipt["human_ratings_used"] is False
+    assert receipt["treatments_rerun"] is False
