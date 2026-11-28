@@ -1364,3 +1364,38 @@ def test_packet_verifier_rejects_seeds_outside_generation_domain(
     manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="outside the 256-bit domain"):
         _verify(packet_case)
+
+
+@pytest.mark.parametrize("field", ["blind_id", "task_id", "question", "report_markdown"])
+@pytest.mark.parametrize("mutation", ["leading", "trailing", "nonstring"])
+def test_rehashed_packet_requires_exact_generator_text(packet_case, field, mutation):
+    """A valid JSON serialization/hash cannot certify normalized substitute text."""
+    path = packet_case["output_root"] / "packet.jsonl"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    original = rows[0][field]
+    if mutation == "leading":
+        # Four spaces can change Markdown into a code block.
+        rows[0][field] = "    " + original
+    elif mutation == "trailing":
+        rows[0][field] = original + "\n"
+    else:
+        rows[0][field] = {"text": original}
+    path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False, sort_keys=True) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    _refresh_artifact(packet_case, "packet")
+    with pytest.raises(ValueError, match=field + " must be non-empty, already-trimmed text"):
+        _verify(packet_case)
+
+
+def test_packet_reader_does_not_stringify_numeric_report():
+    # The old reader returned "123", which could match a source report
+    # consisting of the literal string "123" even though JSON was numeric.
+    row = {
+        "blind_id": "H001", "task_id": "main-01", "question": "Synthetic question?",
+        "report_markdown": 123,
+    }
+    raw = (json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+    with pytest.raises(ValueError, match="report_markdown must be non-empty, already-trimmed text"):
+        packet_verifier._read_packet(raw, task_manifest={"tasks": {"main-01": row["question"]}})

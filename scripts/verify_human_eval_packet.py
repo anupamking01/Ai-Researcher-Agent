@@ -206,10 +206,21 @@ def _read_packet(content: bytes, *, task_manifest: dict) -> list[dict]:
             raise ValueError(
                 f"packet.jsonl line {line_number} schema must be exactly {sorted(required)}"
             )
-        blind_id = str(row["blind_id"]).strip()
-        task_id = str(row["task_id"]).strip()
-        question = str(row["question"]).strip()
-        report_markdown = str(row["report_markdown"]).strip()
+        # The builder emits already-trimmed strings. Normalizing candidate
+        # values here could certify different annotator-facing content (e.g.
+        # leading Markdown indentation) or stringify nested JSON. Compare
+        # the actual text to the source, not a repaired representation.
+        for field in sorted(required):
+            value = row[field]
+            if type(value) is not str or not value or value != value.strip():
+                raise ValueError(
+                    f"packet.jsonl line {line_number} {field} must be "
+                    "non-empty, already-trimmed text"
+                )
+        blind_id = row["blind_id"]
+        task_id = row["task_id"]
+        question = row["question"]
+        report_markdown = row["report_markdown"]
         if not blind_id or blind_id in seen:
             raise ValueError(f"packet.jsonl has missing/duplicate blind_id {blind_id!r}")
         seen.add(blind_id)
