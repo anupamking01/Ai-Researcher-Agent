@@ -1626,14 +1626,7 @@ def test_late_task_manifest_replacement_blocks_question_alignment(tmp_path, monk
 
 
 
-@pytest.mark.parametrize("resource,relative", [
-    ("coordinator/blinding_key.csv", "blinding_key.csv"),
-    ("canonical/packet.jsonl", "annotator-canonical-v1/packet.jsonl"),
-    ("reverse/ratings_template.csv", "annotator-reverse-v1/ratings_template.csv"),
-])
-def test_hardlink_alias_blocks_otherwise_complete_inventory(
-    tmp_path, monkeypatch, resource, relative
-):
+def _complete_readiness_inventory(tmp_path, monkeypatch):
     # Synthetic evidence only; the independent handoff is never asserted.
     _write_semantically_aligned_fixture(tmp_path, monkeypatch)
     guide = tmp_path / "paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md"
@@ -1658,6 +1651,18 @@ def test_hardlink_alias_blocks_otherwise_complete_inventory(
             (packet / "manifest.json").read_bytes()
         ).hexdigest(),
     }
+    return packet, kwargs
+
+
+@pytest.mark.parametrize("resource,relative", [
+    ("coordinator/blinding_key.csv", "blinding_key.csv"),
+    ("canonical/packet.jsonl", "annotator-canonical-v1/packet.jsonl"),
+    ("reverse/ratings_template.csv", "annotator-reverse-v1/ratings_template.csv"),
+])
+def test_hardlink_alias_blocks_otherwise_complete_inventory(
+    tmp_path, monkeypatch, resource, relative
+):
+    packet, kwargs = _complete_readiness_inventory(tmp_path, monkeypatch)
     baseline = audit.audit_archive_readiness(**kwargs)
     assert baseline["blockers"] == []
     candidate = packet / relative
@@ -2679,6 +2684,74 @@ def test_late_frozen_content_input_change_blocks_matrix_alignment(
         )
         assert relative in receipt["trace_report_content"]["reason"]
         assert "original_trace_report_content_alignment" in receipt["blockers"]
+        assert receipt["status"] == "blocked"
+    assert receipt["handoff_verified"] is False
+    assert receipt["human_ratings_used"] is False
+    assert receipt["treatments_rerun"] is False
+
+
+@pytest.mark.parametrize("relative,mutation,resource,pin", [
+    (None, None, None, None),
+    ("outputs/human_eval/blinding_key.csv", "remove",
+     "coordinator/blinding_key.csv", None),
+    ("outputs/human_eval/annotator-canonical-v1/packet.jsonl", "hardlink",
+     "canonical/packet.jsonl", None),
+    ("paper/HUMAN_EVAL_ANNOTATOR_GUIDE.md", "symlink",
+     "frozen_annotator_guide", None),
+    ("outputs/human_eval/manifest.json", "append",
+     "coordinator/manifest.json", "coordinator_manifest_file"),
+    (audit.published.MANIFEST, "append",
+     "research_manifest", "research_manifest_file"),
+])
+def test_final_inventory_and_pins_cannot_report_stale_zero_blockers(
+    tmp_path, monkeypatch, relative, mutation, resource, pin,
+):
+    _, kwargs = _complete_readiness_inventory(tmp_path, monkeypatch)
+    original = audit._trace_report_content_status
+
+    def change_after_content_check(**arguments):
+        result = original(**arguments)
+        assert result["checked"] == 40
+        assert result["status"] == (
+            "40_trace_report_contents_align_to_frozen_cells_not_authenticated"
+        )
+        if relative is not None:
+            candidate = tmp_path / relative
+            if mutation == "remove":
+                candidate.unlink()
+            elif mutation == "hardlink":
+                try:
+                    (tmp_path / "late-alias").hardlink_to(candidate)
+                except (OSError, NotImplementedError):
+                    pytest.skip("hardlinks unavailable on this test filesystem")
+            elif mutation == "symlink":
+                alias = tmp_path / "late-alias"
+                candidate.rename(alias)
+                try:
+                    candidate.symlink_to(alias)
+                except (OSError, NotImplementedError):
+                    pytest.skip("symlinks unavailable on this test filesystem")
+            elif mutation == "append":
+                candidate.write_bytes(candidate.read_bytes() + b"\\n")
+        return result
+
+    monkeypatch.setattr(audit, "_trace_report_content_status", change_after_content_check)
+    receipt = audit.audit_archive_readiness(**kwargs)
+    assert receipt["trace_report_content"]["checked"] == 40
+    if relative is None:
+        assert receipt["blockers"] == []
+        assert receipt["status"] == "candidate_inputs_present_not_verified"
+    elif pin is not None:
+        assert receipt["resources"][resource] == "present_unverified"
+        assert receipt["independent_pins"][pin] == "pin_mismatch"
+        assert receipt["blockers"] == [pin]
+        assert receipt["status"] == "blocked"
+    else:
+        assert receipt["resources"][resource] == {
+            "remove": "missing", "hardlink": "unsafe_hardlink",
+            "symlink": "unsafe_file_type",
+        }[mutation]
+        assert receipt["blockers"] == [resource]
         assert receipt["status"] == "blocked"
     assert receipt["handoff_verified"] is False
     assert receipt["human_ratings_used"] is False

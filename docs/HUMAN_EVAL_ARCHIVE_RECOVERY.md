@@ -1,3 +1,22 @@
+## Final readiness resource and manifest-pin recheck (28 November 2026)
+
+The read-only auditor may spend substantially longer on the 40-cell content
+audit than on its initial inventory. Previously, a required coordinator or
+annotator resource could disappear or become unsafe, or either manifest
+could cease matching its supplied pin, after that initial check without
+preventing a zero-blocker receipt. Before returning an otherwise zero-blocker
+receipt, the auditor now repeats the required-resource classification and
+both bounded manifest-pin comparisons. A late failure becomes the ordinary
+resource or pin blocker; an earlier blocked observation is never upgraded.
+Synthetic regressions exercise removal, aliasing, changed manifest bytes,
+and an unchanged complete inventory.
+
+This is a final point-in-time presence/safety check and local manifest-byte
+comparison, not full packet-content validation, an atomic snapshot, or
+independent authentication. Continue to require the integrated source-pinned
+handoff verifier and genuine independent ratings. No frozen outcome or
+experimental treatment is changed.
+
 ## Single-link recovery inventory (28 November 2026)
 
 The read-only readiness inventory previously counted a hardlinked regular

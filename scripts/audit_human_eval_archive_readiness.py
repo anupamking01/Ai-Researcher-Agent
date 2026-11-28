@@ -1614,6 +1614,23 @@ def audit_archive_readiness(
     ):
         gaps.append("original_expected_run_archive_paths")
 
+    # A complete matrix can take much longer to validate than the initial
+    # inventory and pin reads. Before reporting zero blockers, recheck the
+    # required resource paths and both manifest pins. Never upgrade an
+    # initially blocked observation just because a resource appeared later.
+    if not gaps:
+        resources = {label: _file_status(path) for label, path in sources.items()}
+        pins = {
+            "research_manifest_file": _pin_status(research_manifest_sha256, manifest),
+            "coordinator_manifest_file": _pin_status(
+                coordinator_manifest_sha256, packet / "manifest.json"
+            ),
+        }
+        gaps.extend(label for label, status in resources.items()
+                    if status != "present_unverified")
+        gaps.extend(label for label, status in pins.items()
+                    if status != "pin_matches_file_not_authenticated")
+
     return {
         "schema_version": 1,
         "study_id": "budget-main-v1",
