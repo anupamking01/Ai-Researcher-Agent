@@ -1673,12 +1673,31 @@ def _complete_readiness_inventory(tmp_path, monkeypatch):
                 path.write_text("synthetic annotator artifact", encoding="utf-8")
     # Produce the same byte-level canonical/reverse transformation as export.
     # These are synthetic text rows, never historical reports or human scores.
-    rows = [
-        {"blind_id": f"H{i:03d}", "task_id": f"main-{(i - 1) // 4 + 1:02d}",
-         "question": f"Synthetic question for main-{(i - 1) // 4 + 1:02d}",
-         "report_markdown": f"Synthetic report {i}"}
-        for i in range(1, 41)
-    ]
+    rows = []
+    key_rows = []
+    for n, task in enumerate(audit.lineage.TASKS):
+        for variant in audit.VARIANTS:
+            blind_id = f"H{len(rows) + 1:03d}"
+            run_id = f"{variant.lower()}-run-{n:02d}"
+            trace_rel = f"outputs/experiment_traces/{variant}/{run_id}.json"
+            report_rel = f"outputs/{run_id}/research_report.md"
+            # Make each report distinct while preserving the fixture's frozen
+            # 50-word count; no treatment identity in annotator-facing text.
+            report = f"Synthetic report {len(rows) + 1} " + "evidence " * 46 + "ending"
+            (tmp_path / report_rel).write_text(report, encoding="utf-8")
+            rows.append({
+                "blind_id": blind_id, "task_id": task,
+                "question": f"Synthetic question for {task}",
+                "report_markdown": report,
+            })
+            key_rows.append({
+                "blind_id": blind_id, "variant_id": variant, "task_id": task,
+                "run_id": run_id, "trace_path": trace_rel, "report_path": report_rel,
+            })
+    with (packet / "blinding_key.csv").open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=audit.packet_verifier.KEY_FIELDS)
+        writer.writeheader()
+        writer.writerows(key_rows)
     (packet / "packet.jsonl").write_text(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
         encoding="utf-8",
@@ -3107,6 +3126,90 @@ def test_complete_distribution_pair_requires_frozen_task_coverage_and_questions(
     assert receipt["resources"]["annotator_presentation_pair"] == expected_status
     assert receipt["blockers"] == ["annotator_presentation_pair"]
     assert receipt["status"] == "blocked"
+    assert receipt["handoff_verified"] is False
+    assert receipt["human_ratings_used"] is False
+    assert receipt["treatments_rerun"] is False
+
+
+@pytest.mark.parametrize("mutation,late,expected", [
+    ("substitute_report", False, "candidate_blinded_report_content_mismatch"),
+    ("swap_reports", False, "candidate_blinded_report_content_mismatch"),
+    ("swap_key_cells", False, "candidate_blinded_report_content_mismatch"),
+    ("duplicate_key_cell", False, "candidate_blinding_key_cell_mismatch"),
+    ("duplicate_blind_id", False, "candidate_blind_id_coverage_mismatch"),
+    ("substitute_report", True, "candidate_blinded_report_content_mismatch"),
+])
+def test_recovered_packet_must_link_blind_ids_to_captured_report_cells(
+    tmp_path, monkeypatch, mutation, late, expected,
+):
+    packet, kwargs = _complete_readiness_inventory(tmp_path, monkeypatch)
+    assert audit.audit_archive_readiness(**kwargs)["blockers"] == []
+
+    def mutate():
+        if mutation in ("substitute_report", "swap_reports"):
+            path = packet / "packet.jsonl"
+            rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+            if mutation == "substitute_report":
+                # Same word count; regenerate both legitimate presentation
+                # manifests to isolate source linkage, not stale hashes.
+                rows[0]["report_markdown"] = rows[0]["report_markdown"].replace(
+                    "Synthetic", "Replacement", 1
+                )
+            else:
+                rows[0]["report_markdown"], rows[1]["report_markdown"] = (
+                    rows[1]["report_markdown"], rows[0]["report_markdown"],
+                )
+            path.write_text(
+                "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+            for order in ("canonical", "reverse"):
+                bundle = packet / f"annotator-{order}-v1"
+                ordered = exporter._ordered_artifacts(
+                    path.read_bytes(), (packet / "ratings_template.csv").read_bytes(),
+                    presentation_order=order,
+                )
+                for name, content in zip(("packet.jsonl", "ratings_template.csv"), ordered):
+                    (bundle / name).write_bytes(content)
+                _write_synthetic_annotator_manifest(bundle, order)
+                assert exporter.verify_annotator_bundle(bundle)["n_reports"] == 40
+        else:
+            path = packet / "blinding_key.csv"
+            with path.open(encoding="utf-8", newline="") as stream:
+                rows = list(csv.DictReader(stream))
+            if mutation == "duplicate_blind_id":
+                rows[0]["blind_id"] = rows[1]["blind_id"]
+            elif mutation == "duplicate_key_cell":
+                for field in audit.packet_verifier.KEY_FIELDS[1:]:
+                    rows[0][field] = rows[1][field]
+            else:
+                for field in audit.packet_verifier.KEY_FIELDS[1:]:
+                    rows[0][field], rows[1][field] = rows[1][field], rows[0][field]
+            with path.open("w", encoding="utf-8", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=audit.packet_verifier.KEY_FIELDS)
+                writer.writeheader()
+                writer.writerows(rows)
+
+    if late:
+        original = audit._trace_report_content_status
+
+        def change_after_content_check(**arguments):
+            result = original(**arguments)
+            assert result["checked"] == 40
+            mutate()
+            return result
+
+        monkeypatch.setattr(audit, "_trace_report_content_status", change_after_content_check)
+    else:
+        mutate()
+
+    receipt = audit.audit_archive_readiness(**kwargs)
+    assert receipt["trace_report_content"]["checked"] == 40
+    assert receipt["resources"]["candidate_packet_source_linkage"] == expected
+    assert receipt["blockers"] == ["candidate_packet_source_linkage"]
+    assert receipt["status"] == "blocked"
+    assert "Synthetic report" not in json.dumps(receipt)
+    assert "H001" not in json.dumps(receipt)
     assert receipt["handoff_verified"] is False
     assert receipt["human_ratings_used"] is False
     assert receipt["treatments_rerun"] is False

@@ -19,6 +19,7 @@ from pathlib import Path
 from scripts import build_human_eval_packet as packet_builder
 from scripts import export_human_eval_annotator_bundle as exporter
 from scripts import verify_published_main_study_inputs as published
+from scripts import verify_human_eval_packet as packet_verifier
 from scripts import verify_human_eval_automated_run_lineage as lineage
 from scripts import validate_main_study_inputs as main_input_contract
 from scripts import verify_frozen_main_study_tasks as frozen_tasks
@@ -397,6 +398,50 @@ def _presentation_pair_status(sources: dict[str, Path], statuses: dict[str, str]
                     return "annotator_question_mismatch"
     except (OSError, ValueError, RecursionError):
         return "annotator_presentation_pair_unreadable_or_invalid"
+    return None
+
+
+def _candidate_packet_source_status(
+    sources: dict[str, Path], report_digests: dict[tuple[str, str, str], str],
+) -> str | None:
+    """Check blind-ID linkage to the reports captured by the matrix audit.
+
+    Never use paths from the untrusted key to select evidence. The matrix
+    audit already selected and validated the frozen variant/task/run cells.
+    This is local concordance, not validation of the coordinator manifest,
+    seed, source-path fingerprints, or independent historical custody.
+    """
+    try:
+        packet = exporter._read_jsonl_packet(exporter._regular_bytes(
+            sources["coordinator/packet.jsonl"], label="candidate coordinator packet"
+        ))
+        key = packet_verifier._read_csv(
+            exporter._regular_bytes(
+                sources["coordinator/blinding_key.csv"], label="candidate coordinator key"
+            ),
+            fields=packet_verifier.KEY_FIELDS, label="candidate coordinator key",
+        )
+        by_blind = {row["blind_id"]: row for row in packet}
+        if (
+            len(packet) != EXPECTED_TRACES or len(by_blind) != EXPECTED_TRACES
+            or len(key) != EXPECTED_TRACES or len(report_digests) != EXPECTED_TRACES
+            or {row["blind_id"] for row in key} != set(by_blind)
+        ):
+            return "candidate_blind_id_coverage_mismatch"
+        cells = {(row["variant_id"], row["task_id"], row["run_id"]) for row in key}
+        if cells != set(report_digests):
+            return "candidate_blinding_key_cell_mismatch"
+        for row in key:
+            blinded = by_blind[row["blind_id"]]
+            if blinded["task_id"] != row["task_id"]:
+                return "candidate_blinding_key_task_mismatch"
+            cell = (row["variant_id"], row["task_id"], row["run_id"])
+            observed = hashlib.sha256(blinded["report_markdown"].encode("utf-8")).hexdigest()
+            if observed != report_digests[cell]:
+                return "candidate_blinded_report_content_mismatch"
+    except (OSError, ValueError, RecursionError):
+        # Never echo key rows, report text, or parser diagnostics containing them.
+        return "candidate_packet_source_unreadable_or_invalid"
     return None
 
 
@@ -1213,6 +1258,7 @@ def _trace_report_content_status(
     located_ids: tuple[tuple[str, str], ...],
     run_alignment_status: str,
     task_anchor_status: str,
+    report_digests: dict[tuple[str, str, str], str] | None = None,
 ) -> dict:
     """Diagnose archived trace/report *content* against frozen run/task cells.
 
@@ -1292,6 +1338,7 @@ def _trace_report_content_status(
     total_bytes = 0
     checked = 0
     candidate_pins: list[tuple] = []
+    captured_report_digests: dict[tuple[str, str, str], str] = {}
     run_starts: dict[tuple[str, str], datetime] = {}
     run_latencies: dict[tuple[str, str], float] = {}
     run_recordings: dict[tuple[str, str], datetime] = {}
@@ -1442,6 +1489,11 @@ def _trace_report_content_status(
                   "report_markdown": report_text.strip()}],
                 label="recovered research report",
             )
+            # Match the packet builder's exact UTF-8 decode/strip transform;
+            # retain only digests, not a second copy of report text.
+            captured_report_digests[(variant, task_id, run_id)] = hashlib.sha256(
+                report_text.strip().encode("utf-8")
+            ).hexdigest()
         except (OSError, ValueError, UnicodeDecodeError, KeyError) as exc:
             return {"status": "invalid_or_mismatched_trace_report_content",
                     "checked": checked, "expected": EXPECTED_TRACES,
@@ -1536,6 +1588,8 @@ def _trace_report_content_status(
             "checked": checked, "expected": EXPECTED_TRACES,
             "reason": str(exc),
         }
+    if report_digests is not None:
+        report_digests.update(captured_report_digests)
     return {"status": "40_trace_report_contents_align_to_frozen_cells_not_authenticated",
             "checked": checked, "expected": EXPECTED_TRACES}
 
@@ -1697,10 +1751,11 @@ def audit_archive_readiness(
         repo_root=root, trace_status=trace_candidates["status"],
         located_ids=located_ids, published_input_anchor=input_anchor,
     )
+    report_digests: dict[tuple[str, str, str], str] = {}
     content_status = _trace_report_content_status(
         repo_root=root, trace_root=traces, report_root=reports,
         located_ids=located_ids, run_alignment_status=run_alignment["status"],
-        task_anchor_status=task_anchor,
+        task_anchor_status=task_anchor, report_digests=report_digests,
     )
     recovery_targets = _expected_recovery_paths(
         repo_root=root, trace_root=traces, report_root=reports,
@@ -1752,6 +1807,16 @@ def audit_archive_readiness(
                     if status != "present_unverified")
         gaps.extend(label for label, status in pins.items()
                     if status != "pin_matches_file_not_authenticated")
+
+    # A correctly ordered and rehashed presentation pair can still contain
+    # a different report or a wrong coordinator mapping. Compare only after
+    # the preceding independent local checks pass; do not replace their
+    # more specific diagnostics or expose the confidential mapping.
+    if not gaps:
+        source_status = _candidate_packet_source_status(sources, report_digests)
+        if source_status is not None:
+            resources["candidate_packet_source_linkage"] = source_status
+            gaps.append("candidate_packet_source_linkage")
 
     return {
         "schema_version": 1,

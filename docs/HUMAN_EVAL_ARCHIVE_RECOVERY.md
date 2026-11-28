@@ -1,3 +1,25 @@
+## Candidate blinded-report source linkage (28 November 2026)
+
+A correctly counterbalanced, balanced, rehashed distribution pair can still
+contain a different report or an incorrect coordinator mapping. Before
+returning an otherwise zero-blocker readiness receipt, the auditor now
+compares each candidate blinded ID to the frozen variant/task/run matrix
+through the coordinator key and checks the exact report text against
+SHA-256 digests captured during the successful trace/report content audit.
+The digest uses the packet builder's UTF-8 decode and strip transformation.
+The key cannot select alternative filesystem paths; only the previously
+audited cells are used. Confidential key fields and report text are not
+included in the diagnostic.
+
+Synthetic whole-matrix tests cover same-word-count replacements, same-task
+report swaps, swapped key identities, duplicate cells and IDs, and late
+replacement with freshly generated distribution manifests. This is local
+concordance with the observed candidates, not independent authentication,
+a complete verification of the coordinator manifest, seeded blinding or
+source path fingerprints, or atomic multi-file custody. The integrated
+source-pinned handoff remains mandatory before distribution. No treatments,
+evaluators, frozen observations or human ratings are changed.
+
 ## Frozen task coverage in recovered annotator packets (28 November 2026)
 
 A pair of internally consistent 40-report distributions with distinct blind
